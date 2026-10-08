@@ -218,7 +218,7 @@ Hipóteses a validar: disposição a pagar por nicho (psico e nutri mais sensív
 - Infra de IA (GPU) para a LLM própria e STT (speech-to-text) em português clínico — definida pela frente 🤖 IA/LLM (`docs/05-ia-llm/`).
 
 ## 12. Questões em aberto
-1. Escriba no MVP: STT + LLM própria desde o dia 1 ou LLM de terceiros com contrato de não-retenção como ponte, migrando para a própria em F2? (decisão IA + Guardião + Sócios)
+1. Escriba no MVP: STT + LLM própria desde o dia 1 ou LLM de terceiros com contrato de não-retenção como ponte, migrando para a própria em F2? (decisão IA + Guardião + Sócios). **Recomendação atual da frente IA (`docs/05-ia-llm/README.md`):** MVP com API + RAG + humano no loop; fine-tuning open-weight em F2; modelo próprio hospedado no Brasil em F3. A WBS (IA-05.1) e o roadmap já seguem essa recomendação.
 2. Hospedagem de dados obrigatoriamente no Brasil?
 3. Nicho de entrada para go-to-market (psico/nutri têm ciclo de venda curto; odonto/estética têm ticket maior)?
 4. Certificação SBIS NGS2 — em que fase?

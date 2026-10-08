@@ -16,7 +16,33 @@
 
 | # | Código | Módulo | Partes | Micropartes | MVP | F2 | F3 |
 |---|---|---|---|---|---|---|---|
-<!-- SUMARIO -->
+| 1 | NUC | Núcleo / Plataforma | 5 | 26 | 20 | 4 | 2 |
+| 2 | PAC | Cadastro de pacientes | 2 | 12 | 9 | 3 | 0 |
+| 3 | AGD | Agenda | 3 | 16 | 12 | 3 | 1 |
+| 4 | AON | Agendamento online | 2 | 10 | 8 | 1 | 1 |
+| 5 | COM | Comunicação (WhatsApp, SMS, e-mail) | 4 | 20 | 16 | 3 | 1 |
+| 6 | PRO | Prontuário eletrônico | 3 | 29 | 16 | 10 | 3 |
+| 7 | DOC | Prescrição, atestados e assinatura digital | 3 | 13 | 10 | 2 | 1 |
+| 8 | TEL | Teleconsulta | 2 | 8 | 0 | 7 | 1 |
+| 9 | FIN | Financeiro | 4 | 15 | 7 | 6 | 2 |
+| 10 | PAG | Pagamentos (Pix, cartão, split) | 3 | 14 | 7 | 5 | 2 |
+| 11 | FIS | Fiscal (NFS-e) | 1 | 9 | 6 | 3 | 0 |
+| 12 | CNV | Convênios / TISS | 3 | 14 | 0 | 12 | 2 |
+| 13 | EST | Estoque (estética, odonto e procedimentos) | 1 | 8 | 0 | 6 | 2 |
+| 14 | CRM | Marketing, CRM e NPS | 3 | 12 | 3 | 7 | 2 |
+| 15 | REL | Relatórios e BI | 3 | 11 | 5 | 4 | 2 |
+| 16 | POR | Portal e app do paciente | 3 | 15 | 8 | 6 | 1 |
+| 17 | IA | Inteligência artificial | 5 | 24 | 13 | 8 | 3 |
+| 18 | INT | Integrações | 2 | 11 | 1 | 5 | 5 |
+| 19 | MIG | Migração / importação | 2 | 11 | 9 | 2 | 0 |
+| 20 | EXP | Exportação de dados | 1 | 6 | 4 | 1 | 1 |
+| 21 | BIL | Billing da plataforma (assinaturas dos clientes) | 1 | 9 | 8 | 1 | 0 |
+| 22 | ADM | Admin / backoffice | 1 | 8 | 7 | 1 | 0 |
+| 23 | SUP | Suporte | 1 | 7 | 4 | 3 | 0 |
+| 24 | LGP | LGPD (privacidade by design) | 3 | 16 | 13 | 3 | 0 |
+| | | **Total (24 módulos)** | **61** | **324** | **186** | **106** | **32** |
+
+**155** das 324 micropartes tocam dado sensível (S) e exigem aprovação do Guardião LGPD antes do merge. Dependências validadas: todo ID referenciado existe e nenhuma microparte depende de outra de fase posterior.
 
 ---
 
@@ -313,7 +339,7 @@ Partes: **01** NPS e satisfação · **02** Leads e funil · **03** Campanhas e 
 |---|---|---|---|---|---|---|---|
 | CRM-01.1 | Pesquisa NPS pós-atendimento | NPS + comentário via WhatsApp após o atendimento | Produto | COM-03.4 | N | MVP | Taxa de resposta medida; 1 pesquisa por paciente a cada X dias (anti-fadiga) |
 | CRM-01.2 | Painel NPS | NPS por profissional, unidade, período e comentários | Engenharia | CRM-01.1 | N | MVP | Painel atualizado em tempo real; comentários pesquisáveis |
-| CRM-01.3 | Avaliação pública | Convite a promotores para avaliar no Google | Produto | CRM-01.1, INT-02.6 | N | F2 | Convite só para promotores e com opt-in de comunicação |
+| CRM-01.3 | Avaliação pública | Convite a promotores para avaliar no Google | Produto | CRM-01.1, INT-02.5 | N | F2 | Convite só para promotores e com opt-in de comunicação |
 | CRM-01.4 | Tratamento de detratores | Alerta e tarefa para gestor contatar detratores | Engenharia | CRM-01.1 | N | F2 | Detrator gera tarefa em < 1 min |
 | CRM-02.1 | Origem do paciente | Campo "como conheceu" e UTM do agendamento online | Produto | PAC-01.1, AON-01.2 | N | MVP | Origem registrada em 100% dos agendamentos online |
 | CRM-02.2 | Captura de leads | Leads de WhatsApp, formulário e Instagram antes de virarem pacientes | Engenharia | COM-02.1 | N | F2 | Lead convertido em paciente preserva histórico |
@@ -390,7 +416,7 @@ Partes: **01** Escriba · **02** Assistentes clínicos · **03** Preditivo · **
 | IA-04.1 | NLU do bot | Intenções: agendar, remarcar, cancelar, preço, endereço, convênio aceito, falar com humano | IA | IA-05.1 | N | MVP | Acurácia de intenção ≥ 92% em conjunto de teste de conversas sintéticas/anônimas |
 | IA-04.2 | FAQ com RAG da clínica | Base de conhecimento editável pela clínica (preparos, políticas) respondida pelo bot | IA | IA-04.1, IA-05.2 | N | F2 | Respostas citam a base; "não sei" quando fora da base |
 | IA-04.3 | Guardrails do bot | Bot não dá orientação clínica; detecta urgência e orienta SAMU 192/pronto-socorro e alerta a clínica | IA | IA-04.1 | S | MVP | 100% dos casos do conjunto de red teaming de urgência roteados corretamente |
-| IA-05.1 | Serviço de inferência | Gateway de modelos (LLM própria fine-tuned + fallback), roteamento, cotas e custo por tenant | IA | NUC-01.1 | S | MVP | Latência P95 dentro do SLO; custo por consulta medido; nenhum prompt/saída logado com PII |
+| IA-05.1 | Serviço de inferência | Gateway de modelos agnóstico de provedor (MVP: LLM via API com contrato de não-retenção + RAG; F2: open-weight fine-tuned; F3: modelo próprio hospedado no Brasil — ver `docs/05-ia-llm/`), roteamento, cotas e custo por tenant | IA | NUC-01.1 | S | MVP | Latência P95 dentro do SLO; custo por consulta medido; nenhum prompt/saída logado com PII |
 | IA-05.2 | RAG isolado por tenant | Indexação vetorial por tenant/paciente com controle de acesso + base clínica curada de referência | IA | IA-05.1, NUC-03.3 | S | MVP | Teste prova que recuperação nunca cruza tenant/permissão |
 | IA-05.3 | Avaliação contínua | Golden sets por nicho, métricas de qualidade, alucinação e viés; gate de release | IA | IA-05.1 | N | MVP | Nenhum modelo vai a produção sem passar no gate; relatório por versão |
 | IA-05.4 | Pipeline de dados para treino | Coleta, anonimização, revisão e versionamento de datasets com aprovação do Guardião | IA | LGP-03.7 | S | F2 | Dataset com laudo de anonimização aprovado; rastreabilidade de origem e base legal |
@@ -507,7 +533,7 @@ Partes: **01** Bases legais e consentimento · **02** Direitos do titular · **0
 | LGP-03.1 | ROPA | Registro das operações de tratamento da plataforma, atualizado a cada feature | LGPD | LGP-01.1 | N | MVP | ROPA cobre 100% dos módulos MVP |
 | LGP-03.2 | RIPD | Relatório de impacto do produto e por feature de alto risco (escriba, teleconsulta, IA preditiva, RNDS, marketing) | LGPD | LGP-03.1 | S | MVP | RIPD do produto e do escriba aprovados antes do lançamento |
 | LGP-03.3 | Retenção e descarte | Tabela de temporalidade por tipo de dado (prontuário 20 anos, áudio do escriba, logs, tickets) com jobs automáticos | LGPD | LGP-01.1, NUC-05.4 | S | MVP | Jobs de descarte executados e evidenciados; nenhum dado retido além da tabela |
-| LGP-03.4 | Gestão de incidentes | Detecção, resposta, avaliação de risco, comunicação à ANPD e titulares nos prazos regulamentares | LGPD | NUC-05.5, NUC-04.3 | S | MVP | Plano testado em simulação (tabletop) antes do lançamento |
+| LGP-03.4 | Gestão de incidentes | Detecção, resposta, avaliação de risco, comunicação à ANPD e titulares nos prazos regulamentares | LGPD | NUC-05.5, NUC-04.1 | S | MVP | Plano testado em simulação (tabletop) antes do lançamento |
 | LGP-03.5 | Privacy review no SDLC | Checklist do Guardião em PRs que tocam dado sensível; threat modeling por módulo | LGPD | — | N | MVP | 100% dos PRs com flag S têm aprovação do Guardião |
 | LGP-03.6 | Painel LGPD da clínica | Encarregado (DPO) da clínica, relatórios de consentimento, solicitações e acessos | Produto | LGP-02.2, NUC-04.2 | S | F2 | Clínica gera relatório de conformidade em 1 clique |
 | LGP-03.7 | Anonimização e pseudonimização | Serviço de pseudonimização para analytics e anonimização (com laudo de risco de reidentificação) para treino de IA | LGPD | LGP-01.1 | S | F2 | Laudo de reidentificação aprovado; técnica documentada |
