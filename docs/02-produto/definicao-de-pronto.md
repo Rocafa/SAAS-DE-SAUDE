@@ -108,3 +108,11 @@
 - Teste com dado real de paciente, ou print com dado real anexado ao PR.
 - HU com flag `S` mergeada sem aprovação do Guardião, mesmo em hotfix (hotfix segue o fluxo acelerado, não o pula).
 - Funcionalidade de IA que grava direto no prontuário sem revisão humana.
+
+## Garantias ao cliente (obrigatório nas histórias afetadas)
+
+Toda história que mexe em **assinatura e cobrança (BIL), exportação (EXP), migração (MIG), suporte (SUP) ou acesso por status de assinatura** só fica pronta se:
+
+- [ ] Não viola nenhuma garantia G1–G9 de [garantias-ao-cliente.md](garantias-ao-cliente.md).
+- [ ] Mantém verdes os testes que fazem valer G1–G3 (política de acesso por status, exportação isolada por tenant, auditoria append-only).
+- [ ] Quando cria um mecanismo novo para uma garantia, atualiza a coluna "Como a fazemos valer" e a §4 (estado da implementação) daquele documento.
