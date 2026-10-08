@@ -11,6 +11,10 @@ describe('CSV aberto (RFC 4180)', () => {
     expect(csvField('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
     expect(csvField('+1')).toBe(`"'+1"`);
     expect(csvField('@cmd')).toBe(`"'@cmd"`);
+    expect(csvField(' =1+1')).toBe(`"' =1+1"`);
+    expect(csvField('\n=1+1')).toBe(`"'\n=1+1"`);
+    expect(csvField('\uFF1D1+1')).toBe(`"'\uFF1D1+1"`);
+    expect(csvField('Ana -  Ficticia')).toBe('"Ana -  Ficticia"');
   });
 
   it('BOM UTF-8, cabeçalho e CRLF', () => {

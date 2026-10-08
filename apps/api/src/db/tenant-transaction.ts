@@ -157,10 +157,10 @@ export class SlotLimiter {
 /**
  * Executa `fn` dentro de uma transação com o contexto do tenant definido.
  *
- * Usa `set_config('app.tenant_id', $1, true)`, que é o equivalente parametrizado de
- * `SET LOCAL app.tenant_id = ...` (SET não aceita bind parameter). O `true` (is_local)
- * garante escopo de transação: o valor some no COMMIT/ROLLBACK e não vaza para a próxima
- * requisição que reutilizar a conexão do pool.
+ * Usa `app_set_tenant($1)` (migração 0003): grava o tenant numa tabela inacessível ao runtime,
+ * chaveada pelo ID da transação, e as policies leem dali. O contexto vale só para esta transação
+ * (não vaza para a próxima requisição na mesma conexão do pool) e fica TRAVADO: trocar para outro
+ * tenant no meio dela (set_config/SET LOCAL/nova chamada) não tem efeito ou é recusado.
  *
  * Isto é a segunda camada (RLS). Repositórios continuam filtrando por tenant_id explicitamente.
  */
@@ -174,7 +174,7 @@ export async function withTenant<T>(
     throw new Error('tenant_id inválido: esperado UUID');
   }
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select set_config('app.tenant_id', ${tenantId}, true)`);
+    await tx.execute(sql`select app_set_tenant(${tenantId}::uuid)`);
     return fn(tx);
   });
 }
