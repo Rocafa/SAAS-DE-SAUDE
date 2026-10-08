@@ -11,11 +11,13 @@ export interface ReadinessProbe {
  * pool não derruba a readiness (evita tirar todas as instâncias do balanceador ao mesmo tempo),
  * e banco fora do ar é detectado rápido (connect_timeout curto + timeout total do ping).
  */
-export function createReadinessProbe(url: string, timeoutMs = 1_000, cacheMs = 1_000): ReadinessProbe {
+export function createReadinessProbe(url: string, timeoutMs = 1_000, cacheMs = 0): ReadinessProbe {
   const raw = createUncachedProbe(url, timeoutMs);
   // Proteção do banco: o endpoint de readiness não tem rate limit (ver http-security.ts), então
-  // chamadas simultâneas compartilham UM ping em andamento e o resultado vale por `cacheMs`.
-  // Uma rajada de N requisições vira no máximo 1 `select 1` por janela.
+  // chamadas simultâneas compartilham UM ping em andamento (no máximo 1 `select 1` por vez, numa
+  // conexão dedicada). `cacheMs` (padrão 0) pode guardar o resultado por um tempo, mas atrasa a
+  // detecção de queda; por isso fica desligado e a queda aparece na próxima sonda.
+  // Uma rajada de N requisições simultâneas vira 1 `select 1`.
   let inFlight: Promise<boolean> | null = null;
   let last: { ok: boolean; at: number } | null = null;
   return {
