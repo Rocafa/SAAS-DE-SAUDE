@@ -114,5 +114,6 @@
 Toda história que mexe em **assinatura e cobrança (BIL), exportação (EXP), migração (MIG), suporte (SUP) ou acesso por status de assinatura** só fica pronta se:
 
 - [ ] Não viola nenhuma garantia G1–G9 de [garantias-ao-cliente.md](garantias-ao-cliente.md).
-- [ ] Mantém verdes os testes que fazem valer G1–G3 (política de acesso por status, exportação isolada por tenant, auditoria append-only).
+- [ ] Mantém verdes os testes que fazem valer G1–G3 (política de acesso por status e janela de saída, exportação isolada por tenant, auditoria append-only).
+- [ ] Histórias de exportação (EXP) testam os controles contra vazamento da G2: MFA recente, link vinculado ao usuário com expiração de 24 h, alerta a todos os admins com "não fui eu" revogando o link, e pausa quando houver suspeita de conta comprometida.
 - [ ] Quando cria um mecanismo novo para uma garantia, atualiza a coluna "Como a fazemos valer" e a §4 (estado da implementação) daquele documento.

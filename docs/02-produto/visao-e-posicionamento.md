@@ -54,7 +54,7 @@
 **Declaração de posicionamento**
 > Para **clínicas independentes de qualquer especialidade da saúde** que perdem tempo com burocracia e se sentem presas a sistemas caros, a **[nome do produto]** é a **plataforma de gestão clínica com IA** que **automatiza documentação, agenda e cobrança pelo WhatsApp e Pix**. Diferente de iClinic, Feegow e sistemas de nicho, **cobramos um preço único com tudo incluído, atendemos todos os nichos num núcleo só e tratamos os dados só por conta da clínica (somos operadores)**, com exportação total e LGPD por design.
 
-**Garantias ao cliente:** os compromissos anti-lock-in (acesso nunca bloqueado, exportação gratuita, saída em 90 dias, cancelamento em 3 cliques) estão em [garantias-ao-cliente.md](garantias-ao-cliente.md), cada um com seu mecanismo de verificação.
+**Garantias ao cliente:** os compromissos anti-lock-in (atraso de pagamento nunca bloqueia o acesso, exportação gratuita, 90 dias para sair após cancelar, cancelamento em 3 cliques) estão em [garantias-ao-cliente.md](garantias-ao-cliente.md), cada um com seu mecanismo de verificação.
 
 **Diferenciais defensáveis (do mais difícil ao mais fácil de copiar)**
 1. **Qualidade de IA por nicho:** modelos de prontuário, prompts e avaliações (evals) por especialidade, construídos com profissionais parceiros e dados **sintéticos**. *Hipótese de Fase 2, não usar em marketing:* aprendizado com textos clínicos reais só depois de RIPD específico, parecer jurídico (LGPD art. 11 §4º), anonimização aprovada pelo Guardião, base legal válida perante o **paciente** (o opt-in da clínica não basta) e aprovação dos sócios.
