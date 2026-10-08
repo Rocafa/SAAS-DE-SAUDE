@@ -48,5 +48,5 @@
 
 | Garantia | Estado |
 |---|---|
-| G1, G2, G3 | 🛠️ Em implementação na branch `eng/garantia-de-saida`: política de acesso por status de assinatura, exportação com manifesto e auditoria append-only, prazo de 90 dias, testes de unidade e de isolamento |
+| G1, G2, G3 | ✅ Implementadas no PR #9 (`eng/garantia-de-saida`): política de acesso por status com janela de saída de 90 dias (piso), exportação com manifesto e auditoria append-only; 24 testes unitários e 18 contra Postgres real, todos verdes no CI. Pendentes para a história de exportação: rota HTTP com RBAC e os controles anti-exfiltração da G2 |
 | G4–G9 | 📋 No backlog (WBS acima); viram critérios de aceite das histórias |
