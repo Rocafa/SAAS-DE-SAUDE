@@ -1,0 +1,15 @@
+name: "⚖️ Decisão dos sócios"
+description: Decisão de negócio ou arquitetura que precisa dos dois sócios
+title: "[decisão] "
+labels: [decisao]
+body:
+  - type: textarea
+    id: contexto
+    attributes: { label: Contexto }
+    validations: { required: true }
+  - type: textarea
+    id: opcoes
+    attributes: { label: Opções e prós e contras }
+  - type: textarea
+    id: recomendacao
+    attributes: { label: Recomendação do Maestro ou do agente }

@@ -1,0 +1,15 @@
+name: "🚨 Incidente de segurança / LGPD"
+description: Suspeita de vazamento, acesso indevido ou segredo exposto. NÃO cole dados pessoais aqui.
+title: "[incidente] "
+labels: [incidente, lgpd]
+body:
+  - type: markdown
+    attributes: { value: "**Não inclua dados de pacientes, segredos ou credenciais nesta issue.** Descreva só o tipo de dado e o alcance." }
+  - type: dropdown
+    id: severidade
+    attributes: { label: Severidade, options: ["S1 — dado de saúde exposto", "S2 — segredo exposto", "S3 — bug sem exposição"] }
+    validations: { required: true }
+  - type: textarea
+    id: descricao
+    attributes: { label: O que aconteceu, quando foi detectado e qual o alcance estimado }
+    validations: { required: true }
