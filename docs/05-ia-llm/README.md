@@ -24,7 +24,7 @@ Documentos desta pasta:
 
 1. **Fase 1 (0–6 meses): API + RAG + prompts bem feitos.** Lança o produto, gera receita e — mais importante — começa a coletar, *com consentimento e de forma anonimizada*, os dados de correção dos profissionais. Custo de IA estimado: **R$ 0,30 a R$ 0,70 por consulta** com escriba.
 2. **Fase 2 (6–18 meses): fine-tuning leve (LoRA/QLoRA) de um modelo open-weight**, só nas tarefas onde as avaliações mostrarem que a API não basta ou que o custo/volume justifica (ex.: sugestão de CID/TUSS, extração de exames, estilo de evolução por nicho).
-3. **Fase 3 (18+ meses): modelo próprio ajustado e hospedado no Brasil**, para os fluxos com dado sensível mais pesado, quando houver volume que pague GPUs dedicadas (estimativa: acima de ~150–250 mil consultas/mês com IA).
+3. **Fase 3 (18+ meses): modelo próprio ajustado e hospedado no Brasil**, para os fluxos com dado sensível mais pesado, quando houver volume que pague GPUs dedicadas (estimativa: de ~75–160 mil consultas/mês se substituir rota Claude a ~320–700 mil se substituir Gemini Flash; ver `arquitetura-ia.md` §4.4) — ou antes, se um cliente exigir processamento 100% no Brasil.
 4. **Treinar um modelo do zero: não.** Custa dezenas de milhões, exige equipe de pesquisa e não traz vantagem para o nosso problema.
 
 A "IA que aprende com a clínica" acontece desde o dia 1 — não por treinar pesos do modelo, mas por **memória (RAG), modelos/templates por nicho, few-shot com exemplos aprovados e um ciclo de avaliação contínua** alimentado pelas correções dos profissionais.
