@@ -56,11 +56,11 @@
 | M4 | 50 | 260 |
 | **MVP total** | **176** | **898** |
 
-- **MoSCoW:** 147 Must · 21 Should · 8 Could. **Flag LGPD = S:** 88 histórias.
-- **Histórias com tag de nicho:** HU-PRO-009, HU-PRO-012 a HU-PRO-023, HU-DOC-001, HU-DOC-002, HU-DOC-004, HU-PRO-024, HU-PRO-025, HU-AGD-011, HU-CNV-001 a HU-CNV-006 (as demais são núcleo comum).
+- **MoSCoW:** 147 Must · 21 Should · 8 Could. **Flag LGPD = S:** 95 histórias.
+- **Histórias com tag de nicho:** HU-PRO-009, HU-PRO-012 a HU-PRO-023, HU-DOC-001, HU-DOC-002, HU-DOC-004, HU-PRO-024, HU-PRO-025, HU-AGD-012, HU-CNV-001 a HU-CNV-006 (as demais são núcleo comum).
 - **Velocidade de referência (ESTIMATIVA):** 2 squads de engenharia a ~30 pts/semana somados → M0+M1 (377 pts) em ~12–13 semanas (o roadmap prevê 14; a folga caiu de ~2,5 para ~1,5 semana com a rodada 3). Recalibrar após 2 iterações.
 - A seção [Rastreabilidade](#rastreabilidade-wbs--histórias) ao final confirma que as 194 micropartes MVP da WBS estão cobertas.
-- **Rodada 3 (2026-10-08):** pacotes antecipados para o M1 (HU-FIN-004, sem contador provisório), controle de guia simples no M1 (EP-24, HU-CNV-001 a 006), atendimento simultâneo (HU-AGD-011) e cobrança de pacotes no M4 (HU-FIN-006).
+- **Rodada 3 (2026-10-08):** pacotes antecipados para o M1 (HU-FIN-004, sem contador provisório), controle de guia simples no M1 (EP-24, HU-CNV-001 a 006), atendimento simultâneo (HU-AGD-012) e cobrança de pacotes no M4 (HU-FIN-006).
 
 ---
 
@@ -848,7 +848,7 @@ Como **Juliana**, quero ver a agenda por dia, semana, mês e lista, com vários 
 ```
 
 ### HU-AGD-006 — Criar, mover e cancelar agendamentos
-**WBS:** AGD-02.2 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-005, HU-PAC-001, HU-AGD-011 · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
+**WBS:** AGD-02.2 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-005, HU-PAC-001, HU-AGD-012 · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** S
 
 Como **Juliana**, quero criar, arrastar, editar e cancelar agendamentos com validação de conflito, para manter a agenda correta sem retrabalho.
 
@@ -866,13 +866,20 @@ Como **Juliana**, quero criar, arrastar, editar e cancelar agendamentos com vali
   Cenário: Profissional com atendimento simultâneo
     Dado Diego com capacidade de 3 pacientes por horário e 2 agendados às 8h
     Quando Juliana agenda um terceiro paciente às 8h
-    Então o agendamento é aceito e o horário aparece como lotado (regras em HU-AGD-011)
+    Então o agendamento é aceito e o horário aparece como lotado (regras em HU-AGD-012)
 
   Cenário: Cancelamento exige motivo
     Dado um agendamento futuro
     Quando Juliana o cancela sem informar motivo
     Então o sistema não permite concluir
+
+  Cenário: Agenda sem dado clínico exposto (segurança)
+    Dado um agendamento de psicologia
+    Quando Juliana registra o motivo do cancelamento ou um usuário sem vínculo de cuidado consulta a agenda
+    Então o campo de motivo avisa para não incluir diagnóstico e a agenda mostra só nome, horário e tipo genérico
+    E toda alteração entra na trilha de auditoria com autor, data e IP
 ```
+> Rodada 3: AGD-02.2 passou a "Dado sensível = S" por achado do Guardião (a agenda revela vínculo com serviço de saúde).
 
 ### HU-AGD-007 — Encaixe
 **WBS:** AGD-02.3 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-006 · **Pontos:** 2 · **MoSCoW:** Should · **LGPD:** N
@@ -892,7 +899,7 @@ Como **Juliana**, quero encaixar um paciente fora da grade com sinalização, pa
 ```
 
 ### HU-AGD-008 — Sessões recorrentes vinculadas a pacote
-**WBS:** AGD-02.4 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-006, HU-FIN-004 (pacote definitivo no M1; a cobrança do pacote fica em HU-FIN-006, no M4) · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
+**WBS:** AGD-02.4 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-006, HU-FIN-004 (pacote definitivo no M1; a cobrança do pacote vem no M4) · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
 
 Como **Marcos (psicólogo)**, quero criar uma série semanal ou quinzenal de sessões em uma ação, vinculada a um pacote (ou a uma guia de convênio, ver HU-CNV-003), para não agendar uma por uma.
 
@@ -953,7 +960,7 @@ Como **Juliana**, quero marcar chegada, atendimento, falta e cancelamento, para 
     Então a falta entra na métrica de no-show
 ```
 
-### HU-AGD-011 — Atendimento simultâneo e em grupo `[nicho:fisio-to]`
+### HU-AGD-012 — Atendimento simultâneo e em grupo `[nicho:fisio-to]`
 **WBS:** AGD-01.5 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-002, HU-AGD-004 · **Pontos:** 5 · **MoSCoW:** Must · **LGPD:** N
 
 Como **Diego (fisio)**, quero atender até 4 pacientes no mesmo horário, cada um com seu aparelho, para refletir como o meu ginásio funciona de verdade.
@@ -1664,7 +1671,7 @@ Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio 
 
 | ID | Título | WBS | Pts | MoSCoW | LGPD | Tags |
 |---|---|---|---|---|---|---|
-| HU-COM-001 | Conectar o número oficial da clínica ao WhatsApp Business Platform | COM-01.1 | 8 | Must | N | |
+| HU-COM-001 | Conectar o número oficial da clínica ao WhatsApp Business Platform | COM-01.1 | 8 | Must | S | |
 | HU-COM-002 | Gerir templates aprovados sem conteúdo clínico | COM-01.2 | 5 | Must | N | |
 | HU-COM-003 | Opt-in e preferências de canal do paciente | COM-01.3 | 3 | Must | N | |
 | HU-COM-004 | Status de entrega e retentativas | COM-01.4 | 3 | Must | N | |
@@ -1672,9 +1679,9 @@ Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio 
 | HU-COM-006 | Inbox multiatendente da recepção | COM-02.1 | 13 | Must | S | |
 | HU-COM-007 | Painel de contexto do paciente na conversa (só administrativo para recepção) | COM-02.2 | 5 | Must | S | |
 | HU-COM-008 | Respostas rápidas e envio de mídia | COM-02.3 | 3 | Must | S | |
-| HU-COM-009 | Notas internas e transferência de conversa | COM-02.4 | 3 | Must | N | |
-| HU-COM-010 | Lembretes automáticos de consulta | COM-03.1 | 5 | Must | N | |
-| HU-COM-011 | Confirmação interativa com regras por tipo de atendimento | COM-03.2, AGD-03.1 | 8 | Must | N | |
+| HU-COM-009 | Notas internas e transferência de conversa | COM-02.4 | 3 | Must | S | |
+| HU-COM-010 | Lembretes automáticos de consulta | COM-03.1 | 5 | Must | S | |
+| HU-COM-011 | Confirmação interativa com regras por tipo de atendimento | COM-03.2, AGD-03.1 | 8 | Must | S | |
 | HU-COM-012 | Instruções de preparo e link de pré-cadastro pelo WhatsApp | COM-03.3, PAC-01.4 | 5 | Must | S | |
 | HU-COM-013 | E-mail e SMS transacionais como canal alternativo | COM-04.1, COM-04.2 | 5 | Must | N | |
 | HU-COM-014 | Motor de templates multicanal | COM-04.4 | 5 | Must | N | |
@@ -1689,7 +1696,7 @@ Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio 
 | HU-AON-003 | Identificação do paciente no agendamento online | AON-01.3 | 5 | Must | S | |
 | HU-AON-004 | Widget e links de agendamento para site e Instagram | AON-01.5 | 2 | Could | N | |
 | HU-AON-005 | Proteção anti-abuso no agendamento online | AON-01.7 | 3 | Must | N | |
-| HU-AON-006 | Bot conversacional de agendamento no WhatsApp | AON-02.1, IA-04.1 | 13 | Must | N | |
+| HU-AON-006 | Bot conversacional de agendamento no WhatsApp | AON-02.1, IA-04.1 | 13 | Must | S | |
 | HU-AON-007 | Regras de autoagendamento por tipo e profissional | AON-02.2 | 3 | Must | N | |
 | HU-AON-008 | Handoff do bot para atendente humano | AON-02.3 | 3 | Must | N | |
 | HU-IA-001 | Guardrails do bot (sem orientação clínica, sem dado sensível) | IA-04.3 | 5 | Must | S | |
@@ -1725,7 +1732,7 @@ Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio 
 | HU-IA-008 | Retenção e descarte do áudio | IA-01.5 | 3 | Must | S | |
 | HU-IA-009 | Resumo do histórico do paciente | IA-02.1 | 5 | Should | S | |
 | HU-IA-010 | Sugestão de CID opcional e justificada | IA-02.2 | 5 | Should | S | |
-| HU-IA-011 | Avaliação contínua com golden sets por nicho (gate do escriba) | IA-05.3 | 8 | Must | N | golden set por nicho segue D1 |
+| HU-IA-011 | Avaliação contínua com golden sets por nicho (gate do escriba) | IA-05.3 | 8 | Must | S | golden set por nicho segue D1; golden sets só com casos sintéticos, nunca dado real de paciente |
 | HU-IA-012 | Monitoramento de qualidade, custo e latência da IA | IA-05.6 | 3 | Must | N | |
 | HU-IA-013 | RIPD específico do escriba aprovado | LGP-03.2 | 3 | Must | S | |
 
@@ -1778,7 +1785,7 @@ Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio 
 | HU-LGP-008 | Fluxo de solicitações de direitos do titular com protocolo e prazo | LGP-02.1 | 5 | Must | S | |
 | HU-LGP-009 | Fila da clínica para responder solicitações | LGP-02.2 | 5 | Must | S | |
 | HU-LGP-010 | Eliminação, anonimização e bloqueio até o fim da guarda | LGP-02.3 | 8 | Must | S | |
-| HU-LGP-011 | Plano de resposta a incidentes testado (comunicação em 3 dias úteis) | LGP-03.4 | 5 | Must | S | |
+| HU-LGP-011 | Plano de resposta a incidentes testado (aviso à clínica controladora em até 24 h; comunicação à ANPD e aos titulares em 3 dias úteis) | LGP-03.4 | 5 | Must | S | |
 | HU-LGP-012 | Salvaguardas de transferência internacional de suboperadores | LGP-03.8 | 3 | Must | S | depende de D3 |
 
 ### EP-20 — Migração e exportação
@@ -1869,24 +1876,24 @@ As 194 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | AGD-01.2 | N | HU-AGD-002 |
 | AGD-01.3 | N | HU-AGD-003 |
 | AGD-01.4 | N | HU-AGD-004 |
-| AGD-01.5 | N | HU-AGD-011 |
+| AGD-01.5 | N | HU-AGD-012 |
 | AGD-02.1 | N | HU-AGD-005 |
-| AGD-02.2 | N | HU-AGD-006 |
+| AGD-02.2 | S | HU-AGD-006 |
 | AGD-02.3 | N | HU-AGD-007 |
 | AGD-02.4 | N | HU-AGD-008 |
 | AGD-02.5 | N | HU-AGD-009 |
 | AGD-02.7 | N | HU-AGD-010 |
-| AGD-03.1 | N | HU-COM-011 |
+| AGD-03.1 | S | HU-COM-011 |
 | AGD-03.2 | N | HU-AGD-011 |
 | AON-01.1 | N | HU-AON-001 |
 | AON-01.2 | N | HU-AON-002 |
 | AON-01.3 | S | HU-AON-003 |
 | AON-01.5 | N | HU-AON-004 |
 | AON-01.7 | N | HU-AON-005 |
-| AON-02.1 | N | HU-AON-006 |
+| AON-02.1 | S | HU-AON-006 |
 | AON-02.2 | N | HU-AON-007 |
 | AON-02.3 | N | HU-AON-008 |
-| COM-01.1 | N | HU-COM-001 |
+| COM-01.1 | S | HU-COM-001 |
 | COM-01.2 | N | HU-COM-002 |
 | COM-01.3 | N | HU-COM-003 |
 | COM-01.4 | N | HU-COM-004 |
@@ -1894,9 +1901,9 @@ As 194 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | COM-02.1 | S | HU-COM-006 |
 | COM-02.2 | S | HU-COM-007 |
 | COM-02.3 | S | HU-COM-008 |
-| COM-02.4 | N | HU-COM-009 |
-| COM-03.1 | N | HU-COM-010 |
-| COM-03.2 | N | HU-COM-011 |
+| COM-02.4 | S | HU-COM-009 |
+| COM-03.1 | S | HU-COM-010 |
+| COM-03.2 | S | HU-COM-011 |
 | COM-03.3 | N | HU-COM-012 |
 | COM-03.4 | S | HU-CRM-001 |
 | COM-04.1 | N | HU-COM-013 |
@@ -1978,11 +1985,11 @@ As 194 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | IA-01.5 | S | HU-IA-008 |
 | IA-02.1 | S | HU-IA-009 |
 | IA-02.2 | S | HU-IA-010 |
-| IA-04.1 | N | HU-AON-006 |
+| IA-04.1 | S | HU-AON-006 |
 | IA-04.3 | S | HU-IA-001 |
 | IA-05.1 | S | HU-IA-002 |
 | IA-05.2 | S | HU-IA-003 |
-| IA-05.3 | N | HU-IA-011 |
+| IA-05.3 | S | HU-IA-011 |
 | IA-05.6 | N | HU-IA-012 |
 | INT-01.4 | N | HU-INT-001 |
 | MIG-01.1 | S | HU-MIG-001 |
