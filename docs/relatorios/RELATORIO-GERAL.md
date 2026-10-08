@@ -2,7 +2,7 @@
 
 > **Para quem:** os dois sócios (N0). Dá para entender o projeto inteiro só com este documento, sem abrir o resto.
 > **Autor:** Maestro (N1) · **Data de referência:** 09/10/2026 · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
-> **Escopo:** `main` (rodadas 1 a 3) + PRs abertos **#8** e **#9** (rodada 4). A rodada 5 (testes de segurança e de produção) ainda está em andamento e tem uma seção própria para ser preenchida depois.
+> **Escopo:** `main` (rodadas 1 a 3) + PRs abertos **#8** e **#9** (rodada 4) e **#10** e **#11** (rodada 5: testes de segurança e de produção, com todos os checks verdes; resultados na §6).
 >
 > **Legenda de estado:** ✅ pronto · 🛠️ em andamento ou aguardando merge · 📋 planejado (só no papel)
 
@@ -47,7 +47,7 @@ As datas estão no horário de Brasília. Os merges aparecem no GitHub como 09/1
 | 08/10/2026 | — | Dependabot abre 4 PRs de atualização de dependências | PRs #1–#4 (abertos) |
 | 08/10/2026 | 3 — Revisão LGPD + bootstrap | Guardião vetou o PR #5 (1 bloqueante, corrigido); produto incluiu guia, pacotes e agenda simultânea no MVP; engenharia criou API NestJS + site Next.js + teste de isolamento entre clínicas no CI; CodeQL | **PR #6**, **PR #7** (merge em 08/10); `f452407`, `db440d8`, `5bb1d6d` |
 | 08–09/10/2026 | 4 — Garantias ao cliente | Garantias G1–G9 contra as queixas do mercado; Guardião vetou a 1ª versão (2 bloqueantes, corrigidos); garantia de saída (G1–G3) em código com 24 testes unitários e 18 contra banco real | **PR #8**, **PR #9** (abertos, CI 5/5) |
-| em andamento | 5 — Testes de segurança e produção | Ver §6 | branches `eng/testes-seguranca` e `eng/testes-producao` (não publicadas) |
+| 09/10/2026 | 5 — Testes de segurança e produção | 72 ataques automatizados + ZAP; resiliência (banco fora, carga, backup/restauração); 1 falha crítica de isolamento e 1 bug da biblioteca de banco encontrados e corrigidos (§6) | PRs #10 e #11 |
 
 Fontes: `git log --oneline`, `gh pr list --state all`, [rodada 2](2026-10-08-rodada-2.md), [rodada 3](2026-10-08-rodada-3.md) e o relatório da rodada 4 (`docs/relatorios/2026-10-09-rodada-4-garantias.md`, no PR #8).
 
@@ -214,7 +214,63 @@ O **CI** é um robô do GitHub que, a cada PR e a cada mudança na `main`, roda 
 
 ## 6. Rodada 5: testes de segurança e produção
 
-<!-- PREENCHER: resultado da rodada 5 -->
+**Pedido dos sócios:** "testes de segurança e de produção para que o sistema consiga suportar qualquer tipo de problema".
+**Resposta honesta:** nenhum sistema suporta *qualquer* problema. O que fizemos foi listar os modos de falha (ataques, banco fora do ar, sobrecarga, perda de dados, deploy) e criar, **para cada um, um teste automático que roda no CI** e prova o comportamento esperado. Os testes encontraram **problemas reais**, todos corrigidos antes de existir qualquer dado de paciente.
+
+**Agentes:** 3 de no máximo 3 (testes de segurança, testes de produção e este relatório). **PRs:** #10 (segurança) e #11 (produção), empilhados sobre o #9.
+
+### 6.1 Testes de segurança (PR #10): "um atacante tenta; o teste prova que falha"
+
+| O que o atacante tenta | Resultado |
+|---|---|
+| Trocar de clínica no meio de uma operação para ler ou gravar dados de outra (`set_config`, `SET LOCAL`, savepoint, `RESET`) | **🔴 FUNCIONAVA (crítico).** Corrigido: migração 0003 trava a clínica por transação |
+| Criar uma tabela temporária `patients` para "sombrear" a real numa conexão reaproveitada | **🟠 FUNCIONAVA (alto).** Corrigido: `REVOKE TEMPORARY` (**precisa ser repetido ao criar o banco de produção na AWS**) |
+| Assumir outro papel (`SET ROLE`), desligar ou apagar a proteção por clínica (RLS), criar tabelas ou funções | ✅ Bloqueado |
+| Alterar ou apagar a trilha de auditoria; gravar auditoria em nome de outra clínica | ✅ Bloqueado (inclusive para o dono do banco) |
+| Ler as senhas do banco (`pg_authid`, `pg_shadow`) | ✅ Bloqueado |
+| Injeção de SQL (payloads clássicos, Unicode, bytes nulos) pela API interna | ✅ Tratado como dado comum |
+| Injeção em planilha no CSV exportado (`=`, `+`, `-`, `@`, inclusive variações escondidas) | **🟡 Parcial.** Corrigido para cobrir as variações |
+| HTTP: cabeçalhos inseguros, CORS de site desconhecido, corpo gigante, rajada de requisições, erro que vaza detalhes internos | **🟡 Faltavam proteções.** Adicionados helmet, CORS por lista, limite de 100 kb (413), rate limit (429) e erros genéricos |
+| Scanner **OWASP ZAP** atacando a API em execução | ✅ Nenhum alerta de risco alto |
+
+**Números:** antes das correções, **11 de 47 ataques ao banco funcionavam**. Hoje passam **72/72 testes ofensivos** no CI, contra PostgreSQL 16 real.
+
+### 6.2 Testes de produção e resiliência (PR #11): "o que acontece quando algo quebra"
+
+| Falha simulada | Comportamento provado pelo teste |
+|---|---|
+| Banco de dados cai | A API **continua viva**; `/health` responde 200 e `/health/ready` responde 503 em menos de 2,5 s, sem detalhes internos |
+| Banco volta | A API volta a usar o banco **sozinha**, sem reiniciar (antes da correção: até 20 s) |
+| Rede "pendurada" (conecta, mas nada responde) | A requisição falha por prazo (antes: ficava travada ~16 s) |
+| Consulta lenta, transação esquecida aberta, todas as conexões ocupadas | Cancelada por timeout ou 503 em ~300 ms; nada trava |
+| Erro no meio de uma operação | Rollback completo: nada parcial é gravado, nem a auditoria |
+| Deploy (SIGTERM) com requisição em andamento | A requisição termina, as conexões fecham e o processo sai limpo |
+| **Backup e restauração** (`pg_dump`/`pg_restore` reais no CI) | 23 checagens no banco restaurado: contagens, migrações, proteção por clínica e auditoria imutável continuam valendo |
+| **Carga (k6)** | Rampa até 20 usuários simultâneos: p95 abaixo de 300 ms e menos de 1% de erros |
+
+**Problemas reais encontrados e corrigidos:**
+1. **🔴 Bug na biblioteca de banco (postgres.js 3.4.9, versão mais recente).** Se a conexão de uma transação cai, o processo podia travar ou cair, e consultas da transação morta podiam ir para a **transação de outra requisição**. A proteção por clínica barrou tudo nos testes, mas corrigimos com um patch mínimo (`patches/postgres@3.4.9.patch`). **Ação:** reportar ao projeto do postgres.js e remover o patch quando houver versão corrigida.
+2. **🟠 Requisição travava ~16 s** com a rede parada → prazo por transação (15 s, configurável).
+3. **🟠 Reconexão lenta (até 20 s)** → limitada a 1 s.
+4. **🟠 O teste de carga encontrou um problema de produção.** O rate limit da segurança respondia 429 para `/health`, e o balanceador da AWS, que consulta essas rotas sem parar a partir de poucos IPs, **tiraria do ar instâncias saudáveis**. Corrigido: as sondas de saúde ficam fora do limite (caminho exato), e o readiness agrupa chamadas simultâneas num único ping ao banco. Testes novos garantem as duas coisas.
+
+### 6.3 Estado no GitHub
+| PR | Checks |
+|---|---|
+| #10 Segurança | ✅ 7/7: testes ofensivos, ZAP, RLS, CodeQL, gitleaks, auditoria, lint/testes |
+| #11 Produção | ✅ 9/9: os 7 acima + resiliência/backup + carga (k6) com SIGTERM real |
+
+### 6.4 O que **ainda não** está coberto (honestidade)
+- **Infraestrutura de produção (não existe ainda):** falha de uma zona inteira da AWS (Multi-AZ), troca automática para o banco reserva, restauração de snapshot/PITR do RDS, recuperação de desastre em outra região. Estão documentados em `docs/04-arquitetura/testes-de-producao.md` e só podem ser testados quando a AWS for montada.
+- **Execução arbitrária de SQL** (várias instruções) ainda permite abrir outra transação e escolher uma clínica. A trava protege contra injeção numa única instrução; a defesa principal continua sendo a consulta parametrizada (já usada).
+- **Réplicas de leitura:** a trava de clínica grava a cada transação e não funciona em réplica somente leitura. Precisa ser resolvido quando houver réplicas.
+- **Rate limit em memória, por instância:** com várias instâncias, migrar para Redis.
+- **Banco em modo somente leitura** (erro 25006) ainda vira 500 em vez de 503.
+- **Build da API:** `node dist/main.js` não sobe sozinho, porque `packages/shared` é TypeScript puro. Hoje usamos um carregador (`--import ./tests/carga/resolver-ts.mjs`, Node ≥ 22.18); falta uma solução definitiva antes do deploy.
+- **Teste de penetração externo** (pessoa contratada) segue obrigatório antes do piloto (pré-requisito P2 do plano de piloto). Testes automáticos não o substituem.
+
+### 6.5 Ordem de merge
+**#8 → #9 → #10 → #11.** Depois do #9, mudar a base do #10 para `main`; depois do #10, a do #11.
 
 ---
 
@@ -261,7 +317,7 @@ Fontes: [roadmap.md](../02-produto/roadmap.md) §8, [PRD.md](../02-produto/PRD.m
 
 **Rodada 6: fechar a rodada 4 e preparar o M0**
 - Sócios: merge dos PRs #8 e #9; decidir D4 e D8; começar as entrevistas da D1/D2.
-- `engenharia`: aplicar os resultados da rodada 5 e decidir o tratamento dos PRs #1–#4 do Dependabot (com `devops-ci`, se houver ajuste de CI).
+- `engenharia`: resolver os pendentes da §6.4 (build da API, erro 25006 → 503, rate limit em Redis), reportar o bug ao postgres.js e decidir o tratamento dos PRs #1–#4 do Dependabot (com `devops-ci`, se houver ajuste de CI).
 - `guardiao-lgpd`: fechar as ressalvas M1–M6 das garantias e começar o RIPD do produto.
 - `produto`: transformar G1–G9 em critérios de aceite no backlog; preparar a síntese das entrevistas.
 
