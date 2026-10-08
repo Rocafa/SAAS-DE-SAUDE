@@ -158,7 +158,7 @@ Preços acessados em **06/10/2026**, salvo indicação. "Por prof." = por profis
 
 ---
 
-## 6. Fontes consultadas (acesso em 06/10/2026)
+## 6. Fontes consultadas (acesso em 06/10/2026; 2ª rodada em 08/10/2026)
 
 - Demografia Médica 2025: https://medicinasa.com.br/?p=133493 · https://med.estrategia.com/portal/noticias/brasil-tera-635-mil-medicos-ate-o-fim-do-ano-confira-os-principais-dados-da-demografia-medica-2025/
 - CFO/dentistas: https://www.tnh1.com.br/noticia/nid/brasil-e-o-pais-com-mais-dentistas-no-mundo/
@@ -197,10 +197,18 @@ Preços acessados em **06/10/2026**, salvo indicação. "Por prof." = por profis
 ## 7. Lacunas para a próxima rodada
 
 1. Total nacional do CNES (consultórios isolados e clínicas). Tabular direto no DATASUS/TabNet.
-2. Total de farmacêuticos (CFF), enfermeiros em 2025 (Cofen) e terapeutas ocupacionais (COFFITO).
-3. Preços de Feegow, Doctoralia, Dietbox, Simples Dental, Amplimed e Ninsaúde. Exigem navegador ou contato comercial (as páginas retornaram 404, redirect ou sem preço).
+2. Terapeutas ocupacionais (COFFITO): ainda não encontrado. Enfermeiros isolados em 2025: só por estimativa (≈ 780 mil). Farmacêuticos: preenchido (> 400 mil, CFF nov/2025).
+3. Preços de Feegow, Doctoralia, Dietbox (só indício via agregador), Simples Dental, Amplimed e Ninsaúde. Exigem navegador ou contato comercial (as páginas retornaram 404, redirect ou sem preço).
 4. Medicinae: confirmar se o produto existe e qual o domínio atual.
 5. Notas do Reclame Aqui de Feegow, Amplimed, Simples Dental e PsicoManager. O site bloqueia acesso automatizado (403).
-6. Open Health no Brasil: status regulatório.
+6. Open Health: preenchido em 08/10/2026 (sem status oficial em 2026). Acompanhar o PL de interoperabilidade/RNDS.
 7. Estudo de tamanho de mercado de software de gestão de clínicas no Brasil em R$ (Liga Insights, Distrito Healthtech Report 2025/2026).
 8. Revalidar todos os itens marcados como [FATO-snippet] abrindo a fonte primária.
+
+### Fontes adicionadas na 2ª rodada (08/10/2026)
+
+- CFF (> 400 mil farmacêuticos): https://site.cff.org.br/noticia/Noticias-gerais/06/11/2025/cff-a-casa-dos-farmaceuticos-celebra-65-anos-de-conquistas-e-cuidado-com-a-saude-dos-brasileiros
+- Cofen (3.192.152 profissionais de enfermagem, mai/2025): https://cofen.gov.br/?p=194595 · https://www.cofen.gov.br/?p=173684 (URL exata da nota a confirmar)
+- Open Health: https://iess.org.br/sites/default/files/2025-06/01%20-%20SS%202035%20-%20Open%20Health.pdf · https://ihu.unisinos.br/616009-open-health-a-nova-tentativa-de-privatizacao-da-saude
+- Dietbox (agregador, indício): https://us.fitgap.com/products/023326/dietbox
+- CNES/PCDaS: https://icict.fiocruz.br/print/8191
