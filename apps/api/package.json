@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "db:migrate": "node scripts/migrate.mjs",
-    "test:rls": "vitest run --config vitest.rls.config.mts"
+    "test:rls": "vitest run --config vitest.rls.config.mts",
+    "test:resiliencia": "vitest run --config vitest.resiliencia.config.mts",
+    "test:backup-restore": "node test/resiliencia/backup-restore.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",

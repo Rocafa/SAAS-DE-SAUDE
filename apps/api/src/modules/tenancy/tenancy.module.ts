@@ -6,6 +6,7 @@ import {
   type DatabaseHandle,
   type TenantTx,
 } from '../../db/tenant-transaction';
+import type { DatabaseTuning } from '../../db/pool-config';
 
 export const DATABASE_HANDLE = Symbol('DATABASE_HANDLE');
 
@@ -29,12 +30,12 @@ export class TenantDatabase implements OnApplicationShutdown {
 
 @Module({})
 export class TenancyModule {
-  static forRoot(options: { databaseUrl: string }): DynamicModule {
+  static forRoot(options: { databaseUrl: string; tuning?: Partial<DatabaseTuning> }): DynamicModule {
     return {
       module: TenancyModule,
       global: true,
       providers: [
-        { provide: DATABASE_HANDLE, useFactory: () => createDatabase(options.databaseUrl) },
+        { provide: DATABASE_HANDLE, useFactory: () => createDatabase(options.databaseUrl, options.tuning) },
         TenantDatabase,
       ],
       exports: [TenantDatabase],

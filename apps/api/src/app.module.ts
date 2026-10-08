@@ -1,6 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import type { AppConfig } from './config';
 import { HealthModule } from './health/health.module';
+import { LifecycleModule } from './lifecycle/lifecycle.module';
 import { ExportsModule } from './modules/exports/exports.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
 
@@ -10,8 +11,9 @@ export class AppModule {
     return {
       module: AppModule,
       imports: [
-        HealthModule,
-        TenancyModule.forRoot({ databaseUrl: config.databaseUrl }),
+        LifecycleModule,
+        HealthModule.forRoot({ databaseUrl: config.databaseUrl }),
+        TenancyModule.forRoot({ databaseUrl: config.databaseUrl, tuning: config.database }),
         ExportsModule.forRoot({ exitWindowDays: config.exitWindowDays }),
       ],
     };

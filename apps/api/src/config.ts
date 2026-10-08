@@ -1,3 +1,4 @@
+import { loadDatabaseTuning, type DatabaseTuning } from './db/pool-config';
 import { EXIT_WINDOW_DAYS } from './modules/exports/access-policy';
 
 export interface AppConfig {
@@ -5,6 +6,8 @@ export interface AppConfig {
   readonly databaseUrl: string;
   /** G4: dias de leitura/exportação após cancelamento. Padrão e piso: 90. */
   readonly exitWindowDays: number;
+  /** Limites do pool e timeouts do banco (DB_* no ambiente; padrões em db/pool-config.ts). */
+  readonly database: DatabaseTuning;
 }
 
 /** Lê configuração do ambiente. Segredos chegam por variável (Secrets Manager em staging/prod). */
@@ -22,5 +25,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (!Number.isInteger(exitWindowDays) || exitWindowDays < EXIT_WINDOW_DAYS) {
     throw new Error(`EXIT_WINDOW_DAYS inválida: inteiro >= ${EXIT_WINDOW_DAYS}`);
   }
-  return { port, databaseUrl, exitWindowDays };
+  return { port, databaseUrl, exitWindowDays, database: loadDatabaseTuning(env) };
 }
