@@ -16,3 +16,4 @@ datasets/
 *.pfx
 .turbo/
 .claude/worktrees/
+plataforma-saude/
