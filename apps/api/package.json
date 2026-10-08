@@ -1,0 +1,15 @@
+{
+  "name": "@plataforma/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"api: placeholder — inicializar NestJS (eng/api-bootstrap)\"",
+    "build": "echo \"api: sem build ainda\"",
+    "lint": "echo \"api: sem lint ainda\"",
+    "typecheck": "echo \"api: sem typecheck ainda\"",
+    "test": "echo \"api: sem testes ainda\""
+  },
+  "dependencies": {
+    "@plataforma/shared": "workspace:*"
+  }
+}

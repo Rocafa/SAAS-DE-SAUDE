@@ -1,0 +1,15 @@
+{
+  "name": "@plataforma/web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"web: placeholder — inicializar Next.js (eng/web-bootstrap)\"",
+    "build": "echo \"web: sem build ainda\"",
+    "lint": "echo \"web: sem lint ainda\"",
+    "typecheck": "echo \"web: sem typecheck ainda\"",
+    "test": "echo \"web: sem testes ainda\""
+  },
+  "dependencies": {
+    "@plataforma/shared": "workspace:*"
+  }
+}
