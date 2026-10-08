@@ -64,7 +64,27 @@
 **O que NÃO somos:** não somos marketplace de pacientes (Doctoralia), não somos operadora nem plano de saúde, não fazemos diagnóstico automatizado (fora da regulação da ANVISA para dispositivos médicos) e não somos hospital (sistemas hospitalares estão fora do escopo).
 
 ## 6. Mercado de entrada e sequência de expansão
-*Pendente: será preenchido com a recomendação do relatório executivo de mercado (seção 3) e confirmado pelos sócios (decisão D1).*
+> Recomendação do [relatório executivo de mercado](../01-mercado/relatorio-executivo-mercado.md). **Aguarda confirmação dos sócios (decisão D1).**
+
+**Nicho de entrada (beachhead):** clínicas de **fisioterapia e terapia ocupacional** com 2 a 10 profissionais, particulares ou mistas. Em paralelo, **psicólogos autônomos** como canal de volume e de baixo custo de aquisição.
+
+| Onda | Nicho | Gatilho para entrar |
+|---|---|---|
+| 1 — MVP | Fisio/TO + psicologia autônoma | MVP com agenda de vários pacientes no mesmo horário, pacotes, sessões recorrentes e controle de guia simples (sem o XML de convênio) |
+| 2 | **TEA/ABA** e fonoaudiologia | TISS e controle de carga horária prontos; 3 a 5 clínicas TEA parceiras desde o MVP |
+| 3 | Clínicas multiprofissionais e populares | Gestão de várias unidades, tabelas de preço e assinatura (após a regulação dos cartões de desconto pela ANS) |
+| 4 | Medicina, odontologia, estética e nutrição | Odontograma, TISS completo, estoque e motor de dieta |
+
+**Por quê:** fisio/TO ficou entre os 2 primeiros em todos os 6 cenários de pesos da matriz. TEA tem a maior receita por cliente, mas exige TISS e controle de carga horária, que são a parte mais cara de construir. Começar por fisio/TO constrói exatamente o núcleo de que TEA vai precisar (sessões, guias, repasse).
+
+**Implicações para o MVP:** antecipar o controle de guia simples (sessões autorizadas, saldo, validade, assinatura do paciente por sessão) e a agenda de vários pacientes no mesmo horário.
+
+**Hipóteses que precisam ser validadas antes de fechar a decisão:**
+- **H2:** o controle de guia sem XML basta para a clínica trocar de sistema.
+- **H1:** a clínica paga R$ 99–129 por profissional por mês.
+- **H3:** clínicas TEA pagam pelo menos R$ 60 por paciente por mês.
+
+O roteiro de entrevista está no relatório de mercado.
 
 ## 7. Mensagens por persona (para a landing page e para vendas)
 
