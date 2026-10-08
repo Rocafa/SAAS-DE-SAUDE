@@ -18,3 +18,5 @@ datasets/
 *.tsbuildinfo
 coverage/
 next-env.d.ts
+.claude/worktrees/
+plataforma-saude/

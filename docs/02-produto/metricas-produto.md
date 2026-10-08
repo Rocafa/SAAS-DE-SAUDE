@@ -71,15 +71,15 @@ flowchart LR
 ## 4. Princípios de instrumentação (LGPD)
 
 1. **Nenhum dado pessoal ou sensível em evento de analytics.** Proibido: nome, telefone, e-mail, CPF, CNS, ID de paciente, texto livre, CID, medicamento, conteúdo de prontuário, áudio, transcrição, valor de medida clínica, nome do profissional.
-2. **Identificadores pseudônimos:** `tenant_hash` e `user_hash` (HMAC com chave rotacionável guardada no KMS, nunca o ID interno); sem `patient_*` de qualquer tipo.
+2. **Identificadores pseudônimos:** `tenant_hash` e `user_hash` (HMAC com chave rotacionável guardada no KMS, nunca o ID interno); sem `patient_*` de qualquer tipo. **Em superfícies de paciente** (`app_surface` = `portal` ou `whatsapp`, ou ator paciente, como em `bot_conversation_ended`, `online_booking_completed` e `nps_submitted` respondido por paciente), **não enviar `user_hash`**: só `user_role = paciente` e `tenant_hash`. Teste de contrato no CI falha se `user_hash` aparecer nesses casos.
 3. **Papel, não pessoa:** usar `user_role` (admin, profissional, recepção, financeiro, gestor) e `clinic_niche` (lista fechada). Nichos sensíveis (ex.: psicologia) aparecem só em agregados de ≥ 5 clínicas nos painéis.
 4. **Valores em faixas:** durações, quantidades e valores monetários em *buckets* (ex.: `duration_bucket = "5-10min"`), nunca o valor exato quando puder reidentificar.
 5. **Lista fechada (allowlist):** o schema de cada evento vive em `packages/shared`; propriedade fora do schema é descartada no servidor; teste de contrato no CI.
-6. **Coleta no servidor** sempre que possível; no front, sem *session replay* em telas clínicas.
+6. **Coleta no servidor** sempre que possível. ***Session replay* desligado em toda a área autenticada e no portal do paciente** (agenda, lista de pacientes e inbox expõem nomes e, em psicologia/TEA, revelam saúde por inferência). Se usado, só em telas públicas (landing, cadastro de clínica), com mascaramento total de textos e campos.
 7. **Ferramenta hospedada no Brasil** (ex.: PostHog self-hosted na AWS São Paulo — sugestão, a decidir com Engenharia) e retenção de eventos de 25 meses.
-8. Analytics de produto é finalidade da plataforma (legítimo interesse sobre dado de uso dos clientes); registrar no ROPA (LGP-03.1).
+8. Analytics de produto é finalidade da plataforma; **nesse tratamento somos controladores** (legítimo interesse, art. 7º, IX). Antes do M1: **LIA** (teste de balanceamento, art. 10, §3º), registro no **ROPA** (LGP-03.1), transparência na nossa política de privacidade e justificativa da retenção de 25 meses. Eventos derivados de atos clínicos (`encounter_record_signed`, `document_issued` com `controle_especial`) levam `event_ts` **truncado à hora**, para não permitir cruzamento com o banco da clínica. Se o PostHog for usado como SaaS (não self-hosted), ele vira suboperador e a transferência internacional precisa ser decidida antes do M1.
 
-Propriedades comuns a todos os eventos: `event_ts`, `tenant_hash`, `user_hash`, `user_role`, `clinic_niche`, `clinic_size_bucket` (1, 2–5, 6–10, 11+), `plan`, `app_surface` (web, pwa, whatsapp, portal), `release_version`, `is_pilot`.
+Propriedades comuns a todos os eventos: `event_ts`, `tenant_hash`, `user_hash` (**exceto em superfícies de paciente**, ver regra 2), `user_role`, `clinic_niche`, `clinic_size_bucket` (1, 2–5, 6–10, 11+), `plan`, `app_surface` (web, pwa, whatsapp, portal), `release_version`, `is_pilot`.
 
 ## 5. Eventos a instrumentar no MVP
 
