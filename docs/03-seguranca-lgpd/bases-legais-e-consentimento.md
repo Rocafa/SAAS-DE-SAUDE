@@ -1,0 +1,68 @@
+# Bases legais e consentimento por fluxo de dados
+
+> Não é aconselhamento jurídico. ⚖️ = validar com advogado. A **escolha final da base legal é do controlador** (a clínica, na maioria dos fluxos); o produto oferece a configuração padrão abaixo e registra a base usada.
+>
+> Fontes: LGPD arts. 7º, 8º, 9º, 11, 14, 16, 18, 20 ([Planalto](https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm)); ANPD — Guia de Legítimo Interesse; Medida Preventiva ANPD/Meta (jul/2024).
+
+## 1. Regras de ouro
+
+1. **Dado de saúde → só art. 11.** Legítimo interesse (art. 7º, IX) e proteção ao crédito **não existem** para dado sensível. Para a ANPD, legítimo interesse não ampara tratamento de dados sensíveis (caso Meta, 2024).
+2. **"Dado de saúde" é amplo**: o simples fato de alguém ter consulta agendada com psiquiatra, oncologista, psicólogo, terapeuta de TEA ou clínica de IST já revela saúde. **Agenda é dado sensível.**
+3. **Consentimento não é a base padrão em saúde.** Para prestar o cuidado, a base é **tutela da saúde** (art. 11, II, "f") e **obrigação legal/regulatória** (art. 11, II, "a" — dever de prontuário). Consentimento é frágil (revogável, art. 8º, §5º) e não pode apagar o prontuário.
+4. **Consentimento, quando usado, é específico, destacado, por finalidade, granular, registrável e revogável** (art. 8º e 11, I). Nada de caixa pré-marcada nem "aceito tudo".
+5. **Menores (art. 14):** melhor interesse; quando a base for consentimento, ele deve ser dado por **pelo menos um dos pais ou responsável legal**. Adolescentes devem ser informados de forma adequada à idade.
+6. **Art. 11, §4º:** é vedado comunicar ou compartilhar dados de saúde para obter **vantagem econômica**, salvo as exceções legais (prestação de serviços de saúde, assistência farmacêutica e à saúde em benefício do titular, portabilidade a pedido, transações financeiras e administrativas do serviço). Isso afeta diretamente monetização e treino de IA.
+
+## 2. Tabela de bases por fluxo
+
+Legenda — **Ctrl**: quem é controlador. **Op**: nós como operador.
+
+| Fluxo | Dados | Controlador | Base legal recomendada | Consentimento necessário? | Observações de produto |
+|---|---|---|---|---|---|
+| **Cadastro do paciente** | Identificação, contato, CPF, convênio, responsável legal | Clínica | Art. 7º, V (contrato/procedimentos preliminares) e art. 11, II, "f" (tutela da saúde) para dados de saúde; art. 7º, II/11, II, "a" para dados exigidos por norma (ex.: identificação no prontuário, TISS) | Não | Campos mínimos obrigatórios; CPF opcional quando não exigido. Nome social suportado. |
+| **Agenda / agendamento online** | Nome, contato, data, profissional, especialidade, motivo (opcional) | Clínica | Art. 11, II, "f" (tutela da saúde) + art. 7º, V | Não | "Motivo da consulta" é texto livre sensível: opcional e criptografado. Página pública de agendamento sem expor a agenda de terceiros. |
+| **Prontuário / evolução / anamnese / exames** | Dados clínicos, imagens, laudos | Clínica (ou profissional autônomo) | Art. 11, II, "f" + art. 11, II, "a" (dever legal de registro e guarda — Lei 13.787/2018; resoluções dos conselhos) | Não | Eliminação a pedido **não** se aplica durante a guarda legal (art. 16, I). Explicar isso no portal. |
+| **Notas psicológicas restritas** | Conteúdo de sessão | Psicólogo | Art. 11, II, "f" + "a" (CFP 01/2009) | Não | Compartimento visível só ao autor; no prontuário multiprofissional, só o necessário. |
+| **Compartilhamento entre profissionais da mesma clínica** | Prontuário | Clínica | Art. 11, II, "f" | Não, mas informar | Acesso restrito à equipe que atende o paciente ("need to know"); trilha de auditoria. |
+| **Compartilhamento com outra instituição / encaminhamento** | Resumo clínico | Clínica | Art. 11, II, "f" (quando for para o cuidado) | Recomendável registrar ciência/consentimento do paciente | Envio por link seguro com expiração, nunca anexo por WhatsApp. |
+| **Receita / atestado digital** | Prescrição, CID (atestado só com autorização do paciente para incluir CID, conforme norma ética) | Clínica/profissional | Art. 11, II, "a" e "f" | Não (exceto CID em atestado) | Assinatura ICP-Brasil; QR de validação expõe o mínimo. |
+| **Teleconsulta** | Vídeo/áudio, prontuário | Clínica | Art. 11, II, "f" | **Sim, TCLE** exigido por CFM 2.314/2022 e Lei 14.510/2022 (consentimento como requisito ético-regulatório, além da base legal) | **Gravação desligada por padrão**; se gravar: consentimento específico, guarda como parte do prontuário. |
+| **Lembretes e confirmações por WhatsApp/SMS/e-mail** | Nome, data/hora, local | Clínica (Meta/BSP = suboperador; transferência internacional) | Art. 11, II, "f" (comunicação necessária ao cuidado) + art. 7º, V | Opt-in do canal WhatsApp exigido pela política da Meta; registrar | **Mensagem mínima**: sem especialidade, diagnóstico, procedimento ou nome de clínica que revele condição sensível (configurável: "nome fantasia neutro"). |
+| **Conversa livre com paciente por WhatsApp (inbox)** | Pode conter dados clínicos | Clínica | Art. 11, II, "f" | Informar no primeiro contato; consentimento para canal | Avisar: "não envie exames por aqui, use o portal". Retenção curta de mensagens fora do prontuário. |
+| **Cobrança / Pix / NFS-e** | Nome, CPF, valor | Clínica (PSP = controlador independente) | Art. 7º, V e II (obrigação fiscal) | Não | **Descrição da cobrança e da NFS-e sem informação clínica** (ex.: "Consulta" e não "Sessão de psicoterapia" — validar com contador, pois a NFS-e exige descrição do serviço ⚖️). |
+| **Faturamento convênio (TISS)** | Guias com procedimentos/CID | Clínica (operadora = controlador independente) | Art. 11, II, "a" e art. 11, §4º, exceção de transações administrativas | Não | Só os campos exigidos pela versão TISS vigente. |
+| **Marketing da clínica para pacientes** (campanhas, aniversário, retorno, promoções estéticas) | Contato + segmentação | Clínica | **Consentimento** (art. 7º, I); se segmentar por dado de saúde (ex.: "pacientes de clareamento"), **consentimento específico e destacado (art. 11, I)** | **Sim, separado, opt-in** | Não segmentar por diagnóstico sem consentimento específico. Descadastro em um clique. Respeitar regras de publicidade do conselho. **Lembrete de retorno clínico** pode ser tutela da saúde se for continuidade do cuidado — distinguir de promoção. ⚖️ |
+| **Uso de imagem (antes/depois em estética/odonto)** | Fotos | Clínica | Consentimento específico (art. 11, I) + autorização de uso de imagem | Sim | Normas de publicidade dos conselhos frequentemente vedam antes/depois; bloquear por profissão. |
+| **Pesquisa de satisfação (NPS)** | Contato, avaliação | Clínica | Art. 7º, IX (legítimo interesse) **se** não envolver dado de saúde; senão consentimento | Recomendável opt-out | Não perguntar sobre condição clínica. |
+| **Analytics do produto (telemetria)** | Eventos de uso dos profissionais, sem conteúdo clínico | **Nós** | Art. 7º, IX (legítimo interesse) com LIA documentado | Não (opt-out para cookies não essenciais no site) | Proibido enviar conteúdo de prontuário, nomes de pacientes ou texto livre para ferramentas de analytics/APM. |
+| **Analytics/BI para a clínica** (dashboards de produção, ocupação) | Dados da própria clínica | Clínica | Art. 11, II, "f" / art. 7º, IX para dados não sensíveis (gestão) | Não | Agregados; perfil "gestor" sem acesso a conteúdo clínico. |
+| **Benchmarks entre clínicas / estatísticas de mercado** | Dados agregados de vários tenants | **Nós** (controlador) | Apenas sobre dados **anonimizados** (fora da LGPD após anonimização robusta); o ato de anonimizar precisa de autorização contratual | Opt-in da clínica no contrato | Limiar mínimo de agregação (k ≥ 10 clínicas e ≥ 50 pacientes por célula). ⚖️ |
+| **IA assistiva no atendimento** (resumo de prontuário, transcrição, sugestão de texto, rascunho de documento) | Dados clínicos do paciente atendido | Clínica (nós = operador; provedor LLM = suboperador) | Art. 11, II, "f" | **Informar o paciente** e permitir **recusa** (CFM 2.454/2026 para médicos; aplicar a todas as profissões como boa prática) | Ver [lgpd-e-ia.md](lgpd-e-ia.md). Registro do uso de IA no prontuário. |
+| **IA para triagem/chatbot com paciente** | Sintomas relatados | Clínica | Art. 11, II, "f" | Aviso claro de que é IA; possibilidade de falar com humano | Não dar diagnóstico; escalonamento para humano; potencial SaMD. ⚖️ |
+| **Treino / fine-tuning de LLM com dados de clientes** | Prontuários, mensagens | **Nós** (controlador) | Identificável ou pseudonimizado: **somente consentimento específico e destacado de cada paciente (art. 11, I)** — operacionalmente inviável e de alto risco; não usar art. 11, II, "c" (não somos órgão de pesquisa); **nunca** legítimo interesse. **Padrão adotado: só treinar com dados anonimizados** de forma comprovada, com opt-in contratual da clínica. | Ver coluna anterior | Veto do Guardião por padrão. Exige RIPD + parecer jurídico + aprovação N0. ⚖️ |
+| **Fine-tuning exclusivo para uma clínica** (modelo usado só por ela) | Dados da própria clínica | Clínica (instrução documentada) | A ser definido com advogado — tutela da saúde é discutível para treino | Provavelmente consentimento | Não fazer no MVP. ⚖️ |
+| **Logs de segurança e auditoria** | IP, usuário, ação, recurso acessado | Nós (plataforma) e clínica (auditoria de prontuário) | Art. 7º, II (Marco Civil art. 15) e IX; art. 11, II, "a" e "g" (prevenção à fraude e segurança do titular) | Não | Logs não contêm conteúdo clínico, só identificadores. |
+| **Suporte técnico** | Pode precisar ver tela/dados | Clínica autoriza; nós operador | Instrução da clínica | Não | Break-glass com chamado, tempo limitado e registro. |
+| **Dados de profissionais/usuários** (conta, CRM/CRP/CRO, assinatura) | Cadastro | Nós | Art. 7º, V e II | Não | Validação de registro profissional em conselho. |
+
+## 3. Consentimento — requisitos técnicos do módulo
+
+- Entidade `consent` versionada: titular, finalidade (enum), texto exato apresentado (hash + versão), canal, data/hora, IP/dispositivo, quem coletou, representante legal (se menor), status, data de revogação.
+- Revogação tão fácil quanto o aceite (portal, link no WhatsApp, recepção).
+- Revogação **não** apaga o prontuário; interrompe apenas a finalidade consentida.
+- Prova de consentimento retida enquanto durar o tratamento + prazo prescricional (proposta: 5 anos após revogação) ⚖️.
+- Textos de consentimento em linguagem simples, por finalidade; versões revisadas pelo jurídico.
+- Bloqueio técnico: fluxos que dependem de consentimento (marketing, gravação, imagem) verificam `consent.status = active` **no servidor** antes de executar.
+
+## 4. Direitos do titular (art. 18) — onde no produto
+
+| Direito | Implementação |
+|---|---|
+| Confirmação e acesso (art. 19: simplificado imediato; completo em até 15 dias) | Portal do paciente + exportação pela clínica |
+| Correção | Pedido registrado; correção clínica via **adendo** (prontuário não é sobrescrito) |
+| Anonimização/bloqueio/eliminação de excessivos | Processo manual assistido; respeitar guarda legal |
+| Portabilidade | Exportação em formato estruturado (JSON/FHIR quando possível) + PDF |
+| Eliminação de dados tratados com consentimento | Apaga dados de marketing/imagem; prontuário mantido (art. 16, I) |
+| Informação sobre compartilhamentos | Lista de suboperadores + compartilhamentos registrados no paciente |
+| Revogação do consentimento | Central de consentimentos |
+| Revisão de decisão automatizada (art. 20) | Nenhuma decisão exclusivamente automatizada sobre o paciente; canal para pedir explicação |
