@@ -39,7 +39,7 @@
 
 ## 4. Proposta de valor
 
-> **"Atenda mais, digite menos: gestão completa da sua clínica com IA que escreve por você, WhatsApp que agenda sozinho e Pix que dá baixa sozinho, por um preço único e com os seus dados sempre seus."**
+> **"Atenda mais, digite menos: gestão completa da sua clínica com IA que rascunha por você, WhatsApp que agenda sozinho e Pix que dá baixa sozinho, por um preço único, com exportação total dos dados da clínica a qualquer momento."**
 
 | Para o… | Ganho principal | Como entregamos |
 |---|---|---|
@@ -52,12 +52,12 @@
 ## 5. Posicionamento
 
 **Declaração de posicionamento**
-> Para **clínicas independentes de qualquer especialidade da saúde** que perdem tempo com burocracia e se sentem presas a sistemas caros, a **[nome do produto]** é a **plataforma de gestão clínica com IA** que **automatiza documentação, agenda e cobrança pelo WhatsApp e Pix**. Diferente de iClinic, Feegow e sistemas de nicho, **cobramos um preço único com tudo incluído, atendemos todos os nichos num núcleo só e garantimos que os dados são da clínica**, com exportação total e LGPD por design.
+> Para **clínicas independentes de qualquer especialidade da saúde** que perdem tempo com burocracia e se sentem presas a sistemas caros, a **[nome do produto]** é a **plataforma de gestão clínica com IA** que **automatiza documentação, agenda e cobrança pelo WhatsApp e Pix**. Diferente de iClinic, Feegow e sistemas de nicho, **cobramos um preço único com tudo incluído, atendemos todos os nichos num núcleo só e tratamos os dados só por conta da clínica (somos operadores)**, com exportação total e LGPD por design.
 
 **Diferenciais defensáveis (do mais difícil ao mais fácil de copiar)**
-1. **Dados de IA com consentimento:** pares rascunho → versão final de clínicas com opt-in, anonimizados, por nicho. O ativo cresce com o uso.
+1. **Qualidade de IA por nicho:** modelos de prontuário, prompts e avaliações (evals) por especialidade, construídos com profissionais parceiros e dados **sintéticos**. *Hipótese de Fase 2, não usar em marketing:* aprendizado com textos clínicos reais só depois de RIPD específico, parecer jurídico (LGPD art. 11 §4º), anonimização aprovada pelo Guardião, base legal válida perante o **paciente** (o opt-in da clínica não basta) e aprovação dos sócios.
 2. **Núcleo multiprofissional com módulos por nicho:** atende clínicas mistas que hoje precisam de 2 ou 3 sistemas.
-3. **Confiança como marca:** exportação total, sem fidelidade, hospedagem no Brasil e transparência sobre a IA.
+3. **Confiança como marca:** exportação total, sem fidelidade, banco de dados hospedado no Brasil e transparência sobre a IA (quais provedores, onde processam). *Só anunciar "IA processada no Brasil" depois da decisão D3; o WhatsApp (Meta) processa fora do país.*
 4. **WhatsApp nativo:** o bot e a caixa de entrada são o centro da operação, não um adicional.
 5. **Preço único:** simples de comunicar, mas copiável. Por isso nunca deve ser o único diferencial.
 
@@ -90,8 +90,8 @@ O roteiro de entrevista está no relatório de mercado.
 
 | Persona | Mensagem principal | Prova |
 |---|---|---|
-| Médico ou dentista | "Termine a consulta com a evolução pronta." | Demonstração do escriba ao vivo; cerca de R$ 0,30–0,58 de custo de IA por consulta |
-| Psicólogo | "Sessões, pacotes e cobrança no automático, com sigilo reforçado." | Notas privadas separadas; IA processada no Brasil |
+| Médico ou dentista | "Termine a consulta com o rascunho da evolução pronto para você revisar e assinar." | Demonstração do escriba ao vivo (a IA rascunha, o profissional decide, conforme CFM 2.454/2026); cerca de R$ 0,30–0,58 de custo de IA por consulta |
+| Psicólogo | "Sessões, pacotes e cobrança no automático, com sigilo reforçado." | Notas privadas separadas; IA com processamento no Brasil (após decisão D3) |
 | Dono de clínica | "Menos faltas, mais caixa, zero planilha." | Painel de no-show e conciliação Pix automática |
 | Quem quer trocar de sistema | "Migramos seus dados de graça, e você pode sair quando quiser." | Importador de concorrentes e exportação total |
 
