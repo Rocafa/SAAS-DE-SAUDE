@@ -1,7 +1,7 @@
 # Contexto do projeto — leia primeiro
 
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 08/10/2026. Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 08/10/2026 (rodada 2: ver [relatório](docs/relatorios/2026-10-08-rodada-2.md)). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -30,6 +30,8 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 ## 4. Produto
 - **24 módulos, 324 micropartes** (186 no MVP, 106 na Fase 2, 32 na Fase 3).
 - **MVP estimado de nov/2026 a jun/2027.** TISS e teleconsulta ficam para a Fase 2.
+- **Backlog do MVP:** 23 épicos, 168 histórias, 864 pontos. Também prontos: definição de pronto, métricas e plano de piloto (30 clínicas).
+- **Nicho de entrada recomendado:** fisio/TO + psicólogos autônomos; TEA/ABA na onda 2 ([relatório executivo](docs/01-mercado/relatorio-executivo-mercado.md)).
   → [PRD](docs/02-produto/PRD.md) · [WBS](docs/02-produto/WBS-micropartes.md) · [roadmap](docs/02-produto/roadmap.md) · [jornadas](docs/02-produto/jornadas.md)
 
 ## 5. LGPD e regulação (inegociável)
