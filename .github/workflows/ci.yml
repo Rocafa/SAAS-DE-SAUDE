@@ -32,10 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+      # O cache do pnpm exige pnpm-lock.yaml; enquanto o lockfile não for commitado, roda sem cache.
       - uses: actions/setup-node@v4
+        if: hashFiles('pnpm-lock.yaml') != ''
         with:
           node-version: 22
           cache: pnpm
+      - uses: actions/setup-node@v4
+        if: hashFiles('pnpm-lock.yaml') == ''
+        with:
+          node-version: 22
       - name: Install
         run: |
           if [ -f pnpm-lock.yaml ]; then
