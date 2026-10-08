@@ -11,7 +11,28 @@ export interface ReadinessProbe {
  * pool não derruba a readiness (evita tirar todas as instâncias do balanceador ao mesmo tempo),
  * e banco fora do ar é detectado rápido (connect_timeout curto + timeout total do ping).
  */
-export function createReadinessProbe(url: string, timeoutMs = 1_000): ReadinessProbe {
+export function createReadinessProbe(url: string, timeoutMs = 1_000, cacheMs = 1_000): ReadinessProbe {
+  const raw = createUncachedProbe(url, timeoutMs);
+  // Proteção do banco: o endpoint de readiness não tem rate limit (ver http-security.ts), então
+  // chamadas simultâneas compartilham UM ping em andamento e o resultado vale por `cacheMs`.
+  // Uma rajada de N requisições vira no máximo 1 `select 1` por janela.
+  let inFlight: Promise<boolean> | null = null;
+  let last: { ok: boolean; at: number } | null = null;
+  return {
+    ping() {
+      if (last && Date.now() - last.at < cacheMs) return Promise.resolve(last.ok);
+      inFlight ??= raw.ping().then((ok) => {
+        last = { ok, at: Date.now() };
+        inFlight = null;
+        return ok;
+      });
+      return inFlight;
+    },
+    close: () => raw.close(),
+  };
+}
+
+function createUncachedProbe(url: string, timeoutMs: number): ReadinessProbe {
   const client = postgres(url, {
     max: 1,
     connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
