@@ -15,9 +15,12 @@ O trabalho é feito por uma **orquestra de agentes** com hierarquia definida:
 | N2 | 📊 Mercado · 🧩 Produto · 🛠️ Engenharia · 🤖 IA/LLM |
 | N3 | Executores de micropartes |
 
+- **Contexto completo em 5 minutos: [CONTEXTO.md](CONTEXTO.md)**
 - Hierarquia e regras: [docs/00-governanca/hierarquia.md](docs/00-governanca/hierarquia.md)
 - Fluxogramas: [docs/00-governanca/fluxograma.md](docs/00-governanca/fluxograma.md)
 - Definições dos agentes (Claude Code): [.claude/agents/](.claude/agents/)
+- **Skills disponíveis, agentes e automação de CI/features:** [docs/00-governanca/skills-agentes-e-automacao.md](docs/00-governanca/skills-agentes-e-automacao.md) ← comece por aqui
+- Decisões pendentes dos sócios: [docs/00-governanca/decisoes.md](docs/00-governanca/decisoes.md)
 
 ## Mapa da documentação
 

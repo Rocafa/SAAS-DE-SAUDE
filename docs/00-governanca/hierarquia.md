@@ -12,6 +12,7 @@
 | **N0 — Donos** | Sócios | Humanos (Matheus + sócio) | Decisão final, aprovar merge na `main`, definir prioridades e orçamento | — |
 | **N1 — Regente** | 🎼 **Maestro** | Agente líder / orquestrador | Quebrar o trabalho em micropartes, distribuir tarefas, integrar resultados, resolver conflitos entre frentes | Fazer merge na `main` sem aprovação humana; ignorar veto do Guardião |
 | **N1 — Transversal** | 🛡️ **Guardião LGPD & Segurança** | Agente de compliance | **Vetar** qualquer entrega (doc, código, dataset, prompt de IA) que viole LGPD/segurança; exigir correções | Escrever features; aprovar o próprio trabalho |
+| **N1 — Transversal** | 🔍 **Revisor de código** | Agente de qualidade | Bloquear merge com bug crítico; exigir evidência de testes | Revisar LGPD a fundo (é do Guardião); escrever features |
 | **N2 — Líderes de frente** | 📊 Pesquisa de Mercado · 🧩 Produto · 🛠️ Engenharia · 🤖 IA/LLM | Subagentes | Planejar e executar sua frente, criar sub-tarefas para executores | Mudar escopo de outra frente sem passar pelo Maestro |
 | **N3 — Executores** | Pesquisadores por nicho, devs por módulo, etc. | Subagentes efêmeros | Executar UMA microparte bem definida | Tomar decisões de arquitetura/escopo |
 
@@ -38,6 +39,14 @@ flowchart TD
     P2 --> E4["N3 · PRD + WBS de micropartes"]
     P3 --> E5["N3 · Arquitetura + esqueleto do MVP"]
     P4 --> E6["N3 · Estratégia de LLM, dados e treino"]
+    P2 --> E7["N3 · 🎨 design-ui"]
+    P3 --> E8["N3 · 🧪 qa-testes"]
+    P3 --> E9["N3 · ⚙️ devops-ci"]
+
+    R["🔍 N1 · REVISOR DE CÓDIGO<br/>bloqueia bug crítico"]
+    M <--> R
+    R -. revisa PRs .-> P3
+    R -. revisa PRs .-> P4
 
     G -. audita .-> P1
     G -. audita .-> P2
@@ -53,7 +62,8 @@ flowchart TD
     class M maestro
     class G guard
     class P1,P2,P3,P4 lider
-    class E1,E2,E3,E4,E5,E6 exec
+    class R guard
+    class E1,E2,E3,E4,E5,E6,E7,E8,E9 exec
 ```
 
 ## Regras de ouro
