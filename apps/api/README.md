@@ -2,7 +2,7 @@
 
 API em **NestJS (TypeScript)** — monólito modular. Workers BullMQ rodam a partir da mesma base de código (processo separado).
 
-Status: **placeholder** — dependências do NestJS, Drizzle e BullMQ serão adicionadas na microparte `eng/api-bootstrap`.
+Status: **bootstrap** — NestJS + `GET /health`, tenancy (`withTenant` → `set_config(app.tenant_id, …, true)`), migração `db/migrations/0001` com RLS FORCE. Teste de isolamento: `pnpm db:migrate` (DATABASE_MIGRATOR_URL) e `pnpm test:rls` (DATABASE_URL = app_user).
 
 ## Estrutura
 

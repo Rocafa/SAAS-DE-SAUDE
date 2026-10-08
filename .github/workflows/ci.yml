@@ -17,12 +17,12 @@ jobs:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: gitleaks
         run: |
-          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
             git /repo --redact --verbose --exit-code 1
 
   quality:
@@ -30,15 +30,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: secrets
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       # O cache do pnpm exige pnpm-lock.yaml; enquanto o lockfile não for commitado, roda sem cache.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: hashFiles('pnpm-lock.yaml') != ''
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: hashFiles('pnpm-lock.yaml') == ''
         with:
           node-version: 22
@@ -51,13 +51,65 @@ jobs:
           fi
       - run: pnpm turbo run lint typecheck test
 
+  rls:
+    name: Isolamento entre tenants (RLS)
+    runs-on: ubuntu-latest
+    needs: secrets
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          # Senha descartável do container efêmero de CI (sem dado algum). Não é segredo.
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPASSWORD: ci-efemero
+      POSTGRES_USER: postgres
+      POSTGRES_DB: plataforma_saude
+      POSTGRES_PASSWORD: ci-efemero
+      DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: hashFiles('pnpm-lock.yaml') != ''
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: hashFiles('pnpm-lock.yaml') == ''
+        with:
+          node-version: 22
+      - name: Install
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+      # Mesmo script do docker-compose local: cria app_migrator (dono) e app_user (NOBYPASSRLS).
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+      - name: Migrar (papel app_migrator)
+        run: pnpm --filter @plataforma/api db:migrate
+      - name: Teste de isolamento (papel app_user)
+        run: pnpm --filter @plataforma/api test:rls
+
   deps:
     name: Auditoria de dependências
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: pnpm audit (high/critical bloqueia)
