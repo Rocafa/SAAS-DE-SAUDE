@@ -26,15 +26,16 @@
 | EP-04 | Governança LGPD base | M0 | 4 | 14 |
 | EP-05 | Backoffice interno seguro | M0 | 2 | 8 |
 | EP-06 | Onboarding e cadastro de pacientes | M1 | 9 | 39 |
-| EP-07 | Agenda | M1 | 10 | 45 |
+| EP-07 | Agenda | M1 | 11 | 50 |
 | EP-08 | Prontuário — núcleo | M1 | 10 | 62 |
 | EP-09 | Prontuário por nicho | M1 | 13 | 47 |
 | EP-10 | Gate LGPD (consentimento, retenção, RIPD) | M1 | 3 | 18 |
+| EP-24 | Pacotes e controle de guia simples (sem XML TISS) | M1 | 7 | 31 |
 | EP-11 | WhatsApp e comunicação | M2 | 15 | 79 |
 | EP-12 | Agendamento online e bot | M2 | 9 | 44 |
 | EP-13 | Documentos clínicos e assinatura | M3 | 11 | 64 |
 | EP-14 | Escriba e IA clínica | M3 | 12 | 74 |
-| EP-15 | Financeiro e repasse | M4 | 5 | 26 |
+| EP-15 | Financeiro e repasse | M4 | 5 | 24 |
 | EP-16 | Pagamentos (Pix e cartão) | M4 | 5 | 32 |
 | EP-17 | Fiscal (NFS-e) | M4 | 3 | 16 |
 | EP-18 | Portal do paciente | M4 | 5 | 24 |
@@ -43,22 +44,23 @@
 | EP-21 | Billing da plataforma | M4 | 6 | 27 |
 | EP-22 | Relatórios, NPS e métricas | M4 | 6 | 31 |
 | EP-23 | Suporte e backoffice | M4 | 5 | 24 |
-| **Total** | **23 épicos** | | **168** | **864** |
+| **Total** | **24 épicos** | | **176** | **898** |
 
 | Recorte | Histórias | Pontos |
 |---|---|---|
 | M0 | 26 | 130 |
-| M1 | 45 | 211 |
-| **M0 + M1** | **71** | **341** |
+| M1 | 53 | 247 |
+| **M0 + M1** | **79** | **377** |
 | M2 | 24 | 123 |
 | M3 | 23 | 138 |
-| M4 | 50 | 262 |
-| **MVP total** | **168** | **864** |
+| M4 | 50 | 260 |
+| **MVP total** | **176** | **898** |
 
-- **MoSCoW:** 139 Must · 21 Should · 8 Could. **Flag LGPD = S:** 83 histórias.
-- **Histórias com tag de nicho:** HU-PRO-009, HU-PRO-012 a HU-PRO-023, HU-DOC-001, HU-DOC-002, HU-DOC-004, HU-PRO-024, HU-PRO-025 (as demais são núcleo comum).
-- **Velocidade de referência (ESTIMATIVA):** 2 squads de engenharia a ~30 pts/semana somados → M0+M1 em ~11–12 semanas (o roadmap prevê 14). Recalibrar após 2 iterações.
-- A seção [Rastreabilidade](#rastreabilidade-wbs--histórias) ao final confirma que as 186 micropartes MVP da WBS estão cobertas.
+- **MoSCoW:** 147 Must · 21 Should · 8 Could. **Flag LGPD = S:** 88 histórias.
+- **Histórias com tag de nicho:** HU-PRO-009, HU-PRO-012 a HU-PRO-023, HU-DOC-001, HU-DOC-002, HU-DOC-004, HU-PRO-024, HU-PRO-025, HU-AGD-011, HU-CNV-001 a HU-CNV-006 (as demais são núcleo comum).
+- **Velocidade de referência (ESTIMATIVA):** 2 squads de engenharia a ~30 pts/semana somados → M0+M1 (377 pts) em ~12–13 semanas (o roadmap prevê 14; a folga caiu de ~2,5 para ~1,5 semana com a rodada 3). Recalibrar após 2 iterações.
+- A seção [Rastreabilidade](#rastreabilidade-wbs--histórias) ao final confirma que as 194 micropartes MVP da WBS estão cobertas.
+- **Rodada 3 (2026-10-08):** pacotes antecipados para o M1 (HU-FIN-004, sem contador provisório), controle de guia simples no M1 (EP-24, HU-CNV-001 a 006), atendimento simultâneo (HU-AGD-011) e cobrança de pacotes no M4 (HU-FIN-006).
 
 ---
 
@@ -846,7 +848,7 @@ Como **Juliana**, quero ver a agenda por dia, semana, mês e lista, com vários 
 ```
 
 ### HU-AGD-006 — Criar, mover e cancelar agendamentos
-**WBS:** AGD-02.2 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-005, HU-PAC-001 · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
+**WBS:** AGD-02.2 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-005, HU-PAC-001, HU-AGD-011 · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
 
 Como **Juliana**, quero criar, arrastar, editar e cancelar agendamentos com validação de conflito, para manter a agenda correta sem retrabalho.
 
@@ -856,10 +858,15 @@ Como **Juliana**, quero criar, arrastar, editar e cancelar agendamentos com vali
     Quando Juliana o arrasta para as 11h livre
     Então o horário muda e a alteração fica no histórico com autor
 
-  Cenário: Conflito de profissional
-    Dado Dr. Rafael ocupado às 14h
+  Cenário: Conflito de profissional com capacidade 1
+    Dado Dr. Rafael com capacidade de 1 paciente por horário e ocupado às 14h
     Quando Juliana tenta agendar outro paciente às 14h
     Então o sistema bloqueia (salvo encaixe)
+
+  Cenário: Profissional com atendimento simultâneo
+    Dado Diego com capacidade de 3 pacientes por horário e 2 agendados às 8h
+    Quando Juliana agenda um terceiro paciente às 8h
+    Então o agendamento é aceito e o horário aparece como lotado (regras em HU-AGD-011)
 
   Cenário: Cancelamento exige motivo
     Dado um agendamento futuro
@@ -885,9 +892,9 @@ Como **Juliana**, quero encaixar um paciente fora da grade com sinalização, pa
 ```
 
 ### HU-AGD-008 — Sessões recorrentes vinculadas a pacote
-**WBS:** AGD-02.4 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-006, HU-FIN-004 (no M1 usar contador de sessões; vínculo financeiro completo no M4) · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
+**WBS:** AGD-02.4 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-006, HU-FIN-004 (pacote definitivo no M1; a cobrança do pacote fica em HU-FIN-006, no M4) · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** N
 
-Como **Marcos (psicólogo)**, quero criar uma série semanal ou quinzenal de sessões em uma ação, para não agendar uma por uma.
+Como **Marcos (psicólogo)**, quero criar uma série semanal ou quinzenal de sessões em uma ação, vinculada a um pacote (ou a uma guia de convênio, ver HU-CNV-003), para não agendar uma por uma.
 
 ```gherkin
   Cenário: Série de 20 sessões
@@ -945,6 +952,35 @@ Como **Juliana**, quero marcar chegada, atendimento, falta e cancelamento, para 
     Quando Juliana marca "faltou"
     Então a falta entra na métrica de no-show
 ```
+
+### HU-AGD-011 — Atendimento simultâneo e em grupo `[nicho:fisio-to]`
+**WBS:** AGD-01.5 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-002, HU-AGD-004 · **Pontos:** 5 · **MoSCoW:** Must · **LGPD:** N
+
+Como **Diego (fisio)**, quero atender até 4 pacientes no mesmo horário, cada um com seu aparelho, para refletir como o meu ginásio funciona de verdade.
+
+```gherkin
+  Cenário: Capacidade por profissional e tipo de atendimento
+    Dado Diego com capacidade de 4 pacientes por horário no tipo "Fisioterapia em ginásio"
+    Quando Juliana agenda 4 pacientes às 8h com Diego
+    Então os 4 agendamentos são criados, cada um com status e cobrança próprios
+    E a agenda mostra o horário das 8h como "4/4 — lotado"
+
+  Cenário: Excesso de capacidade
+    Dado o horário das 8h de Diego lotado
+    Quando Juliana tenta agendar o 5º paciente
+    Então o sistema bloqueia e sugere os próximos horários com vaga
+
+  Cenário: Aparelho em uso no mesmo horário
+    Dado o aparelho "Ultrassom 1" reservado para outro paciente às 8h
+    Quando Juliana reserva o mesmo aparelho para um paciente do grupo das 8h
+    Então o sistema aponta o conflito do aparelho (regra de HU-AGD-004)
+
+  Cenário: Falta de um paciente do grupo
+    Dado 3 pacientes no grupo das 8h
+    Quando Juliana marca falta para 1 deles
+    Então só aquele agendamento muda de status e os outros 2 seguem para atendimento
+```
+> Revisão da rodada 3: o relatório de mercado (§5.3, item 3) pede agenda com 1 profissional e 2–4 pacientes no mesmo horário. HU-AGD-006 passa a validar conflito pela capacidade definida aqui.
 
 ## EP-08 — Prontuário — núcleo
 
@@ -1450,6 +1486,172 @@ Como **sócio (N0)**, quero o RIPD do produto aprovado pelo Guardião antes de q
 ```
 > O RIPD específico do escriba (também LGP-03.2) é gate do M3 — ver HU-IA-013.
 
+## EP-24 — Pacotes e controle de guia simples (sem XML TISS)
+
+> Antecipado para o M1 na rodada 3 (premissa reversível de D1: fisio/TO + psicólogos autônomos). Resolve o conflito apontado em [docs/relatorios/2026-10-08-rodada-2.md](../relatorios/2026-10-08-rodada-2.md) §3. O faturamento continua no portal da operadora; o XML TISS (CNV-02/03) fica na F2.1.
+
+### HU-FIN-004 — Pacotes de sessões com saldo
+**WBS:** FIN-01.5 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-AGD-002, HU-PAC-001 · **Pontos:** 5 · **MoSCoW:** Must · **LGPD:** N
+
+Como **Diego (fisio)**, quero registrar um pacote de sessões para o paciente e ver o saldo, para não controlar créditos em planilha.
+
+```gherkin
+  Cenário: Saldo debitado por sessão
+    Dado um pacote de 10 sessões de "Pilates" para o paciente Antônio
+    Quando uma sessão do pacote é marcada como "atendido"
+    Então o saldo passa a 9 e o histórico mostra a sessão que consumiu o crédito
+
+  Cenário: Falta conforme a política da clínica
+    Dado a política "falta sem aviso consome a sessão"
+    Quando Juliana marca falta para Antônio
+    Então o saldo é debitado e a falta aparece no extrato do pacote
+
+  Cenário: Alerta de saldo baixo
+    Dado um pacote com 2 sessões restantes
+    Quando a recepção abre o agendamento de Antônio
+    Então aparece o aviso de saldo baixo com a opção de renovar o pacote
+
+  Cenário: Saldo esgotado
+    Dado um pacote com saldo 0
+    Quando Juliana tenta vincular nova sessão ao pacote
+    Então o sistema recusa, salvo override com motivo registrado
+```
+> Substitui o "contador provisório" do M1: o pacote já nasce como entidade definitiva. A cobrança do pacote (venda, parcelas e recibo) fica em HU-FIN-006, no M4.
+
+### HU-CNV-001 — Cadastro simples de convênios `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.1 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-NUC-001 · **Pontos:** 2 · **MoSCoW:** Must · **LGPD:** N
+
+Como **Carla (dona)**, quero cadastrar os convênios que atendo com valor por sessão e exigências, para usar no agendamento e nas guias.
+
+```gherkin
+  Cenário: Cadastro rápido
+    Dado Carla na tela de convênios
+    Quando ela cadastra "Operadora X" com valor de R$ 45 por sessão, exigindo senha e assinatura por sessão
+    Então o convênio fica disponível como forma de atendimento no agendamento
+
+  Cenário: Convênio inativado
+    Dado um convênio com guias ativas
+    Quando Carla o inativa
+    Então novas guias são bloqueadas e as guias ativas continuam até o fim do saldo
+```
+
+### HU-CNV-002 — Registro de guia com sessões autorizadas, senha e validade `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.2 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-CNV-001, HU-PAC-001, HU-NUC-005 · **Pontos:** 5 · **MoSCoW:** Must · **LGPD:** S
+
+Como **Juliana (recepção)**, quero registrar a guia autorizada do paciente em menos de 1 minuto, para controlar as sessões sem papel solto.
+
+```gherkin
+  Cenário: Registro completo
+    Dado o paciente Antônio com convênio "Operadora X"
+    Quando Juliana informa nº da guia, senha, carteirinha, procedimento, 10 sessões autorizadas, emissão e validade e anexa a foto da guia
+    Então a guia fica ativa com saldo 10 e validade visível na ficha do paciente
+
+  Cenário: Guia duplicada
+    Dado uma guia "123456" já registrada na "Operadora X"
+    Quando Juliana registra outra guia com o mesmo número no mesmo convênio
+    Então o sistema bloqueia e mostra a guia existente
+
+  Cenário: Acesso ao anexo da guia (segurança)
+    Dado a imagem da guia armazenada
+    Quando um usuário sem permissão de faturamento ou recepção tenta abri-la
+    Então o acesso é negado e a tentativa fica na trilha de auditoria
+    E a imagem só é servida por URL assinada de curta duração
+```
+
+### HU-CNV-003 — Consumo da guia e saldo por sessão `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.3 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-CNV-002, HU-AGD-008, HU-AGD-010 · **Pontos:** 8 · **MoSCoW:** Must · **LGPD:** S
+
+Como **Diego (fisio)**, quero que cada sessão atendida consuma a guia automaticamente, para saber o saldo sem contar à mão.
+
+```gherkin
+  Cenário: Consumo ao atender
+    Dado uma guia com 10 sessões autorizadas e 3 realizadas
+    Quando a sessão vinculada é marcada como "atendido"
+    Então o saldo passa de 7 para 6
+
+  Cenário: Estorno ao desfazer
+    Dado uma sessão atendida que consumiu a guia
+    Quando o status é corrigido para "faltou"
+    Então a sessão volta ao saldo da guia e a correção fica auditada
+
+  Cenário: Série recorrente ligada à guia
+    Dado uma guia com saldo 8
+    Quando Juliana cria uma série de 10 sessões vinculada à guia
+    Então o sistema avisa que 2 sessões ficarão sem cobertura e pede decisão
+
+  Cenário: Guia vencida
+    Dado uma guia com validade até ontem
+    Quando alguém tenta consumir a guia
+    Então o sistema bloqueia, salvo override com motivo registrado na auditoria
+```
+
+### HU-CNV-004 — Assinatura do paciente por sessão `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.4 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-CNV-003, HU-NUC-018, HU-NUC-005 · **Pontos:** 5 · **MoSCoW:** Must · **LGPD:** S
+
+Como **Diego (fisio)**, quero colher a assinatura do paciente no tablet a cada sessão, para comprovar a execução à operadora sem folha de papel.
+
+```gherkin
+  Cenário: Assinatura na tela
+    Dado uma sessão de guia marcada como "atendido"
+    Quando Antônio assina no tablet
+    Então a assinatura fica registrada com data, hora, dispositivo e hash e a sessão sai das pendências
+
+  Cenário: Sessão sem assinatura
+    Dado um convênio que exige assinatura por sessão
+    Quando a sessão é concluída sem assinatura
+    Então ela aparece em "assinaturas pendentes" para a recepção
+
+  Cenário: Folha de frequência para a operadora
+    Dado uma guia com 10 sessões realizadas
+    Quando Juliana gera a folha de frequência
+    Então o PDF lista as 10 sessões com as assinaturas, ou campos em branco para assinatura física
+
+  Cenário: Integridade da assinatura (segurança)
+    Dado uma assinatura registrada
+    Quando alguém tenta alterá-la ou excluí-la
+    Então o sistema recusa e registra a tentativa na trilha de auditoria
+```
+
+### HU-CNV-005 — Alertas de guia vencendo ou esgotando `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.5 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-CNV-003, HU-NUC-006 · **Pontos:** 3 · **MoSCoW:** Must · **LGPD:** S
+
+Como **Juliana (recepção)**, quero ser avisada antes de a guia vencer ou acabar, para pedir a renovação sem interromper o tratamento.
+
+```gherkin
+  Cenário: Guia esgotando
+    Dado o limiar "2 sessões restantes"
+    Quando uma guia chega a 2 sessões de saldo
+    Então Juliana e o profissional recebem um alerta e a guia entra no painel "guias a renovar"
+
+  Cenário: Guia vencendo
+    Dado o limiar "7 dias antes da validade"
+    Quando faltam 7 dias para a validade de uma guia com saldo
+    Então o alerta é disparado uma única vez por guia e limiar
+
+  Cenário: Notificação sem dado clínico (segurança)
+    Dado um alerta de guia
+    Quando ele aparece no centro de notificações
+    Então o preview mostra só iniciais do paciente e o convênio, sem procedimento nem diagnóstico
+```
+
+### HU-CNV-006 — Relatório de sessões por convênio `[nicho:fisio-to]` `[nicho:fono-tea]`
+**WBS:** CNV-04.6 · **Marco:** M1 · **Frente:** Engenharia · **Depende de:** HU-CNV-003, HU-CNV-004 · **Pontos:** 3 · **MoSCoW:** Must · **LGPD:** S
+
+Como **Carla (dona)**, quero um relatório de sessões realizadas por convênio e período, para faturar no portal da operadora sem planilha paralela.
+
+```gherkin
+  Cenário: Fechamento do mês por convênio
+    Dado 120 sessões de convênio realizadas em setembro
+    Quando Carla filtra por "Operadora X" e setembro
+    Então vê as sessões por guia e profissional, o valor a faturar e as assinaturas pendentes
+    E pode exportar em CSV ou PDF
+
+  Cenário: Permissão de exportação (segurança)
+    Dado um usuário com papel "profissional" sem permissão de faturamento
+    Quando ele tenta exportar o relatório da clínica
+    Então a exportação é negada e a tentativa fica auditada
+```
+
 ---
 
 # Marcos M2–M4 — histórias listadas (Gherkin no refinamento)
@@ -1536,8 +1738,10 @@ Como **sócio (N0)**, quero o RIPD do produto aprovado pelo Guardião antes de q
 | HU-FIN-001 | Cobrança gerada a partir do atendimento | FIN-01.1 | 5 | Must | N | |
 | HU-FIN-002 | Caixa diário e formas de pagamento | FIN-01.2, FIN-01.3 | 5 | Must | N | |
 | HU-FIN-003 | Recibo para reembolso e IR (Receita Saúde) | FIN-01.4 | 3 | Must | S | |
-| HU-FIN-004 | Pacotes e créditos de sessões | FIN-01.5 | 5 | Must | N | |
 | HU-FIN-005 | Regras e fechamento de repasse por profissional | FIN-03.1, FIN-03.2 | 8 | Must | N | |
+| HU-FIN-006 | Cobrança de pacotes (à vista ou parcelada, com recibo) | FIN-01.8 | 3 | Must | N | |
+
+> HU-FIN-004 (pacotes com saldo) foi antecipada para o M1, no EP-24.
 
 ### EP-16 — Pagamentos (Pix e cartão)
 
@@ -1628,7 +1832,7 @@ Como **sócio (N0)**, quero o RIPD do produto aprovado pelo Guardião antes de q
 
 ## Rastreabilidade WBS → histórias
 
-As 186 micropartes MVP da WBS estão cobertas por ao menos uma história (conferido em 2026-10-08).
+As 194 micropartes MVP da WBS estão cobertas por ao menos uma história (conferido em 2026-10-08, após a rodada 3).
 
 | Microparte | Dado sensível | História(s) |
 |---|---|---|
@@ -1665,6 +1869,7 @@ As 186 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | AGD-01.2 | N | HU-AGD-002 |
 | AGD-01.3 | N | HU-AGD-003 |
 | AGD-01.4 | N | HU-AGD-004 |
+| AGD-01.5 | N | HU-AGD-011 |
 | AGD-02.1 | N | HU-AGD-005 |
 | AGD-02.2 | N | HU-AGD-006 |
 | AGD-02.3 | N | HU-AGD-007 |
@@ -1728,6 +1933,7 @@ As 186 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | FIN-01.3 | N | HU-FIN-002 |
 | FIN-01.4 | S | HU-FIN-003 |
 | FIN-01.5 | N | HU-FIN-004 |
+| FIN-01.8 | N | HU-FIN-006 |
 | FIN-03.1 | N | HU-FIN-005 |
 | FIN-03.2 | N | HU-FIN-005 |
 | PAG-01.1 | S | HU-PAG-001 |
@@ -1743,6 +1949,12 @@ As 186 micropartes MVP da WBS estão cobertas por ao menos uma história (confer
 | FIS-01.4 | N | HU-FIS-003 |
 | FIS-01.5 | N | HU-FIS-003 |
 | FIS-01.6 | S | HU-FIS-002 |
+| CNV-04.1 | N | HU-CNV-001 |
+| CNV-04.2 | S | HU-CNV-002 |
+| CNV-04.3 | S | HU-CNV-003 |
+| CNV-04.4 | S | HU-CNV-004 |
+| CNV-04.5 | S | HU-CNV-005 |
+| CNV-04.6 | S | HU-CNV-006 |
 | CRM-01.1 | N | HU-CRM-001 |
 | CRM-01.2 | N | HU-CRM-001 |
 | CRM-02.1 | N | HU-CRM-002 |

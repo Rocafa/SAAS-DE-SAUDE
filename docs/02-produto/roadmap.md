@@ -8,7 +8,7 @@
 
 | Fase | Período estimado | Tema | Público-alvo | Saída (critério de fase concluída) |
 |---|---|---|---|---|
-| **MVP (Fase 1)** | nov/2026 → jun/2027 (~8 meses) | Atender, documentar e receber | Autônomos e clínicas pequenas (≤ 10 profissionais), particular-first | GA (lançamento comercial) com 186 micropartes MVP prontas, RIPD aprovado, pentest sem achado crítico/alto aberto, 30 clínicas piloto ativas |
+| **MVP (Fase 1)** | nov/2026 → jun/2027 (~8 meses) | Atender, documentar e receber | Autônomos e clínicas pequenas (≤ 10 profissionais), particular-first com controle de guia simples para clínicas mistas (premissa D1: fisio/TO + psicólogos) | GA (lançamento comercial) com 194 micropartes MVP prontas, RIPD aprovado, pentest sem achado crítico/alto aberto, 30 clínicas piloto ativas |
 | **Fase 2** | jul/2027 → fev/2028 (~8 meses) | Convênios, equipes e escala de IA | Clínicas médias com convênio, clínicas multiprofissionais, odonto/estética | TISS homologado com ≥ 3 operadoras, teleconsulta, split, estoque, apps nativos, previsão de faltas; 106 micropartes F2 |
 | **Fase 3** | mar/2028 → 2029 | Ecossistema e escala | Redes, franquias, parceiros | RNDS, API pública e marketplace, multiunidade, modelo de IA próprio hospedado no Brasil; 32 micropartes F3 |
 
@@ -19,16 +19,16 @@ O MVP é entregue em 5 marcos incrementais. Cada marco termina com uma **demo pa
 | Marco | Semanas (est.) | Objetivo | Micropartes principais (WBS) | Gate de saída |
 |---|---|---|---|---|
 | **M0 — Fundação** | 1–6 | Plataforma segura multi-tenant pronta para receber módulos | NUC-01.1, NUC-01.3, NUC-01.4, NUC-02.1–02.4, NUC-02.6, NUC-03.1, NUC-03.3, NUC-04.1, NUC-04.2, NUC-05.1–05.7, LGP-01.1, LGP-01.3, LGP-01.4, LGP-03.1, LGP-03.5, INT-01.4, ADM-01.1, ADM-01.3, ADM-01.7 | Testes de isolamento de tenant 100% verdes; auditoria e criptografia ativas; ROPA inicial |
-| **M1 — Núcleo clínico** | 7–14 | Agendar e atender com prontuário por nicho | PAC-01.1–01.3, PAC-02.1–02.4, PAC-02.6, AGD-01.*, AGD-02.1–02.5, AGD-02.7, PRO-01.1–01.4, PRO-02.1–02.3, PRO-02.5–02.7, PRO-03.1, PRO-03.4, PRO-03.7, PRO-03.8, LGP-01.2, LGP-03.2 (RIPD do produto), LGP-03.3, ADM-01.5, NUC-01.2 | **Gate LGPD:** RIPD do produto aprovado, pentest externo do núcleo, plano de incidentes (LGP-03.4) testado → libera piloto com dados reais |
+| **M1 — Núcleo clínico** | 7–14 | Agendar e atender com prontuário por nicho | PAC-01.1–01.3, PAC-02.1–02.4, PAC-02.6, AGD-01.* (inclui atendimento simultâneo AGD-01.5), AGD-02.1–02.5, AGD-02.7, FIN-01.5 (pacotes), CNV-04.* (controle de guia simples, sem XML TISS), PRO-01.1–01.4, PRO-02.1–02.3, PRO-02.5–02.7, PRO-03.1, PRO-03.4, PRO-03.7, PRO-03.8, LGP-01.2, LGP-03.2 (RIPD do produto), LGP-03.3, ADM-01.5, NUC-01.2 | **Gate LGPD:** RIPD do produto aprovado, pentest externo do núcleo, plano de incidentes (LGP-03.4) testado → libera piloto com dados reais |
 | **M2 — WhatsApp first** | 13–20 | Paciente agenda, confirma e conversa pelo WhatsApp | COM-01.*, COM-02.1–02.4, COM-03.1–03.3, COM-04.1, COM-04.2, COM-04.4, AON-01.1–01.3, AON-01.5, AON-01.7, AON-02.*, AGD-03.1, AGD-03.2, PAC-01.4, IA-04.1, IA-04.3 | ≥ 70% dos agendamentos do bot concluídos sem humano em piloto; no-show medido |
 | **M3 — Documentos e escriba** | 17–26 | Profissional atende sem digitar e entrega documentos assinados | DOC-01.1–01.5, DOC-02.1, DOC-02.3, DOC-02.4, DOC-03.1, DOC-03.2, PRO-03.9, PRO-03.13, IA-01.1–01.5, IA-02.1, IA-02.2, IA-05.1–05.3, IA-05.6 | RIPD específico do escriba aprovado; gate de avaliação de IA (IA-05.3) aprovado para todos os nichos do MVP |
-| **M4 — Receber e lançar** | 23–34 | Cobrar, emitir nota, portal do paciente, migrar, cobrar o cliente e lançar | FIN-01.1–01.5, FIN-03.1, FIN-03.2, PAG-01.1, PAG-01.2, PAG-01.4, PAG-01.5, PAG-02.1, PAG-02.2, PAG-03.2, FIS-01.1–01.6, COM-03.4, CRM-01.1, CRM-01.2, CRM-02.1, REL-01.*, REL-02.1, REL-03.1, POR-01.1, POR-01.2, POR-02.1–02.3, POR-02.5, POR-02.6, POR-03.1, LGP-02.*, LGP-03.4, LGP-03.8, MIG-01.1–01.4, MIG-01.6, MIG-02.*, EXP-01.1, EXP-01.3, EXP-01.5, EXP-01.6, BIL-01.1–01.7, BIL-01.9, ADM-01.2, ADM-01.4, ADM-01.6, SUP-01.1–01.4 | **GA:** 30 clínicas piloto ativas, North Star medida semanalmente, SLO 99,9% por 4 semanas, Guardião ✅, Sócios ✅ |
+| **M4 — Receber e lançar** | 23–34 | Cobrar, emitir nota, portal do paciente, migrar, cobrar o cliente e lançar | FIN-01.1–01.4, FIN-01.8 (cobrança de pacotes), FIN-03.1, FIN-03.2, PAG-01.1, PAG-01.2, PAG-01.4, PAG-01.5, PAG-02.1, PAG-02.2, PAG-03.2, FIS-01.1–01.6, COM-03.4, CRM-01.1, CRM-01.2, CRM-02.1, REL-01.*, REL-02.1, REL-03.1, POR-01.1, POR-01.2, POR-02.1–02.3, POR-02.5, POR-02.6, POR-03.1, LGP-02.*, LGP-03.4, LGP-03.8, MIG-01.1–01.4, MIG-01.6, MIG-02.*, EXP-01.1, EXP-01.3, EXP-01.5, EXP-01.6, BIL-01.1–01.7, BIL-01.9, ADM-01.2, ADM-01.4, ADM-01.6, SUP-01.1–01.4 | **GA:** 30 clínicas piloto ativas, North Star medida semanalmente, SLO 99,9% por 4 semanas, Guardião ✅, Sócios ✅ |
 
 > Os marcos se sobrepõem de propósito (trabalho paralelo entre squads; integração serial pelo Maestro).
 
 ## 3. Fase 2 — ordem sugerida
 
-1. **F2.1 Convênios/TISS** (maior pedido de médicos e clínicas médias): CNV-01.*, CNV-02.1–02.5, CNV-03.1–03.3, CNV-03.5, PAC-01.5, IA-02.3.
+1. **F2.1 Convênios/TISS** (maior pedido de médicos e clínicas médias; libera a onda 2 TEA/ABA): CNV-02.2 primeiro, reaproveitando as guias do controle simples do MVP (CNV-04.*); depois CNV-01.*, CNV-02.1–02.5, CNV-03.1–03.3, CNV-03.5, PAC-01.5, IA-02.3.
 2. **F2.2 Teleconsulta**: TEL-01.1–01.5, TEL-02.*, POR-02.9.
 3. **F2.3 Dinheiro avançado**: PAG-01.3, PAG-01.6, PAG-02.4, PAG-03.1, PAG-03.4, FIN-01.6, FIN-01.7, FIN-02.1–02.3, FIN-03.3, FIS-01.7–01.9, REL-02.2, REL-02.3.
 4. **F2.4 Nichos aprofundados**: PRO-03.2 (plano odonto), PRO-03.5, PRO-03.6, PRO-03.10–03.12, PRO-02.8, PRO-01.5, EST-01.1–01.6.
@@ -175,8 +175,8 @@ flowchart LR
 | Atraso na verificação da Meta (D3) | M2 escorrega | Iniciar na semana 1; usar número de teste/sandbox; fallback SMS/e-mail |
 | Escriba não passa no gate de qualidade em algum nicho (D5) | M3 parcial | Lançar escriba por nicho conforme passar no gate; nichos restantes com ditado/modelo manual |
 | Veto do Guardião no Gate LGPD | Piloto atrasa | Guardião participa desde o M0 (LGP-03.5); RIPD escrito em paralelo ao M1 |
-| Escopo do MVP grande (186 micropartes) | GA atrasa | Corte pré-acordado: se necessário, mover para F2 sem quebrar a proposta de valor — MIG-01.4, CRM-02.1, REL-01.3, AON-01.5, PRO-03.8 (exceto EVA), DOC-01.5 |
-| Pedido forte de TISS por médicos | Perda de vendas no GA | Recibo de reembolso bem feito (FIN-01.4) no MVP; F2.1 é a primeira entrega pós-GA |
+| Escopo do MVP grande (194 micropartes; o M1 ganhou pacotes, guia simples e atendimento simultâneo) | GA atrasa | Corte pré-acordado: se necessário, mover para F2 sem quebrar a proposta de valor — MIG-01.4, CRM-02.1, REL-01.3, AON-01.5, PRO-03.8 (exceto EVA), DOC-01.5 |
+| Pedido forte de TISS por médicos | Perda de vendas no GA | Recibo de reembolso bem feito (FIN-01.4) e controle de guia simples (CNV-04.*) no MVP; F2.1 é a primeira entrega pós-GA |
 
 ## 9. Regras de mudança do roadmap
 
