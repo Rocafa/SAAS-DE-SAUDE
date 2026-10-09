@@ -2,7 +2,7 @@
 
 Front-end web em **Next.js (App Router) + Tailwind CSS + shadcn/ui**.
 
-Status: **placeholder** — o projeto Next.js será inicializado na microparte `eng/web-bootstrap`.
+Status: **bootstrap** — Next.js (App Router) + Tailwind v4, página inicial e teste de renderização.
 
 ## Escopo
 

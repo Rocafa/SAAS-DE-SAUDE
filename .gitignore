@@ -15,5 +15,8 @@ datasets/
 *.pem
 *.pfx
 .turbo/
+*.tsbuildinfo
+coverage/
+next-env.d.ts
 .claude/worktrees/
 plataforma-saude/
