@@ -1,0 +1,114 @@
+diff --git a/cjs/src/connection.js b/cjs/src/connection.js
+index 07f6716702ac888215c86ad6e0071aaf55ae519c..f1ad68156e4ecaa9fccb401c52f056aded3c0045 100644
+--- a/cjs/src/connection.js
++++ b/cjs/src/connection.js
+@@ -252,6 +252,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function nextWrite(fn) {
++    // patch plataforma-saude: socket fechado entre o agendamento e a escrita (antes: TypeError não capturado)
++    if (!socket) {
++      nextWriteTimer !== null && clearImmediate(nextWriteTimer)
++      chunk = nextWriteTimer = null
++      return false
++    }
+     const x = socket.write(chunk, fn)
+     nextWriteTimer !== null && clearImmediate(nextWriteTimer)
+     chunk = nextWriteTimer = null
+@@ -438,6 +444,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     remaining = 0
+     incomings = null
+     clearImmediate(nextWriteTimer)
++    // patch plataforma-saude: sem isto o timer "velho" impede o StartupMessage da reconexão (CONNECT_TIMEOUT eterno)
++    chunk = nextWriteTimer = null
+     socket.removeListener('data', data)
+     socket.removeListener('connect', connected)
+     idleTimer.cancel()
+diff --git a/cjs/src/index.js b/cjs/src/index.js
+index f09c61c7e998f411560b95c9a8e1ed6a97972c11..a1646745f4a8b086484c55d9fcf94c68aa6e7463 100644
+--- a/cjs/src/index.js
++++ b/cjs/src/index.js
+@@ -237,12 +237,13 @@ function Postgres(a, b) {
+     let savepoints = 0
+       , connection
+       , prepare = null
++      , lost = false // patch plataforma-saude
+ 
+     try {
+       await sql.unsafe('begin ' + options.replace(/[^a-z ]/ig, ''), [], { onexecute }).execute()
+       return await Promise.race([
+         scope(connection, fn),
+-        new Promise((_, reject) => connection.onclose = reject)
++        new Promise((_, reject) => connection.onclose = (e) => (lost = true, reject(e)))
+       ])
+     } catch (error) {
+       throw error
+@@ -290,6 +291,11 @@ function Postgres(a, b) {
+ 
+       function handler(q) {
+         q.catch(e => uncaughtError || (uncaughtError = e))
++        // patch plataforma-saude: a conexão da transação caiu; o callback ainda pode emitir queries,
++        // que iriam para a MESMA conexão já devolvida/reconectada (fora da transação, sem o contexto
++        // de tenant, ou dentro da transação de OUTRA requisição). Rejeita em vez de executar.
++        if (lost)
++          return q.reject(Errors.generic('CONNECTION_CLOSED', 'transaction connection was lost'))
+         c.queue === full
+           ? queries.push(q)
+           : c.execute(q) || move(c, full)
+diff --git a/src/connection.js b/src/connection.js
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..4950419a9209ede33cbd65e8e935a6f21059ab49 100644
+--- a/src/connection.js
++++ b/src/connection.js
+@@ -252,6 +252,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function nextWrite(fn) {
++    // patch plataforma-saude: socket fechado entre o agendamento e a escrita (antes: TypeError não capturado)
++    if (!socket) {
++      nextWriteTimer !== null && clearImmediate(nextWriteTimer)
++      chunk = nextWriteTimer = null
++      return false
++    }
+     const x = socket.write(chunk, fn)
+     nextWriteTimer !== null && clearImmediate(nextWriteTimer)
+     chunk = nextWriteTimer = null
+@@ -438,6 +444,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+     remaining = 0
+     incomings = null
+     clearImmediate(nextWriteTimer)
++    // patch plataforma-saude: sem isto o timer "velho" impede o StartupMessage da reconexão (CONNECT_TIMEOUT eterno)
++    chunk = nextWriteTimer = null
+     socket.removeListener('data', data)
+     socket.removeListener('connect', connected)
+     idleTimer.cancel()
+diff --git a/src/index.js b/src/index.js
+index c7fba3dace20173f4cb13f3f138bb6d213b43683..77ab1fdcb4785069867e615c4b3c511bc0f7ed28 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -237,12 +237,13 @@ function Postgres(a, b) {
+     let savepoints = 0
+       , connection
+       , prepare = null
++      , lost = false // patch plataforma-saude
+ 
+     try {
+       await sql.unsafe('begin ' + options.replace(/[^a-z ]/ig, ''), [], { onexecute }).execute()
+       return await Promise.race([
+         scope(connection, fn),
+-        new Promise((_, reject) => connection.onclose = reject)
++        new Promise((_, reject) => connection.onclose = (e) => (lost = true, reject(e)))
+       ])
+     } catch (error) {
+       throw error
+@@ -290,6 +291,11 @@ function Postgres(a, b) {
+ 
+       function handler(q) {
+         q.catch(e => uncaughtError || (uncaughtError = e))
++        // patch plataforma-saude: a conexão da transação caiu; o callback ainda pode emitir queries,
++        // que iriam para a MESMA conexão já devolvida/reconectada (fora da transação, sem o contexto
++        // de tenant, ou dentro da transação de OUTRA requisição). Rejeita em vez de executar.
++        if (lost)
++          return q.reject(Errors.generic('CONNECTION_CLOSED', 'transaction connection was lost'))
+         c.queue === full
+           ? queries.push(q)
+           : c.execute(q) || move(c, full)

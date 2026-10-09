@@ -1,0 +1,137 @@
+name: Testes de produção
+
+# Resiliência (falhas de banco, timeouts, pool, encerramento), backup/restauração e carga.
+# Ver docs/04-arquitetura/testes-de-producao.md. Só dados fictícios; senhas abaixo são de
+# containers efêmeros de CI (sem dado algum) — não são segredos.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # semanal: segunda, 06:00 UTC (pega regressão de dependência/imagem)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: producao-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resiliencia:
+    name: Resiliência + backup/restauração (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPASSWORD: ci-efemero
+      POSTGRES_USER: postgres
+      POSTGRES_DB: plataforma_saude
+      POSTGRES_PASSWORD: ci-efemero
+      DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+      BACKUP_ADMIN_URL: postgresql://postgres:ci-efemero@localhost:5432/plataforma_saude
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+      - name: Migrar (papel app_migrator)
+        run: pnpm --filter @plataforma/api db:migrate
+      - name: Testes de falha (banco parado/volta, timeouts, rollback, pool, SIGTERM)
+        run: pnpm --filter @plataforma/api test:resiliencia
+      # pg_dump/pg_restore do PRÓPRIO container (mesma versão do servidor, sem instalar cliente).
+      - name: Backup (pg_dump) -> restauração (pg_restore) -> verificação
+        env:
+          BACKUP_METHOD: pg_dump
+          PG_DUMP_CMD: docker exec -i ${{ job.services.postgres.id }} pg_dump
+          PG_RESTORE_CMD: docker exec -i ${{ job.services.postgres.id }} pg_restore
+        run: pnpm --filter @plataforma/api test:backup-restore
+
+  carga:
+    name: Carga (k6) + SIGTERM real na API compilada
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPASSWORD: ci-efemero
+      POSTGRES_USER: postgres
+      POSTGRES_DB: plataforma_saude
+      POSTGRES_PASSWORD: ci-efemero
+      DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+      API_PORT: '3333'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+      - name: Migrar (papel app_migrator)
+        run: pnpm --filter @plataforma/api db:migrate
+      - name: Build da API
+        run: pnpm --filter @plataforma/api build
+      # packages/shared é TS puro: o resolver troca './x.js' -> './x.ts' (type stripping do Node 22).
+      - name: Subir a API compilada
+        run: |
+          node --import ./tests/carga/resolver-ts.mjs apps/api/dist/main.js > api.log 2>&1 &
+          echo $! > api.pid
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3333/health/ready && exit 0
+            sleep 1
+          done
+          cat api.log; exit 1
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1.2.2
+        with:
+          k6-version: '1.8.1'
+      - name: k6 (smoke + carga moderada; p95 < 300 ms, erros < 1%)
+        run: k6 run -e BASE_URL=http://127.0.0.1:3333 tests/carga/health.k6.js
+      - name: SIGTERM real => encerramento gracioso com código 0
+        run: |
+          pid=$(cat api.pid)
+          kill -TERM "$pid"
+          for i in $(seq 1 30); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then echo "API não encerrou em 30 s"; exit 1; fi
+          # A mensagem só é logada no caminho de sucesso, imediatamente antes de exit(0).
+          grep -q "requisições drenadas e pool fechado" api.log || { cat api.log; exit 1; }
+      - name: Log da API
+        if: always()
+        run: cat api.log || true
