@@ -12,6 +12,8 @@
     "test": "vitest run",
     "db:migrate": "node scripts/migrate.mjs",
     "test:rls": "vitest run --config vitest.rls.config.mts",
+    "test:resiliencia": "vitest run --config vitest.resiliencia.config.mts",
+    "test:backup-restore": "node test/resiliencia/backup-restore.mjs",
     "test:security": "vitest run --config vitest.security.config.mts",
     "serve:dast": "vitest run --config vitest.dast.config.mts"
   },

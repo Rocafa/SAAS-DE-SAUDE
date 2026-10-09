@@ -175,12 +175,24 @@ describe('rate limit global', () => {
   it('rajada acima do limite → 429 com Retry-After', async () => {
     const http = app.getHttpServer() as Server;
     const status: number[] = [];
-    for (let i = 0; i < 8; i += 1) status.push((await request(http).get('/health')).status);
-    expect(status.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
+    for (let i = 0; i < 8; i += 1) status.push((await request(http).get('/qualquer-rota')).status);
+    expect(status.slice(0, 5)).toEqual([404, 404, 404, 404, 404]);
     expect(status.slice(5)).toEqual([429, 429, 429]);
-    const bloqueada = await request(http).get('/health').expect(429);
+    const bloqueada = await request(http).get('/qualquer-rota').expect(429);
     expect(Number(bloqueada.headers['retry-after'])).toBeGreaterThan(0);
     expect(bloqueada.body).toEqual({ statusCode: 429, message: 'Too Many Requests' });
+  });
+
+  it('sonda de liveness nunca leva 429, mesmo com o IP já bloqueado (balanceador não derruba instância saudável)', async () => {
+    const http = app.getHttpServer() as Server;
+    await request(http).get('/qualquer-rota').expect(429); // IP já acima do limite neste ponto
+    for (let i = 0; i < 20; i += 1) await request(http).get('/health').expect(200);
+  });
+
+  it('isenção é por caminho exato: variações não escapam do limite', async () => {
+    const http = app.getHttpServer() as Server;
+    await request(http).get('/health/../qualquer-rota').expect(429);
+    await request(http).get('/healthz').expect(429);
   });
 });
 

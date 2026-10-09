@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  postgres@3.4.9:
+    hash: hcpsn5ywhhz2ji5wwffvewtta4
+    path: patches/postgres@3.4.9.patch
+
 importers:
 
   .:
@@ -31,13 +36,13 @@ importers:
         version: link:../../packages/shared
       drizzle-orm:
         specifier: ^0.45.0
-        version: 0.45.4(postgres@3.4.9)
+        version: 0.45.4(postgres@3.4.9(patch_hash=hcpsn5ywhhz2ji5wwffvewtta4))
       helmet:
         specifier: 8.1.0
         version: 8.1.0
       postgres:
         specifier: ^3.4.9
-        version: 3.4.9
+        version: 3.4.9(patch_hash=hcpsn5ywhhz2ji5wwffvewtta4)
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -3033,9 +3038,9 @@ snapshots:
       asap: 2.0.6
       wrappy: 1.0.2
 
-  drizzle-orm@0.45.4(postgres@3.4.9):
+  drizzle-orm@0.45.4(postgres@3.4.9(patch_hash=hcpsn5ywhhz2ji5wwffvewtta4)):
     optionalDependencies:
-      postgres: 3.4.9
+      postgres: 3.4.9(patch_hash=hcpsn5ywhhz2ji5wwffvewtta4)
 
   dunder-proto@1.0.1:
     dependencies:
@@ -3585,7 +3590,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.2
 
-  postgres@3.4.9: {}
+  postgres@3.4.9(patch_hash=hcpsn5ywhhz2ji5wwffvewtta4): {}
 
   prelude-ls@1.2.1: {}
 

@@ -72,11 +72,24 @@ function sendJson(res: ServerResponse, status: number, message: string): void {
   res.end(JSON.stringify({ statusCode: status, message }));
 }
 
+/**
+ * Sondas de saúde ficam FORA do rate limit: o balanceador/orquestrador as consulta sem parar a
+ * partir de poucos IPs, e um 429 ali tiraria instâncias saudáveis de serviço. Elas não tocam dado
+ * de clínica; a readiness tem cache curto e agrupa chamadas simultâneas (readiness-probe.ts),
+ * então rajadas não chegam ao banco.
+ */
+export const RATE_LIMIT_EXEMPT_PATHS: ReadonlySet<string> = new Set(['/health', '/health/ready']);
+
 /** Janela fixa por IP, em memória. Mapa zerado a cada janela (memória limitada). */
-export function rateLimiter(max: number, windowMs: number) {
+export function rateLimiter(max: number, windowMs: number, exemptPaths: ReadonlySet<string> = RATE_LIMIT_EXEMPT_PATHS) {
   let windowStart = Date.now();
   let hits = new Map<string, number>();
   return (req: Req, res: ServerResponse, next: Next): void => {
+    const path = (req.url ?? '').split('?')[0] ?? '';
+    if (exemptPaths.has(path)) {
+      next();
+      return;
+    }
     const now = Date.now();
     if (now - windowStart >= windowMs) {
       windowStart = now;
