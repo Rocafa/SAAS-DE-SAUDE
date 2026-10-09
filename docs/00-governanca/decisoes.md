@@ -13,6 +13,7 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 | D5 | **Provedor Pix** | Asaas, Efí, Pagar.me, Stripe | `docs/04-arquitetura/integracoes.md` |
 | D6 | **Provedor de vídeo** | LiveKit (recomendado), Daily, Jitsi | `docs/04-arquitetura/integracoes.md` |
 | D7 | **Retenção da trilha de auditoria** | Mínimo 5 anos (sugestão) | `docs/03-seguranca-lgpd/` |
+| D9 | **Garantias ao cliente** | Aprovar a Carta de Compromissos (G1–G9) e antecipar roadmap público (SUP-01.7) e status page (SUP-01.6) para o MVP | `docs/02-produto/garantias-ao-cliente.md` |
 | D8 | **Validação jurídica** | Advogado especialista em saúde + LGPD revisa os itens ⚖️ (CFM 2.454/2026, TRF-1 estética, ANS cartões de desconto, DPA) | `docs/03-seguranca-lgpd/README.md` |
 
 ## Tomadas
