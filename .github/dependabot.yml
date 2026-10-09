@@ -8,6 +8,12 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 (compilador nativo) quebra o lint: typescript-eslint suporta só
+      # typescript ">=4.8.4 <6.1.0" (testado em 09/10/2026, PR #4). Remover quando o
+      # typescript-eslint publicar suporte ao TS 7.
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
