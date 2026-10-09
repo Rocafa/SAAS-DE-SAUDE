@@ -30,6 +30,7 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 ## 4. Produto
 - **24 módulos, 332 micropartes** (194 no MVP, 106 na Fase 2, 32 na Fase 3); 169 tocam dado sensível.
 - **MVP estimado de nov/2026 a jun/2027.** TISS e teleconsulta ficam para a Fase 2.
+- **Garantias ao cliente** contra as queixas nº 1 do mercado (prontuário bloqueado, cancelamento difícil): [garantias-ao-cliente.md](docs/02-produto/garantias-ao-cliente.md).
 - **Backlog do MVP:** 24 épicos, 176 histórias, 898 pontos (M0+M1: 79 histórias, 377 pontos), incluindo controle de guia simples e pacotes no M1. Também prontos: definição de pronto, métricas e plano de piloto (30 clínicas).
 - **Nicho de entrada recomendado:** fisio/TO + psicólogos autônomos; TEA/ABA na onda 2 ([relatório executivo](docs/01-mercado/relatorio-executivo-mercado.md)).
   → [PRD](docs/02-produto/PRD.md) · [WBS](docs/02-produto/WBS-micropartes.md) · [roadmap](docs/02-produto/roadmap.md) · [jornadas](docs/02-produto/jornadas.md)
