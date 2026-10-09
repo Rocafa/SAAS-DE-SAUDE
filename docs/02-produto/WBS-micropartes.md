@@ -18,16 +18,16 @@
 |---|---|---|---|---|---|---|---|
 | 1 | NUC | Núcleo / Plataforma | 5 | 26 | 20 | 4 | 2 |
 | 2 | PAC | Cadastro de pacientes | 2 | 12 | 9 | 3 | 0 |
-| 3 | AGD | Agenda | 3 | 16 | 12 | 3 | 1 |
+| 3 | AGD | Agenda | 3 | 17 | 13 | 3 | 1 |
 | 4 | AON | Agendamento online | 2 | 10 | 8 | 1 | 1 |
 | 5 | COM | Comunicação (WhatsApp, SMS, e-mail) | 4 | 20 | 16 | 3 | 1 |
 | 6 | PRO | Prontuário eletrônico | 3 | 29 | 16 | 10 | 3 |
 | 7 | DOC | Prescrição, atestados e assinatura digital | 3 | 13 | 10 | 2 | 1 |
 | 8 | TEL | Teleconsulta | 2 | 8 | 0 | 7 | 1 |
-| 9 | FIN | Financeiro | 4 | 15 | 7 | 6 | 2 |
+| 9 | FIN | Financeiro | 4 | 16 | 8 | 6 | 2 |
 | 10 | PAG | Pagamentos (Pix, cartão, split) | 3 | 14 | 7 | 5 | 2 |
 | 11 | FIS | Fiscal (NFS-e) | 1 | 9 | 6 | 3 | 0 |
-| 12 | CNV | Convênios / TISS | 3 | 14 | 0 | 12 | 2 |
+| 12 | CNV | Convênios / TISS | 4 | 20 | 6 | 12 | 2 |
 | 13 | EST | Estoque (estética, odonto e procedimentos) | 1 | 8 | 0 | 6 | 2 |
 | 14 | CRM | Marketing, CRM e NPS | 3 | 12 | 3 | 7 | 2 |
 | 15 | REL | Relatórios e BI | 3 | 11 | 5 | 4 | 2 |
@@ -40,9 +40,9 @@
 | 22 | ADM | Admin / backoffice | 1 | 8 | 7 | 1 | 0 |
 | 23 | SUP | Suporte | 1 | 7 | 4 | 3 | 0 |
 | 24 | LGP | LGPD (privacidade by design) | 3 | 16 | 13 | 3 | 0 |
-| | | **Total (24 módulos)** | **61** | **324** | **186** | **106** | **32** |
+| | | **Total (24 módulos)** | **62** | **332** | **194** | **106** | **32** |
 
-**155** das 324 micropartes tocam dado sensível (S) e exigem aprovação do Guardião LGPD antes do merge. Dependências validadas: todo ID referenciado existe e nenhuma microparte depende de outra de fase posterior.
+**169** das 332 micropartes tocam dado sensível (S) e exigem aprovação do Guardião LGPD antes do merge. Dependências validadas: todo ID referenciado existe e nenhuma microparte depende de outra de fase posterior (revalidado em 2026-10-08 após incluir o controle de guia simples CNV-04, o atendimento simultâneo AGD-01.5 e a cobrança de pacotes FIN-01.8).
 
 ---
 
@@ -89,7 +89,7 @@ Partes: **01** Cadastro · **02** Organização e histórico
 | PAC-01.2 | Responsáveis e acompanhantes | Responsável legal (menores, TEA, curatela), contatos de emergência e permissões do responsável | Produto | PAC-01.1 | S | MVP | Menor de idade exige responsável; responsável recebe comunicações conforme configuração |
 | PAC-01.3 | Deduplicação e mesclagem | Detecção de duplicados (CPF, telefone, nome + nascimento) e mesclagem auditada | Engenharia | PAC-01.1, NUC-04.1 | S | MVP | Alerta de possível duplicado na criação; mesclagem preserva todo o histórico e é reversível em 30 dias |
 | PAC-01.4 | Pré-cadastro / autocadastro | Link enviado por WhatsApp para o paciente completar dados antes da consulta | Engenharia | PAC-01.1, COM-03.3 | S | MVP | Paciente completa cadastro em < 2 min no celular; dados validados entram na ficha |
-| PAC-01.5 | Dados de convênio do paciente | Operadora, plano, nº de carteirinha, validade, titular | Engenharia | PAC-01.1, CNV-01.1 | S | F2 | Carteirinha validada por regra de dígito da operadora; alerta de validade vencida |
+| PAC-01.5 | Dados de convênio do paciente | Operadora, plano, nº de carteirinha, validade, titular | Engenharia | PAC-01.1, CNV-01.1, CNV-04.2 | S | F2 | Carteirinha validada por regra de dígito da operadora; alerta de validade vencida |
 | PAC-01.6 | Campos personalizados | Campos extras definidos pela clínica no cadastro | Engenharia | PAC-01.1 | N | F2 | Admin cria campo; campo aparece em filtros e exportação |
 | PAC-02.1 | Busca e listagem | Lista com filtros (nome, telefone, CPF, tag, profissional, último atendimento) | Engenharia | PAC-01.1 | N | MVP | Busca por nome parcial/sem acento em < 300 ms com 100 mil pacientes |
 | PAC-02.2 | Tags e segmentos | Etiquetas manuais e segmentos salvos | Engenharia | PAC-02.1 | N | MVP | Tags filtráveis; tags não podem conter diagnóstico (validação + orientação) |
@@ -108,16 +108,17 @@ Partes: **01** Configuração · **02** Operação · **03** Automação e polí
 | AGD-01.2 | Tipos de atendimento | Duração, preço, cor, modalidade (presencial/online), preparo, profissionais habilitados | Produto | AGD-01.1 | N | MVP | Tipo vinculado define duração e preço sugerido da cobrança |
 | AGD-01.3 | Bloqueios e feriados | Bloqueios pontuais, férias, feriados nacionais/municipais | Engenharia | AGD-01.1 | N | MVP | Feriados nacionais pré-carregados; bloqueio impede agendamento online |
 | AGD-01.4 | Recursos compartilhados | Salas e equipamentos com checagem de conflito | Engenharia | NUC-01.3, AGD-01.1 | N | MVP | Impossível alocar a mesma sala em sobreposição sem override explícito |
+| AGD-01.5 | Atendimento simultâneo e em grupo | Capacidade por profissional e tipo de atendimento (ex.: 1 fisioterapeuta com até 4 pacientes no mesmo horário), cada paciente com agendamento, status, sala/aparelho e cobrança próprios | Engenharia | AGD-01.2, AGD-01.4 | N | MVP | Profissional com capacidade 4 recebe até 4 pacientes no mesmo horário e o 5º é bloqueado; vagas livres do horário visíveis na agenda |
 | AGD-02.1 | Visões de agenda | Dia, semana, mês, lista; múltiplos profissionais lado a lado | Engenharia | AGD-01.1 | N | MVP | Carrega semana de 10 profissionais em < 1 s; funciona em tablet |
-| AGD-02.2 | CRUD de agendamento | Criar, mover (arrastar), editar e cancelar com motivo, validando conflito | Engenharia | AGD-02.1, PAC-01.1 | N | MVP | Conflitos bloqueados; histórico de alterações auditado; motivo de cancelamento obrigatório |
+| AGD-02.2 | CRUD de agendamento | Criar, mover (arrastar), editar e cancelar com motivo, validando conflito | Engenharia | AGD-02.1, PAC-01.1 | S | MVP | Conflitos bloqueados respeitando a capacidade do profissional (AGD-01.5); histórico de alterações auditado; motivo de cancelamento obrigatório |
 | AGD-02.3 | Encaixe | Encaixe fora da grade com sinalização visual e limite configurável | Engenharia | AGD-02.2 | N | MVP | Encaixe visível e contabilizado separadamente nos relatórios |
-| AGD-02.4 | Recorrência e pacotes | Séries recorrentes (semanal, quinzenal) vinculadas a pacote de sessões | Engenharia | AGD-02.2, FIN-01.5 | N | MVP | Série de 20 sessões criada em 1 ação; edição "só esta / todas as próximas" |
+| AGD-02.4 | Recorrência e pacotes | Séries recorrentes (semanal, quinzenal) vinculadas a pacote de sessões ou a guia de convênio (CNV-04.3) | Engenharia | AGD-02.2, FIN-01.5 | N | MVP | Série de 20 sessões criada em 1 ação; edição "só esta / todas as próximas" |
 | AGD-02.5 | Lista de espera | Lista de espera por profissional/serviço/período preferido | Engenharia | AGD-02.2 | N | MVP | Recepção vê candidatos compatíveis quando uma vaga é liberada |
 | AGD-02.6 | Oferta automática de vaga | Ao cancelar, bot oferece a vaga a pacientes da lista de espera por ordem | Engenharia | AGD-02.5, COM-03.2 | N | F2 | Primeira aceitação confirma vaga; demais recebem aviso de vaga preenchida |
 | AGD-02.7 | Status e check-in | Agendado → confirmado → chegou → em atendimento → atendido / faltou / cancelado; tempo de espera | Engenharia | AGD-02.2 | N | MVP | Transições válidas aplicadas; tempo de espera calculado; faltas alimentam relatório |
 | AGD-02.8 | Agendamento em sequência | Vários procedimentos/profissionais em sequência para o mesmo paciente | Engenharia | AGD-02.2 | N | F2 | Bloco multi-etapa reservado atomicamente |
 | AGD-02.9 | Painel de chamada | Tela para TV da recepção chamando por nome social/iniciais | Engenharia | AGD-02.7 | N | F3 | Exibição configurável (iniciais por padrão, minimização) |
-| AGD-03.1 | Regras de confirmação | Quando e por qual canal pedir confirmação, nº de tentativas, escalonamento para a recepção | Produto | AGD-02.7, COM-03.2 | N | MVP | Regras por tipo de atendimento; não confirmados aparecem em fila da recepção |
+| AGD-03.1 | Regras de confirmação | Quando e por qual canal pedir confirmação, nº de tentativas, escalonamento para a recepção | Produto | AGD-02.7, COM-03.2 | S | MVP | Regras por tipo de atendimento; não confirmados aparecem em fila da recepção |
 | AGD-03.2 | Autorremarcação/cancelamento | Paciente remarca/cancela via WhatsApp/portal respeitando antecedência mínima | Engenharia | AGD-02.2, COM-03.2, POR-02.1 | N | MVP | Remarcação libera vaga e notifica profissional; regra de antecedência aplicada |
 | AGD-03.3 | Política de no-show | Taxa de falta, sinal obrigatório após X faltas, bloqueio de autoagendamento | Produto | AGD-02.7, PAG-02.1 | N | F2 | Política configurável; paciente informado previamente da política |
 
@@ -134,7 +135,7 @@ Partes: **01** Página pública de agendamento · **02** Agendamento pelo WhatsA
 | AON-01.5 | Widget e links | Widget embutível, link curto para Instagram/Google e QR code | Engenharia | AON-01.1 | N | MVP | Widget funciona em site de terceiros sem conflitos de CSS |
 | AON-01.6 | Diretórios externos | Reserve with Google e diretórios parceiros | Engenharia | AON-01.2 | N | F3 | Agendamento originado em diretório chega à agenda com origem rastreada |
 | AON-01.7 | Proteção anti-abuso | Rate limit, detecção de reservas falsas, bloqueio de número abusivo (sem CAPTCHA intrusivo) | Engenharia | AON-01.2 | N | MVP | Teste de carga de reservas falsas bloqueado sem afetar usuário legítimo |
-| AON-02.1 | Fluxo conversacional | Bot de agendamento no WhatsApp: botões/listas + linguagem natural para marcar | Produto | COM-01.1, IA-04.1, AGD-02.2 | N | MVP | ≥ 70% dos agendamentos iniciados pelo bot concluídos sem humano em piloto |
+| AON-02.1 | Fluxo conversacional | Bot de agendamento no WhatsApp: botões/listas + linguagem natural para marcar | Produto | COM-01.1, IA-04.1, AGD-02.2 | S | MVP | ≥ 70% dos agendamentos iniciados pelo bot concluídos sem humano em piloto |
 | AON-02.2 | Regras de autoagendamento | Quais serviços/profissionais/horários o bot pode oferecer | Produto | AON-02.1, AGD-01.2 | N | MVP | Clínica restringe serviços (ex.: primeira consulta só por humano) |
 | AON-02.3 | Handoff para humano | Transferência para a inbox com contexto da conversa | Engenharia | AON-02.1, COM-02.1 | N | MVP | Paciente digita "atendente" ou bot detecta impasse → conversa na fila da inbox em < 5 s |
 
@@ -144,7 +145,7 @@ Partes: **01** Infraestrutura WhatsApp · **02** Inbox compartilhada · **03** M
 
 | ID | Microparte | Descrição curta | Frente dona | Dependências | Dado sensível | Fase | Critério de pronto |
 |---|---|---|---|---|---|---|---|
-| COM-01.1 | Conexão WhatsApp Business Platform | Integração com Cloud API oficial (ou BSP) com embedded signup do número da clínica | Engenharia | NUC-01.1 | N | MVP | Clínica conecta número em < 10 min sem suporte; envio/recebimento funcionando |
+| COM-01.1 | Conexão WhatsApp Business Platform | Integração com Cloud API oficial (ou BSP) com embedded signup do número da clínica | Engenharia | NUC-01.1 | S | MVP | Clínica conecta número em < 10 min sem suporte; envio/recebimento funcionando |
 | COM-01.2 | Gestão de templates | Criação, submissão e acompanhamento de aprovação de templates (utility/marketing) | Engenharia | COM-01.1 | N | MVP | Biblioteca de templates padrão aprovados; status sincronizado com a Meta |
 | COM-01.3 | Opt-in e preferências | Registro de opt-in/opt-out por canal e finalidade (lembrete vs. marketing) | LGPD | COM-01.1, LGP-01.2 | N | MVP | Nenhuma mensagem de marketing sem opt-in; "SAIR" processado automaticamente |
 | COM-01.4 | Status e retentativas | Webhooks de entregue/lido/falha, retentativa e fallback para SMS/e-mail | Engenharia | COM-01.1, NUC-05.4 | N | MVP | Falha de WhatsApp gera fallback em < 5 min; status visível no agendamento |
@@ -152,11 +153,11 @@ Partes: **01** Infraestrutura WhatsApp · **02** Inbox compartilhada · **03** M
 | COM-02.1 | Inbox multiatendente | Caixa compartilhada com filas, atribuição, status (aberta/pendente/resolvida) | Engenharia | COM-01.1, NUC-03.1 | S | MVP | 3 atendentes simultâneos sem colisão; histórico completo por paciente |
 | COM-02.2 | Painel de contexto | Lateral com dados do paciente, próximos agendamentos e pendências financeiras (sem conteúdo clínico por padrão) | Produto | COM-02.1, PAC-02.4 | S | MVP | Recepção agenda/remarca sem sair da inbox; nenhum dado clínico exibido a perfil sem permissão |
 | COM-02.3 | Respostas rápidas e mídia | Atalhos de resposta, envio de documentos, áudio, imagem, localização | Engenharia | COM-02.1 | S | MVP | Envio de PDF de documento clínico só por link seguro (DOC-03.1) |
-| COM-02.4 | Notas internas e transferência | Notas visíveis só à equipe, transferência entre atendentes/filas | Engenharia | COM-02.1 | N | MVP | Nota nunca é enviada ao paciente (teste automatizado) |
+| COM-02.4 | Notas internas e transferência | Notas visíveis só à equipe, transferência entre atendentes/filas | Engenharia | COM-02.1 | S | MVP | Nota nunca é enviada ao paciente (teste automatizado) |
 | COM-02.5 | SLA e horário de atendimento | Metas de tempo de resposta, mensagem de ausência, relatório de SLA | Engenharia | COM-02.1 | N | F2 | Relatório de tempo de 1ª resposta por atendente |
 | COM-02.6 | Outros canais na inbox | Instagram Direct e Messenger na mesma caixa | Engenharia | COM-02.1 | N | F3 | Conversas de 3 canais unificadas por paciente |
-| COM-03.1 | Lembretes de consulta | Lembretes configuráveis (D-2, D-1, H-2) com endereço e preparo | Produto | COM-01.2, AGD-02.2, COM-04.4 | N | MVP | Lembretes enviados no horário com desvio < 5 min; sem dado clínico no texto |
-| COM-03.2 | Confirmação interativa | Botões Confirmar / Remarcar / Cancelar atualizando o status do agendamento | Engenharia | COM-03.1, AGD-02.7 | N | MVP | Clique no botão atualiza agenda em < 10 s |
+| COM-03.1 | Lembretes de consulta | Lembretes configuráveis (D-2, D-1, H-2) com endereço e preparo | Produto | COM-01.2, AGD-02.2, COM-04.4 | S | MVP | Lembretes enviados no horário com desvio < 5 min; sem dado clínico no texto |
+| COM-03.2 | Confirmação interativa | Botões Confirmar / Remarcar / Cancelar atualizando o status do agendamento | Engenharia | COM-03.1, AGD-02.7 | S | MVP | Clique no botão atualiza agenda em < 10 s |
 | COM-03.3 | Instruções e pré-cadastro | Envio de preparo, localização, link de pré-cadastro e formulários | Engenharia | COM-03.1 | N | MVP | Mensagens configuráveis por tipo de atendimento |
 | COM-03.4 | Pós-consulta | Disparo de documentos, cobrança e NPS após "atendido" | Produto | COM-03.1, DOC-03.1, PAG-02.1, CRM-01.1 | S | MVP | Sequência pós-consulta configurável; nenhuma mensagem duplicada |
 | COM-03.5 | Mensagens de relacionamento | Aniversário, retorno programado, reativação | Produto | COM-03.1, CRM-03.3 | N | F2 | Envio só com base legal/opt-in válido |
@@ -246,9 +247,10 @@ Partes: **01** Contas a receber · **02** Contas a pagar e fluxo de caixa · **0
 | FIN-01.2 | Caixa diário | Abertura, fechamento, sangria, conferência por forma de pagamento | Engenharia | FIN-01.1 | N | MVP | Fechamento de caixa com diferenças destacadas; relatório imprimível |
 | FIN-01.3 | Formas de pagamento | Dinheiro, Pix, cartão, transferência, convênio, parcelamento | Engenharia | FIN-01.1 | N | MVP | Configuração de taxas por forma para cálculo de líquido |
 | FIN-01.4 | Recibos | Recibo com dados do profissional/clínica para reembolso de plano e IR (sem diagnóstico) | Produto | FIN-01.1 | S | MVP | Recibo aceito em teste com 3 operadoras para reembolso; numeração sequencial |
-| FIN-01.5 | Pacotes e créditos | Venda de pacotes de sessões pré-pagas com controle de saldo | Engenharia | FIN-01.1 | N | MVP | Saldo debitado a cada sessão concluída; alerta de saldo baixo |
+| FIN-01.5 | Pacotes e créditos | Pacote de sessões por paciente (quantidade, tipo de atendimento, valor total, validade) com controle de saldo; a cobrança do pacote entra em FIN-01.8 | Engenharia | AGD-01.2, PAC-01.1 | N | MVP | Saldo debitado a cada sessão concluída; alerta de saldo baixo; saldo nunca negativo sem override |
 | FIN-01.6 | Orçamentos | Orçamento com itens, validade, aprovação do paciente (assinatura) e conversão em cobranças | Produto | FIN-01.1, DOC-02.4 | N | F2 | Orçamento aprovado vira parcelas automaticamente |
 | FIN-01.7 | Inadimplência e régua de cobrança | Lista de inadimplentes, régua de lembretes de pagamento por WhatsApp | Engenharia | FIN-01.1, COM-03.4 | N | F2 | Régua configurável; mensagem com tom não constrangedor validado por UX |
+| FIN-01.8 | Cobrança de pacotes | Cobrança do pacote à vista ou parcelada, vinculada ao saldo de FIN-01.5, com recibo | Engenharia | FIN-01.5, FIN-01.1 | N | MVP | Venda de pacote gera as parcelas; sessão de pacote não gera cobrança avulsa duplicada |
 | FIN-02.1 | Contas a pagar | Despesas, fornecedores, recorrências, anexos de comprovante | Engenharia | NUC-01.1 | N | F2 | Lançamentos recorrentes gerados automaticamente |
 | FIN-02.2 | Plano de contas e centros de custo | Plano de contas padrão para clínicas, centros de custo por unidade/profissional | Produto | FIN-02.1 | N | F2 | Plano padrão revisado por contador |
 | FIN-02.3 | Fluxo de caixa | Realizado e projetado (recebíveis, convênios, despesas) | Engenharia | FIN-02.1, FIN-01.1 | N | F2 | Projeção de 90 dias com recebíveis de cartão e convênio |
@@ -297,7 +299,9 @@ Partes: **01** NFS-e
 
 ## 12. CNV — Convênios / TISS
 
-Partes: **01** Cadastros · **02** Guias e autorizações · **03** Faturamento e glosas
+Partes: **01** Cadastros · **02** Guias e autorizações · **03** Faturamento e glosas · **04** Controle de guia simples (MVP, sem XML TISS)
+
+> A parte 04 entra no MVP para as clínicas mistas de fisio/TO (ver [relatório executivo de mercado](../01-mercado/relatorio-executivo-mercado.md) §5.3). O faturamento continua no portal da operadora; o XML TISS (CNV-02/03) segue na F2.1 e reaproveita as guias da parte 04.
 
 | ID | Microparte | Descrição curta | Frente dona | Dependências | Dado sensível | Fase | Critério de pronto |
 |---|---|---|---|---|---|---|---|
@@ -307,7 +311,7 @@ Partes: **01** Cadastros · **02** Guias e autorizações · **03** Faturamento 
 | CNV-02.1 | Guia de consulta | Geração pré-preenchida a partir do atendimento | Engenharia | CNV-01.2, PRO-02.1 | S | F2 | Guia válida no schema XSD vigente |
 | CNV-02.2 | Guia SP/SADT | Guia de serviços profissionais/SADT com múltiplos procedimentos/sessões | Engenharia | CNV-02.1 | S | F2 | Guia de 10 sessões de fisio gerada sem retrabalho |
 | CNV-02.3 | Honorários e odontologia (GTO) | Guia de honorários individuais e guia de tratamento odontológico | Engenharia | CNV-02.1, PRO-03.2 | S | F2 | GTO gerada a partir do plano de tratamento |
-| CNV-02.4 | Autorizações | Solicitação e controle de senhas, validade e saldo de sessões autorizadas | Engenharia | CNV-02.2 | S | F2 | Agendamento alerta quando sessões autorizadas acabam ou vencem |
+| CNV-02.4 | Autorizações | Solicitação eletrônica de autorização à operadora, evoluindo o controle de saldo e validade de CNV-04.3 | Engenharia | CNV-02.2, CNV-04.3 | S | F2 | Agendamento alerta quando sessões autorizadas acabam ou vencem |
 | CNV-02.5 | Validação pré-envio | Validação de schema, campos obrigatórios e regras por operadora antes de fechar lote | Engenharia | CNV-02.1 | S | F2 | 100% das guias com erro detectável barradas antes do envio |
 | CNV-02.6 | Token/biometria do beneficiário | Captura de token de atendimento quando exigido pela operadora | Engenharia | CNV-02.1 | S | F3 | Token registrado na guia para operadoras que exigem |
 | CNV-03.1 | Lotes XML TISS | Geração de lote, hash, protocolo, envio por portal ou webservice | Engenharia | CNV-02.5 | S | F2 | Lote aceito em homologação por ≥ 3 operadoras |
@@ -315,6 +319,12 @@ Partes: **01** Cadastros · **02** Guias e autorizações · **03** Faturamento 
 | CNV-03.3 | Glosas e recursos | Gestão de glosas por motivo, recurso de glosa e acompanhamento | Engenharia | CNV-03.2 | S | F2 | Taxa de glosa e recuperação em relatório; recurso gerado no padrão TISS |
 | CNV-03.4 | Envio via webservice | Envio automático via webservices TISS das operadoras | Engenharia | CNV-03.1 | S | F3 | Envio sem acessar portal da operadora para ≥ 5 operadoras |
 | CNV-03.5 | Atualização de versão TISS | Processo de atualização às novas versões do padrão ANS | Produto | CNV-03.1 | N | F2 | Nova versão suportada antes da data de obrigatoriedade |
+| CNV-04.1 | Cadastro simples de convênios | Operadora (nome, registro ANS opcional), valor por sessão, exigências (assinatura por sessão, senha, validade padrão da guia); sem regras TISS | Engenharia | NUC-01.1 | N | MVP | Clínica cadastra 5 convênios em < 5 min; convênio aparece como forma de atendimento no agendamento |
+| CNV-04.2 | Registro de guia | Guia vinculada a paciente e convênio: nº da guia, senha de autorização, nº da carteirinha, procedimento (texto livre ou TUSS), sessões autorizadas, data de emissão e validade, imagem da guia anexada | Engenharia | CNV-04.1, PAC-01.1, NUC-05.2 | S | MVP | Guia registrada em < 1 min; anexo só por URL assinada; nº de guia duplicado no mesmo convênio é bloqueado |
+| CNV-04.3 | Saldo e consumo por sessão | Cada sessão marcada como atendida consome 1 sessão da guia vinculada; saldo = autorizadas − realizadas; estorno ao desfazer; série recorrente (AGD-02.4) vinculável à guia; aviso ao agendar além do saldo ou da validade | Engenharia | CNV-04.2, AGD-02.4, AGD-02.7 | S | MVP | Saldo sempre igual à contagem de sessões atendidas; nenhuma sessão consome guia vencida sem override com motivo auditado |
+| CNV-04.4 | Assinatura do paciente por sessão | Assinatura eletrônica simples na tela (tablet/celular) a cada sessão realizada, com data/hora, dispositivo e hash; folha de frequência por guia imprimível para assinatura física quando a operadora exigir | Engenharia | CNV-04.3, NUC-04.1, NUC-05.2 | S | MVP | Sessão sem assinatura aparece como pendente; folha de frequência sai com todas as sessões e assinaturas da guia |
+| CNV-04.5 | Alertas de guia vencendo ou esgotando | Alerta configurável (ex.: 7 dias antes da validade, 2 sessões restantes) para recepção e profissional; painel "guias a renovar" | Engenharia | CNV-04.3, NUC-05.3 | S | MVP | Alerta disparado no limiar configurado; notificação sem dado clínico no preview; painel lista 100% das guias em risco |
+| CNV-04.6 | Relatório por convênio | Sessões realizadas por convênio, guia, profissional e período, com valor a faturar e pendências de assinatura; exportação CSV/PDF para faturar no portal da operadora | Engenharia | CNV-04.3, CNV-04.4 | S | MVP | Totais batem com a contagem manual de 3 clínicas piloto; exportação respeita permissão do papel faturista |
 
 ## 13. EST — Estoque (estética, odonto e procedimentos)
 
@@ -413,12 +423,12 @@ Partes: **01** Escriba · **02** Assistentes clínicos · **03** Preditivo · **
 | IA-02.5 | Auditoria pré-envio de guias | IA aponta inconsistências entre prontuário e guia antes do envio | IA | IA-02.3, CNV-02.5 | S | F3 | Redução de glosa ≥ 20% em clínicas piloto |
 | IA-03.1 | Previsão de faltas | Score de risco de falta por agendamento com ação sugerida (reforço de confirmação, encaixe) | IA | AGD-02.7, COM-03.2 | N | F2 | AUC ≥ 0,75; features sem dado clínico; avaliação de viés documentada |
 | IA-03.2 | Previsão de abandono | Pacientes com risco de abandonar tratamento/plano | IA | IA-03.1, PRO-03.7 | S | F3 | Precisão@50 ≥ 0,5 em piloto; uso só para ação de cuidado/relacionamento |
-| IA-04.1 | NLU do bot | Intenções: agendar, remarcar, cancelar, preço, endereço, convênio aceito, falar com humano | IA | IA-05.1 | N | MVP | Acurácia de intenção ≥ 92% em conjunto de teste de conversas sintéticas/anônimas |
+| IA-04.1 | NLU do bot | Intenções: agendar, remarcar, cancelar, preço, endereço, convênio aceito, falar com humano | IA | IA-05.1 | S | MVP | Acurácia de intenção ≥ 92% em conjunto de teste de conversas sintéticas/anônimas |
 | IA-04.2 | FAQ com RAG da clínica | Base de conhecimento editável pela clínica (preparos, políticas) respondida pelo bot | IA | IA-04.1, IA-05.2 | N | F2 | Respostas citam a base; "não sei" quando fora da base |
 | IA-04.3 | Guardrails do bot | Bot não dá orientação clínica; detecta urgência e orienta SAMU 192/pronto-socorro e alerta a clínica | IA | IA-04.1 | S | MVP | 100% dos casos do conjunto de red teaming de urgência roteados corretamente |
 | IA-05.1 | Serviço de inferência | Gateway de modelos agnóstico de provedor (MVP: LLM via API com contrato de não-retenção + RAG; F2: open-weight fine-tuned; F3: modelo próprio hospedado no Brasil — ver `docs/05-ia-llm/`), roteamento, cotas e custo por tenant | IA | NUC-01.1 | S | MVP | Latência P95 dentro do SLO; custo por consulta medido; nenhum prompt/saída logado com PII |
 | IA-05.2 | RAG isolado por tenant | Indexação vetorial por tenant/paciente com controle de acesso + base clínica curada de referência | IA | IA-05.1, NUC-03.3 | S | MVP | Teste prova que recuperação nunca cruza tenant/permissão |
-| IA-05.3 | Avaliação contínua | Golden sets por nicho, métricas de qualidade, alucinação e viés; gate de release | IA | IA-05.1 | N | MVP | Nenhum modelo vai a produção sem passar no gate; relatório por versão |
+| IA-05.3 | Avaliação contínua | Golden sets por nicho, métricas de qualidade, alucinação e viés; gate de release | IA | IA-05.1 | S | MVP | Nenhum modelo vai a produção sem passar no gate; relatório por versão |
 | IA-05.4 | Pipeline de dados para treino | Coleta, anonimização, revisão e versionamento de datasets com aprovação do Guardião | IA | LGP-03.7 | S | F2 | Dataset com laudo de anonimização aprovado; rastreabilidade de origem e base legal |
 | IA-05.5 | Loop de feedback | Edições do profissional como sinal de qualidade, com opt-in da clínica | IA | IA-01.4, LGP-01.2 | S | F2 | Opt-in registrado por tenant; sinais pseudonimizados |
 | IA-05.6 | Monitoramento de IA | Drift, latência, custo, taxa de aceitação, incidentes de IA | IA | IA-05.1, NUC-05.5 | N | MVP | Painel com alertas; incidente de IA segue fluxo de incidentes |
