@@ -15,6 +15,7 @@ O trabalho é feito por uma **orquestra de agentes** com hierarquia definida:
 | N2 | 📊 Mercado · 🧩 Produto · 🛠️ Engenharia · 🤖 IA/LLM |
 | N3 | Executores de micropartes |
 
+- **Relatório geral (tudo explicado): [docs/relatorios/RELATORIO-GERAL.md](docs/relatorios/RELATORIO-GERAL.md)**
 - **Contexto completo em 5 minutos: [CONTEXTO.md](CONTEXTO.md)**
 - Hierarquia e regras: [docs/00-governanca/hierarquia.md](docs/00-governanca/hierarquia.md)
 - Fluxogramas: [docs/00-governanca/fluxograma.md](docs/00-governanca/fluxograma.md)

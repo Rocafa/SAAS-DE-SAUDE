@@ -1,5 +1,7 @@
 # Contexto do projeto — leia primeiro
 
+> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md): estado de cada área, como o código funciona, o que cada check do CI protege, decisões pendentes, riscos e glossário.
+>
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
 > Atualizado em 08/10/2026 (rodada 2: ver [relatório](docs/relatorios/2026-10-08-rodada-2.md)). Detalhes e fontes estão nos links de cada seção.
 
