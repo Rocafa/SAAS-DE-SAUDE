@@ -14,3 +14,6 @@ datasets/
 *.dump
 *.pem
 *.pfx
+.turbo/
+.claude/worktrees/
+plataforma-saude/

@@ -1,0 +1,37 @@
+name: "🚨 Incidente de segurança / LGPD"
+description: Suspeita de vazamento, acesso indevido ou segredo exposto. NÃO cole dados pessoais aqui.
+title: "[incidente] "
+labels: [incidente, lgpd]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Não inclua dados de pacientes, segredos ou credenciais nesta issue.** Descreva só o tipo de dado e o alcance.
+        **Segredo exposto?** Revogue/rotacione a credencial **antes** de abrir esta issue.
+        Prazos: avisar a clínica em até **24 h**; a clínica comunica ANPD e titulares em até **3 dias úteis**.
+        Se o repositório um dia ficar público, use *Security → Report a vulnerability* (advisory privado) em vez de issue.
+  - type: checkboxes
+    id: sem-dados
+    attributes:
+      label: Confirmação
+      options:
+        - label: Não incluí dado pessoal, dado de saúde nem segredo nesta issue
+          required: true
+  - type: input
+    id: deteccao
+    attributes: { label: Data e hora da detecção (horário de Brasília), placeholder: "2026-10-09 14:30" }
+    validations: { required: true }
+  - type: dropdown
+    id: severidade
+    attributes:
+      label: Severidade
+      options:
+        - "S1 — dado de saúde exposto"
+        - "S1 — dado pessoal (não sensível) exposto"
+        - "S2 — segredo exposto"
+        - "S3 — bug sem exposição"
+    validations: { required: true }
+  - type: textarea
+    id: descricao
+    attributes: { label: O que aconteceu e qual o alcance estimado (nº de clínicas/titulares, categorias de dado) }
+    validations: { required: true }

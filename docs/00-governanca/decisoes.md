@@ -6,7 +6,7 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 
 | # | Decisão | Opções levantadas | Análise |
 |---|---|---|---|
-| D1 | **Nicho de entrada** | (a) Psico + nutri + fisio + multiprofissionais — pesquisa geral; (b) TEA/ABA + fisio/TO — pesquisa de nichos. Ponto em comum: núcleo de sessões recorrentes, guias de convênio e repasse | `docs/01-mercado/mercado-geral-e-concorrentes.md` §5, `docs/01-mercado/nichos/` |
+| D1 | **Nicho de entrada** — recomendação atual: fisio/TO + psico autônomo; TEA na onda 2 (ver relatorio-executivo-mercado.md) | (a) Psico + nutri + fisio + multiprofissionais — pesquisa geral; (b) TEA/ABA + fisio/TO — pesquisa de nichos. Ponto em comum: núcleo de sessões recorrentes, guias de convênio e repasse | `docs/01-mercado/mercado-geral-e-concorrentes.md` §5, `docs/01-mercado/nichos/` |
 | D2 | **Preço** | Preço único R$ 89–129 com WhatsApp, IA e Receita Saúde inclusos, sem fidelidade; TEA cobra por paciente | `docs/01-mercado/`, `docs/02-produto/PRD.md` |
 | D3 | **Provedor de LLM para dado sensível** | Gemini (Vertex, São Paulo) ou Maritaca/Sabiá no Brasil; Claude/GPT só pseudonimizado + cláusulas-padrão ANPD; psicologia nunca sai do país | `docs/05-ia-llm/README.md`, `arquitetura-ia.md` |
 | D4 | **Autenticação** | Login próprio vs Keycloak hospedado no Brasil | `docs/04-arquitetura/README.md` |

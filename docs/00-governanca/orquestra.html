@@ -1,0 +1,169 @@
+<title>Orquestra Plataforma Saúde</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: uma partitura vertical — do regente (topo) aos músicos (base), com o fiscal de veto ao lado. */
+:root{
+  --bg:#f5f7f8; --surface:#ffffff; --ink:#14232b; --muted:#566872; --line:#d6dee2;
+  --accent:#1f7a6d; --accent-soft:#e1f0ed; --veto:#b4312b; --veto-soft:#f8e4e2;
+  --quality:#7a5a12; --quality-soft:#f5ecd6; --exec:#eef2f4;
+  --display:"Instrument Serif", Georgia, "Times New Roman", serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f171b; --surface:#16222829; --surface:#172329; --ink:#e3ebee; --muted:#9db0b8; --line:#2b3a41;
+  --accent:#5cc3b2; --accent-soft:#163631; --veto:#ef7a72; --veto-soft:#3a1d1b;
+  --quality:#e0bd6a; --quality-soft:#352b14; --exec:#1d2b31; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f171b; --surface:#172329; --ink:#e3ebee; --muted:#9db0b8; --line:#2b3a41;
+  --accent:#5cc3b2; --accent-soft:#163631; --veto:#ef7a72; --veto-soft:#3a1d1b;
+  --quality:#e0bd6a; --quality-soft:#352b14; --exec:#1d2b31; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--body)}
+.wrap{max-width:1080px;margin:0 auto;padding-inline:20px;padding-block:40px 64px;display:grid;gap:48px}
+h1,h2{font-family:var(--display);font-weight:400;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.2rem,5vw,3.4rem);line-height:1.05}
+h2{font-size:1.9rem}
+h3{font-size:1rem;margin:0;font-weight:600}
+p{margin:0}
+.lead{color:var(--muted);max-width:62ch;font-size:1.05rem}
+.eyebrow{font:500 .72rem/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+header{display:grid;gap:14px}
+section{display:grid;gap:20px}
+.tier{display:grid;grid-template-columns:72px 1fr;gap:16px;align-items:start}
+.tier-label{font:500 .8rem/1.2 var(--mono);color:var(--muted);padding-top:14px}
+.tier-label b{display:block;font-size:1.4rem;color:var(--ink);font-weight:500}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;min-width:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:6px;min-width:0}
+.card p{color:var(--muted);font-size:.9rem}
+.card .skills{font:400 .74rem/1.5 var(--mono);color:var(--muted)}
+.card.owner{border-color:var(--ink)}
+.card.maestro{background:var(--accent-soft);border-color:var(--accent)}
+.card.veto{background:var(--veto-soft);border-color:var(--veto)}
+.card.quality{background:var(--quality-soft);border-color:var(--quality)}
+.card.exec{background:var(--exec)}
+.tag{justify-self:start;font:500 .68rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 7px;border-radius:999px;border:1px solid currentColor}
+.tag.veto{color:var(--veto)} .tag.quality{color:var(--quality)} .tag.accent{color:var(--accent)}
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;list-style:none;padding:0;margin:0}
+.rules li{border-top:2px solid var(--accent);padding-top:10px;color:var(--muted);font-size:.92rem}
+.rules li b{color:var(--ink);display:block;margin-bottom:2px}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:.9rem}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:500 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+code{font:400 .82rem var(--mono)}
+.pill{display:inline-block;font:500 .72rem/1 var(--mono);padding:5px 8px;border-radius:999px;white-space:nowrap}
+.ok{background:var(--accent-soft);color:var(--accent)}
+.wip{background:var(--quality-soft);color:var(--quality)}
+.block{background:var(--veto-soft);color:var(--veto)}
+footer{color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);padding-top:16px;display:grid;gap:6px}
+a{color:var(--accent)}
+@media (max-width:560px){.tier{grid-template-columns:1fr}.tier-label{padding-top:0}}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Governança · SaaS de gestão clínica</span>
+    <h1>A orquestra de agentes</h1>
+    <p class="lead">Quem decide, quem coordena, quem executa e quem pode parar tudo. Cada entrega passa por esta cadeia antes de chegar à <code>main</code> do repositório <code>Rocafa/SAAS-DE-SAUDE</code>.</p>
+  </header>
+
+  <section aria-labelledby="h-hier">
+    <h2 id="h-hier">Hierarquia</h2>
+
+    <div class="tier">
+      <div class="tier-label"><b>N0</b>Donos</div>
+      <div class="row">
+        <div class="card owner"><h3>👥 Sócios</h3><p>Decisão final: prioridades, preço, nicho, merge na <code>main</code>. Só eles derrubam um veto do Guardião, por escrito.</p></div>
+      </div>
+    </div>
+
+    <div class="tier">
+      <div class="tier-label"><b>N1</b>Regência</div>
+      <div class="row">
+        <div class="card maestro"><span class="tag accent">coordena</span><h3>🎼 maestro</h3><p>Quebra demandas em micropartes, distribui até 3 agentes, integra e escreve o relatório da rodada.</p><span class="skills">brainstorming · writing-plans · executing-plans</span></div>
+        <div class="card veto"><span class="tag veto">veto absoluto</span><h3>🛡️ guardiao-lgpd</h3><p>Revisa tudo que toca dado pessoal ou de saúde. Aprova ou veta, com correções.</p><span class="skills">security-review · checklist-pr · RIPD</span></div>
+        <div class="card quality"><span class="tag quality">bloqueia bug crítico</span><h3>🔍 revisor-codigo</h3><p>Caça bugs, simplifica e exige prova de que os testes rodaram.</p><span class="skills">code-review · simplify · verification</span></div>
+      </div>
+    </div>
+
+    <div class="tier">
+      <div class="tier-label"><b>N2</b>Frentes</div>
+      <div class="row">
+        <div class="card"><h3>📊 pesquisa-mercado</h3><p>Concorrentes, tamanho de mercado, nichos. Todo número com fonte.</p><span class="skills">deep-research · lead-research</span></div>
+        <div class="card"><h3>🧩 produto</h3><p>PRD, WBS, backlog, roadmap, critérios de aceite.</p><span class="skills">doc-coauthoring · writing-plans</span></div>
+        <div class="card"><h3>🛠️ engenharia</h3><p>Arquitetura, código do MVP, integrações.</p><span class="skills">test-driven-development · run</span></div>
+        <div class="card"><h3>🤖 ia-llm</h3><p>Modelos, RAG, escriba, avaliação e governança de dados de treino.</p><span class="skills">claude-api · deep-research</span></div>
+      </div>
+    </div>
+
+    <div class="tier">
+      <div class="tier-label"><b>N3</b>Execução</div>
+      <div class="row">
+        <div class="card exec"><h3>🎨 design-ui</h3><p>Telas e protótipos (sob Produto).</p><span class="skills">frontend-design · shadcn</span></div>
+        <div class="card exec"><h3>🧪 qa-testes</h3><p>TDD, Playwright, teste de isolamento entre clínicas (sob Engenharia).</p><span class="skills">webapp-testing · TDD</span></div>
+        <div class="card exec"><h3>⚙️ devops-ci</h3><p>CI, CodeQL, Dependabot, deploy (sob Engenharia).</p><span class="skills">update-config · schedule</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-fluxo">
+    <h2 id="h-fluxo">Ciclo de uma demanda</h2>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    A([Issue dos sócios]) --> B[Maestro quebra em micropartes]
+    B --> C{Toca dado de saúde?}
+    C -- sim --> D[Guardião: RIPD antes]
+    C -- não --> E
+    D --> E[Até 3 agentes em paralelo<br/>cada um na sua branch]
+    E --> F[Revisor de código]
+    F --> G{Guardião LGPD}
+    G -- veta --> E
+    G -- aprova --> H[CI verde<br/>gitleaks · CodeQL · RLS]
+    H --> I{Sócios}
+    I -- aprovam --> J([Merge na main])
+    I -- ajustes --> B
+</pre>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-regras">
+    <h2 id="h-regras">Regras de ouro</h2>
+    <ul class="rules">
+      <li><b>Ninguém pula nível</b>Executor → líder de frente → Maestro → sócios.</li>
+      <li><b>Veto do Guardião é absoluto</b>Só os sócios derrubam, por escrito no PR.</li>
+      <li><b>No máximo 3 agentes por tarefa</b>Economia de tokens; o resto o Maestro faz direto.</li>
+      <li><b>Nada se perde</b>Commit após cada entrega; relatório em <code>docs/relatorios/</code> ao fim da rodada.</li>
+      <li><b>Zero dado real no git</b>Nem em prompt, log, teste ou dataset. Só pacientes fictícios.</li>
+      <li><b>A IA rascunha, o profissional assina</b>Resolução CFM 2.454/2026.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="h-estado">
+    <h2 id="h-estado">Estado das frentes</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Frente</th><th>Entrega</th><th>Status</th><th>Onde</th></tr></thead>
+        <tbody>
+          <tr><td>Governança</td><td>Hierarquia, fluxogramas, RACI, rituais, modelos de issue</td><td><span class="pill ok">pronto</span></td><td><code>docs/00-governanca/</code></td></tr>
+          <tr><td>Mercado</td><td>11 nichos, relatório executivo, matriz de nichos</td><td><span class="pill ok">pronto</span></td><td><code>docs/01-mercado/</code></td></tr>
+          <tr><td>Produto</td><td>Visão, PRD, WBS, backlog do MVP, piloto, métricas</td><td><span class="pill ok">pronto</span></td><td>PR #5</td></tr>
+          <tr><td>Produto</td><td>Controle de guia, pacotes e agenda simultânea no MVP</td><td><span class="pill ok">pronto</span></td><td>PR #6</td></tr>
+          <tr><td>LGPD</td><td>Mapa regulatório, checklist, RIPD, parecer do PR #5 com correções aplicadas</td><td><span class="pill ok">pronto</span></td><td><code>docs/03-seguranca-lgpd/</code></td></tr>
+          <tr><td>Engenharia</td><td>API NestJS, web Next.js, teste de isolamento entre clínicas no CI</td><td><span class="pill ok">pronto</span></td><td>PR #7</td></tr>
+          <tr><td>IA/LLM</td><td>Estratégia em 3 fases, arquitetura, custos</td><td><span class="pill ok">pronto</span></td><td><code>docs/05-ia-llm/</code></td></tr>
+          <tr><td>Sócios</td><td>Decisões D1 a D8 (nicho, preço, provedor de IA, advogado)</td><td><span class="pill block">aguardando</span></td><td><code>decisoes.md</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p>Repositório privado: <a href="https://github.com/Rocafa/SAAS-DE-SAUDE">github.com/Rocafa/SAAS-DE-SAUDE</a> · Comece pelo <code>CONTEXTO.md</code>.</p>
+    <p>Para acionar a orquestra no Claude Code: “Use o agente maestro na issue #N”.</p>
+  </footer>
+</div>

@@ -1,0 +1,15 @@
+name: "📊 Pesquisa"
+description: Pesquisa de mercado, nicho, concorrente ou regulação
+title: "[pesquisa] "
+labels: [pesquisa]
+body:
+  - type: textarea
+    id: pergunta
+    attributes: { label: Pergunta a responder, description: Qual decisão esta pesquisa vai apoiar? }
+    validations: { required: true }
+  - type: textarea
+    id: escopo
+    attributes: { label: Escopo e fontes sugeridas }
+  - type: input
+    id: prazo
+    attributes: { label: Prazo }

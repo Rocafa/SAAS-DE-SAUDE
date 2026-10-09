@@ -1,0 +1,29 @@
+name: "🧩 Feature"
+description: Nova funcionalidade ou microparte da WBS
+title: "[feature] "
+labels: [feature]
+body:
+  - type: input
+    id: wbs
+    attributes: { label: IDs da WBS, placeholder: "AGD-03.2, AGD-03.3" }
+  - type: textarea
+    id: problema
+    attributes: { label: Problema / objetivo, description: Qual dor de qual persona isso resolve? }
+    validations: { required: true }
+  - type: textarea
+    id: aceite
+    attributes: { label: Critérios de aceite, placeholder: "Dado ... Quando ... Então ..." }
+  - type: dropdown
+    id: sensivel
+    attributes:
+      label: Toca dado pessoal ou de saúde?
+      options: ["Não", "Sim — exige revisão do guardiao-lgpd"]
+    validations: { required: true }
+  - type: dropdown
+    id: fase
+    attributes: { label: Fase, options: [MVP, F2, F3] }
+  - type: textarea
+    id: lgpd
+    attributes:
+      label: Se toca dado sensível — finalidade, base legal e categoria do dado
+      description: "Ex.: finalidade = lembrete de consulta; base legal = art. 11, II, f (tutela da saúde); categoria = C3 dado de saúde. Ver docs/03-seguranca-lgpd/bases-legais-e-consentimento.md"
