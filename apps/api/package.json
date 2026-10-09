@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "db:migrate": "node scripts/migrate.mjs",
-    "test:rls": "vitest run --config vitest.rls.config.mts"
+    "test:rls": "vitest run --config vitest.rls.config.mts",
+    "test:security": "vitest run --config vitest.security.config.mts",
+    "serve:dast": "vitest run --config vitest.dast.config.mts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",
@@ -19,6 +21,7 @@
     "@nestjs/platform-express": "^11.1.0",
     "@plataforma/shared": "workspace:*",
     "drizzle-orm": "^0.45.0",
+    "helmet": "8.1.0",
     "postgres": "^3.4.9",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"

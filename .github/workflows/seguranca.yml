@@ -1,0 +1,127 @@
+name: Segurança
+
+# Suíte ofensiva (o atacante tenta; o teste prova que falha) + DAST com OWASP ZAP.
+# Ver docs/04-arquitetura/testes-de-seguranca.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 1' # semanal: pega regressões de imagens/dependências
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seguranca-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PGHOST: localhost
+  PGPASSWORD: ci-efemero
+  POSTGRES_USER: postgres
+  POSTGRES_DB: plataforma_saude
+  # Senha descartável do container efêmero de CI (sem dado algum). Não é segredo.
+  POSTGRES_PASSWORD: ci-efemero
+  DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
+  DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+
+jobs:
+  ataques:
+    name: Testes ofensivos (banco + HTTP)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Mesmo script do docker-compose local e do job rls: app_migrator (dono) e app_user (NOBYPASSRLS).
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+      - name: Migrar (papel app_migrator)
+        run: pnpm --filter @plataforma/api db:migrate
+      - name: Ataques (papel app_user)
+        run: pnpm --filter @plataforma/api test:security
+
+  dast:
+    name: DAST (OWASP ZAP baseline)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      API_PORT: '3333'
+      DAST_SERVE_SECONDS: '900'
+      # Imagem oficial fixada por versão (não usar :stable/:latest).
+      ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.16.1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+      - name: Migrar (papel app_migrator)
+        run: pnpm --filter @plataforma/api db:migrate
+      - name: Subir a API (AppModule + applyHttpSecurity)
+        run: |
+          nohup pnpm --filter @plataforma/api serve:dast > api.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${API_PORT}/health" > /dev/null; then echo "API no ar"; exit 0; fi
+            sleep 2
+          done
+          echo "API não subiu"; cat api.log; exit 1
+      - name: ZAP baseline
+        run: |
+          mkdir -p zap && chmod a+rwx zap
+          # -I: avisos não derrubam o passo; a decisão (falhar só em risco Alto) é feita abaixo.
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t "http://127.0.0.1:${API_PORT}/health" \
+            -J zap-report.json -r zap-report.html -m 2 -I || rc=$?
+          echo "zap-baseline saiu com ${rc:-0}"
+          test -s zap/zap-report.json
+      - name: Falhar em alertas de risco Alto
+        run: |
+          jq -r '.site[].alerts[] | "\(.riskdesc)\t\(.pluginid)\t\(.alert)"' zap/zap-report.json \
+            | sort | tee zap/resumo.txt
+          {
+            echo '### OWASP ZAP baseline'
+            echo '```'
+            cat zap/resumo.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          altos=$(jq '[.site[].alerts[] | select(.riskcode == "3")] | length' zap/zap-report.json)
+          echo "Alertas de risco Alto: ${altos}"
+          test "${altos}" -eq 0
+      - name: Log da API em caso de falha
+        if: failure()
+        run: cat api.log || true
