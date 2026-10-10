@@ -50,7 +50,9 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Stack:** monorepo pnpm + Turborepo; Next.js + shadcn no front; NestJS na API.
 - **Dados:** PostgreSQL com isolamento por clínica (RLS); Redis/BullMQ para filas.
 - **Hospedagem:** AWS São Paulo.
-- **Código:** o esqueleto está pronto, mas **ainda não foi executado**.
+- **Código:** API, banco com isolamento por clínica (RLS), garantia de saída e 9 checks de CI **rodam e estão verdes** na `main`.
+  Ainda **não há** login, telas de negócio nem ambiente na AWS.
+- **O que falta para produção** (infra, regulação, custos e checklist de go-live): [rodada 7](docs/relatorios/2026-10-10-rodada-7-necessidades-de-producao.md).
   → [arquitetura](docs/04-arquitetura/)
 
 ## 7. IA
@@ -63,7 +65,8 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
   → [estratégia de IA](docs/05-ia-llm/)
 
 ## 8. Decisões pendentes dos sócios
-Nicho de entrada · preço · provedor de LLM · autenticação · Pix · vídeo · retenção de auditoria · advogado.
+Nicho de entrada · preço · provedor de LLM · autenticação · Pix · vídeo · retenção de auditoria · advogado ·
+receita controlada (SNCR) · inscrição no CRM · certificação SBIS · orçamento de infra e pentest.
 → [decisoes.md](docs/00-governanca/decisoes.md)
 
 ## 9. Como começar (sócio novo)
