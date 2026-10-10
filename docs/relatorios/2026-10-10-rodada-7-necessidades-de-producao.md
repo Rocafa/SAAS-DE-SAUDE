@@ -17,7 +17,7 @@
    - **Plataformas de prescrição precisam ser inscritas no CRM** da jurisdição (Res. CFM 2.299/2021, art. 5º). Documentos médicos digitais exigem ICP-Brasil **NGS2**. [FATO]
    - **Resolução CFM 2.454/2026 sobre IA** está **em vigor desde cerca de agosto de 2026** (publicada em 27/02/2026, com prazo de 180 dias). [FATO]
    - **ANPD virou agência reguladora** pela Lei 15.352/2026. O prazo de 3 dias úteis para comunicar incidente (Res. 15/2024) continua valendo. [FATO]
-3. **Infraestrutura de produção é a maior lacuna técnica.** Faltam o Terraform, as contas AWS, o RDS Multi-AZ, o CD, os segredos, a observabilidade e o backup testado na nuvem. Isso é o pré-requisito **P7** do plano de piloto. Custo estimado de staging + produção no MVP: **cerca de US$ 800 a 1.100 por mês** [ESTIMATIVA, §6].
+3. **Infraestrutura de produção é a maior lacuna técnica.** Faltam o Terraform, as contas AWS, o RDS Multi-AZ, o CD, os segredos, a observabilidade e o backup testado na nuvem. Isso é o pré-requisito **P7** do plano de piloto. Custo estimado de staging + produção no MVP: **cerca de US$ 750 a 1.050 por mês de AWS, ou US$ 800 a 1.200 somando as ferramentas** [ESTIMATIVA, §6].
 4. **Os 5 bloqueios do piloto, em ordem:** D4 (autenticação) → infraestrutura AWS (P7) → M0 completo (RBAC, MFA, criptografia de campo, auditoria) → advogado (D8: DPA, RIPD, CRM, termos) → pentest externo (P2).
 
 ---
