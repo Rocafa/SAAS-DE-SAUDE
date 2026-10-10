@@ -72,7 +72,7 @@
 | Trilha de auditoria do prontuário | Igual ao prontuário | SBIS / defesa em processos |
 | Gravação de teleconsulta (se houver) | Igual ao prontuário | Integra o prontuário |
 | Dados fiscais (NFS-e, financeiro) | 5 anos (prazo tributário) — confirmar com contador | CTN art. 173/174 ⚖️ |
-| Logs de acesso à aplicação | ≥ 6 meses (adotado: 5 anos) | Marco Civil art. 15 |
+| Logs de acesso à aplicação | ≥ 6 meses (proposta D7: 12 meses, ver [retencao-e-descarte.md](retencao-e-descarte.md)) | Marco Civil art. 15 |
 | Mensagens de WhatsApp fora do prontuário | 12 meses (proposta) | Minimização |
 | Prompts/respostas de IA não incorporados ao prontuário | ≤ 30 dias | Minimização |
 | Consentimentos e revogações | Duração do tratamento + 5 anos | Prova (art. 8º, §2º) ⚖️ |
@@ -81,6 +81,7 @@
 - **Bloqueio técnico de exclusão** de prontuário antes do prazo; "exclusão" pela clínica = inativação.
 - **Descarte ao fim do prazo**: rotina anual gera lista de prontuários elegíveis → aprovação da clínica (pode haver interesse histórico/pesquisa/judicial) → crypto-shredding da DEK por registro/paciente ou exclusão segura + registro do descarte. Mídias físicas: NIST SP 800-88.
 - **Encerramento de contrato**: exportação completa por 90 dias; depois eliminação certificada ou custódia contratada.
+- **Política detalhada e expurgo de backups:** [retencao-e-descarte.md](retencao-e-descarte.md) (proposta para a D7).
 
 ## 8. Gestão de segredos (MUST)
 
