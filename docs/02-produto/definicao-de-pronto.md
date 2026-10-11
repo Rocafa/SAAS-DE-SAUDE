@@ -115,5 +115,6 @@ Toda história que mexe em **assinatura e cobrança (BIL), exportação (EXP), m
 
 - [ ] Não viola nenhuma garantia G1–G9 de [garantias-ao-cliente.md](garantias-ao-cliente.md).
 - [ ] Mantém verdes os testes que fazem valer G1–G3 (política de acesso por status e janela de saída, exportação isolada por tenant, auditoria append-only).
-- [ ] Histórias de exportação (EXP) testam os controles contra vazamento da G2: MFA recente, link vinculado ao usuário com expiração de 24 h, alerta a todos os admins com "não fui eu" revogando o link, e pausa quando houver suspeita de conta comprometida.
+- [ ] Histórias de exportação (EXP) testam os controles contra vazamento da G2 (EXP-01.5): MFA nos últimos 5 min, aprovação do responsável técnico, link vinculado ao usuário com expiração de 24 h e limite de downloads, alerta a todos os admins e ao RT com "não fui eu" revogando o link e encerrando as sessões, janela de segurança, pausa quando houver suspeita de conta comprometida e auditoria da exportação.
+- [ ] Histórias de eliminação (EXP-01.6) registram que a exportação foi oferecida antes de eliminar e emitem certificado com a data de expiração da última cópia de backup ([retencao-e-descarte.md](../03-seguranca-lgpd/retencao-e-descarte.md)).
 - [ ] Quando cria um mecanismo novo para uma garantia, atualiza a coluna "Como a fazemos valer" e a §4 (estado da implementação) daquele documento.

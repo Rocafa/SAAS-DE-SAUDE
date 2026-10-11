@@ -17,6 +17,12 @@ O Guardião LGPD & Segurança é transversal e tem **poder de veto**: nenhum PR,
 | [lgpd-e-ia.md](lgpd-e-ia.md) | Regras para LLM: provedores externos, anonimização, treino, revisão humana |
 | [checklist-pr.md](checklist-pr.md) | Checklist sim/não para todo PR |
 | [RIPD-modelo.md](RIPD-modelo.md) | Modelo de Relatório de Impacto à Proteção de Dados |
+| [RIPD-plataforma.md](RIPD-plataforma.md) | RIPD da plataforma base (rascunho 0.1, 10/10/2026) |
+| [dpa-minuta.md](dpa-minuta.md) | Minuta do contrato de operador clínica × plataforma (rascunho para o advogado) |
+| [retencao-e-descarte.md](retencao-e-descarte.md) | Proposta de retenção (D7), descarte e expurgo de backups |
+| [plano-resposta-incidentes.md](plano-resposta-incidentes.md) | Resposta a incidente (3 dias úteis) com modelos de aviso |
+| [checklist-cfm-2454.md](checklist-cfm-2454.md) | Checklist da Res. CFM 2.454/2026 para as features de IA |
+| [revisoes/](revisoes/) | Pareceres do Guardião sobre PRs |
 
 ## Premissas do produto que mais pesam regulatoriamente
 

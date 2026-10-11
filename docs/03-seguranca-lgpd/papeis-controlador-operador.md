@@ -33,6 +33,7 @@ Clínicas com profissionais autônomos que alugam sala podem ter cada profission
 ## 3. Contrato de operador (DPA) — cláusulas-chave do modelo
 
 > Anexo ao contrato SaaS (Termos de Uso B2B). Redação final com advogado. ⚖️
+> **Minuta completa (rascunho para o advogado):** [dpa-minuta.md](dpa-minuta.md). Os números abaixo são os mesmos da minuta.
 
 1. **Objeto e instruções documentadas** — tratamos dados exclusivamente para prestar os serviços descritos (agenda, prontuário, comunicação, faturamento, teleconsulta, receita, IA assistiva), conforme instruções da clínica, que são o contrato, a configuração do produto e instruções escritas posteriores. Instrução ilícita: o operador avisa e pode recusar.
 2. **Descrição do tratamento (Anexo I)** — categorias de titulares (pacientes, responsáveis legais, profissionais, colaboradores), categorias de dados (identificação, contato, dados de saúde, dados de menores, imagem/voz em teleconsulta, dados financeiros), finalidades, duração, localização (Brasil).
