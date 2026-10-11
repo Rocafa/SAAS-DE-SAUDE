@@ -65,6 +65,30 @@ zitadel start-from-init --config zitadel.yaml --steps steps.yaml \
   --masterkey <32 bytes> --tlsMode disabled   # porta 8084
 ```
 
+## Um terceiro achado, do próprio CI
+
+O `gitleaks` do CI reprovou a primeira versão deste PR por causa de **uma linha de
+`.env.example`**: a variável do segredo vinha com uma frase de exemplo no lugar do valor —
+nenhum segredo de verdade —, e a regra `generic-api-key` a acusou por entropia 3,69. E
+reprovou **de novo** quando este memo descreveu o problema citando a linha literal: para o
+scanner, descrever um achado com o texto original é o mesmo que reintroduzi-lo. Daí este
+parágrafo não trazer o valor.
+
+O conserto certo não é lista de exceção: o `.env.example` passou a deixar a variável
+**vazia**, e a PoC passou a **recusar subir** sem `POC_AUTH_SECRET` em vez de cair num valor
+padrão escrito no código. Medido depois da mudança: sem a variável, o processo morre com
+`POC_AUTH_SECRET é obrigatória`.
+
+Duas regras para qualquer frente, as duas pagas com CI vermelho aqui:
+
+1. **Valor de exemplo com cara de segredo num `.env.example` derruba o `gitleaks`.** Deixe a
+   variável vazia e diga como gerar o valor.
+2. **Não cite a linha acusada ao documentar o achado** — nem em memo, nem em relatório, nem
+   no corpo do PR. O scanner varre o repositório inteiro, e markdown conta.
+
+E, como o `gitleaks` varre o **histórico** (95 commits nesta execução), apagar num commit
+novo não resolve: é preciso reescrever o commit que introduziu a linha.
+
 ## Limites honestos desta medição
 
 - Esta máquina **não tem runtime de container**. O pedido original dizia "Zitadel
