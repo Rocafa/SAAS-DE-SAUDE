@@ -89,7 +89,7 @@ banco é injetada por um **proxy TCP** entre a API e o Postgres real (mesmo comp
   defesa em profundidade não deveria precisar segurar. Correção: `patches/postgres@3.4.9.patch`
   (`pnpm.patchedDependencies`): guarda de socket nulo em `nextWrite`, reset do timer em `closed()`, e
   `begin()` rejeita queries do callback depois que a conexão da transação caiu. **Pendência:** reportar
-  upstream; ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar
+  upstream (rascunho pronto, com reprodução mínima: [bug-postgresjs-3.4.9.md](bug-postgresjs-3.4.9.md)); ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar
   `test:resiliencia` antes de remover o patch.
 
 ## 4. Backup e restauração
