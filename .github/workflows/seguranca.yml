@@ -44,7 +44,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres -d plataforma_saude"
           --health-interval 5s --health-timeout 5s --health-retries 10
-      # Rate limit distribuído: duas instâncias da API dividem o mesmo Redis (rate-limit-redis.test.ts).
+      # Rate limit distribuído: duas instâncias da API dividem o mesmo Redis (rate-limit-redis.security.test.ts).
       redis:
         image: redis:7-alpine
         ports:

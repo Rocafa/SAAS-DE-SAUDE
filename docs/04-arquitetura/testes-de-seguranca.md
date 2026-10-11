@@ -85,7 +85,7 @@ num repositório), dentro ou fora de `withTenant`.
 - **`node dist/main.js` não sobe**: `@plataforma/shared` é publicado como TypeScript-fonte com
   imports `./x.js`, que o Node não resolve. Por isso o DAST sobe a API via `serve:dast` (vitest).
   Corrigir no build/deploy (compilar `shared` ou empacotar a API) em microparte própria.
-- Rate limit por IP em Redis, compartilhado entre instâncias (`REDIS_URL`), com fallback em memória se o Redis cair ou demorar mais de 100 ms; a chave guarda só um hash do IP. Coberto por `rate-limit-redis.test.ts` (duas instâncias, um Redis). Ainda falta limite por usuário e por tenant, que depende do login (D4).
+- Rate limit por IP em Redis, compartilhado entre instâncias (`REDIS_URL`), com fallback em memória se o Redis cair ou demorar mais de 100 ms; a chave guarda só um hash do IP. Coberto por `rate-limit-redis.security.test.ts` (duas instâncias, um Redis). Ainda falta limite por usuário e por tenant, que depende do login (D4).
   Atrás do ALB, configurar `HTTP_TRUST_PROXY_HOPS=1` para usar o IP real.
 - CSP do web usa `script-src 'unsafe-inline'` (scripts inline de hidratação do App Router).
   Próximo passo: CSP com nonce em `proxy.ts`.
