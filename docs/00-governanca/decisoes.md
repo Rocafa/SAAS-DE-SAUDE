@@ -15,10 +15,11 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 | D7 | **Retenção da trilha de auditoria** | Mínimo 5 anos (sugestão) | `docs/03-seguranca-lgpd/` |
 | D9 | **Garantias ao cliente** | Aprovar a Carta de Compromissos (G1–G9) e antecipar roadmap público (SUP-01.7) e status page (SUP-01.6) para o MVP | `docs/02-produto/garantias-ao-cliente.md` |
 | D8 | **Validação jurídica** | Advogado especialista em saúde + LGPD revisa os itens ⚖️ (CFM 2.454/2026, TRF-1 estética, ANS cartões de desconto, DPA) | `docs/03-seguranca-lgpd/README.md` |
-| D10 | **Receita controlada (SNCR)** — Anvisa RDC 1.000/2025: receita de controle especial só vale se emitida por sistema integrado ao SNCR | Integrar direto à API do SNCR vs usar parceiro já integrado (confirmar com a Memed) | `docs/relatorios/2026-10-10-rodada-7-necessidades-de-producao.md` §3 (R7) |
-| D11 | **Inscrição no CRM como plataforma de prescrição** (Res. CFM 2.299/2021, art. 5º) | Inscrever a empresa (com responsável técnico) vs delegar a prescrição a parceiro inscrito | idem §3 (R6) ⚖️ |
-| D12 | **Certificação SBIS S-RES NGS2** | Seguir o manual 5.2 desde o M0 e certificar depois do GA vs não certificar | idem §3 (R4) |
-| D13 | **Orçamento de infraestrutura e pentest** | ~US$ 750–1.050/mês de AWS (staging + prod) [ESTIMATIVA]; pentest US$ 5–30 mil | idem §6 |
+| D10 | **Receita controlada (SNCR)** — Anvisa RDC 1.000/2025: receita de controle especial só vale se emitida por sistema integrado ao SNCR | Integrar direto à API do SNCR vs usar parceiro já integrado (confirmar com a Memed) | `docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md` §3.8 |
+| D11 | **Inscrição no CRM como plataforma de prescrição** (Res. CFM 2.299/2021, art. 5º) | Inscrever a empresa (com responsável técnico) vs delegar a prescrição a parceiro inscrito | idem §3.8 ⚖️ |
+| D12 | **Certificação SBIS S-RES NGS2** | Seguir o manual 5.2 desde o M0 e certificar depois do GA vs não certificar | idem §3.9 |
+| D13 | **Orçamento de infraestrutura e pentest** | ~US$ 750–1.050/mês de AWS (staging + prod) [ESTIMATIVA]; pentest US$ 5–30 mil | idem §4 |
+| D14 | **Escopo do Receita Saúde no MVP** | Gerar o arquivo de lote (manual v2.1) e conciliar vs prometer emissão automática (não há API pública) | `docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md` §3.2 |
 
 ## Tomadas
 
