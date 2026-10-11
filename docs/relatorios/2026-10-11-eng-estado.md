@@ -3,19 +3,19 @@
 Atualizado a cada entrega. Ordens vêm do Maestro (`.maestro/ordens-eng.md`).
 
 ## Feito
-- **Item 1 (S5): criptografia de campo por clínica**, branch `eng/criptografia-por-clinica`
-  - migração 0004 (`tenant_master_keys`, `tenant_data_keys`, RLS FORCE, transições por trigger);
-  - módulo `apps/api/src/modules/crypto` (KeyProvider, KMS por interface, provedor local, FieldCipher, cache com TTL);
-  - doc `docs/04-arquitetura/criptografia-de-campo.md`;
-  - testes: unit 85 (25 novos de cifra + 9 de provedores), RLS 25 (7 novos), security 74, resiliência 24.
+- **Item 1 (S5): criptografia de campo por clínica.** PR #35, branch `eng/criptografia-por-clinica`.
+  Migração 0004, módulo `crypto`, doc `criptografia-de-campo.md`. Unit 85, RLS 25, security 74, resiliência 24.
+- **Item 2 (S6): auditoria encadeada por clínica.** PR #37, branch `eng/auditoria-encadeada`.
+  Migração 0005 (trigger com trava por clínica + SHA-256 de JSON canônico), `audit-chain.ts`, doc `auditoria-encadeada.md`.
+  Unit 59, RLS 29, security 74, resiliência 24, backup-restore OK.
 
 ## Falta
-- Item 2 (S6): auditoria encadeada por clínica, migração 0005, branch `eng/auditoria-encadeada`.
 - Item 0: rebase dos PRs #31 e #33, só depois de o #30 entrar na `main` (o Maestro avisa).
 - Relatório final `docs/relatorios/2026-10-11-eng.md`.
+- Pendentes registrados nos docs: SDK do KMS e IAM (DevOps); job de âncora da auditoria em S3 com Object Lock (DevOps + Engenharia).
 
 ## Ambiente de teste (sem Docker neste Mac)
-Postgres 16.15 nativo em 127.0.0.1:5441 e Redis 8.10 em 6381 (o Homebrew não tem Redis 7), com dados em `~/Documents/Dev/projetos/.r8-dados/eng`. Os papéis foram criados com `infra/local/postgres-init.sh`.
+Postgres 16.15 nativo em 127.0.0.1:5441 (bancos `plataforma_saude` para o item 1 e `plataforma_saude_audit` para o item 2) e Redis 8.10 em 6381 (o Homebrew não tem Redis 7), com dados em `~/Documents/Dev/projetos/.r8-dados/eng`.
 
 ## Próximo passo
-Abrir o PR do item 1 e começar o item 2.
+Aguardar o #30 na `main` para o item 0; enquanto isso, acompanhar o CI e a revisão do Guardião nos PRs #35 e #37.
