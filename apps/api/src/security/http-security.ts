@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadHttpSecurityConfig, type HttpSecurityConfig } from './http-security.config';
+import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit-store';
 
 type Next = (err?: unknown) => void;
 type Req = IncomingMessage & { ip?: string };
@@ -18,12 +19,13 @@ const CORS_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * - Limite de corpo (413) e rate limit global por IP (429).
  * - Erros da camada express (corpo grande, JSON malformado) sem stack trace nem detalhe interno.
  *
- * O rate limit é em memória (por instância). Em produção com várias tasks, a meta é Redis
- * (docs/04-arquitetura/seguranca-na-arquitetura.md); isto é a rede de proteção mínima.
+ * O rate limit usa o `store` recebido: em produção, Redis compartilhado entre as instâncias com
+ * fallback em memória (createRateLimitStore); por padrão, só memória (local e testes).
  */
 export function applyHttpSecurity(
   app: INestApplication,
   config: HttpSecurityConfig = loadHttpSecurityConfig(),
+  store: RateLimitStore = new MemoryRateLimitStore(),
 ): void {
   const expressApp = app as NestExpressApplication;
   expressApp.disable('x-powered-by');
@@ -53,7 +55,7 @@ export function applyHttpSecurity(
     maxAge: 600,
   });
 
-  app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs));
+  app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs, store));
 
   expressApp.useBodyParser('json', { limit: config.bodyLimit });
   expressApp.useBodyParser('urlencoded', { limit: config.bodyLimit, extended: false });
@@ -80,34 +82,39 @@ function sendJson(res: ServerResponse, status: number, message: string): void {
  */
 export const RATE_LIMIT_EXEMPT_PATHS: ReadonlySet<string> = new Set(['/health', '/health/ready']);
 
-/** Janela fixa por IP, em memória. Mapa zerado a cada janela (memória limitada). */
-export function rateLimiter(max: number, windowMs: number, exemptPaths: ReadonlySet<string> = RATE_LIMIT_EXEMPT_PATHS) {
-  let windowStart = Date.now();
-  let hits = new Map<string, number>();
+/**
+ * Janela fixa por IP. A contagem vem do `store` (Redis ou memória). Se o store falhar mesmo assim
+ * (o FallbackRateLimitStore já cobre o Redis fora), a requisição segue: um erro no contador não
+ * pode derrubar a API inteira.
+ */
+export function rateLimiter(
+  max: number,
+  windowMs: number,
+  store: RateLimitStore = new MemoryRateLimitStore(),
+  exemptPaths: ReadonlySet<string> = RATE_LIMIT_EXEMPT_PATHS,
+) {
   return (req: Req, res: ServerResponse, next: Next): void => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     if (exemptPaths.has(path)) {
       next();
       return;
     }
-    const now = Date.now();
-    if (now - windowStart >= windowMs) {
-      windowStart = now;
-      hits = new Map();
-    }
     const key = req.ip ?? req.socket.remoteAddress ?? 'desconhecido';
-    const count = (hits.get(key) ?? 0) + 1;
-    hits.set(key, count);
-    const resetSeconds = Math.max(1, Math.ceil((windowStart + windowMs - now) / 1000));
-    res.setHeader('RateLimit-Limit', String(max));
-    res.setHeader('RateLimit-Remaining', String(Math.max(0, max - count)));
-    res.setHeader('RateLimit-Reset', String(resetSeconds));
-    if (count > max) {
-      res.setHeader('Retry-After', String(resetSeconds));
-      sendJson(res, 429, 'Too Many Requests');
-      return;
-    }
-    next();
+    store.hit(key, windowMs).then(
+      ({ count, resetMs }) => {
+        const resetSeconds = Math.max(1, Math.ceil(resetMs / 1000));
+        res.setHeader('RateLimit-Limit', String(max));
+        res.setHeader('RateLimit-Remaining', String(Math.max(0, max - count)));
+        res.setHeader('RateLimit-Reset', String(resetSeconds));
+        if (count > max) {
+          res.setHeader('Retry-After', String(resetSeconds));
+          sendJson(res, 429, 'Too Many Requests');
+          return;
+        }
+        next();
+      },
+      () => next(),
+    );
   };
 }
 
