@@ -122,6 +122,8 @@
 
 ## 13. Plano de resposta a incidentes
 
+> Plano detalhado, com modelos de aviso à clínica, à ANPD e ao paciente: [plano-resposta-incidentes.md](plano-resposta-incidentes.md).
+
 ### Papéis
 - **Líder do incidente** (on-call de engenharia), **Guardião LGPD/Encarregado**, **Jurídico**, **Comunicação**, **N0** para decisões de notificação.
 
