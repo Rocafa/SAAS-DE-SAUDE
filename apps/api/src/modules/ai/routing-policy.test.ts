@@ -46,7 +46,7 @@ describe('routeRequest', () => {
     niche: 'fisio_to' as const,
     sensitivity: 'sensivel' as const,
     tenantPolicy: comTransferencia,
-    patientConsent: 'nao_recusou' as const,
+    patientConsent: 'informado_nao_recusou' as const,
   };
 
   it('nega quando a IA está desligada na clínica', () => {
@@ -63,6 +63,36 @@ describe('routeRequest', () => {
     const semConsentimento = { task: base.task, niche: base.niche, sensitivity: base.sensitivity, tenantPolicy: base.tenantPolicy };
     expect(routeRequest(semConsentimento, [br])).toEqual({ allowed: false, reason: 'consentimento_nao_informado' });
   });
+
+  // Os TRÊS estados do consentimento, um por um. Ausência de registro nunca é permissão:
+  // `nao_informado` tem de negar exatamente como o campo faltando.
+  it('nao_informado nega, igual a não ter campo nenhum', () => {
+    expect(routeRequest({ ...base, patientConsent: 'nao_informado' }, [br])).toEqual({
+      allowed: false,
+      reason: 'consentimento_nao_informado',
+    });
+  });
+
+  it('recusou nega', () => {
+    expect(routeRequest({ ...base, patientConsent: 'recusou' }, [br])).toEqual({
+      allowed: false,
+      reason: 'paciente_recusou_ia',
+    });
+  });
+
+  it('informado_nao_recusou permite', () => {
+    const r = routeRequest({ ...base, patientConsent: 'informado_nao_recusou' }, [br]);
+    expect(r.allowed).toBe(true);
+  });
+
+  it.each(['nao_informado', 'recusou'] as const)(
+    'o estado %s nega em TODAS as tarefas, não só no escriba',
+    (consent) => {
+      for (const task of AI_TASKS) {
+        expect(routeRequest({ ...base, task, patientConsent: consent }, [br, ext]).allowed).toBe(false);
+      }
+    },
+  );
 
   it('dado não pessoal dispensa consentimento de paciente', () => {
     const r = routeRequest({ task: 'chatbot', niche: 'outro', sensitivity: 'nao_pessoal', tenantPolicy: semTransferencia }, [ext]);

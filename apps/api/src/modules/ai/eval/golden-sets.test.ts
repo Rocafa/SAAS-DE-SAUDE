@@ -47,13 +47,23 @@ const files = readdirSync(DIR).filter((f) => f.endsWith('.json'));
 const sets = files.map((f) => ({ file: f, set: JSON.parse(readFileSync(join(DIR, f), 'utf8')) as GoldenSet }));
 const cases = sets.flatMap(({ set }) => set.casos.map((c) => ({ nicho: set.nicho, c })));
 
-/** Padrões de dado pessoal que nunca podem aparecer num golden set. */
+/**
+ * Padrões de dado pessoal que nunca podem aparecer num golden set.
+ * Cada padrão existe porque a forma ANTERIOR deixava passar uma escrita comum do mesmo dado:
+ * CNS escrito com separador passava pelo `\d{15}`, e data em ISO passava pelo dd/mm/aaaa.
+ */
 const PII_PATTERNS: Record<string, RegExp> = {
   cpf: /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/,
   cns: /\b\d{15}\b/,
+  // CNS é impresso em grupos: "123 4567 8901 2345" (espaço, ponto ou hífen entre os grupos).
+  cns_com_separador: /\b\d{3}[\s.-]\d{4}[\s.-]\d{4}[\s.-]\d{4}\b/,
   telefone: /\(?\b\d{2}\)?\s?9?\d{4}-\d{4}\b/,
   email: /[\w.+-]+@[\w-]+\.[\w.]+/,
   data: /\b\d{2}\/\d{2}\/\d{4}\b/,
+  // Data em ISO (2026-10-12) é a forma que mais vaza, porque é a que o sistema gera.
+  data_iso: /\b\d{4}-\d{2}-\d{2}\b/,
+  cep: /\b\d{5}-\d{3}\b/,
+  rg: /\b\d{1,2}\.\d{3}\.\d{3}-?[\dxX]\b/,
 };
 
 describe('golden sets do escriba', () => {

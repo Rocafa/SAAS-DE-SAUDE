@@ -16,6 +16,14 @@ export function parseAiProvider(env: NodeJS.ProcessEnv = process.env): AiProvide
   if (!(AI_PROVIDER_IDS as readonly string[]).includes(raw)) {
     throw new Error(`AI_PROVIDER inválido: "${raw}" (use ${AI_PROVIDER_IDS.join(' | ')})`);
   }
+  // O `fake` é o padrão de desenvolvimento, e padrão silencioso é como ele chegaria em
+  // produção: rascunho de IA vazio, sem ninguém perceber. Em produção, falha no boot.
+  if (raw === 'fake' && env.NODE_ENV === 'production') {
+    throw new Error(
+      'AI_PROVIDER=fake não sobe em produção: é a rota de desenvolvimento e não gera documento. ' +
+        'Configure uma rota real (depende da decisão D3) ou não habilite o módulo de IA.',
+    );
+  }
   return raw as AiProviderId;
 }
 

@@ -94,13 +94,79 @@ O gate do M3 libera o escriba para o piloto. **Todos** os limiares abaixo precis
 | Registro do uso de IA no documento | `provenance` (rota, modelo@versão, prompt@hash, data) | Teste de código (`ai.service.test.ts`) |
 | Transparência (finalidade, limitações, métricas) | Model card por nicho publicado às clínicas | Item do checklist de go-live (`avaliacao-e-seguranca.md` §6) |
 
-## 7. Execução e registro
+## 7. Avaliação preliminar de risco (arts. 12 e 13 da Res. CFM 2.454/2026)
+
+A resolução exige **avaliação preliminar de risco por tarefa**, não por produto. Um mesmo
+sistema pode ter uma tarefa de risco médio e outra de risco alto; o que vale é o uso.
+
+### 7.1 Classificação por tarefa
+
+| Tarefa | Classificação | Base | Por quê |
+|---|---|---|---|
+| **Escriba** (rascunho de documento a partir da consulta) | **Médio risco** | Anexo II, II | Produz rascunho sob supervisão humana obrigatória; não decide, não diagnostica, não fala com o paciente |
+| Sumarização de evolução | Médio risco | Anexo II, II | Mesmo desenho: rascunho revisado por profissional |
+| Chatbot administrativo (agenda, dúvida de horário) | Baixo risco | Não trata dado clínico | Sem conteúdo clínico e sem efeito em conduta |
+| Qualquer tarefa que sugira diagnóstico, triagem ou conduta | **Alto risco — não implementamos** | — | Vedado pelo nosso próprio desenho; a política de roteamento nega antes de chamar o modelo |
+
+A classificação é **por tarefa** (`AiTask`), então ela vive junto da tarefa no código, não
+num documento solto: cada tarefa nova entra nesta tabela antes de entrar no produto.
+
+### 7.2 Gatilho de reclassificação (§1º)
+
+A classificação não é definitiva. Ela **tem de ser revista** quando qualquer um destes
+mudar — e a revisão é condição para o deploy, não tarefa posterior:
+
+1. A finalidade da tarefa muda (ex.: o rascunho passa a sugerir conduta).
+2. A supervisão humana deixa de ser obrigatória ou passa a ser contornável na interface.
+3. O público muda (ex.: a saída passa a ser lida pelo paciente, e não pelo profissional).
+4. A tarefa passa a tratar categoria de dado que não tratava (ex.: imagem, biometria).
+5. Troca de modelo ou de rota que altere o perfil de risco (ex.: sair de rota 100% BR).
+6. Incidente ou erro relevante observado em produção.
+
+Operacionalmente: qualquer PR que mexa em `AiTask`, no prompt de uma tarefa, na
+`routing-policy` ou na obrigatoriedade de revisão humana **declara no corpo do PR** se a
+classificação muda. Sem essa linha, o PR não passa pela revisão da frente de IA.
+
+### 7.3 A classificação tem de aparecer na interface
+
+Não basta estar no documento: a resolução pede transparência ao profissional. Então:
+
+- A tela que mostra o rascunho exibe, visível e sem precisar de clique, a classificação da
+  tarefa e a frase de supervisão (ex.: "Escriba de IA — risco médio. Rascunho: revise e
+  assine; nada é salvo sem a sua assinatura").
+- O `provenance` já gravado (rota, modelo@versão, prompt@hash, data) passa a carregar
+  também a classificação, para que o registro no documento diga sob qual classificação
+  aquele rascunho foi gerado.
+- Checklist de go-live: nenhuma tarefa de IA vai para produção sem a classificação exposta
+  na tela que a usa.
+
+### 7.4 O que ainda NÃO existe
+
+A interface ainda não existe (o módulo `records` está por fazer), então 7.3 é **requisito
+escrito, não implementado**. Está aqui para que a tela nasça com isso, e para que o gate do
+M3 cobre: sem a classificação na tela, o gate reprova.
+
+### 7.5 Fontes e um aviso honesto
+
+- Portal do CFM, "CFM normatiza uso da IA na medicina": https://portal.cfm.org.br/noticias/cfm-normatiza-uso-da-ia-na-medicina (consultado em 2026-10-12)
+- Resumo Mattos Filho: https://www.mattosfilho.com.br/unico/cfm-ia-medicina/ (consultado em 2026-10-12)
+- Resumo Demarest: https://www.demarest.com.br/cfm-publica-resolucao-que-regulamenta-o-uso-de-inteligencia-artificial-na-medicina/ (consultado em 2026-10-12)
+- Resumo Mayer Brown (em inglês): https://www.mayerbrown.com/pt/insights/publications/2026/03/brazilian-cfm-issues-resolution-on-the-use-of-artificial-intelligence-in-medicine (consultado em 2026-10-12)
+
+**Aviso:** a numeração citada aqui (arts. 12 e 13, §1º, Anexo II, II) veio da **revisão do
+Guardião LGPD** nesta rodada, não da leitura do texto oficial publicado no Diário Oficial.
+Antes do go-live, alguém precisa conferir artigo por artigo contra o texto oficial — os
+resumos de banca acima não substituem a norma. Isto é ESTIMATIVA de enquadramento; a
+classificação em si (escriba = médio risco, sob supervisão humana) é a parte que o nosso
+desenho sustenta de FATO.
+
+## 8. Execução e registro
 
 - **CI (hoje):** `pnpm --filter @plataforma/api test` roda a integridade dos golden sets: casos sintéticos, sem PII, referência coerente com as próprias checagens, e recusa bloqueada.
 - **Rodada com modelo real (depois da D3):** script `eval:escriba` (a criar em `ia/eval-escriba`) que chama o modelo **só pelo `AiService`**, grava o resultado em `docs/05-ia-llm/resultados/<data>-<nicho>-<modelo@versão>-<prompt@hash>.json` (só métricas e ids de caso, nunca o texto gerado) e falha se algum limiar da §5 não for atingido.
 - **Quando rodar:** toda mudança de modelo, versão, prompt, parâmetro ou golden set (bloqueia o merge); semanalmente durante o piloto.
 
-## 8. Quem aprova o gate do M3
+## 9. Quem aprova o gate do M3
 
 | Papel | Aprova |
 |---|---|
@@ -109,7 +175,7 @@ O gate do M3 libera o escriba para o piloto. **Todos** os limiares abaixo precis
 | 🛡️ Guardião LGPD | Rota BR, ausência de PHI em logs e resultados, RIPD da IA |
 | Sócios (N0) | Liberação do modo sombra e, depois, do fluxo padrão |
 
-## 9. Limitações conhecidas
+## 10. Limitações conhecidas
 
 - As checagens determinísticas usam termos. Elas pegam o erro **previsto** no caso, não qualquer erro; o juiz e os humanos cobrem o resto.
 - Golden set sintético é mais "limpo" que consulta real. O modo sombra existe para medir essa diferença.

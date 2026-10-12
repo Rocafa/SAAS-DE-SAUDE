@@ -12,7 +12,7 @@ const input: AiGenerateInput = {
   niche: 'fisio_to',
   sensitivity: 'sensivel',
   tenantPolicy: { aiEnabled: true, allowsInternationalTransfer: false },
-  patientConsent: 'nao_recusou',
+  patientConsent: 'informado_nao_recusou',
   system: 'Você é um assistente de documentação. Prompt sintético v1.',
   input: 'Transcrição sintética.',
 };
@@ -80,6 +80,20 @@ describe('configuração do provedor (AI_PROVIDER)', () => {
 
   it('valor desconhecido falha no boot', () => {
     expect(() => parseAiProvider({ AI_PROVIDER: 'openai' })).toThrow(/AI_PROVIDER inválido/);
+  });
+
+  it('fake NÃO sobe em produção: falha no boot', () => {
+    expect(() => parseAiProvider({ AI_PROVIDER: 'fake', NODE_ENV: 'production' })).toThrow(
+      /não sobe em produção/,
+    );
+  });
+
+  it('em produção, nem o padrão implícito passa (AI_PROVIDER ausente)', () => {
+    expect(() => parseAiProvider({ NODE_ENV: 'production' })).toThrow(/não sobe em produção/);
+  });
+
+  it('fora de produção o fake segue valendo', () => {
+    expect(parseAiProvider({ AI_PROVIDER: 'fake', NODE_ENV: 'test' })).toBe('fake');
   });
 
   it.each(AI_PROVIDER_IDS.filter((id) => id !== 'fake'))('%s ainda não existe: aguarda a D3', (id) => {

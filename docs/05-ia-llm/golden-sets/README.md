@@ -28,7 +28,7 @@ O teste `apps/api/src/modules/ai/eval/golden-sets.test.ts` barra no CI arquivo s
 |---|---|
 | `id` | `FT-nnn` (fisio/TO) ou `PS-nnn` (psicologia) |
 | `cenario`, `tags` | Descrição e tipo de dificuldade (`negacao`, `lateralidade`, `terceiro_citado`, `injecao_falada`, `risco`, `recusa_cfm_2454`...) |
-| `consentimento_ia` | `nao_recusou` ou `recusou` |
+| `consentimento_ia` | `nao_informado`, `informado_nao_recusou` ou `recusou`. Ausência de registro NUNCA equivale a permissão: `nao_informado` nega. |
 | `resultado_esperado` | `rascunho` ou `bloqueado` (recusa do paciente: o escriba nem é chamado) |
 | `transcricao` | Falas com `falante` (`PROFISSIONAL`, `PACIENTE`, `ACOMPANHANTE`) e `texto` |
 | `nota_referencia` | `secoes[].itens[]` com `texto` e `ancora` (trecho **literal** da transcrição que sustenta o item), mais `alertas[]` |

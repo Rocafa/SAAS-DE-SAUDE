@@ -5,7 +5,9 @@
  *
  * Ordem das regras (falha fechada: na dúvida, nega):
  * 1. Clínica com IA desligada → nega.
- * 2. Paciente recusou IA (Res. CFM 2.454/2026) → nega, para qualquer tarefa que use dado dele.
+ * 2. Consentimento de IA (Res. CFM 2.454/2026), três estados: paciente não informado (ou sem
+ *    registro) → nega; recusou → nega; informado e não recusou → segue. Ausência de registro
+ *    NUNCA equivale a permissão.
  * 3. Rota precisa ter sido avaliada para a tarefa (`provider.tasks`).
  * 4. Psicologia → somente BR, mesmo pseudonimizado e mesmo com transferência aceita.
  * 5. sensivel → somente BR.
@@ -66,8 +68,14 @@ export function routeRequest(input: RoutingInput, providers: readonly LlmProvide
   if (!input.tenantPolicy.aiEnabled) return { allowed: false, reason: 'ia_desligada_na_clinica' };
 
   if (input.sensitivity !== 'nao_pessoal') {
-    if (input.patientConsent === undefined) return { allowed: false, reason: 'consentimento_nao_informado' };
-    if (input.patientConsent !== 'nao_recusou') return { allowed: false, reason: 'paciente_recusou_ia' };
+    // Três estados. Ausência de registro (`undefined`) e `nao_informado` são a MESMA coisa
+    // para a decisão: ninguém pode afirmar que o paciente não recusou, então nega.
+    if (input.patientConsent === undefined || input.patientConsent === 'nao_informado') {
+      return { allowed: false, reason: 'consentimento_nao_informado' };
+    }
+    if (input.patientConsent !== 'informado_nao_recusou') {
+      return { allowed: false, reason: 'paciente_recusou_ia' };
+    }
   }
 
   const residencies = allowedResidencies(input.niche, input.sensitivity, input.tenantPolicy);

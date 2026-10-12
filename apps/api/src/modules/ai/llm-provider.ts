@@ -84,5 +84,13 @@ export interface TenantAiPolicy {
   readonly allowsInternationalTransfer: boolean;
 }
 
-/** Recusa do paciente ao uso de IA (Res. CFM 2.454/2026). Ausência de registro = não recusou. */
-export type PatientAiConsent = 'nao_recusou' | 'recusou';
+/**
+ * Posição do paciente quanto ao uso de IA (Res. CFM 2.454/2026). TRÊS estados, porque
+ * **ausência de registro nunca equivale a permissão**: se ninguém informou o paciente,
+ * não há como afirmar que ele não recusou, e a falha é fechada.
+ *
+ * - `nao_informado` — o paciente não foi informado, ou o registro não existe → NEGA.
+ * - `informado_nao_recusou` — foi informado e não recusou → PERMITE.
+ * - `recusou` — recusou expressamente → NEGA.
+ */
+export type PatientAiConsent = 'nao_informado' | 'informado_nao_recusou' | 'recusou';
