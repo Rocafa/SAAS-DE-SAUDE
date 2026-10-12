@@ -3,13 +3,15 @@
 > **Para que serve:** há dois Maestros trabalhando no mesmo repositório, a sessão do @Rocafa e a do @Lopesloro. **Antes de pegar um item, confira aqui. Ao pegar, coloque seu nome e commite na `main`.** Ao terminar, mova o item para "Feito".
 > Regra: **quem abriu o PR faz o merge**, salvo pedido explícito do outro sócio.
 
+> ⚠️ **13/10/2026: o GitHub Actions parou** ("recent account payments have failed or your spending limit needs to be increased"). Nenhum CI roda até ajustar o billing da conta Rocafa. **Não fazer merge sem CI verde.**
+
 ## Em andamento
 
 | Item | Quem pegou | Desde | Onde |
 |---|---|---|---|
-| Rodada 9.1: merge de #41, #31, #33; fechar os PRs individuais do Dependabot (#14–#26); recusar #18 com regra no `dependabot.yml` | Maestro @Rocafa | 12/10/2026 | PRs |
+| Rodada 9.1: ✅ #41, #31, #33 mergeados; Dependabot #14–#26 fechados sozinhos; #18 já ignorado no dependabot.yml | Maestro @Rocafa | 12/10/2026 | concluído |
 | Rodada 9.2: rebase/atualização do #38 (LGPD) | Maestro @Rocafa | 12/10/2026 | `lgpd/mapa-regulatorio-rebase` |
-| Rodada 9.3: revisão do Guardião LGPD nas telas #42, #44, #46, #47; merge das telas **#42 → #47** autorizado por @Rocafa | Maestro @Rocafa | 12/10/2026 | PRs |
+| Rodada 9.3: parecer do Guardião commitado (#42/#43/#45 aprovados com ressalvas; **#44, #46, #47 VETADOS**, comentários nos PRs). ✅ #42 mergeado (com correção de caminhos no Windows). **#43 pronto** (main juntada, 12/12 local), **parado: GitHub Actions sem minutos/pagamento**. Correções B1–B3 das telas vetadas: com o front (@Lopesloro) | Maestro @Rocafa | 12/10/2026 | PRs |
 | Rodada 9.4: atualizar RELATORIO-GERAL (rodadas 6–8), CONTEXTO.md e orquestra.html | Maestro @Rocafa | 12/10/2026 | — |
 
 ## Livre (pegue colocando seu nome)
