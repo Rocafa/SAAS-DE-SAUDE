@@ -93,6 +93,8 @@ export function ExecutorProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [exec, setExec] = useState<Execucao | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  // O painel de narração fica do lado oposto ao alvo, para nunca cobrir o botão destacado.
+  const [painelEmCima, setPainelEmCima] = useState(false);
   const sinal = useRef({ parar: false });
 
   const apontar = useCallback(async (el: HTMLElement) => {
@@ -100,6 +102,7 @@ export function ExecutorProvider({ children }: { children: ReactNode }) {
     await pausa(semMovimento() ? 50 : 350);
     const r = el.getBoundingClientRect();
     setCursor({ x: r.left + Math.min(r.width / 2, 60), y: r.top + r.height / 2 });
+    setPainelEmCima(r.top + r.height / 2 > window.innerHeight / 2);
     await pausa(semMovimento() ? 50 : 450);
   }, []);
 
@@ -247,7 +250,9 @@ export function ExecutorProvider({ children }: { children: ReactNode }) {
         <div
           role="region"
           aria-label="Ajudante trabalhando"
-          className="fixed inset-x-3 bottom-24 z-[60] mx-auto flex max-w-2xl flex-col gap-3 rounded-lg border-[3px] border-borda-forte bg-fundo p-4 shadow-[0_6px_0_0_var(--texto)] md:bottom-6"
+          className={`fixed inset-x-3 z-[60] mx-auto flex max-w-2xl flex-col gap-3 rounded-lg border-[3px] border-borda-forte bg-fundo p-4 shadow-[0_6px_0_0_var(--texto)] ${
+            painelEmCima ? 'top-3' : 'bottom-24 md:bottom-6'
+          }`}
         >
           <p className="text-[0.95rem] font-bold uppercase tracking-wide">
             {exec.modo === 'fazer' ? 'Ajudante fazendo por você' : 'Ajudante mostrando como'} · passo {exec.indice + 1} de{' '}

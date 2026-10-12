@@ -55,7 +55,11 @@ export function acharPacientes(texto: string, pacientes: Paciente[]): { paciente
   const achados: { paciente: Paciente; nota: number }[] = [];
   for (const p of pacientes) {
     let nota = 0;
-    if (letras) nota = Math.max(notaTexto(letras, p.nome), p.nomeSocial ? notaTexto(letras, p.nomeSocial) + 0.01 : 0);
+    if (letras) {
+      const social = p.nomeSocial ? notaTexto(letras, p.nomeSocial) : 0;
+      // Empate: o nome social vence (é o nome que a pessoa usa).
+      nota = Math.max(notaTexto(letras, p.nome), social > 0 ? social + 0.01 : 0);
+    }
     if (digitos.length >= 3) {
       const tel = somenteDigitos(p.telefone);
       const cpf = somenteDigitos(p.cpf);
@@ -67,7 +71,10 @@ export function acharPacientes(texto: string, pacientes: Paciente[]): { paciente
     }
     if (nota > 0) achados.push({ paciente: p, nota });
   }
-  return achados.sort((a, b) => b.nota - a.nota || nomeExibido(a.paciente).localeCompare(nomeExibido(b.paciente)));
+  achados.sort((a, b) => b.nota - a.nota || nomeExibido(a.paciente).localeCompare(nomeExibido(b.paciente)));
+  // Com acerto bom, esconde os "parecidos" fracos (ex.: "joao" não traz "Joana").
+  const melhor = achados[0]?.nota ?? 0;
+  return achados.filter((a) => a.nota >= Math.min(melhor, Math.max(1, melhor / 2)));
 }
 
 /** Para perguntas de ajuda: basta metade das palavras importantes bater. */

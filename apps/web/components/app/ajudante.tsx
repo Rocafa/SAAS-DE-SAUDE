@@ -153,7 +153,7 @@ export function Ajudante() {
             ) : escolhido ? (
               <EscolherModo resultado={escolhido} rodar={rodar} voltar={() => setEscolhido(null)} />
             ) : (
-              <Command shouldFilter={false} loop label="Ajudante" className="flex min-h-0 flex-1 flex-col">
+              <Command shouldFilter={false} loop label="O que você precisa?" className="flex min-h-0 flex-1 flex-col">
                 <div className="flex items-center gap-2 border-b-2 border-borda p-3">
                   <Command.Input
                     autoFocus
@@ -168,6 +168,7 @@ export function Ajudante() {
                   <Botao
                     variante="suave"
                     tamanho="pequeno"
+                    className="hidden sm:inline-flex"
                     disabled
                     title="Voz desligada por enquanto, para proteger os dados dos pacientes"
                   >
@@ -176,9 +177,9 @@ export function Ajudante() {
                   </Botao>
                 </div>
                 <p id="ajudante-dica" className="px-4 pt-2 text-[0.95rem] text-texto-suave">
-                  Use as setas ↑ ↓ e Enter. O Ajudante nunca grava nada sozinho.
+                  Use as setas ↑ ↓ e Enter. O Ajudante nunca grava nada sozinho. Voz desligada por enquanto.
                 </p>
-                <Command.List className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+                <Command.List label="Resultados" className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
                   {!texto && (
                     <Command.Group heading="Experimente escrever" className={CLASSE_GRUPO}>
                       {SUGESTOES.map((s) => (
@@ -207,12 +208,12 @@ export function Ajudante() {
                             <span className="flex min-w-0 flex-col">
                               <span className="font-bold">{r.titulo}</span>
                               {r.detalhe && <span className="text-[0.95rem] text-texto-suave">{r.detalhe}</span>}
+                              {r.requiresConfirm && (
+                                <span className="mt-1 self-start rounded-sm border-2 border-borda px-2 text-[0.85rem] font-bold">
+                                  pede sua confirmação
+                                </span>
+                              )}
                             </span>
-                            {r.requiresConfirm && (
-                              <span className="ml-auto shrink-0 rounded-sm border-2 border-borda px-2 text-[0.85rem] font-bold">
-                                pede confirmação
-                              </span>
-                            )}
                           </Command.Item>
                         ))}
                       </Command.Group>

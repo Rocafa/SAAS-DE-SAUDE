@@ -68,29 +68,32 @@
   }
 }
 
-/* Letra base de 18 px: 1rem = 18px em todo o app. */
-html {
-  font-size: 112.5%;
-  -webkit-text-size-adjust: 100%;
-}
+/* Base em camada: as classes utilitárias (ex.: texto de botão em link) vencem. */
+@layer base {
+  /* Letra base de 18 px: 1rem = 18px em todo o app. */
+  html {
+    font-size: 112.5%;
+    -webkit-text-size-adjust: 100%;
+  }
 
-body {
-  background: var(--fundo);
-  color: var(--texto);
-  line-height: 1.55;
-}
+  body {
+    background: var(--fundo);
+    color: var(--texto);
+    line-height: 1.55;
+  }
 
-/* Foco de teclado sempre visível: contorno preto de 3 px com halo branco (aparece no claro e no escuro). */
-:focus-visible {
-  outline: 3px solid var(--foco);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 7px var(--foco-halo);
-}
+  /* Foco de teclado sempre visível: contorno preto de 3 px com halo branco (aparece no claro e no escuro). */
+  :focus-visible {
+    outline: 3px solid var(--foco);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 7px var(--foco-halo);
+  }
 
-a {
-  color: inherit;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
+  a {
+    color: inherit;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
 }
 
 /* Destaque do Ajudante: borda grossa dupla, sem cor. */

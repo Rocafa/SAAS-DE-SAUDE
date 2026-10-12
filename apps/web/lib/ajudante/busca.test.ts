@@ -56,6 +56,12 @@ describe('busca de pacientes', () => {
     expect(acharPacientes(cpf.slice(-6), pacientes).map((x) => x.paciente.nome)).toContain('Ana Souza');
   });
 
+  it('acerto bom esconde parecidos fracos ("joao" não traz Joana nem Alice)', async () => {
+    const { pacientes } = await indice();
+    const nomes = acharPacientes('joao', pacientes).map((x) => x.paciente.nome);
+    expect(nomes).toEqual(['João Pereira']);
+  });
+
   it('dois dígitos não bastam (evita listar todo mundo)', async () => {
     const { pacientes } = await indice();
     expect(acharPacientes('00', pacientes)).toHaveLength(0);
