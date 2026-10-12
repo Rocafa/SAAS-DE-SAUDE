@@ -239,10 +239,13 @@ export default function PaginaFicha() {
           <FileText aria-hidden className="size-6" />
           Prontuário
         </h2>
-        <Vazio
-          titulo="A tela de atendimento chega no próximo pacote"
-          oQueFazer="Evolução por modelo (fisio/TO e psicologia), histórico e assinatura entram no PR 3."
-        />
+        <p className="mb-3 text-texto-suave">Evoluções assinadas, do mais novo para o mais antigo. Psicologia fica em compartimento sigiloso.</p>
+        <Botao asChild variante="contorno">
+          <Link href={`/pacientes/${paciente.id}/prontuario`}>
+            <FileText aria-hidden />
+            Abrir prontuário
+          </Link>
+        </Botao>
       </section>
 
       <section aria-labelledby="t-recibos" data-assist-id="ficha-recibos">

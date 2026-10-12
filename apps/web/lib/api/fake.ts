@@ -5,6 +5,7 @@
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
+import { ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   Agendamento,
   Anexo,
@@ -12,6 +13,7 @@ import type {
   ItemEspera,
   NovoPaciente,
   Pacote,
+  Registro,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -178,6 +180,39 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'e2', pacienteId: 'p20', preferencia: 'Terça ou quinta depois das 17h', criadoEm: paraIsoLocal(somarDias(agora, -1)) },
       ];
   const pacotes: Pacote[] = vazio ? [] : [{ id: 'k1', pacienteId: 'p01', nome: 'Pacote de 10 sessões de fisioterapia', total: 10, usadas: 3 }];
+  const USUARIOS: Usuario[] = [
+    { id: 'u1', nome: 'Recepção (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
+    { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
+    { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
+    { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
+  ];
+  let usuario: Usuario = USUARIOS[0]!;
+  const registros: Registro[] = vazio
+    ? []
+    : agendamentos
+        .filter((a) => a.status === 'atendido' && a.data < hojeIso)
+        .map((a, i) => {
+          const modelo = modeloDoProfissional(PROFISSIONAIS.find((p) => p.id === a.profissionalId));
+          const campos: Record<string, string> =
+            modelo === 'psicologia'
+              ? { tema: 'Conteúdo fictício de demonstração.', evolucao: 'Processo em andamento (fictício).' }
+              : { queixa: 'Relata melhora da dor no joelho (fictício).', dor: '3', conduta: 'Fortalecimento de quadríceps, 3 séries de 12 (fictício).', plano: 'Manter exercícios em casa.' };
+          return {
+            id: `g${i + 1}`,
+            pacienteId: a.pacienteId,
+            agendamentoId: a.id,
+            profissionalId: a.profissionalId,
+            modelo,
+            data: a.data,
+            campos,
+            status: 'assinado' as const,
+            assinadoEm: a.data,
+            adendos: [],
+            restrito: ehRestrito(modelo),
+          };
+        });
+  const podeLer = (r: Registro) => !r.restrito || usuario.profissionalId === r.profissionalId;
+  const visivel = (r: Registro): Registro => (podeLer(r) ? r : { ...r, campos: {}, adendos: [] });
   const anexos: Anexo[] = vazio
     ? []
     : [
@@ -192,8 +227,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   }
 
   return {
-    usuarioAtual: () =>
-      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' }),
+    usuarioAtual: () => resposta<Usuario>(usuario),
+    usuariosDemo: () => resposta(USUARIOS),
+    async entrarComo(id) {
+      const u = USUARIOS.find((x) => x.id === id);
+      if (!u) throw new Error('Usuário não existe.');
+      usuario = u;
+      return resposta(u);
+    },
     listarPacientes: () => resposta(pacientes),
     obterPaciente: (id) => resposta(pacientes.find((p) => p.id === id) ?? null),
     listarProfissionais: () => resposta(PROFISSIONAIS),
@@ -375,6 +416,48 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       for (const r of recibos.filter((x) => x.pacienteId === pacienteId)) ev.push({ data: r.data, tipo: 'recibo', texto: `Pagamento recebido: R$ ${r.valor},00` });
       for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${x.nome}` });
       return resposta(ev.sort((a, b) => (b.data + (b.hora ?? '')).localeCompare(a.data + (a.hora ?? ''))));
+    },
+
+    listarRegistros: (pacienteId) =>
+      resposta(registros.filter((r) => r.pacienteId === pacienteId).map(visivel).sort((a, b) => b.data.localeCompare(a.data))),
+    obterRegistroDoAgendamento: (agendamentoId) => {
+      const r = registros.find((x) => x.agendamentoId === agendamentoId);
+      return resposta(r ? visivel(r) : null);
+    },
+    async salvarRascunho(agendamentoId, campos) {
+      const a = agendamentos.find((x) => x.id === agendamentoId);
+      if (!a) throw new Error('Esse atendimento não existe mais. Volte para Atendimento.');
+      if (usuario.profissionalId !== a.profissionalId) throw new Error('Só o profissional do atendimento pode escrever a evolução.');
+      let r = registros.find((x) => x.agendamentoId === agendamentoId);
+      if (r?.status === 'assinado') throw new Error('Registro já assinado. Para corrigir, use “Adicionar adendo”.');
+      if (!r) {
+        const modelo = modeloDoProfissional(PROFISSIONAIS.find((p) => p.id === a.profissionalId));
+        r = { id: novoId('g'), pacienteId: a.pacienteId, agendamentoId, profissionalId: a.profissionalId, modelo, data: a.data, campos: {}, status: 'rascunho', adendos: [], restrito: ehRestrito(modelo) };
+        registros.push(r);
+        if (a.status !== 'atendido') a.status = 'em_atendimento';
+      }
+      r.campos = { ...campos };
+      return resposta(r);
+    },
+    async assinarRegistro(id) {
+      const r = registros.find((x) => x.id === id);
+      if (!r) throw new Error('Registro não encontrado.');
+      if (usuario.profissionalId !== r.profissionalId) throw new Error('Só o profissional do atendimento pode assinar.');
+      const faltas = faltasParaAssinar(r.modelo, r.campos);
+      if (faltas.length) throw new Error(faltas.join(' '));
+      r.status = 'assinado';
+      r.assinadoEm = hojeIso;
+      const a = agendamentos.find((x) => x.id === r.agendamentoId);
+      if (a) a.status = 'atendido';
+      return resposta(r);
+    },
+    async adicionarAdendo(id, texto) {
+      const r = registros.find((x) => x.id === id);
+      if (!r) throw new Error('Registro não encontrado.');
+      if (usuario.profissionalId !== r.profissionalId) throw new Error('Só o profissional do atendimento pode adicionar adendo.');
+      if (!texto.trim()) throw new Error('Escreva o que precisa corrigir ou acrescentar.');
+      r.adendos.push({ texto: texto.trim(), em: hojeIso, autor: usuario.nome });
+      return resposta(r);
     },
   };
 }

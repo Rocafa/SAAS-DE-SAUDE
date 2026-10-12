@@ -8,7 +8,7 @@
 |---|---|---|
 | 1 | Design system em cinza + estrutura (menu lateral e barra inferior) + camada de dados fake + **Ajudante completo** + Início | 🟢 aberto, pede revisão do Guardião |
 | 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | 🟢 aberto, empilhado sobre o PR 1 |
-| 3 | Atendimento/Prontuário + Documentos | ⬜ |
+| 3 | Atendimento/Prontuário + Documentos | 🟢 aberto, empilhado sobre o PR 2 |
 | 4 | Financeiro + Guias + Mensagens + Relatórios | ⬜ |
 | 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | ⬜ |
 | 6 | Portal do paciente + PWA + páginas de erro | ⬜ |
@@ -45,3 +45,12 @@
 - **Atendimento simultâneo** (fisio no ginásio): o profissional tem limite de pacientes ao mesmo tempo; a agenda mostra "2 pacientes ao mesmo tempo".
 - **Pacientes**: cadastro com só nome e telefone obrigatórios, nome social, CPF opcional com dígito verificador, responsável obrigatório para menor; ficha com pacotes (saldo), anexos, linha do tempo e **inativar sem apagar** (texto explica a guarda legal; consultas futuras canceladas; desfazer reativa). Inativos ficam escondidos na lista, com opção de mostrar.
 - Números do PR 2: Vitest 153 no web; Playwright 75 verdes + 1 pulado de propósito (arrastar no celular; lá o caminho é o botão, testado).
+
+## O que o PR 3 entrega
+
+- **Atendimento:** lista do dia do profissional que está usando; tela com evolução pelo modelo do nicho (fisioterapia, terapia ocupacional, psicologia), rascunho salvo sozinho, histórico, "Assinar" com confirmação ("depois de assinada não muda; correção vira adendo") e adendo. Só o profissional do atendimento escreve e assina.
+- **Psicologia em compartimento sigiloso:** separado e marcado na ficha, no prontuário e no histórico; quem não é o autor vê só que o registro existe (o fake nem devolve o conteúdo).
+- **Escriba de IA:** só o aviso, botão desligado ("em breve, com revisão humana").
+- **Documentos:** atestado (1 a 15 dias por extenso; CID só com autorização do paciente), declaração de comparecimento e recibo, com prévia em folha e "Imprimir" (a impressão sai só com a folha). ICP-Brasil marcado como "em breve".
+- **Demonstração:** em Mais › "Demonstração: entrar como", troca entre recepção, fisioterapeuta e psicólogo para ver as permissões.
+- Números do PR 3: Vitest 163 no web; Playwright 93 verdes + 1 pulado de propósito.

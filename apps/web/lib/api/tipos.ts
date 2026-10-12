@@ -10,6 +10,30 @@ export interface Usuario {
   nome: string;
   papel: Papel;
   clinica: string;
+  /** Quando o usuário é um profissional de saúde. */
+  profissionalId?: string;
+}
+
+export interface Adendo {
+  texto: string;
+  em: string;
+  autor: string;
+}
+
+/** Registro clínico (evolução). Assinado não muda mais: correção vira adendo. */
+export interface Registro {
+  id: string;
+  pacienteId: string;
+  agendamentoId?: string;
+  profissionalId: string;
+  modelo: 'fisio' | 'to' | 'psicologia';
+  data: string;
+  campos: Record<string, string>;
+  status: 'rascunho' | 'assinado';
+  assinadoEm?: string;
+  adendos: Adendo[];
+  /** Psicologia: compartimento separado; só o profissional autor lê o conteúdo. */
+  restrito: boolean;
 }
 
 export interface Responsavel {

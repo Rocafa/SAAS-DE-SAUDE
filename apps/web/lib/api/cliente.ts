@@ -5,6 +5,7 @@ import type {
   ItemEspera,
   NovoPaciente,
   Pacote,
+  Registro,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -60,4 +61,15 @@ export interface ApiClinica {
   reativarPaciente(id: string): Promise<void>;
   listarAnexos(pacienteId: string): Promise<Anexo[]>;
   linhaDoTempo(pacienteId: string): Promise<EventoLinhaTempo[]>;
+
+  /** Registros do paciente. Conteúdo restrito volta com `campos` vazio para quem não é o autor. */
+  listarRegistros(pacienteId: string): Promise<Registro[]>;
+  obterRegistroDoAgendamento(agendamentoId: string): Promise<Registro | null>;
+  salvarRascunho(agendamentoId: string, campos: Record<string, string>): Promise<Registro>;
+  assinarRegistro(id: string): Promise<Registro>;
+  adicionarAdendo(id: string, texto: string): Promise<Registro>;
+
+  /** Só na demonstração: trocar quem está usando, para ver as permissões. */
+  usuariosDemo(): Promise<Usuario[]>;
+  entrarComo(id: string): Promise<Usuario>;
 }
