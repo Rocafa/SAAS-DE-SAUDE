@@ -1,6 +1,7 @@
 import type { AuditAction, RequestContext } from '@plataforma/shared';
 import { auditLog, type AuditMetadata } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
+import { assertAuditMetadata } from './audit-metadata';
 
 export interface AuditEntry {
   readonly action: AuditAction;
@@ -15,6 +16,8 @@ export interface AuditEntry {
  * tenant). Se a gravação falhar, a operação auditada falha junto: não há ação sem registro.
  */
 export async function recordAudit(tx: TenantTx, ctx: RequestContext, entry: AuditEntry): Promise<void> {
+  // Contrato do metadata (0005): falha aqui, antes do banco, com o motivo e sem repetir o valor.
+  assertAuditMetadata(entry.metadata ?? {});
   await tx.insert(auditLog).values({
     tenantId: ctx.tenantId,
     actorId: ctx.userId,
