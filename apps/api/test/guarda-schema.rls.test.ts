@@ -95,12 +95,23 @@ afterAll(async () => {
   await sql?.end({ timeout: 5 });
 });
 
+/**
+ * Privilégios que podem ser concedidos COLUNA a coluna. Para eles, `has_table_privilege`
+ * responde `false` quando o GRANT é só de uma coluna — e `GRANT UPDATE (metadata) ON
+ * audit_log TO app_user` já basta para furar o append-only. Por isso soma-se
+ * `has_any_column_privilege`. DELETE, TRUNCATE e TRIGGER só existem no nível da tabela.
+ */
+const PRIVILEGIOS_POR_COLUNA = new Set<Privilegio>(['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']);
+
 /** Privilégios que o papel de runtime realmente tem na tabela, lidos do catálogo. */
 async function privilegiosDoRuntime(tabela: string): Promise<Privilegio[]> {
   const concedidos: Privilegio[] = [];
+  const alvo = `public.${tabela}`;
   for (const p of PRIVILEGIOS) {
     const [row] = await sql<{ tem: boolean }[]>`
-      SELECT has_table_privilege(${RUNTIME_ROLE}, ${`public.${tabela}`}, ${p}) AS tem`;
+      SELECT has_table_privilege(${RUNTIME_ROLE}, ${alvo}, ${p})
+             OR (${PRIVILEGIOS_POR_COLUNA.has(p)}
+                 AND has_any_column_privilege(${RUNTIME_ROLE}, ${alvo}, ${p})) AS tem`;
     if (row?.tem) concedidos.push(p);
   }
   return concedidos;
@@ -176,12 +187,20 @@ describe('guarda de schema: RLS e policies', () => {
     expect(cmds.filter((c) => c === 'UPDATE' || c === 'DELETE' || c === 'ALL')).toEqual([]);
   });
 
-  it('nenhuma tabela de public concede privilégio a PUBLIC', async () => {
+  it('nenhuma tabela de public concede privilégio a PUBLIC, nem na tabela nem em coluna', async () => {
     const vazamentos = await sql<LinhaPublic[]>`
       SELECT c.relname AS tabela, acl.privilege_type AS privilegio
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND acl.grantee = 0
+      UNION
+      -- GRANT por coluna mora em pg_attribute.attacl, não em pg_class.relacl.
+      SELECT c.relname AS tabela, a.attname || ':' || acl.privilege_type AS privilegio
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a ON a.attrelid = c.oid AND NOT a.attisdropped
+      CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND acl.grantee = 0`;
     expect(vazamentos.map((v) => `${v.tabela}:${v.privilegio}`)).toEqual([]);
   });
