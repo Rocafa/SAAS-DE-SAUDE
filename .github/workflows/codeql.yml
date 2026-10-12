@@ -1,9 +1,18 @@
 name: CodeQL
 
 on:
+  # Economia de minutos do Actions (billing): ver docs/04-arquitetura/ambientes-e-devops.md.
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
   schedule:
     - cron: "17 6 * * 1" # segunda-feira, 03:17 (horário de Brasília)
 
@@ -14,6 +23,7 @@ jobs:
   analyze:
     name: Análise estática de segurança (CodeQL)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: read

@@ -5,9 +5,24 @@ name: Testes de produção
 # containers efêmeros de CI (sem dado algum) — não são segredos.
 
 on:
+  # Economia de minutos do Actions (billing): ver docs/04-arquitetura/ambientes-e-devops.md.
   pull_request:
+    # Só quando o PR mexe no que esta suíte exercita (API, banco, pacotes, infra, dependências).
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'tests/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/producao.yml'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
   schedule:
     - cron: '0 6 * * 1' # semanal: segunda, 06:00 UTC (pega regressão de dependência/imagem)
   workflow_dispatch:

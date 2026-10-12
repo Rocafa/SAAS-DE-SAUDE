@@ -91,3 +91,18 @@ pnpm dev                      # turbo run dev (web + api)
 ```
 
 Seeds locais usam apenas dados sintéticos. Proibido importar dumps de produção.
+
+## Economia de minutos do GitHub Actions (13/10/2026)
+
+O repositório é privado, então o Actions tem cota mensal. Em 13/10/2026 a cota acabou e os jobs pararam de rodar ("spending limit"). Para gastar menos, sem tirar a proteção de PRs que mexem em código:
+
+| Workflow | Quando roda |
+|---|---|
+| **CI** (gitleaks, lint/typecheck/testes, isolamento RLS, auditoria de dependências) | Todo PR e push na `main`, **exceto** quando só mudam `docs/**`, `**/*.md` ou `.claude/**` |
+| **CodeQL** | Igual ao CI, mais toda segunda-feira |
+| **Segurança: ataques** (`test:security`) | PR que muda `apps/api`, `packages`, `infra`, `tests`, `patches`, dependências ou o próprio workflow; push na `main`; semanal |
+| **Segurança: DAST (ZAP)** | **Só** na `main`, semanal e manual (`workflow_dispatch`); nunca em PR |
+| **Testes de produção** (resiliência, backup, k6) | Mesmos caminhos da segurança; push na `main`; semanal |
+
+Todos os jobs têm `timeout-minutes: 20`, para um job travado não consumir a cota.
+**Sem proteção da `main`, um check pulado não bloqueia o merge.** A regra continua sendo de disciplina: PR de código só entra com os checks que rodaram verdes.

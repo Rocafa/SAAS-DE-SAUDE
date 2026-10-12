@@ -4,9 +4,24 @@ name: Segurança
 # Ver docs/04-arquitetura/testes-de-seguranca.md.
 
 on:
+  # Economia de minutos do Actions (billing): ver docs/04-arquitetura/ambientes-e-devops.md.
   pull_request:
+    # Só quando o PR mexe no que esta suíte exercita (API, banco, pacotes, infra, dependências).
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'tests/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/seguranca.yml'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
   schedule:
     - cron: '17 6 * * 1' # semanal: pega regressões de imagens/dependências
   workflow_dispatch:
@@ -32,6 +47,7 @@ jobs:
   ataques:
     name: Testes ofensivos (banco + HTTP)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -73,6 +89,9 @@ jobs:
   dast:
     name: DAST (OWASP ZAP baseline)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # ZAP é o job mais caro: roda na main, toda semana e sob demanda, não em cada PR.
+    if: github.event_name != 'pull_request'
     services:
       postgres:
         image: postgres:16-alpine
