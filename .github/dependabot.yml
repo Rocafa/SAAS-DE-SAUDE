@@ -4,7 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    # Economia de minutos do Actions: cada PR dispara o CI inteiro.
+    open-pull-requests-limit: 5
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -23,3 +24,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Todas as actions num PR só por semana (antes: 1 PR por action).
+    groups:
+      actions:
+        patterns: ["*"]
