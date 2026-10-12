@@ -104,6 +104,8 @@ Riscos técnicos específicos do treino: **memorização** e extração de dados
 
 ## 9. Checklist rápido para qualquer feature de IA
 
+> Checklist artigo por artigo da Res. CFM 2.454/2026, com classificação de risco e gate de go-live: [checklist-cfm-2454.md](checklist-cfm-2454.md).
+
 - [ ] Finalidade e classificação de risco documentadas; RIPD atualizado.
 - [ ] Passa pelo gateway `ai`; nada de chamada direta ao provedor.
 - [ ] Mínimo necessário + pseudonimização no prompt.

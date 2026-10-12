@@ -68,6 +68,20 @@ describe('timeouts por conexão', () => {
     expect(isTransientDatabaseError(err)).toBe(true);
   });
 
+  it('escrita em banco somente leitura (failover) dá 25006, classificado como transitório (503)', async () => {
+    // No failover, conexões antigas podem cair num nó que virou somente leitura. Simulamos com
+    // SET TRANSACTION READ ONLY: o Postgres recusa a escrita com o mesmo SQLSTATE 25006.
+    const err = await erroDe(
+      withTenant(h.db, tenant, async (tx) => {
+        await tx.execute(sql`set transaction read only`);
+        await tx.execute(sql`delete from patients where false`);
+      }),
+    );
+    expect(dbErrorCode(err)).toBe('25006');
+    expect(isTransientDatabaseError(err)).toBe(true);
+    expect((await contagens()).pacientes).toBe(2);
+  });
+
   it('transação esquecida aberta é encerrada pelo Postgres, sem crash, e o pool se recupera', async () => {
     // Regressão do bug do postgres.js 3.4.9 (patches/postgres@3.4.9.patch): escrever numa conexão
     // reservada já encerrada pelo servidor lançava TypeError NÃO capturado (derruba o processo) e
