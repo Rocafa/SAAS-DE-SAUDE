@@ -40,12 +40,21 @@ afterAll(async () => {
   await proxy?.fechar();
 });
 
+
+/** Corpo do /health/ready: só `status` e o rótulo do modo do rate limit — nada de detalhe de erro. */
+function expectReadiness(body: string, status: 'ok' | 'indisponivel'): void {
+  const parsed = JSON.parse(body) as Record<string, unknown>;
+  expect(Object.keys(parsed).sort()).toEqual(['rateLimit', 'status']);
+  expect(parsed.status).toBe(status);
+  expect(parsed.rateLimit).toMatch(/^(compartilhado|fallback|memoria|instancia-unica|desligado)$/);
+}
+
 describe('estado normal', () => {
   it('liveness, readiness e rota de domínio respondem 200', async () => {
     expect((await get('/health')).status).toBe(200);
     const ready = await get('/health/ready');
     expect(ready.status).toBe(200);
-    expect(JSON.parse(ready.body)).toEqual({ status: 'ok' });
+    expectReadiness(ready.body, 'ok');
     const pac = await get(`/__teste/pacientes/${tenant}`);
     expect(pac.status).toBe(200);
     expect(JSON.parse(pac.body)).toEqual({ total: 3 });
@@ -66,7 +75,7 @@ describe('banco PARADO (conexões derrubadas e porta recusando)', () => {
   it('/health/ready responde 503 rápido e sem detalhes', async () => {
     const res = await get('/health/ready');
     expect(res.status).toBe(503);
-    expect(JSON.parse(res.body)).toEqual({ status: 'indisponivel' });
+    expectReadiness(res.body, 'indisponivel');
     expect(res.ms).toBeLessThan(2_500);
     semVazamento(res.body);
   });
