@@ -10,9 +10,11 @@ import type { AuditMetadata } from '../../db/schema';
  * linha) e deixe o valor no campo cifrado.
  */
 export const AUDIT_METADATA_MAX_KEYS = 16;
-export const AUDIT_METADATA_MAX_JSON = 1024;
 export const AUDIT_METADATA_MAX_STRING = 64;
-export const AUDIT_METADATA_MAX_NUMBER = 1_000_000_000;
+/** Números a partir daqui podem ser CPF, CNS ou telefone digitados como número. */
+export const AUDIT_METADATA_MAX_NUMBER = 10_000_000;
+/** Texto com tantos dígitos no total (com qualquer separador) é tratado como possível dado pessoal. */
+export const AUDIT_METADATA_MAX_DIGITS = 7;
 
 const KEY_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
 const FORBIDDEN_KEYS = new Set([
@@ -51,10 +53,13 @@ export class AuditMetadataRejectedError extends Error {
   }
 }
 
-/** Parece dado pessoal: e-mail ou sequência de 8+ dígitos (CPF, CNS, telefone), salvo UUID/hash. */
+/**
+ * Parece dado pessoal: e-mail, ou 8+ dígitos no TOTAL depois de tirar tudo que não é dígito (CPF com
+ * qualquer separador, CNS, telefone com ou sem DDD) — salvo UUID e hash hex. Mesma regra do banco.
+ */
 function looksPersonal(value: string): boolean {
   if (UUID_RE.test(value) || HEX64_RE.test(value)) return false;
-  return value.includes('@') || /[0-9]{8}/.test(value.replace(/[\s().-]/g, ''));
+  return value.includes('@') || value.replace(/[^0-9]/g, '').length > AUDIT_METADATA_MAX_DIGITS;
 }
 
 export function assertAuditMetadata(metadata: unknown): asserts metadata is AuditMetadata {
@@ -62,8 +67,9 @@ export function assertAuditMetadata(metadata: unknown): asserts metadata is Audi
     throw new AuditMetadataRejectedError('deve ser um objeto');
   }
   const entries = Object.entries(metadata as Record<string, unknown>);
+  // Sem limite de tamanho total: os limites por chave e por valor já o fixam, e medir o JSON inteiro
+  // daria resultados diferentes aqui (JSON.stringify) e no banco (jsonb::text com espaços).
   if (entries.length > AUDIT_METADATA_MAX_KEYS) throw new AuditMetadataRejectedError('chaves demais');
-  if (JSON.stringify(metadata).length > AUDIT_METADATA_MAX_JSON) throw new AuditMetadataRejectedError('grande demais');
   for (const [key, value] of entries) {
     if (!KEY_RE.test(key)) throw new AuditMetadataRejectedError('chave inválida');
     if (FORBIDDEN_KEYS.has(key.toLowerCase())) throw new AuditMetadataRejectedError(`chave proibida: ${key}`);

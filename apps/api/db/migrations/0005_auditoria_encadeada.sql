@@ -54,6 +54,14 @@ DECLARE
   v_seq  bigint;
   v_hash text;
 BEGIN
+  -- O último elo é lido com um snapshot NOVO depois da trava, o que só acontece em READ COMMITTED.
+  -- Em REPEATABLE READ/SERIALIZABLE o snapshot da transação esconderia o elo que outra transação
+  -- acabou de gravar e a cadeia bateria em duplicate key: recusar com erro claro.
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'audit_log exige transação READ COMMITTED (a cadeia de hash lê o último elo)'
+      USING ERRCODE = 'feature_not_supported';
+  END IF;
+
   -- Uma cadeia por clínica: trava até o fim da transação. Duas transações da mesma clínica nunca
   -- leem o mesmo "último elo"; clínicas diferentes não se bloqueiam.
   PERFORM pg_advisory_xact_lock(hashtextextended('audit_chain:' || NEW.tenant_id::text, 0));
@@ -80,6 +88,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- A data entra no hash: vem do banco, não de quem grava.
+  NEW.created_at := now();
   NEW.seq := COALESCE(v_seq, 0) + 1;
   NEW.prev_hash := COALESCE(v_hash, repeat('0', 64));
   NEW.hash := encode(sha256(convert_to(audit_log_canonical(NEW), 'UTF8')), 'hex');
@@ -94,16 +104,17 @@ CREATE TRIGGER audit_log_chain
 -- Contrato do metadata (ressalva R1 do Guardião no PR #37). A trilha é append-only, encadeada e NÃO
 -- cifrada: um dado pessoal gravado aqui ficaria para sempre, fora do alcance da criptografia de
 -- campo, e removê-lo quebraria a cadeia. Por isso o metadata só aceita identificadores, códigos e
--- contagens: chaves curtas fora de uma lista de nomes de conteúdo; valores escalares; texto curto,
--- sem "@" e sem sequência de 8+ dígitos (CPF, CNS, telefone) — exceto UUID e hash hex, que são
--- referências. Números < 1e9. Vale no banco, para pegar também o INSERT que não passa pela API.
+-- contagens: até 16 chaves curtas fora de uma lista de nomes de conteúdo; valores escalares; texto
+-- de até 64 caracteres, sem "@" e com menos de 8 dígitos NO TOTAL (CPF, CNS, telefone, com
+-- qualquer separador) — exceto UUID e hash hex, que são referências; números < 1e7. Sem limite de
+-- tamanho total separado: os limites por campo já o fixam (≈ 2 KB) e não dependem de como cada lado
+-- serializa o JSON. Vale no banco, para pegar também o INSERT que não passa pela API.
 -- Espelho na aplicação: src/modules/audit/audit-metadata.ts (mesmas regras, erro mais claro).
 CREATE FUNCTION audit_metadata_ok(m jsonb) RETURNS boolean
   LANGUAGE sql IMMUTABLE
   SET search_path = pg_catalog
 AS $$
   SELECT jsonb_typeof(m) = 'object'
-     AND length(m::text) <= 1024
      AND (SELECT count(*) FROM jsonb_object_keys(m)) <= 16
      AND NOT EXISTS (
        SELECT 1 FROM jsonb_each(m) AS e(k, v)
@@ -112,13 +123,13 @@ AS $$
                                     'email', 'telefone', 'phone', 'texto', 'text', 'conteudo', 'content',
                                     'body', 'nota', 'note', 'observacao', 'diagnostico', 'anamnese', 'evolucao'])
            OR jsonb_typeof(v) NOT IN ('string', 'number', 'boolean', 'null')
-           OR (jsonb_typeof(v) = 'number' AND abs((v #>> '{}')::numeric) >= 1000000000)
+           OR (jsonb_typeof(v) = 'number' AND abs((v #>> '{}')::numeric) >= 10000000)
            OR (jsonb_typeof(v) = 'string' AND (
                  length(v #>> '{}') > 64
                  OR ((v #>> '{}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                      AND (v #>> '{}') !~ '^[0-9a-f]{64}$'
                      AND ((v #>> '{}') ~ '@'
-                          OR regexp_replace(v #>> '{}', '[[:space:]().-]', '', 'g') ~ '[0-9]{8}'))))
+                          OR length(regexp_replace(v #>> '{}', '[^0-9]', '', 'g')) >= 8))))
      )
 $$;
 
@@ -126,3 +137,7 @@ $$;
 -- nova passa pela regra.
 ALTER TABLE audit_log
   ADD CONSTRAINT audit_log_metadata_contract_check CHECK (audit_metadata_ok(metadata)) NOT VALID;
+
+-- Toda linha nova é encadeada (a trigger garante; isto é a segunda barreira). NOT VALID pelas antigas.
+ALTER TABLE audit_log
+  ADD CONSTRAINT audit_log_chained_check CHECK (seq IS NOT NULL) NOT VALID;

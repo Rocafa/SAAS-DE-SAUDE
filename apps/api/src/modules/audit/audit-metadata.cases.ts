@@ -6,6 +6,11 @@ export const METADATA_ACEITO: readonly Record<string, unknown>[] = [
   { key_id: '1b4e28ba-2fa1-11d2-883f-0016d3cca427' },
   { hash: 'a'.repeat(64) },
   { ok: true, motivo: 'correcao_cadastral', vazio: null },
+  { v: 'v1.2.3', n: 9_999_999 }, // poucos dígitos e o maior número aceito
+  // Fronteira do tamanho (B2): 16 chaves de 40 caracteres com valores de 17 — passa nos dois lados.
+  Object.fromEntries(
+    Array.from({ length: 16 }, (_, i) => [`k${String(i).padStart(2, '0')}${'x'.repeat(37)}`, 'abcdefghijklmnopq']),
+  ),
 ];
 
 export const METADATA_RECUSADO: readonly Record<string, unknown>[] = [
@@ -21,6 +26,11 @@ export const METADATA_RECUSADO: readonly Record<string, unknown>[] = [
   { x: { y: 1 } }, // aninhado
   { x: [1, 2] },
   { x: 12345678909 }, // número grande (CPF como número)
+  { x: 987654321 }, // telefone de 9 dígitos como número (B3)
+  { x: '987654321' }, // telefone de 9 dígitos como texto (B3)
+  { x: '123_456_789/09' }, // CPF com _ e / (B3)
+  { x: '123\u00a0456\u00a0789\u00a009' }, // CPF com espaço não separável (NBSP) (B3)
+  { x: '11 9 8765 4321' }, // celular com espaços
   { 'chave com espaço': 1 },
   Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, i])), // chaves demais
 ];

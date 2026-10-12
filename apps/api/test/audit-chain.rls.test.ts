@@ -238,3 +238,36 @@ describe('contrato do metadata (ressalva R1 do Guardião)', () => {
     expect(app.filter(Boolean)).toHaveLength(METADATA_ACEITO.length);
   });
 });
+
+describe('isolamento da transação e data (ORDEM-005: B4 e sugestões)', () => {
+  it('B4: fora de READ COMMITTED a gravação é recusada com erro claro (não duplicate key)', async () => {
+    const ctx = await novaClinica(1);
+    const msg = await errorText(
+      h.db.transaction(
+        async (tx) => {
+          await tx.execute(sql`select app_set_tenant(${ctx.tenantId}::uuid)`);
+          await recordAudit(tx, ctx, { action: 'read', scope: 'patients' });
+        },
+        { isolationLevel: 'repeatable read' },
+      ),
+    );
+    expect(msg).toMatch(/exige transação READ COMMITTED/);
+    expect(msg).not.toMatch(/duplicate key/);
+    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 1 });
+  });
+
+  it('a data entra no hash e vem do banco, não de quem grava', async () => {
+    const ctx = await novaClinica();
+    await withTenant(h.db, ctx.tenantId, (tx) =>
+      tx.execute(sql`insert into audit_log (tenant_id, actor_id, action, scope, created_at)
+        values (${ctx.tenantId}, ${ctx.userId}, 'read', 'patients', '2001-01-01T00:00:00Z')`),
+    );
+    const linhas = await withTenant(h.db, ctx.tenantId, (tx) =>
+      tx.execute<{ antiga: boolean }>(
+        sql`select created_at < now() - interval '1 day' as antiga from audit_log where tenant_id = ${ctx.tenantId}`,
+      ),
+    );
+    expect(linhas.map((l) => l.antiga)).toEqual([false]);
+    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 1 });
+  });
+});

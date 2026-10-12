@@ -28,6 +28,12 @@ Duas transações da mesma clínica nunca leem o mesmo último elo. Clínicas di
 
 Custo: as gravações de auditoria de uma mesma clínica ficam em série. ESTIMATIVA: irrelevante no volume de uma clínica, mas a trava vale até o COMMIT, então transações longas que auditam cedo seguram as outras da mesma clínica. Recomendação: auditar perto do fim da transação.
 
+## 2a. Exige READ COMMITTED
+
+O trigger lê o último elo **depois** de pegar a trava, com um snapshot novo, e isso só acontece em `READ COMMITTED`, o padrão do Postgres e do `withTenant`. Em `REPEATABLE READ` ou `SERIALIZABLE`, o snapshot da transação esconderia o elo que outra transação acabou de gravar, e a cadeia bateria em `duplicate key` no índice `(tenant_id, seq)`. Por isso o trigger **recusa** gravar fora de `READ COMMITTED`, com o erro `audit_log exige transação READ COMMITTED`. Há teste para isso.
+
+A data (`created_at`) entra no hash e é sempre a do banco (`now()`): o trigger ignora a enviada por quem grava. Um `CHECK (seq IS NOT NULL) NOT VALID` é a segunda barreira para que nenhuma linha nova fique fora da cadeia.
+
 ## 3. Quem pode o quê
 
 - O runtime (`app_user`) **não define** `seq`, `prev_hash` nem `hash`: se tentar, o trigger recusa.
@@ -67,11 +73,11 @@ A trilha é append-only, encadeada e **não cifrada**. Um dado pessoal que entre
 
 | Regra | Limite |
 |---|---|
-| Objeto plano | Até 16 chaves e 1.024 caracteres de JSON |
+| Objeto plano | Até 16 chaves. Não há limite de tamanho total separado: os limites por chave e por valor já o fixam (≈ 2 KB), e medir o JSON inteiro daria números diferentes na aplicação (`JSON.stringify`) e no banco (`jsonb::text`, com espaços) |
 | Chave | `^[a-zA-Z][a-zA-Z0-9_]{0,39}$`, fora da lista de nomes de conteúdo (`antes`, `depois`, `nome`, `cpf`, `email`, `texto`, `diagnostico`, `evolucao`…) |
 | Valor | Só escalar (texto, número, booleano, nulo) |
-| Texto | Até 64 caracteres, sem `@` e sem 8+ dígitos seguidos (CPF, CNS, telefone), salvo UUID e hash hex, que são referências |
-| Número | Abaixo de 10⁹ |
+| Texto | Até 64 caracteres, sem `@` e com **menos de 8 dígitos no total**, contados depois de remover tudo que não é dígito. Pega CPF com qualquer separador (`_`, `/`, NBSP), CNS e telefone com ou sem DDD. UUID e hash hex ficam de fora, porque são referências |
+| Número | Abaixo de 10⁷ (um telefone de 9 dígitos digitado como número é recusado) |
 
 Vale **no banco** (`audit_metadata_ok` + `CHECK ... NOT VALID`, então pega também o INSERT que não passa pela API) e **na aplicação** (`assertAuditMetadata` em `recordAudit`, com erro que diz a regra e nunca o valor). Um teste confere que as duas regras concordam em todos os casos. Quando for indispensável registrar o que mudou, registre a **referência** (tabela, coluna, id da linha) e deixe o valor no campo cifrado (S5).
 
