@@ -26,6 +26,13 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
   readonly dataKeys: StoredDataKey[] = [];
   readonly masterKeys: StoredMasterKey[] = [];
 
+  /** Volta ao estado de um snapshot (simula o ROLLBACK de uma transação). */
+  restore(from: MemoryDataKeyStore): void {
+    const copy = from.snapshot();
+    this.dataKeys.splice(0, this.dataKeys.length, ...copy.dataKeys);
+    this.masterKeys.splice(0, this.masterKeys.length, ...copy.masterKeys);
+  }
+
   /** Cópia profunda do estado (como um snapshot/backup do banco). */
   snapshot(): MemoryDataKeyStore {
     const copy = new MemoryDataKeyStore();
@@ -92,7 +99,7 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
   }
 
   updateWrapped(_tx: unknown, tenantId: TenantId, id: string, key: WrappedDataKey): Promise<void> {
-    const k = this.dataKeys.find((x) => x.tenantId === tenantId && x.id === id && x.status !== 'destroyed');
+    const k = this.dataKeys.find((x) => x.tenantId === tenantId && x.id === id && (x.status === 'active' || x.status === 'retired'));
     if (k) {
       k.masterKeyId = key.masterKeyId;
       k.wrapped = Buffer.from(key.wrapped);
@@ -101,31 +108,42 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
   }
 
   addUsage(_tx: unknown, tenantId: TenantId, id: string, count: number): Promise<void> {
-    const k = this.dataKeys.find((x) => x.tenantId === tenantId && x.id === id && x.status !== 'destroyed');
+    const k = this.dataKeys.find((x) => x.tenantId === tenantId && x.id === id && (x.status === 'active' || x.status === 'retired'));
     if (k) k.encryptCount += count;
     return Promise.resolve();
   }
 
-  destroyAll(_tx: unknown, tenantId: TenantId): Promise<string[]> {
+  beginDestroy(_tx: unknown, tenantId: TenantId): Promise<string[]> {
+    for (const k of [...this.dataKeys, ...this.masterKeys]) {
+      if (k.tenantId === tenantId && (k.status === 'active' || k.status === 'retired')) k.status = 'destroying';
+    }
+    return Promise.resolve(
+      this.masterKeys.filter((m) => m.tenantId === tenantId && m.status === 'destroying').map((m) => m.id),
+    );
+  }
+
+  finishDestroy(_tx: unknown, tenantId: TenantId): Promise<void> {
     for (const k of this.dataKeys) {
-      if (k.tenantId === tenantId && k.status !== 'destroyed') {
+      if (k.tenantId === tenantId && k.status === 'destroying') {
         k.status = 'destroyed';
         k.wrapped = null;
       }
     }
-    const ids: string[] = [];
     for (const m of this.masterKeys) {
-      if (m.tenantId === tenantId && m.status !== 'destroyed') {
-        m.status = 'destroyed';
-        ids.push(m.id);
-      }
+      if (m.tenantId === tenantId && m.status === 'destroying') m.status = 'destroyed';
     }
-    return Promise.resolve(ids);
+    return Promise.resolve();
+  }
+
+  hasDestroyedKeys(_tx: unknown, tenantId: TenantId): Promise<boolean> {
+    return Promise.resolve(
+      this.masterKeys.some((m) => m.tenantId === tenantId && (m.status === 'destroying' || m.status === 'destroyed')),
+    );
   }
 }
 
 function toRecord(k: StoredDataKey): DataKeyRecord | undefined {
-  if (k.status === 'destroyed' || !k.wrapped) return undefined;
+  if (k.status === 'destroyed' || k.status === 'destroying' || !k.wrapped) return undefined;
   return {
     id: k.id,
     masterKeyId: k.masterKeyId,

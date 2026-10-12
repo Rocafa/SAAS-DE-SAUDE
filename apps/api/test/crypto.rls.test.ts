@@ -9,7 +9,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle, type TenantTx } from '../src/db/tenant-transaction';
-import { FieldDecryptionError, KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
+import { FieldDecryptionError, KeyUnavailableError, TenantKeysDestroyedError } from '../src/modules/crypto/crypto-errors';
 import { DataKeyCache } from '../src/modules/crypto/data-key-cache';
 import { PgDataKeyStore } from '../src/modules/crypto/data-key-store';
 import { FieldCipher, type KeyAuditor } from '../src/modules/crypto/field-cipher';
@@ -175,7 +175,7 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
     });
     expect(await new FieldCipher(provider, backup, semAuditoria).decryptString(null, ref(tenantA), valorA)).toBe(TEXTO);
 
-    await withTenant(h.db, tenantA, (tx) => cipher.destroyTenantKeys(tx, tenantA, ATOR));
+    await cipher.destroyTenantKeys((fn) => withTenant(h.db, tenantA, fn), tenantA, ATOR);
 
     await expect(withTenant(h.db, tenantA, (tx) => cipher.decrypt(tx, ref(tenantA), valorA))).rejects.toBeInstanceOf(
       KeyUnavailableError,
@@ -203,5 +203,52 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
     expect(eventos.map((e) => e.scope)).toContain('crypto.key.destroy');
     expect(eventos.find((e) => e.scope === 'crypto.key.destroy')?.actor_id).toBe(ATOR);
     expect(await withTenant(h.db, tenantB, (tx) => cipher.decryptString(tx, ref(tenantB), valorB))).toBe(TEXTO);
+  });
+});
+
+describe('destruição em duas fases (B1 do revisor N1)', () => {
+  it('COMMIT final falha: o banco fica em destroying, nada decifra, e a nova chamada conclui', async () => {
+    const c = randomUUID() as TenantId;
+    await novaClinica(c);
+    await withTenant(h.db, c, (tx) => cipher.provisionTenant(tx, c, ATOR));
+    const valor = await withTenant(h.db, c, (tx) => cipher.encrypt(tx, ref(c), TEXTO));
+    let chamada = 0;
+    const commitFalhaNaSegunda = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> =>
+      withTenant(h.db, c, async (tx) => {
+        const out = await fn(tx);
+        if (++chamada === 2) throw new Error('commit falhou'); // ROLLBACK da 2ª transação
+        return out;
+      });
+    await expect(cipher.destroyTenantKeys(commitFalhaNaSegunda, c, ATOR)).rejects.toThrow('commit falhou');
+    const estados = await withTenant(h.db, c, (tx) =>
+      tx.execute<{ status: string }>(sql`select status from tenant_data_keys union all select status from tenant_master_keys`),
+    );
+    expect(estados.map((e) => e.status)).toEqual(['destroying', 'destroying']); // nunca "active"
+    const semCache = new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { cache: new DataKeyCache() });
+    await expect(withTenant(h.db, c, (tx) => semCache.decrypt(tx, ref(c), valor))).rejects.toBeInstanceOf(
+      KeyUnavailableError,
+    );
+    // Retomada: o provedor já tinha agendado; destruir de novo é idempotente e o banco conclui.
+    await cipher.destroyTenantKeys((fn) => withTenant(h.db, c, fn), c, ATOR);
+    const finais = await withTenant(h.db, c, (tx) =>
+      tx.execute<{ status: string }>(sql`select status from tenant_data_keys union all select status from tenant_master_keys`),
+    );
+    expect(finais.map((e) => e.status)).toEqual(['destroyed', 'destroyed']);
+    await expect(withTenant(h.db, c, (tx) => cipher.provisionTenant(tx, c, ATOR))).rejects.toBeInstanceOf(
+      TenantKeysDestroyedError,
+    );
+  });
+
+  it('a DEK só aponta para chave mestra da MESMA clínica (FK composta)', async () => {
+    const outra = await withTenant(h.db, tenantB, (tx) =>
+      tx.execute<{ id: string }>(sql`select id from tenant_master_keys limit 1`),
+    );
+    const msg = await errorText(
+      withTenant(h.db, tenantA, (tx) =>
+        tx.execute(sql`insert into tenant_data_keys (tenant_id, master_key_id, wrapped_key)
+          values (${tenantA}, ${outra[0]?.id ?? ''}, ${Buffer.alloc(60)})`),
+      ),
+    );
+    expect(msg).toMatch(/tenant_data_keys_master_fk|foreign key/);
   });
 });

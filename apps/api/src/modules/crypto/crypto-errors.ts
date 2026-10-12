@@ -31,15 +31,11 @@ export class TenantKeyMissingError extends FieldCryptoError {
   }
 }
 
-/**
- * A destruição falhou no provedor e o cancelamento dos agendamentos já feitos também falhou: há
- * chave mestra agendada para destruição sem registro no banco. Exige intervenção humana dentro da
- * janela do KMS (7 dias) — cancelar o agendamento ou concluir a eliminação.
- */
-export class KeyDestructionIncompleteError extends FieldCryptoError {
-  override readonly name = 'KeyDestructionIncompleteError';
+/** A clínica teve as chaves destruídas (eliminação): não se provisiona chave nova em silêncio. */
+export class TenantKeysDestroyedError extends FieldCryptoError {
+  override readonly name = 'TenantKeysDestroyedError';
   constructor() {
-    super('destruição de chaves incompleta: exige intervenção');
+    super('as chaves desta clínica foram destruídas');
   }
 }
 

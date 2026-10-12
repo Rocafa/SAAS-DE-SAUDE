@@ -11,9 +11,9 @@ import {
 } from './crypto-errors';
 import { DataKey } from './data-key';
 import { DataKeyCache } from './data-key-cache';
-import { FieldCipher, type KeyAuditor, type KeyEvent } from './field-cipher';
+import { FieldCipher, type KeyAuditor, type KeyEvent, type TxRunner } from './field-cipher';
 import { AllExceptionsFilter } from '../../lifecycle/all-exceptions.filter';
-import { KeyDestructionIncompleteError } from './crypto-errors';
+import { TenantKeysDestroyedError } from './crypto-errors';
 import { isEncryptedField, parseField, type FieldRef } from './field-format';
 import { LocalKeyProvider } from './local-key-provider';
 import { MemoryDataKeyStore } from './memory-data-key-store';
@@ -30,6 +30,8 @@ const ref = (tenantId: TenantId, over: Partial<FieldRef> = {}): FieldRef => ({
 });
 const TEXTO = 'Paciente fictício relata cefaleia há 3 dias. Conduta: observação.';
 const ATOR = randomUUID();
+/** Sem banco: a "transação" é só chamar a função. */
+const direto: TxRunner<unknown> = (fn) => fn(null);
 
 let provider: LocalKeyProvider;
 let store: MemoryDataKeyStore;
@@ -208,7 +210,7 @@ describe('destruir a chave da clínica deixa tudo ilegível (retencao-e-descarte
     const backupRecente = store.snapshot();
     const vB = await cipher.encrypt(null, ref(tenantB), TEXTO);
 
-    await cipher.destroyTenantKeys(null, tenantA, ATOR);
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR);
 
     // Banco atual (o cache também foi zerado).
     for (const v of [v1, v2]) {
@@ -265,7 +267,7 @@ describe('nenhuma chave em log ou erro', () => {
     ]) {
       errs.push(await p.catch((e: unknown) => e));
     }
-    await cipher.destroyTenantKeys(null, tenantA, ATOR);
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR);
     errs.push(await cipher.decrypt(null, ref(tenantA), v).catch((e: unknown) => e));
     for (const e of errs) {
       expect(e).toBeInstanceOf(FieldCryptoError);
@@ -306,42 +308,64 @@ describe('ressalvas do Guardião (PR #35)', () => {
     const instancia2 = new FieldCipher(provider, store, auditar);
     const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
     expect(await instancia2.decryptString(null, ref(tenantA), v)).toBe(TEXTO); // DEK no cache da instância 2
-    await cipher.destroyTenantKeys(null, tenantA, ATOR); // a instância 1 destrói
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR); // a instância 1 destrói
     await expect(instancia2.decrypt(null, ref(tenantA), v)).rejects.toBeInstanceOf(KeyUnavailableError);
   });
 
-  it('R2: se o provedor falhar no meio, os agendamentos já feitos são cancelados e nada se perde', async () => {
+  it('B1: provedor falha no meio → banco fica em destroying (nada decifra) e a nova chamada retoma', async () => {
     const v1 = await cipher.encrypt(null, ref(tenantA), TEXTO);
-    const backupComKekAntiga = store.snapshot(); // depende da 1ª chave mestra
-    await cipher.rotateMasterKey(null, tenantA, ATOR); // agora A tem duas chaves mestras
-    const antes = store.snapshot();
+    await cipher.rotateMasterKey(null, tenantA, ATOR); // duas chaves mestras
     const destroy = provider.destroyMasterKey.bind(provider);
-    const destruidas: string[] = [];
+    let falhar = true;
     vi.spyOn(provider, 'destroyMasterKey').mockImplementation(async (id: string) => {
-      if (destruidas.length === 1) throw new KeyUnavailableError(); // falha na 2ª
-      destruidas.push(id);
       await destroy(id);
+      if (falhar) throw new KeyUnavailableError(); // agendou a 1ª e caiu
     });
-    await expect(cipher.destroyTenantKeys(null, tenantA, ATOR)).rejects.toBeInstanceOf(KeyUnavailableError);
-    expect(destruidas).toHaveLength(1);
-    // Simula o rollback da transação: o banco volta ao estado anterior. As DUAS chaves mestras
-    // precisam abrir — inclusive a que chegou a ser agendada para destruição.
-    for (const banco of [antes, backupComKekAntiga]) {
-      const restaurado = new FieldCipher(provider, banco, auditar, { cache: new DataKeyCache() });
-      expect(await restaurado.decryptString(null, ref(tenantA), v1)).toBe(TEXTO);
-    }
+    await expect(cipher.destroyTenantKeys(direto, tenantA, ATOR)).rejects.toBeInstanceOf(KeyUnavailableError);
+    const deA = store.dataKeys.filter((k) => k.tenantId === tenantA);
+    expect(deA.every((k) => k.status === 'destroying')).toBe(true); // nunca "ativa" com chave morta
+    await expect(cipher.decrypt(null, ref(tenantA), v1)).rejects.toBeInstanceOf(KeyUnavailableError);
+    await expect(cipher.encrypt(null, ref(tenantA), TEXTO)).rejects.toBeInstanceOf(TenantKeyMissingError);
+    falhar = false;
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR); // retoma; destruir de novo é idempotente
+    expect(store.dataKeys.filter((k) => k.tenantId === tenantA).every((k) => k.status === 'destroyed')).toBe(true);
+    expect(store.masterKeys.filter((m) => m.tenantId === tenantA).every((m) => m.status === 'destroyed')).toBe(true);
   });
 
-  it('R2: se até o cancelamento falhar, o erro exige intervenção', async () => {
-    await cipher.rotateMasterKey(null, tenantA, ATOR);
-    const destroy = provider.destroyMasterKey.bind(provider);
-    let chamadas = 0;
-    vi.spyOn(provider, 'destroyMasterKey').mockImplementation(async (id: string) => {
-      if (++chamadas === 2) throw new KeyUnavailableError();
-      await destroy(id);
-    });
-    vi.spyOn(provider, 'cancelMasterKeyDestruction').mockRejectedValue(new KeyUnavailableError());
-    await expect(cipher.destroyTenantKeys(null, tenantA, ATOR)).rejects.toBeInstanceOf(KeyDestructionIncompleteError);
+  it('B1: COMMIT da 2ª transação falha → banco continua em destroying, não volta a "ativa"', async () => {
+    const v1 = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    let chamada = 0;
+    const commitFalhaNaSegunda: TxRunner<unknown> = async (fn) => {
+      const antes = store.snapshot();
+      const out = await fn(null);
+      if (++chamada === 2) {
+        store.restore(antes); // ROLLBACK
+        throw new Error('commit falhou');
+      }
+      return out;
+    };
+    await expect(cipher.destroyTenantKeys(commitFalhaNaSegunda, tenantA, ATOR)).rejects.toThrow('commit falhou');
+    expect(store.dataKeys.filter((k) => k.tenantId === tenantA).map((k) => k.status)).toEqual(['destroying']);
+    await expect(cipher.decrypt(null, ref(tenantA), v1)).rejects.toBeInstanceOf(KeyUnavailableError);
+  });
+
+  it('B1: COMMIT da 1ª transação falha → nada chega ao provedor e os dados seguem legíveis', async () => {
+    const v1 = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    const destroy = vi.spyOn(provider, 'destroyMasterKey');
+    const commitFalha: TxRunner<unknown> = async (fn) => {
+      const antes = store.snapshot();
+      await fn(null);
+      store.restore(antes);
+      throw new Error('commit falhou');
+    };
+    await expect(cipher.destroyTenantKeys(commitFalha, tenantA, ATOR)).rejects.toThrow('commit falhou');
+    expect(destroy).not.toHaveBeenCalled();
+    expect(await new FieldCipher(provider, store, auditar).decryptString(null, ref(tenantA), v1)).toBe(TEXTO);
+  });
+
+  it('clínica com chave destruída não ganha chave nova em silêncio', async () => {
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR);
+    await expect(cipher.provisionTenant(null, tenantA, ATOR)).rejects.toBeInstanceOf(TenantKeysDestroyedError);
   });
 
   it('R3: a DEK gira sozinha ao atingir o limite de uso e o uso é somado no banco', async () => {
@@ -360,7 +384,7 @@ describe('ressalvas do Guardião (PR #35)', () => {
     await cipher.provisionTenant(null, c, ATOR);
     await cipher.rotateDataKey(null, c, ATOR);
     await cipher.rotateMasterKey(null, c, ATOR);
-    await cipher.destroyTenantKeys(null, c, ATOR);
+    await cipher.destroyTenantKeys(direto, c, ATOR);
     expect(eventos.map((e) => [e.kind, e.actorId, e.tenantId])).toEqual([
       ['provision', ATOR, c],
       ['rotate_dek', ATOR, c],
@@ -372,14 +396,14 @@ describe('ressalvas do Guardião (PR #35)', () => {
   it('R4: se o registro do evento falhar, a destruição não acontece no provedor', async () => {
     const falha = new FieldCipher(provider, store, () => Promise.reject(new Error('auditoria fora')));
     const destroy = vi.spyOn(provider, 'destroyMasterKey');
-    await expect(falha.destroyTenantKeys(null, tenantB, ATOR)).rejects.toThrow('auditoria fora');
+    await expect(falha.destroyTenantKeys(direto, tenantB, ATOR)).rejects.toThrow('auditoria fora');
     expect(destroy).not.toHaveBeenCalled();
   });
 
   it('R5: chave destruída e chave inexistente viram a MESMA resposta HTTP genérica', async () => {
     const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
     const inexistente = await cipher.decrypt(null, ref(tenantB), v).catch((e: unknown) => e);
-    await cipher.destroyTenantKeys(null, tenantA, ATOR);
+    await cipher.destroyTenantKeys(direto, tenantA, ATOR);
     const destruida = await cipher.decrypt(null, ref(tenantA), v).catch((e: unknown) => e);
     const resposta = (erro: unknown) => {
       const out: { status?: number; body?: unknown } = {};

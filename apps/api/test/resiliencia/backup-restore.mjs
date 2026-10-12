@@ -46,7 +46,7 @@ const withDb = (url, db) => {
   return u.toString();
 };
 const opts = { max: 1, onnotice: () => undefined };
-const TABLES = ['tenants', 'patients', 'audit_log'];
+const TABLES = ['tenants', 'patients', 'audit_log', 'tenant_master_keys', 'tenant_data_keys'];
 const failures = [];
 const check = (ok, label) => {
   out(`${ok ? 'OK  ' : 'FALHA'} ${label}`);

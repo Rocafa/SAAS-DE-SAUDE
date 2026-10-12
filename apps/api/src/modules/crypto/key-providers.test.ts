@@ -68,6 +68,7 @@ type FakeKms = KmsApi & { calls: { op: string; input: unknown }[]; fail: boolean
 /** KMS falso que imita o contrato (EncryptionContext obrigatório e igual) e registra as chamadas. */
 function fakeKms(): FakeKms {
   const blobs = new Map<string, { plaintext: Buffer; ctx: string }>();
+  const pendentes = new Set<string>();
   const fake: FakeKms = {
     calls: [],
     fail: false,
@@ -101,10 +102,17 @@ function fakeKms(): FakeKms {
     },
     scheduleKeyDeletion(input) {
       fake.calls.push({ op: 'scheduleKeyDeletion', input });
+      if (pendentes.has(input.KeyId)) return Promise.reject(new Error('KMSInvalidStateException'));
+      pendentes.add(input.KeyId);
       return Promise.resolve({});
+    },
+    describeKey(input) {
+      fake.calls.push({ op: 'describeKey', input });
+      return Promise.resolve({ KeyMetadata: { KeyState: pendentes.has(input.KeyId) ? 'PendingDeletion' : 'Enabled' } });
     },
     cancelKeyDeletion(input) {
       fake.calls.push({ op: 'cancelKeyDeletion', input });
+      pendentes.delete(input.KeyId);
       return Promise.resolve({});
     },
     enableKey(input) {
@@ -144,6 +152,22 @@ describe('KmsKeyProvider (contra KMS falso)', () => {
     await p.destroyMasterKey(arn);
     expect(KMS_DELETION_WINDOW_DAYS).toBe(7);
     expect(kms.calls.at(-1)).toEqual({ op: 'scheduleKeyDeletion', input: { KeyId: arn, PendingWindowInDays: 7 } });
+  });
+
+  it('destruir de novo uma chave já pendente é idempotente (retomada da eliminação)', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    const arn = await p.createMasterKey(tenantA);
+    await p.destroyMasterKey(arn);
+    await expect(p.destroyMasterKey(arn)).resolves.toBeUndefined();
+    expect(kms.calls.at(-1)).toEqual({ op: 'describeKey', input: { KeyId: arn } });
+  });
+
+  it('erro de agendamento com a chave ainda ativa NÃO é tratado como feito', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    kms.scheduleKeyDeletion = () => Promise.reject(new Error('AccessDenied'));
+    await expect(p.destroyMasterKey(await p.createMasterKey(tenantA))).rejects.toBeInstanceOf(KeyUnavailableError);
   });
 
   it('cancelar a destruição cancela o agendamento e reabilita a chave (fica Disabled no KMS)', async () => {

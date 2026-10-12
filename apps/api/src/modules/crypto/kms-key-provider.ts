@@ -35,6 +35,7 @@ export interface KmsApi {
   }): Promise<{ CiphertextBlob?: Uint8Array | undefined }>;
   scheduleKeyDeletion(input: { KeyId: string; PendingWindowInDays: number }): Promise<unknown>;
   cancelKeyDeletion(input: { KeyId: string }): Promise<unknown>;
+  describeKey(input: { KeyId: string }): Promise<{ KeyMetadata?: { KeyState?: string | undefined } | undefined }>;
   enableKey(input: { KeyId: string }): Promise<unknown>;
 }
 
@@ -105,7 +106,13 @@ export class KmsKeyProvider implements KeyProvider {
   }
 
   async destroyMasterKey(masterKeyId: string): Promise<void> {
-    await guard(() => this.kms.scheduleKeyDeletion({ KeyId: masterKeyId, PendingWindowInDays: KMS_DELETION_WINDOW_DAYS }));
+    try {
+      await this.kms.scheduleKeyDeletion({ KeyId: masterKeyId, PendingWindowInDays: KMS_DELETION_WINDOW_DAYS });
+    } catch {
+      // Idempotente: uma tentativa anterior pode ter agendado e parado antes de gravar `destroyed`.
+      const out = await guard(() => this.kms.describeKey({ KeyId: masterKeyId }));
+      if (out.KeyMetadata?.KeyState !== 'PendingDeletion') throw new KeyUnavailableError();
+    }
   }
 
   async cancelMasterKeyDestruction(masterKeyId: string): Promise<void> {

@@ -1,9 +1,9 @@
 import type { TenantId } from '@plataforma/shared';
 import {
   FieldDecryptionError,
-  KeyDestructionIncompleteError,
   KeyUnavailableError,
   TenantKeyMissingError,
+  TenantKeysDestroyedError,
 } from './crypto-errors';
 import type { DataKey } from './data-key';
 import { DataKeyCache } from './data-key-cache';
@@ -21,6 +21,9 @@ export interface KeyEvent {
   readonly actorId: string | null;
   readonly keyId?: string;
 }
+
+/** Abre uma transação do tenant e roda `fn` nela (ex.: `(fn) => withTenant(db, tenantId, fn)`). */
+export type TxRunner<Tx> = <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>;
 
 /** Grava o evento NA MESMA transação: sem evento registrado, a operação de chave não acontece. */
 export type KeyAuditor<Tx> = (tx: Tx, event: KeyEvent) => Promise<void>;
@@ -45,6 +48,13 @@ export interface FieldCipherOptions {
  * - Destruição: a KEK da clínica é destruída e todas as cópias (inclusive backups) ficam ilegíveis.
  *
  * Todos os métodos recebem a transação do tenant (`withTenant`): o RLS limita as chaves à clínica.
+ * A destruição recebe um `TxRunner`, porque precisa de duas transações (ver destroyTenantKeys).
+ *
+ * Ordem das travas na mesma transação: sempre `tenant_keys` (operações de chave) ANTES de
+ * `audit_chain` (gravação em audit_log, migração 0005). As operações de chave já seguem essa ordem
+ * (travam e depois auditam); quem precisar cifrar numa transação que já auditou deve provisionar
+ * ou girar antes. Ordem trocada entre duas transações da mesma clínica vira deadlock, que o
+ * Postgres detecta e desfaz uma delas.
  */
 export class FieldCipher<Tx> {
   private readonly cache: DataKeyCache;
@@ -69,6 +79,8 @@ export class FieldCipher<Tx> {
     await this.store.lockTenant(tx, tenantId);
     const active = await this.store.findActive(tx, tenantId);
     if (active) return active.id;
+    // Clínica eliminada não ganha chave nova em silêncio (os dados antigos continuam ilegíveis).
+    if (await this.store.hasDestroyedKeys(tx, tenantId)) throw new TenantKeysDestroyedError();
     let master = await this.store.findActiveMaster(tx, tenantId);
     if (!master) {
       master = await this.provider.createMasterKey(tenantId);
@@ -159,38 +171,31 @@ export class FieldCipher<Tx> {
   }
 
   /**
-   * Crypto-shredding da clínica: marca todas as chaves como destruídas, registra o evento, zera o
-   * cache e agenda a destruição de TODAS as chaves mestras no provedor (KMS: janela de 7 dias).
-   * Depois disso nenhum campo da clínica abre — nem no banco, nem em snapshot, nem em backup.
+   * Crypto-shredding da clínica, em duas transações (`run` abre uma transação do tenant por chamada):
    *
-   * Tudo ou nada: se o provedor falhar no meio, os agendamentos já feitos são CANCELADOS antes de a
-   * transação desfazer — senão o banco diria "chaves ativas" com uma KEK já destruída, e os dados
-   * sob ela estariam perdidos. Se até o cancelamento falhar, o erro é KeyDestructionIncompleteError
-   * (exige intervenção dentro da janela de 7 dias).
+   * 1. `destroying` comitado: DEKs e chaves mestras vivas param de decifrar e o evento entra na
+   *    trilha de auditoria. Sem evento registrado, nada segue.
+   * 2. Provedor: agenda a destruição de TODAS as chaves mestras (KMS: janela de 7 dias). Idempotente:
+   *    chave já pendente conta como feita.
+   * 3. `destroyed` comitado: a DEK cifrada é apagada do banco.
+   *
+   * Se qualquer passo falhar, o banco fica em `destroying` — nunca volta a dizer "ativa" para uma
+   * chave que o provedor já pode ter agendado —, e chamar de novo retoma de onde parou. Depois disso
+   * nenhum campo da clínica abre: nem no banco, nem em snapshot, nem em backup.
    */
-  async destroyTenantKeys(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<void> {
-    await this.store.lockTenant(tx, tenantId);
-    const masters = await this.store.destroyAll(tx, tenantId);
-    await this.audit(tx, { tenantId, kind: 'destroy', actorId });
+  async destroyTenantKeys(run: TxRunner<Tx>, tenantId: TenantId, actorId: string | null): Promise<void> {
+    const masters = await run(async (tx) => {
+      await this.store.lockTenant(tx, tenantId);
+      const ids = await this.store.beginDestroy(tx, tenantId);
+      await this.audit(tx, { tenantId, kind: 'destroy', actorId });
+      return ids;
+    });
     this.cache.invalidateTenant(tenantId);
-    const scheduled: string[] = [];
-    try {
-      for (const master of masters) {
-        await this.provider.destroyMasterKey(master, tenantId);
-        scheduled.push(master);
-      }
-    } catch (err) {
-      let compensated = true;
-      for (const master of scheduled) {
-        try {
-          await this.provider.cancelMasterKeyDestruction(master, tenantId);
-        } catch {
-          compensated = false;
-        }
-      }
-      if (!compensated) throw new KeyDestructionIncompleteError();
-      throw err;
-    }
+    for (const master of masters) await this.provider.destroyMasterKey(master, tenantId);
+    await run(async (tx) => {
+      await this.store.lockTenant(tx, tenantId);
+      await this.store.finishDestroy(tx, tenantId);
+    });
   }
 
   private usage(record: DataKeyRecord): number {

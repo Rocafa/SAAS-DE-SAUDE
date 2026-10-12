@@ -50,14 +50,17 @@ Não há janela de indisponibilidade: leitores que já têm a DEK antiga em cach
 
 ## 4. Destruição (crypto-shredding) — resposta à §4.1 de retenção
 
-`destroyTenantKeys(tx, clínica, ator)` faz, numa transação:
-1. marca todas as DEKs da clínica como `destroyed` e apaga `wrapped_key`;
-2. marca **todas** as chaves mestras da clínica (ativa e aposentadas) como `destroyed`;
-3. grava o evento `crypto.key.destroy` com o ator. Se a gravação falhar, nada chega ao KMS;
-4. zera o cache local;
-5. chama `ScheduleKeyDeletion` no KMS para cada chave mestra, com 7 dias de espera.
+`destroyTenantKeys(run, clínica, ator)` roda em **duas transações** (o `run` abre cada uma) e pode ser chamada de novo até concluir:
 
-**Tudo ou nada.** Se o KMS falhar na 2ª chave depois de ter agendado a 1ª, o código **cancela** os agendamentos já feitos (`CancelKeyDeletion` + `EnableKey`, porque o cancelamento deixa a chave desabilitada) antes de a transação desfazer. Sem isso, o banco diria "ativa" para uma KEK já destruída, e os dados sob ela estariam perdidos, o que esbarra na guarda de 20 anos do prontuário (Lei 13.787/2018). Se até o cancelamento falhar, o erro é `KeyDestructionIncompleteError`, que exige intervenção humana dentro da janela de 7 dias.
+1. **Transação 1, comitada antes de qualquer chamada ao KMS:**
+   - DEKs e chaves mestras vivas (`active` e `retired`) passam a `destroying`. Daí em diante nada decifra, em nenhuma instância;
+   - o evento `crypto.key.destroy` é gravado com o ator. Se a gravação falhar, nada segue.
+2. **Provedor:** `ScheduleKeyDeletion` para **todas** as chaves mestras da clínica, com 7 dias de espera. É idempotente: chave que já está `PendingDeletion` conta como feita.
+3. **Transação 2:** `destroying` vira `destroyed` e a DEK cifrada é apagada do banco.
+
+**Por que assim (achado B1 do revisor e R2 do Guardião):** se a destruição no provedor acontecesse dentro de uma transação que depois falhasse no COMMIT, o banco voltaria a dizer "ativa" para uma KEK já agendada para morrer. Todos os dados da clínica ficariam ilegíveis, e nada sinalizaria o erro. Com `destroying` comitado primeiro, qualquer falha deixa o banco **coerente com o pior caso**: a chave não é usada, e a nova chamada retoma do ponto em que parou. Testes cobrem falha do KMS no meio, falha no COMMIT da 1ª transação (nada chega ao KMS) e falha no COMMIT da 2ª transação (fica em `destroying`; a nova chamada conclui), tanto em memória quanto no Postgres real.
+
+Clínica com chave destruída **não ganha chave nova em silêncio**: `provisionTenant` lança `TenantKeysDestroyedError`. `cancelMasterKeyDestruction` continua no provedor só para a operação humana de abortar uma eliminação dentro da janela.
 
 FATO (AWS, [Delete an AWS KMS key](https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html), consultado em 11/10/2026): a espera vai de 7 a 30 dias e pode durar até 24 h a mais. Durante a espera a chave não faz nenhuma operação criptográfica e a destruição pode ser cancelada. Depois de apagada, "you can no longer decrypt the data that was encrypted under that KMS key".
 
@@ -84,7 +87,9 @@ Com IV aleatório de 96 bits, o NIST SP 800-38D limita a 2³² cifragens por cha
 ## 6. Banco (0004)
 
 - `tenant_master_keys(id = ARN, tenant_id, status, created_at, destroyed_at)`, com uma ativa por clínica.
-- `tenant_data_keys(id, tenant_id, master_key_id → tenant_master_keys, wrapped_key, status, …)`, com uma ativa por clínica. `destroyed` exige `wrapped_key` nulo.
+- `tenant_data_keys(id, tenant_id, master_key_id, wrapped_key, status, encrypt_count, …)`, com uma ativa por clínica. `destroyed` exige `wrapped_key` nulo. A **FK composta** `(master_key_id, tenant_id) → tenant_master_keys(id, tenant_id)` impede que a DEK aponte para a chave mestra de outra clínica.
+- Estados: `active → retired → destroying → destroyed`. `destroying` só termina em `destroyed`.
+- **Ordem das travas na mesma transação:** sempre `tenant_keys` (operações de chave) **antes** de `audit_chain` (gravação em `audit_log`, migração 0005). As operações de chave já travam e depois auditam. Cifrar numa transação que já auditou pode disparar a rotação automática e inverter a ordem (raro: só a cada 2³⁰ cifragens). Nesse caso o Postgres detecta o deadlock e desfaz uma das transações.
 - RLS FORCE com `app_current_tenant()`. O runtime (`app_user`) não tem DELETE nem TRUNCATE, e UPDATE só nas colunas do ciclo de vida.
 - Trigger `tenant_keys_guard`, que vale para qualquer papel: identidade imutável, `destroyed` terminal, nada volta a `active`, nenhuma linha é apagada.
 
@@ -104,6 +109,6 @@ Pendente para o DevOps (Portão A): conferir a cota de chaves KMS por conta e re
 
 | Suíte | O que prova |
 |---|---|
-| `src/modules/crypto/field-cipher.test.ts` (32) | Ida e volta; formato; IV novo; outra clínica não decifra; adulteração de IV, tag, dado e keyId detectada; mover para outra tabela, coluna ou linha detectado; rotação de DEK e KEK; destruição deixa banco e backups ilegíveis; nada vaza em log ou erro; TTL do cache; ressalvas do Guardião: destruição vale em outra instância com cache quente, compensação quando o KMS falha no meio (com teste de mutação), rotação por limite de uso, eventos de chave com ator, mesma resposta HTTP para destruída e inexistente |
+| `src/modules/crypto/field-cipher.test.ts` (32) | Ida e volta; formato; IV novo; outra clínica não decifra; adulteração de IV, tag, dado e keyId detectada; mover para outra tabela, coluna ou linha detectado; rotação de DEK e KEK; destruição deixa banco e backups ilegíveis; nada vaza em log ou erro; TTL do cache; ressalvas do Guardião e do revisor N1: destruição vale em outra instância com cache quente, destruição em duas fases (KMS falha no meio, COMMIT falha na 1ª ou na 2ª transação), recusa de reprovisionar clínica destruída, rotação por limite de uso, eventos de chave com ator, mesma resposta HTTP para destruída e inexistente |
 | `src/modules/crypto/key-providers.test.ts` | Provedor local (recusa produção, DEK de A não abre como B, destruição) e KMS contra um KMS falso (contexto, janela de 7 dias, erro sem ARN) |
 | `test/crypto.rls.test.ts` (Postgres real, 7) | RLS FORCE nas tabelas de chave; B não vê nem grava chave de A; o runtime não apaga nem reativa chave; provisionamento concorrente gera uma só chave; crypto-shredding com cópia de backup |

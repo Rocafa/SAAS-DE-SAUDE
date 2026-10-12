@@ -6,7 +6,9 @@
 -- nunca guardam chave em claro. Destruir a KEK da clínica torna ilegíveis todas as cópias da DEK e,
 -- com elas, todos os campos cifrados (crypto-shredding — retencao-e-descarte.md §4.1, opção C).
 --
--- Ciclo de vida das linhas: active -> retired -> destroyed (ou active -> destroyed).
+-- Ciclo de vida das linhas: active -> retired -> destroying -> destroyed (ou active -> destroying).
+-- 'destroying' é comitado ANTES de qualquer chamada ao KMS: a partir dele nada decifra, e se o
+-- processo cair no meio o banco nunca volta a dizer "ativa" para uma chave já agendada para morrer.
 -- - Uma única chave mestra ativa por clínica. As aposentadas (após rotação da KEK) continuam
 --   registradas: backups anteriores à rotação ainda dependem delas, e a eliminação da clínica
 --   precisa destruir TODAS — por isso a lista vive no banco, não só no KMS.
@@ -20,10 +22,12 @@ CREATE TABLE tenant_master_keys (
   tenant_id    uuid NOT NULL REFERENCES tenants (id),
   status       text NOT NULL DEFAULT 'active'
                  CONSTRAINT tenant_master_keys_status_check
-                 CHECK (status IN ('active', 'retired', 'destroyed')),
+                 CHECK (status IN ('active', 'retired', 'destroying', 'destroyed')),
   created_at   timestamptz NOT NULL DEFAULT now(),
   destroyed_at timestamptz,
-  CONSTRAINT tenant_master_keys_destroyed_check CHECK ((status = 'destroyed') = (destroyed_at IS NOT NULL))
+  CONSTRAINT tenant_master_keys_destroyed_check CHECK ((status = 'destroyed') = (destroyed_at IS NOT NULL)),
+  -- Alvo da FK composta de tenant_data_keys: a DEK só aponta para chave mestra da MESMA clínica.
+  CONSTRAINT tenant_master_keys_id_tenant_key UNIQUE (id, tenant_id)
 );
 CREATE UNIQUE INDEX tenant_master_keys_one_active_idx ON tenant_master_keys (tenant_id) WHERE status = 'active';
 CREATE INDEX tenant_master_keys_tenant_idx ON tenant_master_keys (tenant_id);
@@ -31,13 +35,13 @@ CREATE INDEX tenant_master_keys_tenant_idx ON tenant_master_keys (tenant_id);
 CREATE TABLE tenant_data_keys (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id     uuid NOT NULL REFERENCES tenants (id),
-  master_key_id text NOT NULL REFERENCES tenant_master_keys (id),
+  master_key_id text NOT NULL,
   wrapped_key   bytea
                   CONSTRAINT tenant_data_keys_wrapped_key_check
                   CHECK (wrapped_key IS NULL OR length(wrapped_key) BETWEEN 32 AND 1024),
   status        text NOT NULL DEFAULT 'active'
                   CONSTRAINT tenant_data_keys_status_check
-                  CHECK (status IN ('active', 'retired', 'destroyed')),
+                  CHECK (status IN ('active', 'retired', 'destroying', 'destroyed')),
   -- Cifragens feitas com esta DEK (aproximado: cada instância soma em lotes). Com IV aleatório de
   -- 96 bits, o NIST SP 800-38D limita a 2^32 usos por chave; a aplicação gira bem antes (2^30).
   encrypt_count bigint NOT NULL DEFAULT 0
@@ -47,7 +51,9 @@ CREATE TABLE tenant_data_keys (
   destroyed_at  timestamptz,
   CONSTRAINT tenant_data_keys_destroyed_check
     CHECK ((status = 'destroyed') = (wrapped_key IS NULL)
-       AND (status = 'destroyed') = (destroyed_at IS NOT NULL))
+       AND (status = 'destroyed') = (destroyed_at IS NOT NULL)),
+  CONSTRAINT tenant_data_keys_master_fk
+    FOREIGN KEY (master_key_id, tenant_id) REFERENCES tenant_master_keys (id, tenant_id)
 );
 -- No máximo uma DEK ativa por clínica (a corrida de provisionamento termina em conflito, não em duas).
 CREATE UNIQUE INDEX tenant_data_keys_one_active_idx ON tenant_data_keys (tenant_id) WHERE status = 'active';
@@ -97,6 +103,9 @@ BEGIN
   END IF;
   IF NEW.status = 'active' AND OLD.status <> 'active' THEN
     RAISE EXCEPTION 'chave de dados aposentada não volta a ser ativa' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.status = 'destroying' AND NEW.status NOT IN ('destroying', 'destroyed') THEN
+    RAISE EXCEPTION 'chave em destruição só pode terminar destruída' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;
 END;
