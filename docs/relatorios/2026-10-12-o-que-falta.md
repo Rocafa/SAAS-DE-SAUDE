@@ -107,7 +107,6 @@ Também resolvidos: **build definitivo da API**, **erro 25006 → 503**, **rate 
   - as ordens das abas, hoje em `~/Documents/Dev/projetos/.maestro/` no Mac do sócio e fora do git, também versionadas, para os dois verem.
 - **Documentos desatualizados:**
   - `RELATORIO-GERAL.md` vai só até a rodada 5;
-  - `decisoes.md` lista D1–D9, mas os memos já vão até D14;
   - a página da orquestra (`orquestra.html`) e o `CONTEXTO.md` não mencionam a rodada 8 nem as telas.
 - **PRs do Dependabot acumulados:** 13 abertos, que serão absorvidos pelos blocos #31 e #33. Fechar os individuais depois, para a lista de PRs voltar a ser útil.
 
