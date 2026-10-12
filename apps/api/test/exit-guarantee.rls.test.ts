@@ -53,6 +53,24 @@ function exportAuditRows(t: FakeTenant) {
 }
 
 /** Junta mensagens da cadeia de causas (drizzle/postgres embrulham o erro original). */
+/** SQLSTATE de violação de RLS. Código, não texto: independe do idioma do servidor. */
+const SQLSTATE_RLS = '42501'; // insufficient_privilege
+
+/**
+ * SQLSTATEs da cadeia de causas. Use isto para violação de RLS; o `errorText` abaixo serve
+ * para as asserções que comparam NOME DE CONSTRAINT, que é identificador e não traduz.
+ */
+async function sqlstates(p: Promise<unknown>): Promise<unknown[]> {
+  const err: unknown = await p.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(err, 'era esperado erro').toBeDefined();
+  const codigos: unknown[] = [];
+  for (let e: unknown = err; e instanceof Error; e = e.cause) codigos.push((e as { code?: unknown }).code);
+  return codigos;
+}
+
 async function errorText(p: Promise<unknown>): Promise<string> {
   const err: unknown = await p.then(
     () => undefined,
@@ -193,14 +211,15 @@ describe('G3 — auditoria append-only da exportação', () => {
 
   it('app_user não consegue UPDATE nem DELETE em audit_log', async () => {
     await exportTenantData(h.db, a.ctx);
-    const upd = await errorText(
+    // SQLSTATE, não mensagem: "permission denied" vem traduzido num servidor pt-BR.
+    const upd = await sqlstates(
       withTenant(h.db, a.ctx.tenantId, (tx) => tx.update(auditLog).set({ scope: 'adulterado' })),
     );
-    expect(upd).toMatch(/permission denied/);
-    const del = await errorText(withTenant(h.db, a.ctx.tenantId, (tx) => tx.delete(auditLog)));
-    expect(del).toMatch(/permission denied/);
-    const trunc = await errorText(withTenant(h.db, a.ctx.tenantId, (tx) => tx.execute(sql`truncate audit_log`)));
-    expect(trunc).toMatch(/permission denied/);
+    expect(upd, `UPDATE: SQLSTATE esperado ${SQLSTATE_RLS}`).toContain(SQLSTATE_RLS);
+    const del = await sqlstates(withTenant(h.db, a.ctx.tenantId, (tx) => tx.delete(auditLog)));
+    expect(del, `DELETE: SQLSTATE esperado ${SQLSTATE_RLS}`).toContain(SQLSTATE_RLS);
+    const trunc = await sqlstates(withTenant(h.db, a.ctx.tenantId, (tx) => tx.execute(sql`truncate audit_log`)));
+    expect(trunc, `TRUNCATE: SQLSTATE esperado ${SQLSTATE_RLS}`).toContain(SQLSTATE_RLS);
     expect((await exportAuditRows(a)).length).toBeGreaterThan(0);
   });
 
@@ -214,11 +233,11 @@ describe('G3 — auditoria append-only da exportação', () => {
     );
     expect(deB).toEqual([]);
 
-    const intruso = await errorText(
+    const intruso = await sqlstates(
       withTenant(h.db, a.ctx.tenantId, (tx) =>
         recordAudit(tx, { ...a.ctx, tenantId: b.ctx.tenantId }, { action: 'export', scope: 'teste' }),
       ),
     );
-    expect(intruso).toMatch(/row-level security/);
+    expect(intruso, `SQLSTATE esperado ${SQLSTATE_RLS}`).toContain(SQLSTATE_RLS);
   });
 });
