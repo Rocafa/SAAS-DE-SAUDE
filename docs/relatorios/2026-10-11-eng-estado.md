@@ -9,6 +9,8 @@ Atualizado a cada entrega. Ordens vêm do Maestro (`.maestro/ordens-eng.md`).
   Migração 0005 (trigger com trava por clínica + SHA-256 de JSON canônico), `audit-chain.ts`, doc `auditoria-encadeada.md`.
   Unit 59, RLS 29, security 74, resiliência 24, backup-restore OK.
 
+- **Pareceres do Guardião (aprovados com ressalvas):** #35 R1–R6 aplicadas (ad55fc2); #37 R1 e R5 aplicadas (a2fe6d1). R2–R4 do #37 ficaram com o Maestro (âncora e HMAC, prazo D7, ações novas no enum compartilhado).
+
 ## Falta
 - Item 0: rebase dos PRs #31 e #33, só depois de o #30 entrar na `main` (o Maestro avisa).
 - Relatório final `docs/relatorios/2026-10-11-eng.md`.
