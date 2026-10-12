@@ -56,5 +56,17 @@ export const AuditAction = {
   LoginFailed: 'login_failed',
   PermissionChange: 'permission_change',
   ConsentChange: 'consent_change',
+  /** Chave de dados da clínica criada (provisionamento). Metadata: só o id da chave. */
+  KeyProvision: 'key_provision',
+  /** Chave de dados ou chave mestra girada (manual ou por limite de uso). */
+  KeyRotate: 'key_rotate',
+  /** Destruição das chaves da clínica (crypto-shredding na eliminação). Irreversível. */
+  KeyDestroy: 'key_destroy',
+  /** Funcionalidade de IA usada sobre dado da clínica (ex.: sugestão de texto). Nunca o conteúdo. */
+  AiUse: 'ai_use',
+  /** Pedido à IA recusado pela política (escopo, consentimento, limite). Nunca o conteúdo. */
+  AiRefusal: 'ai_refusal',
+  /** Acesso de emergência fora da permissão normal (break-glass). Exige revisão posterior. */
+  BreakGlass: 'break_glass',
 } as const;
 export type AuditAction = ValueOf<typeof AuditAction>;

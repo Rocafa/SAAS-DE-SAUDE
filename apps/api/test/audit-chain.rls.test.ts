@@ -7,7 +7,7 @@
  * forçado e o trigger append-only — o pior caso: alguém com acesso privilegiado ao banco.
  * Pré-requisitos: migrações aplicadas, DATABASE_URL (app_user) e DATABASE_MIGRATOR_URL. Dados fictícios.
  */
-import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
+import { AuditAction, type RequestContext, type TenantId, type UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
@@ -269,5 +269,38 @@ describe('isolamento da transação e data (ORDEM-005: B4 e sugestões)', () => 
     );
     expect(linhas.map((l) => l.antiga)).toEqual([false]);
     expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 1 });
+  });
+});
+
+describe('enum de ações × CHECK do banco (0006)', () => {
+  it('o CHECK de audit_log.action aceita exatamente os valores de AuditAction', async () => {
+    const [row] = await owner<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint
+      where conname = 'audit_log_action_check' and conrelid = 'audit_log'::regclass and convalidated`;
+    expect(row, 'audit_log_action_check validada').toBeDefined();
+    const doBanco = [...(row?.def ?? '').matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]).sort();
+    expect(doBanco).toEqual(Object.values(AuditAction).sort());
+  });
+
+  it('as ações novas entram na cadeia; ação fora do enum é recusada', async () => {
+    const ctx = await novaClinica();
+    for (const action of [
+      AuditAction.KeyProvision,
+      AuditAction.KeyRotate,
+      AuditAction.KeyDestroy,
+      AuditAction.AiUse,
+      AuditAction.AiRefusal,
+      AuditAction.BreakGlass,
+    ]) {
+      await withTenant(h.db, ctx.tenantId, (tx) => recordAudit(tx, ctx, { action, scope: 'teste.acoes', metadata: {} }));
+    }
+    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 6 });
+    const msg = await errorText(
+      withTenant(h.db, ctx.tenantId, (tx) =>
+        tx.execute(sql`insert into audit_log (tenant_id, actor_id, action, scope)
+          values (${ctx.tenantId}, ${ctx.userId}, 'apagar_tudo', 'teste.acoes')`),
+      ),
+    );
+    expect(msg).toMatch(/audit_log_action_check/);
   });
 });

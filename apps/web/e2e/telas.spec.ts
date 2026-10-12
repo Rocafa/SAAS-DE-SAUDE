@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
@@ -17,7 +18,7 @@ const TELAS: [string, string][] = [
   ['em-construcao', '/financeiro'],
 ];
 
-const PASTA = new URL('../../../docs/02-produto/telas/', import.meta.url).pathname;
+const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));
 
 /** Lê as cores CALCULADAS de todos os elementos da tela e devolve as que não são cinza. */
 async function coresRenderizadas(page: Page): Promise<string[]> {
