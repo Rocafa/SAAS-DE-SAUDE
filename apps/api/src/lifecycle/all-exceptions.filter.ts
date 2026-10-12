@@ -15,7 +15,7 @@ export const GENERIC_503 = { statusCode: 503, message: 'Serviço temporariamente
 /**
  * Última barreira de erro HTTP:
  * - HttpException: mantém status/corpo intencionais (inclusive 4xx de validação).
- * - Banco indisponível/sobrecarregado/timeout: 503 genérico + Retry-After.
+ * - Banco indisponível/sobrecarregado/timeout/somente leitura (failover): 503 genérico + Retry-After.
  * - Qualquer outro erro: 500 genérico.
  * Nunca devolve stack, mensagem interna, SQL ou SQLSTATE. O log também só leva nome e código
  * (mensagens/`detail` do Postgres podem conter valores de linha, i.e. dado pessoal).
@@ -34,7 +34,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     const name = exception instanceof Error ? exception.name : typeof exception;
-    const code = dbErrorCode(exception) ?? '-';    if (isTransientDatabaseError(exception)) {
+    const code = dbErrorCode(exception) ?? '-';
+    if (isTransientDatabaseError(exception)) {
       this.logger.warn(`banco indisponível/lento: ${name} code=${code}`);
       res.status(HttpStatus.SERVICE_UNAVAILABLE).setHeader('Retry-After', '5').json(GENERIC_503);
       return;

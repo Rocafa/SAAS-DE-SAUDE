@@ -104,12 +104,12 @@ jobs:
         run: sh infra/local/postgres-init.sh
       - name: Migrar (papel app_migrator)
         run: pnpm --filter @plataforma/api db:migrate
+      # turbo compila primeiro o packages/shared (dist/ em JS) e depois a API.
       - name: Build da API
-        run: pnpm --filter @plataforma/api build
-      # packages/shared é TS puro: o resolver troca './x.js' -> './x.ts' (type stripping do Node 22).
-      - name: Subir a API compilada
+        run: pnpm turbo run build --filter=@plataforma/api
+      - name: Subir a API compilada (node puro, como em produção)
         run: |
-          node --import ./tests/carga/resolver-ts.mjs apps/api/dist/main.js > api.log 2>&1 &
+          node apps/api/dist/main.js > api.log 2>&1 &
           echo $! > api.pid
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:3333/health/ready && exit 0

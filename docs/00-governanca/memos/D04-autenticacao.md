@@ -1,4 +1,48 @@
-# Memo D4 — Autenticação: Zitadel self-hosted × Better Auth
+# D4 — Autenticação
+> Memorando para decisão dos sócios (N0) · 10/10/2026 · preparado pelo Maestro com a frente Engenharia · **Este memo não decide nada.**
+
+**Pergunta:** como os usuários das clínicas fazem login (com MFA e permissões por perfil)?
+**Prazo sugerido:** já: é a primeira entrega do M0 · **Urgência:** Alta
+
+## Contexto
+Sem login não existe RBAC, MFA, a rota HTTP de exportação (garantia G2) nem qualquer tela de negócio. Os dados de identidade devem ficar no Brasil: Auth0 e Clerk foram descartados por transferência internacional. A rodada 7 trouxe duas opções novas (Zitadel e Better Auth), e as duas pesquisas da rodada recomendaram caminhos diferentes.
+
+## Opções
+| Opção | Custo | Esforço e operação | Prós | Contras/riscos |
+|---|---|---|---|---|
+| A. Login próprio no módulo `auth` | Custo não levantado (tempo de engenharia) | Escrever sessão, MFA, recuperação de conta | Controle total | Erro de segurança em código nosso, em produto com dado de saúde |
+| B. Keycloak self-hosted em sa-east-1 | Mais 1 serviço na AWS (custo não levantado) | Servidor Java, banco próprio, atualizações | TOTP, WebAuthn e multi-tenancy maduros | Operação pesada para 2 sócios |
+| C. Zitadel self-hosted em sa-east-1 | Mais 1 serviço (custo não levantado) | Menos pesado que o Keycloak | Feito para SaaS B2B (organizações) | Comunidade menor |
+| D. Better Auth (biblioteca dentro da API) | Sem serviço extra | Mesma operação da API | Dados no nosso Postgres; plugins de 2FA e organização | Biblioteca nova (v1.7.7, set/2026); integração com NestJS a validar |
+
+## Recomendação dos agentes
+Recomendação, não decisão: as duas pesquisas da rodada 7 divergem. Uma recomenda **B ou C** (não escrever login do zero, usar servidor de identidade maduro). A outra recomenda **D** (menos operação), sob quatro condições:
+- identidade em schema separado;
+- MFA obrigatório para perfis clínicos e para exportação;
+- revisão do Guardião;
+- sessão e rate limit no Redis.
+
+Ponto comum: **descartar A**. Sugestão: uma prova de conceito de 2 dias com C e D, medindo MFA, vínculo usuário–clínica e recuperação de conta.
+
+## O que trava se adiar
+- Todo o M0: RBAC, MFA, rota de exportação com MFA recente (G2), auditoria de leitura.
+- Testes E2E de login e o Portão B do piloto.
+
+## Para decidir, falta
+Prova de conceito curta; revisão do Guardião LGPD sobre onde ficam os dados de identidade.
+
+## Fontes
+- `docs/04-arquitetura/README.md` (linha "Autenticação")
+- `docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md` §3.12 (branch `pesquisa/necessidades-producao`)
+- Pesquisa complementar de 10/10/2026 (Context7: `/better-auth/better-auth`, `/keycloak/keycloak`)
+
+---
+
+## PoC da D4 — medição da frente QA (rodada 8)
+
+O memo acima é o pedido de decisão. Abaixo, a medição que a frente QA executou nos dois
+candidatos (PR #36, em rascunho). Ela **não decide**: só separa MEDIDO de FATO (doc) e diz
+o que não foi medido.
 
 Data da medição: 2026-10-11 · Frente: QA-TESTES (N3) · Branch: `poc/d4-autenticacao`
 
@@ -11,7 +55,7 @@ contra o `checksums.txt` do release) e **Better Auth 1.7.7** dentro de um NestJS
 (`poc/d4/`, fora do workspace do pnpm). Postgres 16.15 local na porta 5444, bancos
 separados (`zitadel` e `poc_betterauth`). Zitadel na 8084, PoC do Better Auth na 8085.
 
-## Tabela de resultados
+### Tabela de resultados
 
 Legenda: **MEDIDO** = observado na execução desta sessão. **FATO (doc)** = afirmação de
 documentação ou de base pública, com fonte. Nada aqui é opinião.
@@ -36,7 +80,7 @@ documentação ou de base pública, com fonte. Nada aqui é opinião.
 | **Dados no Brasil** | FATO: self-hosted — fica onde a gente puser (AWS São Paulo, conforme CONTEXTO.md §6). Sem dependência de nuvem do fornecedor | FATO: biblioteca na nossa API, no nosso Postgres. Nenhum dado sai da nossa infra |
 | **CVEs recentes** | MEDIDO + FATO (doc): 6 avisos de 2026, vários altos (XSS com tomada de conta no `/saml-post`, escopo de organização não aplicado no OIDC, link de reset montado a partir de cabeçalho `Host`). Corrigidos até 4.12.3 — **a versão que medi, 4.19.4, está acima de todos** | MEDIDO + FATO (doc): vários avisos altos em 2026 (bypass de 2FA por cache de sessão, limite de taxa por IPv6, plugin de device authorization, replay de refresh token em OAuth). Corrigidos até 1.6.11 — 1.7.7 está acima. **Mas** `pnpm audit` da PoC acusa **1 crítico e 16 altos**: a maioria vem do `@better-auth/cli`, que **pina um better-auth antigo** (1.4.x) como dependência |
 
-## Dois achados que valem mais que a tabela
+### Dois achados que valem mais que a tabela
 
 1. **O CLI oficial do Better Auth está atrasado em relação à biblioteca.** `better-auth` está
    em 1.7.7; `@better-auth/cli` em 1.4.21. O CLI é o caminho oficial de migração do banco, e
@@ -50,7 +94,7 @@ documentação ou de base pública, com fonte. Nada aqui é opinião.
    ler o claim do token assinado. Se a escolha for Zitadel, isso precisa virar regra escrita,
    porque o caminho fácil é o errado.
 
-## Como reproduzir
+### Como reproduzir
 
 ```sh
 # Better Auth
@@ -65,7 +109,7 @@ zitadel start-from-init --config zitadel.yaml --steps steps.yaml \
   --masterkey <32 bytes> --tlsMode disabled   # porta 8084
 ```
 
-## Um terceiro achado, do próprio CI
+### Um terceiro achado, do próprio CI
 
 O `gitleaks` do CI reprovou a primeira versão deste PR por causa de **uma linha de
 `.env.example`**: a variável do segredo vinha com uma frase de exemplo no lugar do valor —
@@ -89,7 +133,7 @@ Duas regras para qualquer frente, as duas pagas com CI vermelho aqui:
 E, como o `gitleaks` varre o **histórico** (95 commits nesta execução), apagar num commit
 novo não resolve: é preciso reescrever o commit que introduziu a linha.
 
-## Limites honestos desta medição
+### Limites honestos desta medição
 
 - Esta máquina **não tem runtime de container**. O pedido original dizia "Zitadel
   self-hosted (docker)"; rodei o **binário oficial** por autorização da ORDEM-001. O
@@ -101,7 +145,7 @@ novo não resolve: é preciso reescrever o commit que introduziu a linha.
 - Nenhum teste de carga, nenhum teste de disponibilidade.
 - Tudo com dados sintéticos, em bancos locais descartáveis. Nenhum segredo commitado.
 
-## Fontes
+### Fontes
 
 - Release do Zitadel v4.19.4 (publicado 2026-10-01): https://github.com/zitadel/zitadel/releases/tag/v4.19.4
 - CVE-2026-29191 (XSS no `/saml-post`, correção 4.12.0): https://advisories.gitlab.com/golang/github.com/zitadel/zitadel/CVE-2026-29191/

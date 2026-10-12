@@ -249,7 +249,7 @@ O **CI** é um robô do GitHub que, a cada PR e a cada mudança na `main`, roda 
 | **Carga (k6)** | Rampa até 20 usuários simultâneos: p95 abaixo de 300 ms e menos de 1% de erros |
 
 **Problemas reais encontrados e corrigidos:**
-1. **🔴 Bug na biblioteca de banco (postgres.js 3.4.9, versão mais recente).** Se a conexão de uma transação cai, o processo podia travar ou cair, e consultas da transação morta podiam ir para a **transação de outra requisição**. A proteção por clínica barrou tudo nos testes, mas corrigimos com um patch mínimo (`patches/postgres@3.4.9.patch`). **Ação:** reportar ao projeto do postgres.js e remover o patch quando houver versão corrigida.
+1. **🔴 Bug na biblioteca de banco (postgres.js 3.4.9, versão mais recente).** Se a conexão de uma transação cai, o processo podia travar ou cair, e consultas da transação morta podiam ir para a **transação de outra requisição**. A proteção por clínica barrou tudo nos testes, mas corrigimos com um patch mínimo (`patches/postgres@3.4.9.patch`). **Ação:** reportar ao projeto do postgres.js (rascunho pronto em [bug-postgresjs-3.4.9.md](../04-arquitetura/bug-postgresjs-3.4.9.md)) e remover o patch quando houver versão corrigida.
 2. **🟠 Requisição travava ~16 s** com a rede parada → prazo por transação (15 s, configurável).
 3. **🟠 Reconexão lenta (até 20 s)** → limitada a 1 s.
 4. **🟠 O teste de carga encontrou um problema de produção.** O rate limit da segurança respondia 429 para `/health`, e o balanceador da AWS, que consulta essas rotas sem parar a partir de poucos IPs, **tiraria do ar instâncias saudáveis**. Corrigido: as sondas de saúde ficam fora do limite (caminho exato), e o readiness agrupa chamadas simultâneas num único ping ao banco. Testes novos garantem as duas coisas.
@@ -264,9 +264,9 @@ O **CI** é um robô do GitHub que, a cada PR e a cada mudança na `main`, roda 
 - **Infraestrutura de produção (não existe ainda):** falha de uma zona inteira da AWS (Multi-AZ), troca automática para o banco reserva, restauração de snapshot/PITR do RDS, recuperação de desastre em outra região. Estão documentados em `docs/04-arquitetura/testes-de-producao.md` e só podem ser testados quando a AWS for montada.
 - **Execução arbitrária de SQL** (várias instruções) ainda permite abrir outra transação e escolher uma clínica. A trava protege contra injeção numa única instrução; a defesa principal continua sendo a consulta parametrizada (já usada).
 - **Réplicas de leitura:** a trava de clínica grava a cada transação e não funciona em réplica somente leitura. Precisa ser resolvido quando houver réplicas.
-- **Rate limit em memória, por instância:** com várias instâncias, migrar para Redis.
-- **Banco em modo somente leitura** (erro 25006) ainda vira 500 em vez de 503.
-- **Build da API:** `node dist/main.js` não sobe sozinho, porque `packages/shared` é TypeScript puro. Hoje usamos um carregador (`--import ./tests/carga/resolver-ts.mjs`, Node ≥ 22.18); falta uma solução definitiva antes do deploy.
+- ~~**Rate limit em memória, por instância:** com várias instâncias, migrar para Redis.~~ ✅ Resolvido em 10/10/2026 (PR `eng/pendencias-producao`): Redis compartilhado com fallback em memória.
+- ~~**Banco em modo somente leitura** (erro 25006) ainda vira 500 em vez de 503.~~ ✅ Resolvido em 10/10/2026: 25006 vira 503 com Retry-After.
+- ~~**Build da API:** `node dist/main.js` não sobe sozinho, porque `packages/shared` é TypeScript puro.~~ ✅ Resolvido em 10/10/2026: o `shared` tem build próprio e o carregador foi removido.
 - **Teste de penetração externo** (pessoa contratada) segue obrigatório antes do piloto (pré-requisito P2 do plano de piloto). Testes automáticos não o substituem.
 
 ### 6.5 Ordem de merge

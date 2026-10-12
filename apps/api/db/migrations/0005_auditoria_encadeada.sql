@@ -1,0 +1,143 @@
+-- 0005 — Auditoria encadeada por clínica (S6). Executar com o papel de MIGRAÇÃO (app_migrator).
+-- Ver docs/04-arquitetura/auditoria-encadeada.md.
+--
+-- Cada linha nova de audit_log recebe, DENTRO do banco e na mesma transação do INSERT:
+--   seq       = posição na cadeia da clínica (1, 2, 3, ...);
+--   prev_hash = hash da linha anterior da clínica (64 zeros na primeira);
+--   hash      = SHA-256 do JSON canônico da linha (inclui seq e prev_hash).
+-- Alterar, apagar ou reordenar uma linha quebra o hash dela ou o elo da seguinte; o verificador
+-- (src/modules/audit/audit-chain.ts) recalcula tudo e aponta onde.
+--
+-- Por que no banco e não na aplicação: todo INSERT entra na cadeia, inclusive SQL direto, e a
+-- trava por clínica e a leitura do último elo acontecem no mesmo lugar que a gravação (sem corrida).
+--
+-- Linhas anteriores a esta migração ficam fora da cadeia (seq NULL): o append-only impede
+-- reescrevê-las e o verificador as conta à parte.
+
+ALTER TABLE audit_log
+  ADD COLUMN seq       bigint,
+  ADD COLUMN prev_hash text,
+  ADD COLUMN hash      text,
+  ADD CONSTRAINT audit_log_chain_shape_check CHECK (
+    (seq IS NULL) = (hash IS NULL) AND (seq IS NULL) = (prev_hash IS NULL)
+    AND (seq IS NULL OR seq >= 1)
+    AND (hash IS NULL OR hash ~ '^[0-9a-f]{64}$')
+    AND (prev_hash IS NULL OR prev_hash ~ '^[0-9a-f]{64}$')
+  );
+CREATE UNIQUE INDEX audit_log_tenant_seq_idx ON audit_log (tenant_id, seq) WHERE seq IS NOT NULL;
+
+-- JSON canônico: jsonb normaliza (chaves ordenadas, sem duplicatas, espaçamento fixo) e o texto
+-- de saída é determinístico. Data sempre em UTC com microssegundos, independente do fuso da sessão.
+CREATE FUNCTION audit_log_canonical(r audit_log) RETURNS text
+  LANGUAGE sql STABLE
+  SET search_path = pg_catalog, public
+AS $$
+  SELECT jsonb_build_object(
+    'v', 1,
+    'tenant_id', r.tenant_id,
+    'seq', r.seq,
+    'prev_hash', r.prev_hash,
+    'id', r.id,
+    'actor_id', r.actor_id,
+    'action', r.action,
+    'scope', r.scope,
+    'metadata', r.metadata,
+    'created_at', to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+  )::text
+$$;
+
+CREATE FUNCTION audit_log_chain() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_seq  bigint;
+  v_hash text;
+BEGIN
+  -- O último elo é lido com um snapshot NOVO depois da trava, o que só acontece em READ COMMITTED.
+  -- Em REPEATABLE READ/SERIALIZABLE o snapshot da transação esconderia o elo que outra transação
+  -- acabou de gravar e a cadeia bateria em duplicate key: recusar com erro claro.
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'audit_log exige transação READ COMMITTED (a cadeia de hash lê o último elo)'
+      USING ERRCODE = 'feature_not_supported';
+  END IF;
+
+  -- Uma cadeia por clínica: trava até o fim da transação. Duas transações da mesma clínica nunca
+  -- leem o mesmo "último elo"; clínicas diferentes não se bloqueiam.
+  PERFORM pg_advisory_xact_lock(hashtextextended('audit_chain:' || NEW.tenant_id::text, 0));
+
+  SELECT a.seq, a.hash INTO v_seq, v_hash
+    FROM public.audit_log a
+   WHERE a.tenant_id = NEW.tenant_id AND a.seq IS NOT NULL
+   ORDER BY a.seq DESC
+   LIMIT 1;
+
+  IF NEW.seq IS NOT NULL OR NEW.prev_hash IS NOT NULL OR NEW.hash IS NOT NULL THEN
+    -- Só o dono da tabela ou superusuário (carga de dados já encadeados) traz os elos prontos, e
+    -- mesmo assim eles precisam continuar a cadeia e bater com o próprio conteúdo.
+    IF NOT pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid = TG_RELID), 'MEMBER') THEN
+      RAISE EXCEPTION 'seq/prev_hash/hash de audit_log são definidos pelo banco'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.seq IS DISTINCT FROM COALESCE(v_seq, 0) + 1
+       OR NEW.prev_hash IS DISTINCT FROM COALESCE(v_hash, repeat('0', 64))
+       OR NEW.hash IS DISTINCT FROM encode(sha256(convert_to(audit_log_canonical(NEW), 'UTF8')), 'hex') THEN
+      RAISE EXCEPTION 'linha de audit_log não continua a cadeia da clínica'
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  -- A data entra no hash: vem do banco, não de quem grava.
+  NEW.created_at := now();
+  NEW.seq := COALESCE(v_seq, 0) + 1;
+  NEW.prev_hash := COALESCE(v_hash, repeat('0', 64));
+  NEW.hash := encode(sha256(convert_to(audit_log_canonical(NEW), 'UTF8')), 'hex');
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER audit_log_chain
+  BEFORE INSERT ON audit_log
+  FOR EACH ROW EXECUTE FUNCTION audit_log_chain();
+
+-- Contrato do metadata (ressalva R1 do Guardião no PR #37). A trilha é append-only, encadeada e NÃO
+-- cifrada: um dado pessoal gravado aqui ficaria para sempre, fora do alcance da criptografia de
+-- campo, e removê-lo quebraria a cadeia. Por isso o metadata só aceita identificadores, códigos e
+-- contagens: até 16 chaves curtas fora de uma lista de nomes de conteúdo; valores escalares; texto
+-- de até 64 caracteres, sem "@" e com menos de 8 dígitos NO TOTAL (CPF, CNS, telefone, com
+-- qualquer separador) — exceto UUID e hash hex, que são referências; números < 1e7. Sem limite de
+-- tamanho total separado: os limites por campo já o fixam (≈ 2 KB) e não dependem de como cada lado
+-- serializa o JSON. Vale no banco, para pegar também o INSERT que não passa pela API.
+-- Espelho na aplicação: src/modules/audit/audit-metadata.ts (mesmas regras, erro mais claro).
+CREATE FUNCTION audit_metadata_ok(m jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$
+  SELECT jsonb_typeof(m) = 'object'
+     AND (SELECT count(*) FROM jsonb_object_keys(m)) <= 16
+     AND NOT EXISTS (
+       SELECT 1 FROM jsonb_each(m) AS e(k, v)
+        WHERE k !~ '^[a-zA-Z][a-zA-Z0-9_]{0,39}$'
+           OR lower(k) = ANY (ARRAY['antes', 'depois', 'before', 'after', 'nome', 'name', 'cpf', 'cns', 'rg',
+                                    'email', 'telefone', 'phone', 'texto', 'text', 'conteudo', 'content',
+                                    'body', 'nota', 'note', 'observacao', 'diagnostico', 'anamnese', 'evolucao'])
+           OR jsonb_typeof(v) NOT IN ('string', 'number', 'boolean', 'null')
+           OR (jsonb_typeof(v) = 'number' AND abs((v #>> '{}')::numeric) >= 10000000)
+           OR (jsonb_typeof(v) = 'string' AND (
+                 length(v #>> '{}') > 64
+                 OR ((v #>> '{}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                     AND (v #>> '{}') !~ '^[0-9a-f]{64}$'
+                     AND ((v #>> '{}') ~ '@'
+                          OR length(regexp_replace(v #>> '{}', '[^0-9]', '', 'g')) >= 8))))
+     )
+$$;
+
+-- NOT VALID: linhas antigas (append-only, não podem ser corrigidas) ficam como estão; toda linha
+-- nova passa pela regra.
+ALTER TABLE audit_log
+  ADD CONSTRAINT audit_log_metadata_contract_check CHECK (audit_metadata_ok(metadata)) NOT VALID;
+
+-- Toda linha nova é encadeada (a trigger garante; isto é a segunda barreira). NOT VALID pelas antigas.
+ALTER TABLE audit_log
+  ADD CONSTRAINT audit_log_chained_check CHECK (seq IS NOT NULL) NOT VALID;
