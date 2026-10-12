@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, customType, foreignKey, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -42,4 +42,52 @@ export const auditLog = pgTable('audit_log', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const schema = { tenants, patients, auditLog };
+/** Ciclo de vida das chaves (migração 0004). Mesmos valores do CHECK no banco. */
+export const KEY_STATUSES = ['active', 'retired', 'destroying', 'destroyed'] as const;
+export type KeyStatus = (typeof KEY_STATUSES)[number];
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+
+/**
+ * Chave mestra (KEK) de cada clínica: só a referência (ARN no KMS), nunca material de chave.
+ * Sem DELETE para o runtime; UPDATE só em status/destroyed_at (migração 0004).
+ */
+export const tenantMasterKeys = pgTable('tenant_master_keys', {
+  id: text('id').primaryKey(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  status: text('status', { enum: KEY_STATUSES }).notNull().default('active'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  destroyedAt: timestamp('destroyed_at', { withTimezone: true }),
+});
+
+/**
+ * Chaves de dados (DEK) cifradas pela KEK da clínica. `wrappedKey` é NULL só quando `destroyed`.
+ * O acesso real passa por PgDataKeyStore (src/modules/crypto/data-key-store.ts).
+ */
+export const tenantDataKeys = pgTable(
+  'tenant_data_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    masterKeyId: text('master_key_id').notNull(),
+    wrappedKey: bytea('wrapped_key'),
+    status: text('status', { enum: KEY_STATUSES }).notNull().default('active'),
+    encryptCount: bigint('encrypt_count', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    retiredAt: timestamp('retired_at', { withTimezone: true }),
+    destroyedAt: timestamp('destroyed_at', { withTimezone: true }),
+  },
+  (t) => [
+    foreignKey({
+      name: 'tenant_data_keys_master_fk',
+      columns: [t.masterKeyId, t.tenantId],
+      foreignColumns: [tenantMasterKeys.id, tenantMasterKeys.tenantId],
+    }),
+  ],
+);
+
+export const schema = { tenants, patients, auditLog, tenantMasterKeys, tenantDataKeys };
