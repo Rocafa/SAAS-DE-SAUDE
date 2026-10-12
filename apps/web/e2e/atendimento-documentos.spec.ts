@@ -66,7 +66,7 @@ test.describe('Atendimento e prontuário', () => {
     await irPeloMenu(page, 'Pacientes');
     await page.getByRole('link', { name: /Pedro Santos/ }).click();
     await page.getByRole('link', { name: 'Abrir prontuário' }).click();
-    await expect(page.getByText(/Conteúdo fictício de demonstração/)).toBeVisible();
+    await expect(page.getByText(/Conteúdo fictício de demonstração/).first()).toBeVisible();
   });
 });
 

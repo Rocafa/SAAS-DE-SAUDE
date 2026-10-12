@@ -1,6 +1,9 @@
 import type {
   Agendamento,
   Anexo,
+  Conversa,
+  Guia,
+  NovaGuia,
   EventoLinhaTempo,
   ItemEspera,
   NovoPaciente,
@@ -68,6 +71,13 @@ export interface ApiClinica {
   salvarRascunho(agendamentoId: string, campos: Record<string, string>): Promise<Registro>;
   assinarRegistro(id: string): Promise<Registro>;
   adicionarAdendo(id: string, texto: string): Promise<Registro>;
+
+  registrarPagamento(agendamentoId: string, forma: Recibo['forma']): Promise<Recibo>;
+  removerRecibo(id: string): Promise<void>;
+  listarGuias(): Promise<Guia[]>;
+  criarGuia(dados: NovaGuia): Promise<Guia>;
+  removerGuia(id: string): Promise<void>;
+  listarConversas(): Promise<Conversa[]>;
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
   usuariosDemo(): Promise<Usuario[]>;
