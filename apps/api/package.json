@@ -23,7 +23,7 @@
     "@nestjs/platform-express": "^11.1.0",
     "@plataforma/shared": "workspace:*",
     "drizzle-orm": "^0.45.0",
-    "helmet": "8.1.0",
+    "helmet": "8.3.0",
     "ioredis": "^5.11.1",
     "postgres": "^3.4.9",
     "reflect-metadata": "^0.2.2",
