@@ -50,11 +50,13 @@ export interface FieldCipherOptions {
  * Todos os métodos recebem a transação do tenant (`withTenant`): o RLS limita as chaves à clínica.
  * A destruição recebe um `TxRunner`, porque precisa de duas transações (ver destroyTenantKeys).
  *
- * Ordem das travas na mesma transação: sempre `tenant_keys` (operações de chave) ANTES de
- * `audit_chain` (gravação em audit_log, migração 0005). As operações de chave já seguem essa ordem
- * (travam e depois auditam); quem precisar cifrar numa transação que já auditou deve provisionar
- * ou girar antes. Ordem trocada entre duas transações da mesma clínica vira deadlock, que o
- * Postgres detecta e desfaz uma delas.
+ * Ordem das travas da clínica, em qualquer transação: `audit_chain` (a do trigger de audit_log,
+ * migração 0005) → `tenant_keys` → linhas de tenant_data_keys. `store.lockTenant` toma as duas
+ * primeiras nessa ordem, e TODO caminho que grava linha de chave passa por ele antes — inclusive a
+ * soma do contador de uso dentro de `encrypt`. Assim "auditou e depois cifrou" numa transação e
+ * "girou a chave e auditou" em outra só esperam uma pela outra, sem deadlock (teste em
+ * test/crypto.rls.test.ts). Custo: a cada `usageFlushEvery` cifragens a transação segura a trava
+ * da trilha da clínica até o COMMIT, como já faz qualquer transação que audita.
  */
 export class FieldCipher<Tx> {
   private readonly cache: DataKeyCache;
@@ -209,6 +211,8 @@ export class FieldCipher<Tx> {
       return;
     }
     this.pendingUsage.delete(keyId);
+    // UPDATE trava a linha da DEK: entra na ordem global (ver comentário da classe).
+    await this.store.lockTenant(tx, tenantId);
     await this.store.addUsage(tx, tenantId, keyId, n);
   }
 

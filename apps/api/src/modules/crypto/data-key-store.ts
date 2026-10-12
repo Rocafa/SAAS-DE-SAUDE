@@ -64,6 +64,10 @@ function toRecord(row: Row): DataKeyRecord | 'destroyed' {
 
 export class PgDataKeyStore implements DataKeyStore<TenantTx> {
   async lockTenant(tx: TenantTx, tenantId: TenantId): Promise<void> {
+    // Ordem global das travas da clínica: audit_chain (mesma chave do trigger da migração 0005)
+    // ANTES de tenant_keys, e só depois as linhas de chave. Toda transação que trava linha de
+    // chave passa por aqui, então nenhuma combinação de "audita e cifra" vira deadlock.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`audit_chain:${tenantId}`}, 0))`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`tenant_keys:${tenantId}`}, 0))`);
   }
 

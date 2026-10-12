@@ -3,11 +3,12 @@
  * do runtime, corrida de provisionamento e crypto-shredding com cópia de backup.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import type { TenantId } from '@plataforma/shared';
+import { AuditAction, type TenantId, type UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { tenants } from '../src/db/schema';
+import { recordAudit } from '../src/modules/audit/audit-log';
 import { createDatabase, withTenant, type DatabaseHandle, type TenantTx } from '../src/db/tenant-transaction';
 import { FieldDecryptionError, KeyUnavailableError, TenantKeysDestroyedError } from '../src/modules/crypto/crypto-errors';
 import { DataKeyCache } from '../src/modules/crypto/data-key-cache';
@@ -250,5 +251,37 @@ describe('destruição em duas fases (B1 do revisor N1)', () => {
       ),
     );
     expect(msg).toMatch(/tenant_data_keys_master_fk|foreign key/);
+  });
+});
+
+describe('ordem das travas: trilha de auditoria (0005) × chaves (0004)', () => {
+  it('"auditou e depois cifrou" concorrendo com "girou a DEK" não vira deadlock', async () => {
+    const tenantC = randomUUID() as TenantId;
+    await novaClinica(tenantC);
+    await withTenant(h.db, tenantC, (tx) => cipher.provisionTenant(tx, tenantC, ATOR));
+    // Soma o contador a cada cifragem: o UPDATE da linha da DEK acontece já na primeira.
+    const cifraComContador = new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { usageFlushEvery: 1 });
+    const ctx = { tenantId: tenantC, userId: ATOR as UserId, roles: [] };
+
+    let auditou!: () => void;
+    const auditouPromise = new Promise<void>((resolve) => (auditou = resolve));
+    // A: grava na trilha (trava audit_chain), espera B entrar na disputa e então cifra.
+    const a = withTenant(h.db, tenantC, async (tx) => {
+      await recordAudit(tx, ctx, { action: AuditAction.Read, scope: 'teste.travas', metadata: {} });
+      auditou();
+      await new Promise((r) => setTimeout(r, 300));
+      return cifraComContador.encrypt(tx, ref(tenantC), TEXTO);
+    });
+    // B: gira a DEK (trava as chaves e audita). Na ordem antiga travava a linha da DEK e esperava a
+    // trilha, enquanto A segurava a trilha e esperava a linha: deadlock (40P01).
+    await auditouPromise;
+    const b = withTenant(h.db, tenantC, (tx) => cipher.rotateDataKey(tx, tenantC, ATOR));
+
+    const [ra, rb] = await Promise.allSettled([a, b]);
+    expect([ra.status, rb.status]).toEqual(['fulfilled', 'fulfilled']);
+    const cifrado = ra.status === 'fulfilled' ? ra.value : '';
+    await expect(
+      withTenant(h.db, tenantC, (tx) => cipher.decryptString(tx, ref(tenantC), cifrado)),
+    ).resolves.toBe(TEXTO);
   });
 });
