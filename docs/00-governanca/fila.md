@@ -28,5 +28,6 @@
 ## Feito
 | Item | Quem | Quando |
 |---|---|---|
+| Rodada 10 (sem CI): memo de recomendação da D4, kit de entrevistas (D1/D2), pacote para o advogado (D8) | Maestro @Rocafa | 13/10/2026 |
 | @Lopesloro no CODEOWNERS (#48) | @Rocafa | 12/10/2026 |
 | Relatório "o que falta" | @Rocafa | 12/10/2026 |
