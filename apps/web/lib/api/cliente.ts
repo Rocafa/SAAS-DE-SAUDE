@@ -1,6 +1,7 @@
 import type {
   Agendamento,
   Anexo,
+  PedidoTitular,
   Assinatura,
   DadosClinica,
   EventoAuditoria,
@@ -98,6 +99,13 @@ export interface ApiClinica {
   /** Exige o código do autenticador (MFA recente). */
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
   aprovarExportacao(id: string): Promise<PedidoExportacao>;
+
+  /** Portal do paciente. */
+  listarConsentimentos(pacienteId: string): Promise<Record<string, 'sim' | 'nao' | 'nao_respondido'>>;
+  alterarConsentimento(pacienteId: string, id: string, r: 'sim' | 'nao'): Promise<'sim' | 'nao' | 'nao_respondido'>;
+  voltarConsentimento(pacienteId: string, id: string, r: 'sim' | 'nao' | 'nao_respondido'): Promise<void>;
+  listarPedidosTitular(pacienteId: string): Promise<PedidoTitular[]>;
+  abrirPedidoTitular(pacienteId: string, tipo: PedidoTitular['tipo'], detalhe?: string): Promise<PedidoTitular>;
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
   usuariosDemo(): Promise<Usuario[]>;

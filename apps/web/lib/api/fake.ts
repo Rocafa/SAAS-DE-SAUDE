@@ -6,10 +6,12 @@ import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { fimDaJanela } from '../conta';
+import { prazoResposta, protocolo } from '../portal';
 import { ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   Agendamento,
   Anexo,
+  PedidoTitular,
   Assinatura,
   DadosClinica,
   EventoAuditoria,
@@ -267,6 +269,10 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     auditoria.unshift({ id: novoId('v'), quando: `${hojeIso} ${new Date().toTimeString().slice(0, 5)}`, quem: usuario.nome, acao });
   let assinatura: Assinatura = { plano: 'Clínica (até 5 profissionais)', valorMensal: 349, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 18)) };
   const exportacoes: PedidoExportacao[] = [];
+  const consentimentos: Record<string, Record<string, 'sim' | 'nao' | 'nao_respondido'>> = {
+    p01: { lembretes_whatsapp: 'sim', escriba_ia: 'nao_respondido', pesquisa: 'nao' },
+  };
+  const pedidosTitular: (PedidoTitular & { pacienteId: string })[] = [];
   const anexos: Anexo[] = vazio
     ? []
     : [
@@ -602,6 +608,37 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       p.downloadsRestantes = 3;
       registrar('Responsável técnico aprovou a exportação');
       return resposta(p);
+    },
+
+    listarConsentimentos: (pacienteId) =>
+      resposta({ lembretes_whatsapp: 'nao_respondido', escriba_ia: 'nao_respondido', pesquisa: 'nao_respondido', ...consentimentos[pacienteId] }),
+    async alterarConsentimento(pacienteId, id, r) {
+      const atual = { ...consentimentos[pacienteId] };
+      const anterior = atual[id] ?? 'nao_respondido';
+      consentimentos[pacienteId] = { ...atual, [id]: r };
+      return resposta(anterior);
+    },
+    async voltarConsentimento(pacienteId, id, r) {
+      consentimentos[pacienteId] = { ...consentimentos[pacienteId], [id]: r };
+      await resposta(null);
+    },
+    listarPedidosTitular: (pacienteId) =>
+      resposta(pedidosTitular.filter((p) => p.pacienteId === pacienteId).map(({ pacienteId: _p, ...resto }) => (void _p, resto))),
+    async abrirPedidoTitular(pacienteId, tipo, detalhe) {
+      if (tipo === 'corrigir' && !detalhe?.trim()) throw new Error('Escreva o que está errado e como deve ficar.');
+      const p: PedidoTitular & { pacienteId: string } = {
+        pacienteId,
+        protocolo: protocolo(hojeIso, pedidosTitular.length + 1),
+        tipo,
+        abertoEm: hojeIso,
+        prazo: prazoResposta(hojeIso),
+        situacao: 'aberto',
+        ...(detalhe?.trim() ? { detalhe: detalhe.trim() } : {}),
+      };
+      pedidosTitular.push(p);
+      const { pacienteId: _q, ...semId } = p;
+      void _q;
+      return resposta(semId);
     },
   };
 }
