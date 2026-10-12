@@ -197,11 +197,14 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
     expect(reviver).toMatch(/destruída não pode ser alterada/);
     // A destruição (e o provisionamento) ficaram na trilha de auditoria, com o ator.
     const eventos = await withTenant(h.db, tenantA, (tx) =>
-      tx.execute<{ scope: string; actor_id: string }>(
-        sql`select scope, actor_id from audit_log where scope like 'crypto.key.%' order by created_at`,
+      tx.execute<{ action: string; scope: string; actor_id: string }>(
+        sql`select action, scope, actor_id from audit_log where scope like 'crypto.key.%' order by created_at`,
       ),
     );
-    expect(eventos.map((e) => e.scope)).toContain('crypto.key.destroy');
+    // Ações próprias de chave (0006), não create/update genéricos.
+    const pares = eventos.map((e) => `${e.action}:${e.scope}`);
+    expect(pares).toContain('key_provision:crypto.key.provision');
+    expect(pares).toContain('key_destroy:crypto.key.destroy');
     expect(eventos.find((e) => e.scope === 'crypto.key.destroy')?.actor_id).toBe(ATOR);
     expect(await withTenant(h.db, tenantB, (tx) => cipher.decryptString(tx, ref(tenantB), valorB))).toBe(TEXTO);
   });
