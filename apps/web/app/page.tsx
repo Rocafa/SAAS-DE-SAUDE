@@ -1,11 +1,17 @@
+import Link from 'next/link';
+import { Botao } from '@/components/ui/botao';
+
 export default function HomePage() {
   return (
-    <main className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-16">
-      <h1 className="text-3xl font-semibold tracking-tight">Plataforma Saúde</h1>
-      <p className="text-slate-600">
+    <main className="mx-auto flex max-w-2xl flex-col gap-5 px-4 py-16">
+      <h1 className="text-[2rem] font-bold leading-tight">Plataforma Saúde</h1>
+      <p className="text-lg">
         Gestão para clínicas e consultórios: agenda, prontuário, financeiro e muito mais, com LGPD desde o desenho.
       </p>
-      <p className="text-sm text-slate-500">Ambiente em construção.</p>
+      <p className="text-texto-suave">Ambiente de demonstração, com pacientes fictícios.</p>
+      <Botao asChild tamanho="grande" className="self-start">
+        <Link href="/inicio">Abrir a demonstração</Link>
+      </Botao>
     </main>
   );
 }

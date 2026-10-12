@@ -89,7 +89,7 @@ banco é injetada por um **proxy TCP** entre a API e o Postgres real (mesmo comp
   defesa em profundidade não deveria precisar segurar. Correção: `patches/postgres@3.4.9.patch`
   (`pnpm.patchedDependencies`): guarda de socket nulo em `nextWrite`, reset do timer em `closed()`, e
   `begin()` rejeita queries do callback depois que a conexão da transação caiu. **Pendência:** reportar
-  upstream; ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar
+  upstream (rascunho pronto, com reprodução mínima: [bug-postgresjs-3.4.9.md](bug-postgresjs-3.4.9.md)); ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar
   `test:resiliencia` antes de remover o patch.
 
 ## 4. Backup e restauração
@@ -111,10 +111,11 @@ backup gerenciado (snapshot/PITR do RDS) — ver §6.
 `tests/carga/health.k6.js` (k6 1.8.1 fixado no workflow): smoke (1 VU, 15 s) + carga moderada
 (`ramping-arrival-rate` até 50 req/s, 1 min sustentado). Thresholds: `http_req_failed < 1%`,
 p95 < 300 ms por endpoint, `checks > 99%`. 50 req/s é ESTIMATIVA de ordem de grandeza para uma
-instância em pico, não medição de produção. A API sobe compilada (`node --import
-./tests/carga/resolver-ts.mjs apps/api/dist/main.js`): o resolver só existe porque `packages/shared` é
-TypeScript puro (importa `./x.js` apontando para `./x.ts`); a imagem de produção deve empacotar o shared
-compilado (pendência de build). Depois do k6 o job envia **SIGTERM real** e exige encerramento gracioso.
+instância em pico, não medição de produção. A API sobe compilada, exatamente como em produção
+(`node apps/api/dist/main.js`): o `turbo run build` compila antes o `packages/shared` para `dist/`.
+O `exports` do shared usa condições: `types` e `development` apontam para `src/` (typecheck e Vitest
+não precisam de build) e `default` aponta para `dist/` (Node em produção). A API é CommonJS e carrega
+o shared, que é ESM, por `require(esm)` (estável no Node ≥ 22.12; a imagem deve fixar Node 22 LTS). Depois do k6 o job envia **SIGTERM real** e exige encerramento gracioso.
 
 ## 6. O que AINDA não é coberto (só documentado)
 
