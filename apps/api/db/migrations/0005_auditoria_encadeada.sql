@@ -90,3 +90,39 @@ $$;
 CREATE TRIGGER audit_log_chain
   BEFORE INSERT ON audit_log
   FOR EACH ROW EXECUTE FUNCTION audit_log_chain();
+
+-- Contrato do metadata (ressalva R1 do Guardião no PR #37). A trilha é append-only, encadeada e NÃO
+-- cifrada: um dado pessoal gravado aqui ficaria para sempre, fora do alcance da criptografia de
+-- campo, e removê-lo quebraria a cadeia. Por isso o metadata só aceita identificadores, códigos e
+-- contagens: chaves curtas fora de uma lista de nomes de conteúdo; valores escalares; texto curto,
+-- sem "@" e sem sequência de 8+ dígitos (CPF, CNS, telefone) — exceto UUID e hash hex, que são
+-- referências. Números < 1e9. Vale no banco, para pegar também o INSERT que não passa pela API.
+-- Espelho na aplicação: src/modules/audit/audit-metadata.ts (mesmas regras, erro mais claro).
+CREATE FUNCTION audit_metadata_ok(m jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$
+  SELECT jsonb_typeof(m) = 'object'
+     AND length(m::text) <= 1024
+     AND (SELECT count(*) FROM jsonb_object_keys(m)) <= 16
+     AND NOT EXISTS (
+       SELECT 1 FROM jsonb_each(m) AS e(k, v)
+        WHERE k !~ '^[a-zA-Z][a-zA-Z0-9_]{0,39}$'
+           OR lower(k) = ANY (ARRAY['antes', 'depois', 'before', 'after', 'nome', 'name', 'cpf', 'cns', 'rg',
+                                    'email', 'telefone', 'phone', 'texto', 'text', 'conteudo', 'content',
+                                    'body', 'nota', 'note', 'observacao', 'diagnostico', 'anamnese', 'evolucao'])
+           OR jsonb_typeof(v) NOT IN ('string', 'number', 'boolean', 'null')
+           OR (jsonb_typeof(v) = 'number' AND abs((v #>> '{}')::numeric) >= 1000000000)
+           OR (jsonb_typeof(v) = 'string' AND (
+                 length(v #>> '{}') > 64
+                 OR ((v #>> '{}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                     AND (v #>> '{}') !~ '^[0-9a-f]{64}$'
+                     AND ((v #>> '{}') ~ '@'
+                          OR regexp_replace(v #>> '{}', '[[:space:]().-]', '', 'g') ~ '[0-9]{8}'))))
+     )
+$$;
+
+-- NOT VALID: linhas antigas (append-only, não podem ser corrigidas) ficam como estão; toda linha
+-- nova passa pela regra.
+ALTER TABLE audit_log
+  ADD CONSTRAINT audit_log_metadata_contract_check CHECK (audit_metadata_ok(metadata)) NOT VALID;

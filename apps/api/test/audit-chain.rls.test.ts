@@ -16,6 +16,8 @@ import { tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { auditChainHead, GENESIS_HASH, verifyAuditChain, type ChainAnchor } from '../src/modules/audit/audit-chain';
 import { recordAudit } from '../src/modules/audit/audit-log';
+import { AuditMetadataRejectedError, assertAuditMetadata } from '../src/modules/audit/audit-metadata';
+import { METADATA_ACEITO, METADATA_RECUSADO } from '../src/modules/audit/audit-metadata.cases';
 
 const url = process.env.DATABASE_URL;
 const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
@@ -197,5 +199,42 @@ describe('adulteração privilegiada é detectada', () => {
     await adulterar((tx) => tx`delete from audit_log where tenant_id = ${ctx.tenantId} and seq >= 4`);
     expect(await problemas(ctx)).toEqual([]); // limite documentado da cadeia sem âncora
     expect(await problemas(ctx, ancora)).toEqual(['truncated@5']);
+  });
+});
+
+describe('contrato do metadata (ressalva R1 do Guardião)', () => {
+  it('o banco recusa dado pessoal no metadata mesmo sem passar pela API', async () => {
+    const ctx = await novaClinica();
+    const msg = await errorText(
+      withTenant(h.db, ctx.tenantId, (tx) =>
+        tx.execute(sql`insert into audit_log (tenant_id, actor_id, action, scope, metadata)
+          values (${ctx.tenantId}, ${ctx.userId}, 'update', 'patients', '{"antes": "123.456.789-09"}'::jsonb)`),
+      ),
+    );
+    expect(msg).toMatch(/audit_log_metadata_contract_check/);
+    await expect(
+      withTenant(h.db, ctx.tenantId, (tx) =>
+        recordAudit(tx, ctx, { action: 'update', scope: 'patients', metadata: { x: 'fulano@exemplo.com' } }),
+      ),
+    ).rejects.toBeInstanceOf(AuditMetadataRejectedError);
+    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 0 });
+  });
+
+  it('regra do banco e regra da aplicação concordam em todos os casos', async () => {
+    const casos = [...METADATA_ACEITO, ...METADATA_RECUSADO];
+    const banco = await h.db.execute<{ ok: boolean }>(sql`
+      select audit_metadata_ok(c.m) as ok
+      from jsonb_array_elements(${JSON.stringify(casos)}::jsonb) with ordinality as c(m, i)
+      order by c.i`);
+    const app = casos.map((m) => {
+      try {
+        assertAuditMetadata(m);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(banco.map((r) => r.ok)).toEqual(app);
+    expect(app.filter(Boolean)).toHaveLength(METADATA_ACEITO.length);
   });
 });

@@ -57,6 +57,26 @@ Quem tem acesso privilegiado ao banco pode apagar as últimas linhas ou recalcul
 
 **Pendente (DevOps + Engenharia):** o job que publica as âncoras e roda a verificação periódica com alerta. Este PR entrega o mecanismo e a função de verificação.
 
+### O que a âncora não cobre
+
+Com âncora, detecta-se corte **até a âncora**: uma linha gravada depois da última âncora publicada e apagada antes da próxima passa sem alarme. Isso é inevitável no modelo, e a frequência de publicação é a janela de exposição. `out_of_order` só aparece quando as linhas chegam fora de ordem à função pura; pelo banco elas vêm ordenadas por `seq`, e a troca de posição aparece como `hash_mismatch`. Os dois casos têm teste.
+
+## 4a. Contrato do `metadata` (ressalva R1 do Guardião)
+
+A trilha é append-only, encadeada e **não cifrada**. Um dado pessoal que entre nela fica para sempre, fora do alcance da criptografia de campo, e removê-lo quebraria a cadeia. Por isso o `metadata` só aceita identificadores, códigos e contagens:
+
+| Regra | Limite |
+|---|---|
+| Objeto plano | Até 16 chaves e 1.024 caracteres de JSON |
+| Chave | `^[a-zA-Z][a-zA-Z0-9_]{0,39}$`, fora da lista de nomes de conteúdo (`antes`, `depois`, `nome`, `cpf`, `email`, `texto`, `diagnostico`, `evolucao`…) |
+| Valor | Só escalar (texto, número, booleano, nulo) |
+| Texto | Até 64 caracteres, sem `@` e sem 8+ dígitos seguidos (CPF, CNS, telefone), salvo UUID e hash hex, que são referências |
+| Número | Abaixo de 10⁹ |
+
+Vale **no banco** (`audit_metadata_ok` + `CHECK ... NOT VALID`, então pega também o INSERT que não passa pela API) e **na aplicação** (`assertAuditMetadata` em `recordAudit`, com erro que diz a regra e nunca o valor). Um teste confere que as duas regras concordam em todos os casos. Quando for indispensável registrar o que mudou, registre a **referência** (tabela, coluna, id da linha) e deixe o valor no campo cifrado (S5).
+
+Pendente: o contrato **por ação** (quais chaves cada `action`/`scope` pode ter), versionado, que depende do catálogo de ações do produto.
+
 ## 5. Linhas antigas
 
 Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-only impede reescrevê-las e o verificador as conta em `legacy`. Hoje só existem em ambientes de teste, porque não há produção.
@@ -67,4 +87,6 @@ Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-on
 |---|---|
 | `src/modules/audit/audit-chain.test.ts` (8) | Verificador puro: íntegra; adulterar; adulterar com hash recalculado; apagar; reordenar; trocar `seq`; corte do fim e reescrita contra âncora; gênese |
 | `test/audit-chain.rls.test.ts` (11, Postgres real) | Elos gerados pelo banco; **30 transações concorrentes** formam cadeia contínua; rollback sem buraco; cadeias independentes e isoladas por clínica; runtime não forja elos nem grava em outra clínica; adulteração **privilegiada** (dono sem RLS forçado e sem trigger) de metadados, ação, autor e data; apagar; reordenar; corte do fim pego pela âncora |
+| `src/modules/audit/audit-metadata.test.ts` (21) | Contrato do `metadata`: aceita os formatos em uso (contagem, exportação, id de chave) e recusa CPF, CNS, telefone, e-mail, texto longo, chave de conteúdo, valor aninhado e número grande; o erro não repete o valor |
+| `test/audit-chain.rls.test.ts`, contrato (2) | O banco recusa dado pessoal mesmo por SQL direto; as regras do banco e da aplicação concordam em todos os casos |
 | `test:backup-restore` | Restauração com `pg_dump`/`pg_restore` segue íntegra com a 0005 |
