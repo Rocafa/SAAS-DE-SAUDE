@@ -21,7 +21,8 @@ export interface LocalKeyProviderOptions {
 /**
  * Provedor de chave mestra LOCAL, só para desenvolvimento e teste. Imita o KMS: a DEK sai cifrada
  * (AES-256-GCM) pela chave mestra da clínica, com AAD amarrando chave mestra + clínica.
- * Destruir a chave mestra é imediato aqui (no KMS há janela de 7 a 30 dias).
+ * Destruir torna a chave inutilizável na hora e pode ser cancelado, como na janela do KMS; o
+ * material só some com o processo (é provedor de dev, não guarda nada em disco).
  */
 export class LocalKeyProvider implements KeyProvider {
   private readonly masters = new Map<string, Buffer>();
@@ -83,10 +84,14 @@ export class LocalKeyProvider implements KeyProvider {
     }
   }
 
+  /** Como no KMS: a chave fica inutilizável na hora, mas o agendamento pode ser cancelado. */
   destroyMasterKey(masterKeyId: string): Promise<void> {
-    this.masters.get(masterKeyId)?.fill(0);
-    this.masters.delete(masterKeyId);
     this.destroyed.add(masterKeyId);
+    return Promise.resolve();
+  }
+
+  cancelMasterKeyDestruction(masterKeyId: string): Promise<void> {
+    this.destroyed.delete(masterKeyId);
     return Promise.resolve();
   }
 

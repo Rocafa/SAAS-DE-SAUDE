@@ -12,7 +12,8 @@
 | `LocalKeyProvider` | `local-key-provider.ts` | Dev e teste. Imita o KMS com AES-256-GCM; **recusa `NODE_ENV=production`** |
 | `FieldCipher` | `field-cipher.ts` | Cifra e decifra campos, provisiona, gira DEK e KEK, destrói as chaves da clínica |
 | Formato | `field-format.ts` | `v1:<keyId>:<iv>:<tag>:<dado>` e AAD |
-| Cache | `data-key-cache.ts` | DEK em claro na memória por 60 s (padrão), até 1.000 entradas |
+| Cache | `data-key-cache.ts` | DEK em claro na memória por 60 s (padrão), até 1.000 entradas. Só poupa a chamada ao KMS: o status da chave vem sempre do banco |
+| Auditoria de chave | `key-audit.ts` | Provisionar, girar DEK, girar KEK e destruir gravam evento em `audit_log` na mesma transação, com o ator |
 | Persistência | `data-key-store.ts` + 0004 | `tenant_master_keys` e `tenant_data_keys`, com RLS FORCE |
 
 O KMS entra por uma interface (`KmsApi`) com os nomes do SDK v3. **A dependência `@aws-sdk/client-kms` ainda não foi adicionada**: ela entra junto com a infraestrutura (Portão A do relatório da rodada 7), no `package.json` da API.
@@ -49,11 +50,14 @@ Não há janela de indisponibilidade: leitores que já têm a DEK antiga em cach
 
 ## 4. Destruição (crypto-shredding) — resposta à §4.1 de retenção
 
-`destroyTenantKeys` faz, numa transação:
+`destroyTenantKeys(tx, clínica, ator)` faz, numa transação:
 1. marca todas as DEKs da clínica como `destroyed` e apaga `wrapped_key`;
 2. marca **todas** as chaves mestras da clínica (ativa e aposentadas) como `destroyed`;
-3. zera o cache local;
-4. chama `ScheduleKeyDeletion` no KMS para cada chave mestra, com 7 dias de espera. Se o KMS falhar, a transação desfaz.
+3. grava o evento `crypto.key.destroy` com o ator. Se a gravação falhar, nada chega ao KMS;
+4. zera o cache local;
+5. chama `ScheduleKeyDeletion` no KMS para cada chave mestra, com 7 dias de espera.
+
+**Tudo ou nada.** Se o KMS falhar na 2ª chave depois de ter agendado a 1ª, o código **cancela** os agendamentos já feitos (`CancelKeyDeletion` + `EnableKey`, porque o cancelamento deixa a chave desabilitada) antes de a transação desfazer. Sem isso, o banco diria "ativa" para uma KEK já destruída, e os dados sob ela estariam perdidos, o que esbarra na guarda de 20 anos do prontuário (Lei 13.787/2018). Se até o cancelamento falhar, o erro é `KeyDestructionIncompleteError`, que exige intervenção humana dentro da janela de 7 dias.
 
 FATO (AWS, [Delete an AWS KMS key](https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html), consultado em 11/10/2026): a espera vai de 7 a 30 dias e pode durar até 24 h a mais. Durante a espera a chave não faz nenhuma operação criptográfica e a destruição pode ser cancelada. Depois de apagada, "you can no longer decrypt the data that was encrypted under that KMS key".
 
@@ -61,8 +65,12 @@ Consequência: o backup imutável (Object Lock) guarda as DEKs cifradas, mas sem
 
 Limites (honestos):
 - só alcança o que estiver **cifrado com `FieldCipher`**. Campos C2/C3 em claro (nome de exibição, por exemplo) continuam nos backups até expirarem. A opção B da §4.1 (declarar o prazo) segue valendo para eles;
-- em cada instância da API, a DEK já em cache vale até o TTL (60 s). A própria AWS avisa que agendar a exclusão "might not immediately affect data keys" já abertas;
+- a destruição vale **na hora em todas as instâncias da API**: `decrypt` lê o status da chave no banco antes de usar o cache, então uma DEK em cache numa instância que não fez a destruição também é recusada. O custo é uma consulta por chave primária a cada decifragem. A própria AWS avisa que agendar a exclusão "might not immediately affect data keys" já abertas, e é por isso que a checagem está no banco e não no KMS;
 - a destruição é por clínica, não por paciente. O descarte por paciente ou registro ([requisitos §82](../03-seguranca-lgpd/requisitos-tecnicos-seguranca.md)) pede DEK por paciente e fica para depois.
+
+## 4a. Limite de uso da DEK
+
+Com IV aleatório de 96 bits, o NIST SP 800-38D limita a 2³² cifragens por chave. Cada DEK tem `encrypt_count` no banco. A aplicação soma em lotes de 1.024 por instância, para não travar a linha a cada campo, e **gira a DEK sozinha em 2³⁰** (margem de 4x). A rotação automática é auditada com o ator do sistema (uuid zero). FATO: contagem aproximada; em caso de queda, perde-se no máximo 1.023 cifragens por instância, o que é irrelevante diante da margem.
 
 ## 5. Nenhuma chave em log ou erro
 
@@ -70,6 +78,8 @@ Limites (honestos):
 - `destroy()` zera os bytes e qualquer uso depois disso lança erro: **nunca cifra com chave zerada**.
 - Todos os erros têm mensagem fixa e não encadeiam `cause`. Erro do SDK do KMS (que traz ARN e id de requisição) vira `KeyUnavailableError`.
 - O banco guarda só a DEK cifrada e a referência da chave mestra, que não é segredo.
+- Chave destruída e chave inexistente lançam classes diferentes (úteis no log do servidor), mas viram **a mesma resposta HTTP** (500 genérico do `AllExceptionsFilter`): não dá para descobrir de fora se uma clínica foi eliminada ou nunca existiu. O teste confere.
+- `decryptString` devolve `string`, que o JavaScript não deixa zerar: o texto fica no heap até o GC. Regra: **conteúdo decifrado não vai para cache de aplicação, de resposta nem de template**. Prefira `decrypt` (Buffer) quando o valor for repassado adiante.
 
 ## 6. Banco (0004)
 
@@ -94,6 +104,6 @@ Pendente para o DevOps (Portão A): conferir a cota de chaves KMS por conta e re
 
 | Suíte | O que prova |
 |---|---|
-| `src/modules/crypto/field-cipher.test.ts` (25) | Ida e volta; formato; IV novo; outra clínica não decifra; adulteração de IV, tag, dado e keyId detectada; mover para outra tabela, coluna ou linha detectado; rotação de DEK e KEK; destruição deixa banco e backups ilegíveis; nada vaza em log ou erro; TTL do cache |
+| `src/modules/crypto/field-cipher.test.ts` (32) | Ida e volta; formato; IV novo; outra clínica não decifra; adulteração de IV, tag, dado e keyId detectada; mover para outra tabela, coluna ou linha detectado; rotação de DEK e KEK; destruição deixa banco e backups ilegíveis; nada vaza em log ou erro; TTL do cache; ressalvas do Guardião: destruição vale em outra instância com cache quente, compensação quando o KMS falha no meio (com teste de mutação), rotação por limite de uso, eventos de chave com ator, mesma resposta HTTP para destruída e inexistente |
 | `src/modules/crypto/key-providers.test.ts` | Provedor local (recusa produção, DEK de A não abre como B, destruição) e KMS contra um KMS falso (contexto, janela de 7 dias, erro sem ARN) |
 | `test/crypto.rls.test.ts` (Postgres real, 7) | RLS FORCE nas tabelas de chave; B não vê nem grava chave de A; o runtime não apaga nem reativa chave; provisionamento concorrente gera uma só chave; crypto-shredding com cópia de backup |

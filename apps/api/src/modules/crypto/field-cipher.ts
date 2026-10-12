@@ -1,10 +1,40 @@
 import type { TenantId } from '@plataforma/shared';
-import { FieldDecryptionError, KeyUnavailableError, TenantKeyMissingError } from './crypto-errors';
+import {
+  FieldDecryptionError,
+  KeyDestructionIncompleteError,
+  KeyUnavailableError,
+  TenantKeyMissingError,
+} from './crypto-errors';
 import type { DataKey } from './data-key';
 import { DataKeyCache } from './data-key-cache';
 import type { DataKeyRecord, DataKeyStore } from './data-key-store';
 import { assertFieldRef, openField, parseField, sealField, type FieldRef } from './field-format';
 import type { KeyProvider } from './key-provider';
+
+export type KeyEventKind = 'provision' | 'rotate_dek' | 'rotate_kek' | 'destroy';
+
+/** Operação de chave a registrar na trilha de auditoria (quem, o quê, qual chave). */
+export interface KeyEvent {
+  readonly tenantId: TenantId;
+  readonly kind: KeyEventKind;
+  /** Usuário que pediu; null = rotina do sistema (ex.: rotação por limite de uso). */
+  readonly actorId: string | null;
+  readonly keyId?: string;
+}
+
+/** Grava o evento NA MESMA transação: sem evento registrado, a operação de chave não acontece. */
+export type KeyAuditor<Tx> = (tx: Tx, event: KeyEvent) => Promise<void>;
+
+/** Gira a DEK ao chegar aqui. O NIST SP 800-38D limita IV aleatório a 2^32 usos por chave. */
+export const DEK_ROTATE_AFTER = 2 ** 30;
+/** Cifragens acumuladas em memória antes de somar no banco (contagem aproximada, sem travar a linha a cada campo). */
+export const DEK_USAGE_FLUSH_EVERY = 1024;
+
+export interface FieldCipherOptions {
+  readonly cache?: DataKeyCache;
+  readonly rotateAfter?: number;
+  readonly usageFlushEvery?: number;
+}
 
 /**
  * Criptografia de campo em envelope, por clínica (S5). Ver docs/04-arquitetura/criptografia-de-campo.md.
@@ -17,14 +47,25 @@ import type { KeyProvider } from './key-provider';
  * Todos os métodos recebem a transação do tenant (`withTenant`): o RLS limita as chaves à clínica.
  */
 export class FieldCipher<Tx> {
+  private readonly cache: DataKeyCache;
+  private readonly rotateAfter: number;
+  private readonly usageFlushEvery: number;
+  /** Cifragens ainda não somadas no banco, por DEK. */
+  private readonly pendingUsage = new Map<string, number>();
+
   constructor(
     private readonly provider: KeyProvider,
     private readonly store: DataKeyStore<Tx>,
-    private readonly cache: DataKeyCache = new DataKeyCache(),
-  ) {}
+    private readonly audit: KeyAuditor<Tx>,
+    options: FieldCipherOptions = {},
+  ) {
+    this.cache = options.cache ?? new DataKeyCache();
+    this.rotateAfter = options.rotateAfter ?? DEK_ROTATE_AFTER;
+    this.usageFlushEvery = options.usageFlushEvery ?? DEK_USAGE_FLUSH_EVERY;
+  }
 
   /** Garante chave mestra e DEK ativas para a clínica. Idempotente; devolve o id da DEK ativa. */
-  async provisionTenant(tx: Tx, tenantId: TenantId): Promise<string> {
+  async provisionTenant(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<string> {
     await this.store.lockTenant(tx, tenantId);
     const active = await this.store.findActive(tx, tenantId);
     if (active) return active.id;
@@ -33,31 +74,39 @@ export class FieldCipher<Tx> {
       master = await this.provider.createMasterKey(tenantId);
       await this.store.insertMaster(tx, tenantId, master);
     }
-    return this.createDataKey(tx, tenantId, master);
+    const id = await this.createDataKey(tx, tenantId, master);
+    await this.audit(tx, { tenantId, kind: 'provision', actorId, keyId: id });
+    return id;
   }
 
   async encrypt(tx: Tx, ref: FieldRef, plaintext: string | Uint8Array): Promise<string> {
     assertFieldRef(ref);
-    const active = await this.store.findActive(tx, ref.tenantId);
+    let active = await this.store.findActive(tx, ref.tenantId);
     // Falha fechada: sem chave, o campo não é gravado (nunca em claro).
     if (!active) throw new TenantKeyMissingError();
+    if (this.usage(active) >= this.rotateAfter) {
+      active = await this.rotateIfExhausted(tx, ref.tenantId);
+    }
     const key = await this.dataKey(ref.tenantId, active);
     const bytes = typeof plaintext === 'string' ? Buffer.from(plaintext, 'utf8') : plaintext;
-    return sealField(key, active.id, ref, bytes);
+    const sealed = sealField(key, active.id, ref, bytes);
+    await this.countUsage(tx, ref.tenantId, active.id);
+    return sealed;
   }
 
   async decrypt(tx: Tx, ref: FieldRef, value: string): Promise<Buffer> {
     assertFieldRef(ref);
     const parsed = parseField(value);
-    let key = this.cache.get(ref.tenantId, parsed.keyId);
-    if (!key) {
-      const record = await this.store.findById(tx, ref.tenantId, parsed.keyId);
-      if (record === 'destroyed') throw new KeyUnavailableError();
-      // Chave de outra clínica (invisível pelo RLS) ou inexistente.
-      if (!record) throw new FieldDecryptionError();
-      key = await this.dataKey(ref.tenantId, record);
+    // O status vem SEMPRE do banco, mesmo com a DEK em cache: destruição feita por outra instância
+    // vale na hora aqui também (o cache só poupa a chamada ao KMS).
+    const record = await this.store.findById(tx, ref.tenantId, parsed.keyId);
+    if (record === 'destroyed') {
+      this.cache.invalidateTenant(ref.tenantId);
+      throw new KeyUnavailableError();
     }
-    return openField(key, ref, parsed);
+    // Chave de outra clínica (invisível pelo RLS) ou inexistente.
+    if (!record) throw new FieldDecryptionError();
+    return openField(await this.dataKey(ref.tenantId, record), ref, parsed);
   }
 
   async decryptString(tx: Tx, ref: FieldRef, value: string): Promise<string> {
@@ -65,12 +114,11 @@ export class FieldCipher<Tx> {
   }
 
   /** Gira a DEK: a atual vira `retired` (continua decifrando) e uma nova passa a cifrar. */
-  async rotateDataKey(tx: Tx, tenantId: TenantId): Promise<string> {
+  async rotateDataKey(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<string> {
     await this.store.lockTenant(tx, tenantId);
     const active = await this.store.findActive(tx, tenantId);
     if (!active) throw new TenantKeyMissingError();
-    await this.store.retire(tx, tenantId, active.id);
-    return this.createDataKey(tx, tenantId, active.masterKeyId);
+    return this.replaceDataKey(tx, tenantId, active, actorId);
   }
 
   /** true quando o valor foi cifrado com uma DEK que não é mais a ativa (candidato a recifrar). */
@@ -95,7 +143,7 @@ export class FieldCipher<Tx> {
    * Re-cifra as DEKs sob a KEK nova sem tocar nos dados. A KEK antiga fica `retired`, não é
    * destruída: backups anteriores ainda dependem dela até expirarem.
    */
-  async rotateMasterKey(tx: Tx, tenantId: TenantId): Promise<string> {
+  async rotateMasterKey(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<string> {
     await this.store.lockTenant(tx, tenantId);
     const old = await this.store.findActiveMaster(tx, tenantId);
     if (!old) throw new TenantKeyMissingError();
@@ -106,20 +154,86 @@ export class FieldCipher<Tx> {
       const rewrapped = await this.provider.rewrapDataKey(record, next, tenantId);
       await this.store.updateWrapped(tx, tenantId, record.id, rewrapped);
     }
+    await this.audit(tx, { tenantId, kind: 'rotate_kek', actorId });
     return next;
   }
 
   /**
-   * Crypto-shredding da clínica: marca todas as chaves como destruídas, zera o cache e destrói as
-   * chaves mestras no provedor (KMS: agenda com a janela mínima de 7 dias). Depois disso nenhum campo
-   * da clínica abre — nem no banco, nem em snapshot, nem em backup imutável.
-   * Ordem: banco primeiro; se o provedor falhar, a transação desfaz e nada fica pela metade.
+   * Crypto-shredding da clínica: marca todas as chaves como destruídas, registra o evento, zera o
+   * cache e agenda a destruição de TODAS as chaves mestras no provedor (KMS: janela de 7 dias).
+   * Depois disso nenhum campo da clínica abre — nem no banco, nem em snapshot, nem em backup.
+   *
+   * Tudo ou nada: se o provedor falhar no meio, os agendamentos já feitos são CANCELADOS antes de a
+   * transação desfazer — senão o banco diria "chaves ativas" com uma KEK já destruída, e os dados
+   * sob ela estariam perdidos. Se até o cancelamento falhar, o erro é KeyDestructionIncompleteError
+   * (exige intervenção dentro da janela de 7 dias).
    */
-  async destroyTenantKeys(tx: Tx, tenantId: TenantId): Promise<void> {
+  async destroyTenantKeys(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<void> {
     await this.store.lockTenant(tx, tenantId);
     const masters = await this.store.destroyAll(tx, tenantId);
+    await this.audit(tx, { tenantId, kind: 'destroy', actorId });
     this.cache.invalidateTenant(tenantId);
-    for (const master of masters) await this.provider.destroyMasterKey(master, tenantId);
+    const scheduled: string[] = [];
+    try {
+      for (const master of masters) {
+        await this.provider.destroyMasterKey(master, tenantId);
+        scheduled.push(master);
+      }
+    } catch (err) {
+      let compensated = true;
+      for (const master of scheduled) {
+        try {
+          await this.provider.cancelMasterKeyDestruction(master, tenantId);
+        } catch {
+          compensated = false;
+        }
+      }
+      if (!compensated) throw new KeyDestructionIncompleteError();
+      throw err;
+    }
+  }
+
+  private usage(record: DataKeyRecord): number {
+    return record.encryptCount + (this.pendingUsage.get(record.id) ?? 0);
+  }
+
+  private async countUsage(tx: Tx, tenantId: TenantId, keyId: string): Promise<void> {
+    const n = (this.pendingUsage.get(keyId) ?? 0) + 1;
+    if (n < this.usageFlushEvery) {
+      this.pendingUsage.set(keyId, n);
+      return;
+    }
+    this.pendingUsage.delete(keyId);
+    await this.store.addUsage(tx, tenantId, keyId, n);
+  }
+
+  /** Rotação por limite de uso, sob a trava da clínica (outra instância pode ter girado antes). */
+  private async rotateIfExhausted(tx: Tx, tenantId: TenantId): Promise<DataKeyRecord> {
+    await this.store.lockTenant(tx, tenantId);
+    const active = await this.store.findActive(tx, tenantId);
+    if (!active) throw new TenantKeyMissingError();
+    if (this.usage(active) < this.rotateAfter) return active;
+    const pending = this.pendingUsage.get(active.id);
+    if (pending) {
+      this.pendingUsage.delete(active.id);
+      await this.store.addUsage(tx, tenantId, active.id, pending);
+    }
+    await this.replaceDataKey(tx, tenantId, active, null);
+    const next = await this.store.findActive(tx, tenantId);
+    if (!next) throw new TenantKeyMissingError();
+    return next;
+  }
+
+  private async replaceDataKey(
+    tx: Tx,
+    tenantId: TenantId,
+    active: DataKeyRecord,
+    actorId: string | null,
+  ): Promise<string> {
+    await this.store.retire(tx, tenantId, active.id);
+    const id = await this.createDataKey(tx, tenantId, active.masterKeyId);
+    await this.audit(tx, { tenantId, kind: 'rotate_dek', actorId, keyId: id });
+    return id;
   }
 
   private async createDataKey(tx: Tx, tenantId: TenantId, masterKeyId: string): Promise<string> {

@@ -11,7 +11,9 @@ import {
 } from './crypto-errors';
 import { DataKey } from './data-key';
 import { DataKeyCache } from './data-key-cache';
-import { FieldCipher } from './field-cipher';
+import { FieldCipher, type KeyAuditor, type KeyEvent } from './field-cipher';
+import { AllExceptionsFilter } from '../../lifecycle/all-exceptions.filter';
+import { KeyDestructionIncompleteError } from './crypto-errors';
 import { isEncryptedField, parseField, type FieldRef } from './field-format';
 import { LocalKeyProvider } from './local-key-provider';
 import { MemoryDataKeyStore } from './memory-data-key-store';
@@ -27,17 +29,24 @@ const ref = (tenantId: TenantId, over: Partial<FieldRef> = {}): FieldRef => ({
   ...over,
 });
 const TEXTO = 'Paciente fictício relata cefaleia há 3 dias. Conduta: observação.';
+const ATOR = randomUUID();
 
 let provider: LocalKeyProvider;
 let store: MemoryDataKeyStore;
 let cipher: FieldCipher<unknown>;
+let eventos: KeyEvent[];
+const auditar: KeyAuditor<unknown> = (_tx, e) => {
+  eventos.push(e);
+  return Promise.resolve();
+};
 
 beforeEach(async () => {
+  eventos = [];
   provider = new LocalKeyProvider({ nodeEnv: 'test' });
   store = new MemoryDataKeyStore();
-  cipher = new FieldCipher(provider, store);
-  await cipher.provisionTenant(null, tenantA);
-  await cipher.provisionTenant(null, tenantB);
+  cipher = new FieldCipher(provider, store, auditar);
+  await cipher.provisionTenant(null, tenantA, ATOR);
+  await cipher.provisionTenant(null, tenantB, ATOR);
 });
 
 /** Troca um caractere base64url do trecho `part` (1=keyId … 4=dado) por outro válido. */
@@ -91,7 +100,7 @@ describe('formato e ida e volta', () => {
   });
 
   it('provisionar é idempotente: uma chave mestra e uma DEK ativa por clínica', async () => {
-    await cipher.provisionTenant(null, tenantA);
+    await cipher.provisionTenant(null, tenantA, ATOR);
     expect(store.masterKeys.filter((m) => m.tenantId === tenantA)).toHaveLength(1);
     expect(store.dataKeys.filter((k) => k.tenantId === tenantA && k.status === 'active')).toHaveLength(1);
     const masterA = store.masterKeys.find((m) => m.tenantId === tenantA)?.id;
@@ -116,7 +125,7 @@ describe('isolamento: outra clínica não decifra', () => {
     const dekA = store.dataKeys.find((k) => k.tenantId === tenantA);
     if (!dekA?.wrapped) throw new Error('setup');
     store.dataKeys.push({ ...dekA, tenantId: tenantB, wrapped: Buffer.from(dekA.wrapped) });
-    const fresh = new FieldCipher(provider, store);
+    const fresh = new FieldCipher(provider, store, auditar);
     const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
     await expect(fresh.decrypt(null, ref(tenantB), v)).rejects.toBeInstanceOf(KeyUnavailableError);
   });
@@ -157,7 +166,7 @@ describe('adulteração é detectada (AES-GCM + AAD)', () => {
 describe('rotação sem downtime', () => {
   it('DEK nova cifra; valores antigos continuam abrindo; recifrar atualiza', async () => {
     const antigo = await cipher.encrypt(null, ref(tenantA), TEXTO);
-    const novaId = await cipher.rotateDataKey(null, tenantA);
+    const novaId = await cipher.rotateDataKey(null, tenantA, ATOR);
     const novo = await cipher.encrypt(null, ref(tenantA), TEXTO);
     expect(parseField(novo).keyId).toBe(novaId);
     expect(parseField(antigo).keyId).not.toBe(novaId);
@@ -178,11 +187,11 @@ describe('rotação sem downtime', () => {
   it('girar a chave mestra re-cifra as DEKs sem tocar nos dados', async () => {
     const antes = await cipher.encrypt(null, ref(tenantA), TEXTO);
     const velha = store.masterKeys.find((m) => m.tenantId === tenantA)?.id;
-    const nova = await cipher.rotateMasterKey(null, tenantA);
+    const nova = await cipher.rotateMasterKey(null, tenantA, ATOR);
     expect(nova).not.toBe(velha);
     expect(store.dataKeys.filter((k) => k.tenantId === tenantA).every((k) => k.masterKeyId === nova)).toBe(true);
     expect(store.masterKeys.find((m) => m.id === velha)?.status).toBe('retired');
-    const semCache = new FieldCipher(provider, store);
+    const semCache = new FieldCipher(provider, store, auditar);
     expect(await semCache.decryptString(null, ref(tenantA), antes)).toBe(TEXTO);
   });
 });
@@ -192,14 +201,14 @@ describe('destruir a chave da clínica deixa tudo ilegível (retencao-e-descarte
     const v1 = await cipher.encrypt(null, ref(tenantA), TEXTO);
     const backupAntigo = store.snapshot(); // backup feito com a chave mestra original
     // Sanidade: o backup abre antes da destruição.
-    expect(await new FieldCipher(provider, backupAntigo).decryptString(null, ref(tenantA), v1)).toBe(TEXTO);
-    await cipher.rotateMasterKey(null, tenantA);
-    await cipher.rotateDataKey(null, tenantA);
+    expect(await new FieldCipher(provider, backupAntigo, auditar).decryptString(null, ref(tenantA), v1)).toBe(TEXTO);
+    await cipher.rotateMasterKey(null, tenantA, ATOR);
+    await cipher.rotateDataKey(null, tenantA, ATOR);
     const v2 = await cipher.encrypt(null, ref(tenantA), 'segundo registro fictício');
     const backupRecente = store.snapshot();
     const vB = await cipher.encrypt(null, ref(tenantB), TEXTO);
 
-    await cipher.destroyTenantKeys(null, tenantA);
+    await cipher.destroyTenantKeys(null, tenantA, ATOR);
 
     // Banco atual (o cache também foi zerado).
     for (const v of [v1, v2]) {
@@ -208,11 +217,11 @@ describe('destruir a chave da clínica deixa tudo ilegível (retencao-e-descarte
     expect(store.dataKeys.filter((k) => k.tenantId === tenantA).every((k) => k.wrapped === null)).toBe(true);
     // Backups restaurados: as DEKs cifradas estão lá, mas as chaves mestras (as duas) não existem mais.
     for (const backup of [backupAntigo, backupRecente]) {
-      const restaurado = new FieldCipher(provider, backup, new DataKeyCache());
+      const restaurado = new FieldCipher(provider, backup, auditar, { cache: new DataKeyCache() });
       await expect(restaurado.decrypt(null, ref(tenantA), v1)).rejects.toBeInstanceOf(KeyUnavailableError);
     }
     await expect(
-      new FieldCipher(provider, backupRecente).decrypt(null, ref(tenantA), v2),
+      new FieldCipher(provider, backupRecente, auditar).decrypt(null, ref(tenantA), v2),
     ).rejects.toBeInstanceOf(FieldCryptoError);
     // Outras clínicas não são afetadas.
     expect(await cipher.decryptString(null, ref(tenantB), vB)).toBe(TEXTO);
@@ -256,7 +265,7 @@ describe('nenhuma chave em log ou erro', () => {
     ]) {
       errs.push(await p.catch((e: unknown) => e));
     }
-    await cipher.destroyTenantKeys(null, tenantA);
+    await cipher.destroyTenantKeys(null, tenantA, ATOR);
     errs.push(await cipher.decrypt(null, ref(tenantA), v).catch((e: unknown) => e));
     for (const e of errs) {
       expect(e).toBeInstanceOf(FieldCryptoError);
@@ -274,7 +283,7 @@ describe('cache de DEK com TTL curto', () => {
   it('reaproveita a DEK dentro do TTL e volta ao provedor depois', async () => {
     let agora = 1_000;
     const cache = new DataKeyCache({ ttlMs: 50, now: () => agora });
-    const c = new FieldCipher(provider, store, cache);
+    const c = new FieldCipher(provider, store, auditar, { cache });
     const unwrap = vi.spyOn(provider, 'unwrapDataKey');
     const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
     await c.decrypt(null, ref(tenantA), v);
@@ -289,5 +298,110 @@ describe('cache de DEK com TTL curto', () => {
     const cache = new DataKeyCache({ maxEntries: 2 });
     for (let i = 0; i < 5; i++) cache.set(tenantA, randomUUID(), DataKey.fromBytes(Buffer.alloc(32, i)));
     expect(cache.size).toBe(2);
+  });
+});
+
+describe('ressalvas do Guardião (PR #35)', () => {
+  it('R1: destruição feita por outra instância vale na hora, mesmo com a DEK em cache', async () => {
+    const instancia2 = new FieldCipher(provider, store, auditar);
+    const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    expect(await instancia2.decryptString(null, ref(tenantA), v)).toBe(TEXTO); // DEK no cache da instância 2
+    await cipher.destroyTenantKeys(null, tenantA, ATOR); // a instância 1 destrói
+    await expect(instancia2.decrypt(null, ref(tenantA), v)).rejects.toBeInstanceOf(KeyUnavailableError);
+  });
+
+  it('R2: se o provedor falhar no meio, os agendamentos já feitos são cancelados e nada se perde', async () => {
+    const v1 = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    const backupComKekAntiga = store.snapshot(); // depende da 1ª chave mestra
+    await cipher.rotateMasterKey(null, tenantA, ATOR); // agora A tem duas chaves mestras
+    const antes = store.snapshot();
+    const destroy = provider.destroyMasterKey.bind(provider);
+    const destruidas: string[] = [];
+    vi.spyOn(provider, 'destroyMasterKey').mockImplementation(async (id: string) => {
+      if (destruidas.length === 1) throw new KeyUnavailableError(); // falha na 2ª
+      destruidas.push(id);
+      await destroy(id);
+    });
+    await expect(cipher.destroyTenantKeys(null, tenantA, ATOR)).rejects.toBeInstanceOf(KeyUnavailableError);
+    expect(destruidas).toHaveLength(1);
+    // Simula o rollback da transação: o banco volta ao estado anterior. As DUAS chaves mestras
+    // precisam abrir — inclusive a que chegou a ser agendada para destruição.
+    for (const banco of [antes, backupComKekAntiga]) {
+      const restaurado = new FieldCipher(provider, banco, auditar, { cache: new DataKeyCache() });
+      expect(await restaurado.decryptString(null, ref(tenantA), v1)).toBe(TEXTO);
+    }
+  });
+
+  it('R2: se até o cancelamento falhar, o erro exige intervenção', async () => {
+    await cipher.rotateMasterKey(null, tenantA, ATOR);
+    const destroy = provider.destroyMasterKey.bind(provider);
+    let chamadas = 0;
+    vi.spyOn(provider, 'destroyMasterKey').mockImplementation(async (id: string) => {
+      if (++chamadas === 2) throw new KeyUnavailableError();
+      await destroy(id);
+    });
+    vi.spyOn(provider, 'cancelMasterKeyDestruction').mockRejectedValue(new KeyUnavailableError());
+    await expect(cipher.destroyTenantKeys(null, tenantA, ATOR)).rejects.toBeInstanceOf(KeyDestructionIncompleteError);
+  });
+
+  it('R3: a DEK gira sozinha ao atingir o limite de uso e o uso é somado no banco', async () => {
+    const c = new FieldCipher(provider, store, auditar, { rotateAfter: 5, usageFlushEvery: 2 });
+    const ids = new Set<string>();
+    for (let i = 0; i < 12; i++) ids.add(parseField(await c.encrypt(null, ref(tenantA), TEXTO)).keyId);
+    expect(ids.size).toBeGreaterThanOrEqual(2);
+    const deA = store.dataKeys.filter((k) => k.tenantId === tenantA);
+    expect(deA.filter((k) => k.status === 'retired').every((k) => k.encryptCount >= 5)).toBe(true);
+    expect(eventos.some((e) => e.kind === 'rotate_dek' && e.actorId === null)).toBe(true);
+  });
+
+  it('R4: provisionar, girar e destruir emitem evento com o ator', async () => {
+    eventos = [];
+    const c = randomUUID() as TenantId;
+    await cipher.provisionTenant(null, c, ATOR);
+    await cipher.rotateDataKey(null, c, ATOR);
+    await cipher.rotateMasterKey(null, c, ATOR);
+    await cipher.destroyTenantKeys(null, c, ATOR);
+    expect(eventos.map((e) => [e.kind, e.actorId, e.tenantId])).toEqual([
+      ['provision', ATOR, c],
+      ['rotate_dek', ATOR, c],
+      ['rotate_kek', ATOR, c],
+      ['destroy', ATOR, c],
+    ]);
+  });
+
+  it('R4: se o registro do evento falhar, a destruição não acontece no provedor', async () => {
+    const falha = new FieldCipher(provider, store, () => Promise.reject(new Error('auditoria fora')));
+    const destroy = vi.spyOn(provider, 'destroyMasterKey');
+    await expect(falha.destroyTenantKeys(null, tenantB, ATOR)).rejects.toThrow('auditoria fora');
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('R5: chave destruída e chave inexistente viram a MESMA resposta HTTP genérica', async () => {
+    const v = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    const inexistente = await cipher.decrypt(null, ref(tenantB), v).catch((e: unknown) => e);
+    await cipher.destroyTenantKeys(null, tenantA, ATOR);
+    const destruida = await cipher.decrypt(null, ref(tenantA), v).catch((e: unknown) => e);
+    const resposta = (erro: unknown) => {
+      const out: { status?: number; body?: unknown } = {};
+      const res = {
+        headersSent: false,
+        status(code: number) {
+          out.status = code;
+          return res;
+        },
+        setHeader() {
+          return res;
+        },
+        json(body: unknown) {
+          out.body = body;
+          return res;
+        },
+      };
+      const host = { switchToHttp: () => ({ getResponse: () => res }) };
+      new AllExceptionsFilter().catch(erro, host as never);
+      return out;
+    };
+    expect(resposta(inexistente)).toEqual(resposta(destruida));
+    expect(resposta(destruida).status).toBe(500);
   });
 });

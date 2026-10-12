@@ -36,6 +36,9 @@ describe('LocalKeyProvider', () => {
     await p.destroyMasterKey(master);
     await expect(p.unwrapDataKey(g, tenantA)).rejects.toBeInstanceOf(KeyUnavailableError);
     await expect(p.generateDataKey(master, tenantA)).rejects.toBeInstanceOf(KeyUnavailableError);
+    // Dentro da janela, cancelar devolve a chave (como no KMS).
+    await p.cancelMasterKeyDestruction(master);
+    expect(bytesOf(await p.unwrapDataKey(g, tenantA))).toEqual(bytesOf(g.plaintext));
   });
 
   it('com rootSecret, outra instância (reinício) abre a mesma DEK; segredo curto é recusado', async () => {
@@ -100,6 +103,14 @@ function fakeKms(): FakeKms {
       fake.calls.push({ op: 'scheduleKeyDeletion', input });
       return Promise.resolve({});
     },
+    cancelKeyDeletion(input) {
+      fake.calls.push({ op: 'cancelKeyDeletion', input });
+      return Promise.resolve({});
+    },
+    enableKey(input) {
+      fake.calls.push({ op: 'enableKey', input });
+      return Promise.resolve({});
+    },
   };
   return fake;
 }
@@ -133,6 +144,18 @@ describe('KmsKeyProvider (contra KMS falso)', () => {
     await p.destroyMasterKey(arn);
     expect(KMS_DELETION_WINDOW_DAYS).toBe(7);
     expect(kms.calls.at(-1)).toEqual({ op: 'scheduleKeyDeletion', input: { KeyId: arn, PendingWindowInDays: 7 } });
+  });
+
+  it('cancelar a destruição cancela o agendamento e reabilita a chave (fica Disabled no KMS)', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    const arn = await p.createMasterKey(tenantA);
+    await p.destroyMasterKey(arn);
+    await p.cancelMasterKeyDestruction(arn);
+    expect(kms.calls.slice(-2)).toEqual([
+      { op: 'cancelKeyDeletion', input: { KeyId: arn } },
+      { op: 'enableKey', input: { KeyId: arn } },
+    ]);
   });
 
   it('erro do SDK vira erro de mensagem fixa, sem ARN nem causa', async () => {

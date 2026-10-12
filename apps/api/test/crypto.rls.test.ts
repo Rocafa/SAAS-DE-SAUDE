@@ -12,7 +12,8 @@ import { createDatabase, withTenant, type DatabaseHandle, type TenantTx } from '
 import { FieldDecryptionError, KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
 import { DataKeyCache } from '../src/modules/crypto/data-key-cache';
 import { PgDataKeyStore } from '../src/modules/crypto/data-key-store';
-import { FieldCipher } from '../src/modules/crypto/field-cipher';
+import { FieldCipher, type KeyAuditor } from '../src/modules/crypto/field-cipher';
+import { auditKeyEvents } from '../src/modules/crypto/key-audit';
 import type { FieldRef } from '../src/modules/crypto/field-format';
 import { LocalKeyProvider } from '../src/modules/crypto/local-key-provider';
 import { MemoryDataKeyStore } from '../src/modules/crypto/memory-data-key-store';
@@ -23,6 +24,8 @@ if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória para o 
 const tenantA = randomUUID() as TenantId;
 const tenantB = randomUUID() as TenantId;
 const TEXTO = 'Anotação clínica fictícia para teste.';
+const ATOR = randomUUID();
+const semAuditoria: KeyAuditor<unknown> = () => Promise.resolve();
 const ref = (tenantId: TenantId): FieldRef => ({
   tenantId,
   table: 'record_entries',
@@ -33,7 +36,7 @@ const ref = (tenantId: TenantId): FieldRef => ({
 let h: DatabaseHandle;
 const provider = new LocalKeyProvider({ nodeEnv: 'test' });
 const store = new PgDataKeyStore();
-const cipher = new FieldCipher<TenantTx>(provider, store);
+const cipher = new FieldCipher<TenantTx>(provider, store, auditKeyEvents);
 
 async function errorText(p: Promise<unknown>): Promise<string> {
   const err: unknown = await p.then(
@@ -56,7 +59,7 @@ beforeAll(async () => {
   h = createDatabase(url, { max: 4 });
   for (const t of [tenantA, tenantB]) {
     await novaClinica(t);
-    await withTenant(h.db, t, (tx) => cipher.provisionTenant(tx, t));
+    await withTenant(h.db, t, (tx) => cipher.provisionTenant(tx, t, ATOR));
   }
 });
 
@@ -92,7 +95,7 @@ describe('chaves por clínica no banco (0004)', () => {
     );
     expect(visiveis[0]?.n).toBe(0);
     // Cache novo: a única porta para a DEK é o banco, que o RLS fecha.
-    const semCache = new FieldCipher<TenantTx>(provider, store, new DataKeyCache());
+    const semCache = new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { cache: new DataKeyCache() });
     await expect(withTenant(h.db, tenantB, (tx) => semCache.decrypt(tx, ref(tenantB), valorA))).rejects.toBeInstanceOf(
       FieldDecryptionError,
     );
@@ -118,7 +121,7 @@ describe('chaves por clínica no banco (0004)', () => {
     const reativar = await errorText(
       withTenant(h.db, tenantA, async (tx) => {
         const antiga = await store.findActive(tx, tenantA);
-        await cipher.rotateDataKey(tx, tenantA);
+        await cipher.rotateDataKey(tx, tenantA, ATOR);
         await tx.execute(sql`update tenant_data_keys set status = 'retired' where status = 'active'`);
         await tx.execute(sql`update tenant_data_keys set status = 'active' where id = ${antiga?.id ?? ''}::uuid`);
       }),
@@ -129,8 +132,8 @@ describe('chaves por clínica no banco (0004)', () => {
   it('provisionamento concorrente termina com uma chave mestra e uma DEK ativa', async () => {
     const c = randomUUID() as TenantId;
     await novaClinica(c);
-    const cifras = [0, 1, 2].map(() => new FieldCipher<TenantTx>(provider, store, new DataKeyCache()));
-    const ids = await Promise.all(cifras.map((cf) => withTenant(h.db, c, (tx) => cf.provisionTenant(tx, c))));
+    const cifras = [0, 1, 2].map(() => new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { cache: new DataKeyCache() }));
+    const ids = await Promise.all(cifras.map((cf) => withTenant(h.db, c, (tx) => cf.provisionTenant(tx, c, ATOR))));
     expect(new Set(ids).size).toBe(1);
     const n = await withTenant(h.db, c, (tx) =>
       tx.execute<{ m: number; d: number }>(sql`select
@@ -166,18 +169,19 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
           masterKeyId: k.master_key_id,
           wrapped: Buffer.from(k.wrapped_key),
           status: k.status,
+          encryptCount: 0,
         });
       }
     });
-    expect(await new FieldCipher(provider, backup).decryptString(null, ref(tenantA), valorA)).toBe(TEXTO);
+    expect(await new FieldCipher(provider, backup, semAuditoria).decryptString(null, ref(tenantA), valorA)).toBe(TEXTO);
 
-    await withTenant(h.db, tenantA, (tx) => cipher.destroyTenantKeys(tx, tenantA));
+    await withTenant(h.db, tenantA, (tx) => cipher.destroyTenantKeys(tx, tenantA, ATOR));
 
     await expect(withTenant(h.db, tenantA, (tx) => cipher.decrypt(tx, ref(tenantA), valorA))).rejects.toBeInstanceOf(
       KeyUnavailableError,
     );
     await expect(
-      new FieldCipher(provider, backup, new DataKeyCache()).decrypt(null, ref(tenantA), valorA),
+      new FieldCipher(provider, backup, semAuditoria, { cache: new DataKeyCache() }).decrypt(null, ref(tenantA), valorA),
     ).rejects.toBeInstanceOf(KeyUnavailableError);
     const restante = await withTenant(h.db, tenantA, (tx) =>
       tx.execute<{ vivas: number }>(
@@ -190,6 +194,14 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
       withTenant(h.db, tenantA, (tx) => tx.execute(sql`update tenant_data_keys set status = 'retired'`)),
     );
     expect(reviver).toMatch(/destruída não pode ser alterada/);
+    // A destruição (e o provisionamento) ficaram na trilha de auditoria, com o ator.
+    const eventos = await withTenant(h.db, tenantA, (tx) =>
+      tx.execute<{ scope: string; actor_id: string }>(
+        sql`select scope, actor_id from audit_log where scope like 'crypto.key.%' order by created_at`,
+      ),
+    );
+    expect(eventos.map((e) => e.scope)).toContain('crypto.key.destroy');
+    expect(eventos.find((e) => e.scope === 'crypto.key.destroy')?.actor_id).toBe(ATOR);
     expect(await withTenant(h.db, tenantB, (tx) => cipher.decryptString(tx, ref(tenantB), valorB))).toBe(TEXTO);
   });
 });

@@ -28,6 +28,11 @@ export interface KeyProvider {
   unwrapDataKey(key: WrappedDataKey, tenantId: TenantId): Promise<DataKey>;
   /** Re-cifra a DEK sob outra chave mestra (rotação da KEK) sem mexer nos dados. */
   rewrapDataKey(key: WrappedDataKey, targetMasterKeyId: string, tenantId: TenantId): Promise<WrappedDataKey>;
-  /** Crypto-shredding: destrói (ou agenda a destruição irreversível de) a chave mestra. */
+  /**
+   * Crypto-shredding: agenda a destruição da chave mestra. A partir daqui ela não abre mais nada;
+   * até o fim da janela (KMS: 7 dias) a destruição ainda pode ser cancelada.
+   */
   destroyMasterKey(masterKeyId: string, tenantId: TenantId): Promise<void>;
+  /** Desfaz um agendamento de destruição (compensação quando a destruição da clínica falha no meio). */
+  cancelMasterKeyDestruction(masterKeyId: string, tenantId: TenantId): Promise<void>;
 }

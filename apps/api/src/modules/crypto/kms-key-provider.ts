@@ -34,6 +34,8 @@ export interface KmsApi {
     DestinationEncryptionContext: Record<string, string>;
   }): Promise<{ CiphertextBlob?: Uint8Array | undefined }>;
   scheduleKeyDeletion(input: { KeyId: string; PendingWindowInDays: number }): Promise<unknown>;
+  cancelKeyDeletion(input: { KeyId: string }): Promise<unknown>;
+  enableKey(input: { KeyId: string }): Promise<unknown>;
 }
 
 /** Mínimo permitido pelo KMS. Dentro da janela a destruição ainda pode ser cancelada. */
@@ -104,6 +106,12 @@ export class KmsKeyProvider implements KeyProvider {
 
   async destroyMasterKey(masterKeyId: string): Promise<void> {
     await guard(() => this.kms.scheduleKeyDeletion({ KeyId: masterKeyId, PendingWindowInDays: KMS_DELETION_WINDOW_DAYS }));
+  }
+
+  async cancelMasterKeyDestruction(masterKeyId: string): Promise<void> {
+    // Cancelar deixa a chave "Disabled" (documentação do KMS): é preciso reabilitar.
+    await guard(() => this.kms.cancelKeyDeletion({ KeyId: masterKeyId }));
+    await guard(() => this.kms.enableKey({ KeyId: masterKeyId }));
   }
 }
 

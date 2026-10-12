@@ -8,6 +8,8 @@ export type KeyStatus = 'active' | 'retired' | 'destroyed';
 export interface DataKeyRecord extends WrappedDataKey {
   readonly id: string;
   readonly status: Exclude<KeyStatus, 'destroyed'>;
+  /** Cifragens já contabilizadas no banco (aproximado; ver addUsage). */
+  readonly encryptCount: number;
 }
 
 /**
@@ -27,6 +29,8 @@ export interface DataKeyStore<Tx> {
   retire(tx: Tx, tenantId: TenantId, id: string): Promise<void>;
   listLive(tx: Tx, tenantId: TenantId): Promise<DataKeyRecord[]>;
   updateWrapped(tx: Tx, tenantId: TenantId, id: string, key: WrappedDataKey): Promise<void>;
+  /** Soma cifragens feitas com a DEK (em lotes, para não travar a linha a cada campo). */
+  addUsage(tx: Tx, tenantId: TenantId, id: string, count: number): Promise<void>;
   /** Marca DEKs e chaves mestras como destruídas; devolve as chaves mestras a destruir no provedor. */
   destroyAll(tx: Tx, tenantId: TenantId): Promise<string[]>;
 }
@@ -36,11 +40,18 @@ interface Row extends Record<string, unknown> {
   master_key_id: string;
   wrapped_key: Buffer | null;
   status: KeyStatus;
+  encrypt_count: string;
 }
 
 function toRecord(row: Row): DataKeyRecord | 'destroyed' {
   if (row.status === 'destroyed' || !row.wrapped_key) return 'destroyed';
-  return { id: row.id, masterKeyId: row.master_key_id, wrapped: Buffer.from(row.wrapped_key), status: row.status };
+  return {
+    id: row.id,
+    masterKeyId: row.master_key_id,
+    wrapped: Buffer.from(row.wrapped_key),
+    status: row.status,
+    encryptCount: Number(row.encrypt_count),
+  };
 }
 
 export class PgDataKeyStore implements DataKeyStore<TenantTx> {
@@ -68,7 +79,7 @@ export class PgDataKeyStore implements DataKeyStore<TenantTx> {
 
   async findActive(tx: TenantTx, tenantId: TenantId): Promise<DataKeyRecord | undefined> {
     const rows = await tx.execute<Row>(
-      sql`select id, master_key_id, wrapped_key, status from tenant_data_keys
+      sql`select id, master_key_id, wrapped_key, status, encrypt_count::text as encrypt_count from tenant_data_keys
           where tenant_id = ${tenantId} and status = 'active'`,
     );
     const rec = rows[0] && toRecord(rows[0]);
@@ -77,7 +88,7 @@ export class PgDataKeyStore implements DataKeyStore<TenantTx> {
 
   async findById(tx: TenantTx, tenantId: TenantId, id: string): Promise<DataKeyRecord | 'destroyed' | undefined> {
     const rows = await tx.execute<Row>(
-      sql`select id, master_key_id, wrapped_key, status from tenant_data_keys
+      sql`select id, master_key_id, wrapped_key, status, encrypt_count::text as encrypt_count from tenant_data_keys
           where tenant_id = ${tenantId} and id = ${id}::uuid`,
     );
     return rows[0] && toRecord(rows[0]);
@@ -102,7 +113,7 @@ export class PgDataKeyStore implements DataKeyStore<TenantTx> {
 
   async listLive(tx: TenantTx, tenantId: TenantId): Promise<DataKeyRecord[]> {
     const rows = await tx.execute<Row>(
-      sql`select id, master_key_id, wrapped_key, status from tenant_data_keys
+      sql`select id, master_key_id, wrapped_key, status, encrypt_count::text as encrypt_count from tenant_data_keys
           where tenant_id = ${tenantId} and status <> 'destroyed' order by created_at desc`,
     );
     return rows.map(toRecord).filter((r): r is DataKeyRecord => r !== 'destroyed');
@@ -111,6 +122,13 @@ export class PgDataKeyStore implements DataKeyStore<TenantTx> {
   async updateWrapped(tx: TenantTx, tenantId: TenantId, id: string, key: WrappedDataKey): Promise<void> {
     await tx.execute(
       sql`update tenant_data_keys set master_key_id = ${key.masterKeyId}, wrapped_key = ${key.wrapped}
+          where tenant_id = ${tenantId} and id = ${id}::uuid and status <> 'destroyed'`,
+    );
+  }
+
+  async addUsage(tx: TenantTx, tenantId: TenantId, id: string, count: number): Promise<void> {
+    await tx.execute(
+      sql`update tenant_data_keys set encrypt_count = encrypt_count + ${count}
           where tenant_id = ${tenantId} and id = ${id}::uuid and status <> 'destroyed'`,
     );
   }

@@ -9,6 +9,7 @@ export interface StoredDataKey {
   masterKeyId: string;
   wrapped: Buffer | null;
   status: KeyStatus;
+  encryptCount: number;
 }
 
 export interface StoredMasterKey {
@@ -71,7 +72,7 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
       return Promise.reject(new Error('já existe chave de dados ativa'));
     }
     const id = randomUUID();
-    this.dataKeys.push({ id, tenantId, masterKeyId: key.masterKeyId, wrapped: Buffer.from(key.wrapped), status: 'active' });
+    this.dataKeys.push({ id, tenantId, masterKeyId: key.masterKeyId, wrapped: Buffer.from(key.wrapped), status: 'active', encryptCount: 0 });
     return Promise.resolve(id);
   }
 
@@ -99,6 +100,12 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
     return Promise.resolve();
   }
 
+  addUsage(_tx: unknown, tenantId: TenantId, id: string, count: number): Promise<void> {
+    const k = this.dataKeys.find((x) => x.tenantId === tenantId && x.id === id && x.status !== 'destroyed');
+    if (k) k.encryptCount += count;
+    return Promise.resolve();
+  }
+
   destroyAll(_tx: unknown, tenantId: TenantId): Promise<string[]> {
     for (const k of this.dataKeys) {
       if (k.tenantId === tenantId && k.status !== 'destroyed') {
@@ -119,5 +126,11 @@ export class MemoryDataKeyStore implements DataKeyStore<unknown> {
 
 function toRecord(k: StoredDataKey): DataKeyRecord | undefined {
   if (k.status === 'destroyed' || !k.wrapped) return undefined;
-  return { id: k.id, masterKeyId: k.masterKeyId, wrapped: Buffer.from(k.wrapped), status: k.status };
+  return {
+    id: k.id,
+    masterKeyId: k.masterKeyId,
+    wrapped: Buffer.from(k.wrapped),
+    status: k.status,
+    encryptCount: k.encryptCount,
+  };
 }

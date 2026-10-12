@@ -38,6 +38,10 @@ CREATE TABLE tenant_data_keys (
   status        text NOT NULL DEFAULT 'active'
                   CONSTRAINT tenant_data_keys_status_check
                   CHECK (status IN ('active', 'retired', 'destroyed')),
+  -- Cifragens feitas com esta DEK (aproximado: cada instância soma em lotes). Com IV aleatório de
+  -- 96 bits, o NIST SP 800-38D limita a 2^32 usos por chave; a aplicação gira bem antes (2^30).
+  encrypt_count bigint NOT NULL DEFAULT 0
+                  CONSTRAINT tenant_data_keys_encrypt_count_check CHECK (encrypt_count >= 0),
   created_at    timestamptz NOT NULL DEFAULT now(),
   retired_at    timestamptz,
   destroyed_at  timestamptz,
@@ -74,7 +78,7 @@ CREATE POLICY tenant_data_keys_update ON tenant_data_keys FOR UPDATE
 -- ciclo de vida (id, tenant_id e created_at são imutáveis também pelo trigger abaixo).
 REVOKE DELETE, TRUNCATE, UPDATE ON tenant_master_keys, tenant_data_keys FROM app_user;
 GRANT UPDATE (status, destroyed_at) ON tenant_master_keys TO app_user;
-GRANT UPDATE (master_key_id, wrapped_key, status, retired_at, destroyed_at) ON tenant_data_keys TO app_user;
+GRANT UPDATE (master_key_id, wrapped_key, status, encrypt_count, retired_at, destroyed_at) ON tenant_data_keys TO app_user;
 
 -- Transições válidas, para qualquer papel (inclusive o dono): nada volta a 'active', 'destroyed' é
 -- terminal, identidade imutável, nenhuma linha é apagada.

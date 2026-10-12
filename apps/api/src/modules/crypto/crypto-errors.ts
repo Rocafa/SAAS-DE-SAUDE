@@ -31,6 +31,18 @@ export class TenantKeyMissingError extends FieldCryptoError {
   }
 }
 
+/**
+ * A destruição falhou no provedor e o cancelamento dos agendamentos já feitos também falhou: há
+ * chave mestra agendada para destruição sem registro no banco. Exige intervenção humana dentro da
+ * janela do KMS (7 dias) — cancelar o agendamento ou concluir a eliminação.
+ */
+export class KeyDestructionIncompleteError extends FieldCryptoError {
+  override readonly name = 'KeyDestructionIncompleteError';
+  constructor() {
+    super('destruição de chaves incompleta: exige intervenção');
+  }
+}
+
 /** Referência de campo inválida (tabela/coluna/linha). */
 export class InvalidFieldRefError extends FieldCryptoError {
   override readonly name = 'InvalidFieldRefError';
