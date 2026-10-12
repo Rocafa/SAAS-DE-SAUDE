@@ -10,6 +10,10 @@ const TELAS: [string, string][] = [
   ['pacientes', '/pacientes'],
   ['ficha-paciente', '/pacientes/p01'],
   ['mais', '/mais'],
+  ['agenda-semana', '/agenda?ver=semana'],
+  ['agenda-profissional', '/agenda?ver=profissional'],
+  ['lista-espera', '/agenda?ver=espera'],
+  ['novo-paciente', '/pacientes/novo'],
   ['em-construcao', '/financeiro'],
 ];
 
@@ -51,6 +55,8 @@ test.describe('telas do PR 1', () => {
       const pequenos = await page.evaluate(() =>
         Array.from(document.querySelectorAll('button, input, select, nav a'))
           .filter((el) => (el as HTMLElement).getClientRects().length > 0)
+          // Caixa de marcar conta pelo rótulo inteiro, que é clicável.
+          .map((el) => (el.matches('input[type=checkbox], input[type=radio]') ? (el.closest('label') ?? el) : el))
           .filter((el) => el.getBoundingClientRect().height < 48)
           .map((el) => el.outerHTML.slice(0, 80)),
       );
