@@ -76,3 +76,18 @@ Atualizar EXP-01.5 e HU-EXP-001 com os itens (a) a (e). Na DoD (l.117), acrescen
 | CDC art. 37 / garantias absolutas | 🔴 B1; 🟡 M4, M5. |
 | Marco Civil | Guarda de registros de acesso por 6 meses deve ser ressalvada na eliminação (M3). |
 | Dados reais / segredos no diff | Nenhum. |
+
+## Acompanhamento das ressalvas (10/10/2026, branch `lgpd/ripd-dpa-retencao`)
+
+B1 e B2 foram corrigidos antes do merge do PR #8. Situação das ressalvas M1–M6 depois desta rodada:
+
+| Ressalva | Situação | Onde |
+|---|---|---|
+| M1 | ✅ G2 com os controles (a)–(e), incluindo link não-portador com limite de downloads; EXP-01.5 (WBS) com critérios (a)–(e); DoD atualizada | `garantias-ao-cliente.md` G2, `WBS-micropartes.md` EXP-01.5, `definicao-de-pronto.md` |
+| M2 | ✅ Exportação total exige admin **e** aprovação registrada do RT; manifesto marca seções com sigilo profissional; termo lembra o sigilo. ⚖️ | G2, EXP-01.5 |
+| M3 | ✅ Prazos por conselho na G3; ressalva do que guardamos como controladora (acesso 6 meses, fiscal 5 anos, auditoria da eliminação); prazo de expurgo de backup informado no certificado | G3, [retencao-e-descarte.md](../retencao-e-descarte.md) ⚖️ |
+| M4 | ✅ Já aplicada: "90% das primeiras respostas em até 15 min em horário comercial" | G7 e Carta |
+| M5 | ✅ Certificado ICP-Brasil fora do preço (emitido por AC), cota de IA na página de preço, excedente avisado antes; marcação Markdown corrigida | G5 e Carta |
+| M6 | ✅ Nota final reescrita: publicação condicionada às correções e à D8 | `garantias-ao-cliente.md` §2 |
+
+Este acompanhamento é do próprio Guardião; a aprovação final da Carta depende da validação jurídica (D8).
