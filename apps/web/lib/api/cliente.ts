@@ -1,6 +1,12 @@
 import type {
   Agendamento,
   Anexo,
+  Assinatura,
+  DadosClinica,
+  EventoAuditoria,
+  MembroEquipe,
+  PedidoExportacao,
+  Papel,
   Conversa,
   Guia,
   NovaGuia,
@@ -78,6 +84,20 @@ export interface ApiClinica {
   criarGuia(dados: NovaGuia): Promise<Guia>;
   removerGuia(id: string): Promise<void>;
   listarConversas(): Promise<Conversa[]>;
+
+  obterClinica(): Promise<DadosClinica>;
+  salvarClinica(d: DadosClinica): Promise<DadosClinica>;
+  listarEquipe(): Promise<MembroEquipe[]>;
+  convidar(email: string, papel: Papel): Promise<MembroEquipe>;
+  removerAcesso(id: string): Promise<MembroEquipe | null>;
+  devolverAcesso(m: MembroEquipe): Promise<void>;
+  listarAuditoria(): Promise<EventoAuditoria[]>;
+  obterAssinatura(): Promise<Assinatura>;
+  cancelarAssinatura(): Promise<Assinatura>;
+  reativarAssinatura(): Promise<Assinatura>;
+  /** Exige o código do autenticador (MFA recente). */
+  pedirExportacao(codigo: string): Promise<PedidoExportacao>;
+  aprovarExportacao(id: string): Promise<PedidoExportacao>;
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
   usuariosDemo(): Promise<Usuario[]>;
