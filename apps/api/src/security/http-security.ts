@@ -1,9 +1,15 @@
-import type { INestApplication } from '@nestjs/common';
+import { Logger, type INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadHttpSecurityConfig, type HttpSecurityConfig } from './http-security.config';
-import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit-store';
+import {
+  loadRateLimitHashKey,
+  MemoryRateLimitStore,
+  rateLimitKey,
+  registerRateLimitStore,
+  type RateLimitStore,
+} from './rate-limit-store';
 
 type Next = (err?: unknown) => void;
 type Req = IncomingMessage & { ip?: string };
@@ -26,6 +32,7 @@ export function applyHttpSecurity(
   app: INestApplication,
   config: HttpSecurityConfig = loadHttpSecurityConfig(),
   store: RateLimitStore = new MemoryRateLimitStore(),
+  hashKey: Uint8Array = loadRateLimitHashKey(),
 ): void {
   const expressApp = app as NestExpressApplication;
   expressApp.disable('x-powered-by');
@@ -55,7 +62,8 @@ export function applyHttpSecurity(
     maxAge: 600,
   });
 
-  app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs, store));
+  registerRateLimitStore(store);
+  app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs, store, RATE_LIMIT_EXEMPT_PATHS, hashKey));
 
   expressApp.useBodyParser('json', { limit: config.bodyLimit });
   expressApp.useBodyParser('urlencoded', { limit: config.bodyLimit, extended: false });
@@ -82,16 +90,27 @@ function sendJson(res: ServerResponse, status: number, message: string): void {
  */
 export const RATE_LIMIT_EXEMPT_PATHS: ReadonlySet<string> = new Set(['/health', '/health/ready']);
 
+let failOpenCount = 0;
+const rateLimitLogger = new Logger('rate-limit');
+
+/** Quantas requisições passaram sem contagem porque o store falhou (métrica; ver R4 do Guardião). */
+export function rateLimitFailOpenCount(): number {
+  return failOpenCount;
+}
+
 /**
- * Janela fixa por IP. A contagem vem do `store` (Redis ou memória). Se o store falhar mesmo assim
- * (o FallbackRateLimitStore já cobre o Redis fora), a requisição segue: um erro no contador não
- * pode derrubar a API inteira.
+ * Janela fixa por IP. A chave é derivada AQUI, uma vez (HMAC do IP com segredo): nenhum store
+ * recebe o IP em claro. A contagem vem do `store` (Redis ou memória). Se o store falhar mesmo assim
+ * (o FallbackRateLimitStore já cobre o Redis fora), a requisição segue — um erro no contador não pode
+ * derrubar a API inteira —, mas nunca em silêncio: log de erro com marcador fixo
+ * (RATE_LIMIT_FAIL_OPEN, para filtro de métrica e alarme) e contador.
  */
 export function rateLimiter(
   max: number,
   windowMs: number,
   store: RateLimitStore = new MemoryRateLimitStore(),
   exemptPaths: ReadonlySet<string> = RATE_LIMIT_EXEMPT_PATHS,
+  hashKey: Uint8Array = loadRateLimitHashKey(),
 ) {
   return (req: Req, res: ServerResponse, next: Next): void => {
     const path = (req.url ?? '').split('?')[0] ?? '';
@@ -99,7 +118,7 @@ export function rateLimiter(
       next();
       return;
     }
-    const key = req.ip ?? req.socket.remoteAddress ?? 'desconhecido';
+    const key = rateLimitKey(req.ip ?? req.socket.remoteAddress ?? 'desconhecido', hashKey);
     store.hit(key, windowMs).then(
       ({ count, resetMs }) => {
         const resetSeconds = Math.max(1, Math.ceil(resetMs / 1000));
@@ -113,7 +132,12 @@ export function rateLimiter(
         }
         next();
       },
-      () => next(),
+      (err: unknown) => {
+        failOpenCount++;
+        const name = err instanceof Error ? err.name : typeof err;
+        rateLimitLogger.error(`RATE_LIMIT_FAIL_OPEN: contador indisponível (${name}); requisição seguiu sem limite`);
+        next();
+      },
     );
   };
 }

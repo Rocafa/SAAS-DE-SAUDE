@@ -73,7 +73,7 @@ describe.runIf(REDIS_URL)('rate limit compartilhado no Redis', () => {
   });
 
   it('a chave no Redis não guarda o IP em claro e expira com a janela', async () => {
-    const chaves = await redis.keys('rl:v1:*');
+    const chaves = await redis.keys('rl:v2:*');
     expect(chaves.length).toBeGreaterThan(0);
     for (const chave of chaves) {
       expect(chave).not.toMatch(/\d+\.\d+\.\d+\.\d+|::/);

@@ -85,7 +85,13 @@ num repositório), dentro ou fora de `withTenant`.
 - **`node dist/main.js` não sobe**: `@plataforma/shared` é publicado como TypeScript-fonte com
   imports `./x.js`, que o Node não resolve. Por isso o DAST sobe a API via `serve:dast` (vitest).
   Corrigir no build/deploy (compilar `shared` ou empacotar a API) em microparte própria.
-- Rate limit por IP em Redis, compartilhado entre instâncias (`REDIS_URL`), com fallback em memória se o Redis cair ou demorar mais de 100 ms; a chave guarda só um hash do IP. Coberto por `rate-limit-redis.security.test.ts` (duas instâncias, um Redis). Ainda falta limite por usuário e por tenant, que depende do login (D4).
+- Rate limit por IP em Redis, compartilhado entre instâncias (`REDIS_URL`), com fallback em memória se o Redis cair ou demorar mais de 100 ms. Coberto por `rate-limit-redis.security.test.ts` (duas instâncias, um Redis). Ainda falta limite por usuário e por tenant, que depende do login (D4).
+- Ajustes do parecer do Guardião no PR #30:
+  - **R1:** a chave é `HMAC-SHA256(RATE_LIMIT_HASH_KEY, IP)`. Sem o segredo, não dá para enumerar o IPv4 e voltar ao IP. Em produção, a falta do segredo é erro no boot.
+  - **R2:** a chave é derivada **uma vez, no middleware**. Nenhum store, nem o de memória, recebe ou guarda IP em claro (teste com store espião).
+  - **R3:** produção sem `REDIS_URL` falha no boot, salvo `RATE_LIMIT_ALLOW_SINGLE_INSTANCE=1`.
+  - **R4:** a falha aberta do contador gera log de erro com o marcador `RATE_LIMIT_FAIL_OPEN` (base para filtro de métrica e alarme) e incrementa um contador. O `/health/ready` informa o modo: `compartilhado`, `fallback`, `memoria`, `instancia-unica` ou `desligado`.
+  - **R5** (teste de `trustProxyHops` contra a topologia) depende da topologia definida com a DevOps.
   Atrás do ALB, configurar `HTTP_TRUST_PROXY_HOPS=1` para usar o IP real.
 - CSP do web usa `script-src 'unsafe-inline'` (scripts inline de hidratação do App Router).
   Próximo passo: CSP com nonce em `proxy.ts`.
