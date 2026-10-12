@@ -20,16 +20,22 @@ const patientB = randomUUID();
 
 let h: DatabaseHandle;
 
-/** Postgres embrulha o erro; procuramos a mensagem de RLS na cadeia de causas. */
+/** SQLSTATE de violação de RLS. É código, não texto: não muda com o idioma do servidor. */
+const SQLSTATE_RLS = '42501'; // insufficient_privilege
+
+/**
+ * Postgres embrulha o erro; procuramos o SQLSTATE na cadeia de causas.
+ * Comparar a MENSAGEM quebraria num servidor que não fala inglês (ex.: lc_messages = pt_BR).
+ */
 async function expectRlsViolation(p: Promise<unknown>): Promise<void> {
   const err: unknown = await p.then(
     () => undefined,
     (e: unknown) => e,
   );
   expect(err, 'era esperada violação de RLS').toBeDefined();
-  let text = '';
-  for (let e: unknown = err; e instanceof Error; e = e.cause) text += ` ${e.message}`;
-  expect(text).toMatch(/row-level security/);
+  const codigos: unknown[] = [];
+  for (let e: unknown = err; e instanceof Error; e = e.cause) codigos.push((e as { code?: unknown }).code);
+  expect(codigos, `SQLSTATE esperado ${SQLSTATE_RLS}; erro: ${String(err)}`).toContain(SQLSTATE_RLS);
 }
 
 beforeAll(async () => {
