@@ -18,9 +18,9 @@
     "serve:dast": "vitest run --config vitest.dast.config.mts"
   },
   "dependencies": {
-    "@nestjs/common": "^11.1.0",
-    "@nestjs/core": "^11.1.0",
-    "@nestjs/platform-express": "^11.1.0",
+    "@nestjs/common": "^12.1.2",
+    "@nestjs/core": "^12.1.2",
+    "@nestjs/platform-express": "^12.1.2",
     "@plataforma/shared": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "helmet": "8.1.0",
@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
-    "@nestjs/testing": "^11.1.0",
+    "@nestjs/testing": "^12.1.2",
     "@types/node": "^22.20.0",
     "@types/supertest": "^6.0.3",
     "eslint": "^9.39.0",
