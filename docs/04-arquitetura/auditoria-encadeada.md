@@ -83,6 +83,21 @@ Vale **no banco** (`audit_metadata_ok` + `CHECK ... NOT VALID`, então pega tamb
 
 Pendente: o contrato **por ação** (quais chaves cada `action`/`scope` pode ter), versionado, que depende do catálogo de ações do produto.
 
+## 4b. Ações (migração 0006)
+O enum `AuditAction` de `packages/shared/src/enums.ts` e o CHECK `audit_log_action_check` têm exatamente os mesmos valores. Um teste de paridade em `test/audit-chain.rls.test.ts` lê o CHECK do catálogo e compara com o enum. Ação nova exige mudar os dois no mesmo PR.
+
+A 0006 acrescentou, por decisão do Maestro (ORDEM-004, resposta 5):
+
+| Ação | Quando |
+|---|---|
+| `key_provision`, `key_rotate`, `key_destroy` | Ciclo de vida das chaves por clínica (criptografia de campo, migração 0004) |
+| `ai_use`, `ai_refusal` | Uso de IA sobre dado da clínica e recusa pela política. Nunca o conteúdo |
+| `break_glass` | Acesso de emergência fora da permissão normal; exige revisão posterior |
+
+A migração só amplia o conjunto: as linhas antigas continuam válidas e o hash delas não muda.
+
+**Prazo de guarda (D7, ORDEM-004):** default configurável de 20 anos para eventos de prontuário e 5 anos para os administrativos (proposta de `retencao-e-descarte.md`). A decisão final é dos sócios. O job de expurgo ainda não existe; quando existir, a classificação sai do `scope` e da ação.
+
 ## 5. Linhas antigas
 
 Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-only impede reescrevê-las e o verificador as conta em `legacy`. Hoje só existem em ambientes de teste, porque não há produção.
