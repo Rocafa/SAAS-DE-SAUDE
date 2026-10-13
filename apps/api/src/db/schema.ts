@@ -98,6 +98,10 @@ export const appointments = pgTable('appointments', {
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
+/** Tipo de ator na trilha (migração 0008). Mesmos valores do CHECK no banco. */
+export const ACTOR_KINDS = ['usuario_clinica', 'suporte_plataforma', 'sistema'] as const;
+export type ActorKind = (typeof ACTOR_KINDS)[number];
+
 /** Append-only: o runtime só tem SELECT/INSERT; trigger rejeita UPDATE/DELETE/TRUNCATE. */
 export const auditLog = pgTable('audit_log', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -105,6 +109,8 @@ export const auditLog = pgTable('audit_log', {
     .notNull()
     .references(() => tenants.id),
   actorId: uuid('actor_id').notNull(),
+  /** NULO só nas linhas anteriores à 0008; toda linha nova tem (CHECK NOT VALID + trigger). */
+  actorKind: text('actor_kind', { enum: ACTOR_KINDS }),
   action: text('action').notNull(),
   scope: text('scope').notNull(),
   metadata: jsonb('metadata').$type<AuditMetadata>().notNull().default({}),
