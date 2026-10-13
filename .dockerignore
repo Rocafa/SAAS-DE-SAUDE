@@ -1,0 +1,43 @@
+# Contexto de build da imagem da API (apps/api/Dockerfile, contexto = raiz do repo).
+# Lista de PERMISSÃO: tudo fica de fora, e só entra o que o build precisa.
+# Outras imagens no futuro: usem <Dockerfile>.dockerignore ao lado do próprio Dockerfile.
+*
+
+# Manifesto do workspace, lockfile e patches de dependências
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!patches/
+!patches/**
+
+# Pacote compartilhado (só fonte e configuração de build)
+!packages/shared/package.json
+!packages/shared/tsconfig.json
+!packages/shared/tsconfig.build.json
+!packages/shared/src/
+!packages/shared/src/**
+
+# API: fonte, migrações e o script de migração
+!apps/api/package.json
+!apps/api/tsconfig.json
+!apps/api/tsconfig.build.json
+!apps/api/src/
+!apps/api/src/**
+!apps/api/db/
+!apps/api/db/**
+!apps/api/scripts/
+!apps/api/scripts/**
+
+# Nunca, mesmo dentro das pastas permitidas
+**/node_modules
+**/dist
+**/.turbo
+**/*.tsbuildinfo
+**/*.test.ts
+**/*.spec.ts
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.pfx
