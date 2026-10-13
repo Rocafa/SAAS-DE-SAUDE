@@ -5,12 +5,16 @@
  * aplicação real (mesma cifra da API) e confere conteúdo, contagens, CSV e auditoria.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { auditLog, patients, professionals, appointmentTypes, appointments } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
+import { insertAudit } from '../src/modules/audit/audit-log';
+import { recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
 import { UTF8_BOM } from '../src/modules/exports/csv';
 import { ExportsService } from '../src/modules/exports/exports.module';
 import {
@@ -34,6 +38,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   professionals: 'professionals',
   appointment_types: 'appointmentTypes',
   appointments: 'appointments',
+  audit_log: 'auditEvents',
 };
 
 /** Colunas que, de propósito, não viram campo do item exportado (com o motivo). */
@@ -51,6 +56,9 @@ let clinicaA: TenantId;
 let clinicaB: TenantId;
 let pkg: TenantExportPackage;
 const FORMULA = '=HYPERLINK("http://exemplo.test")';
+/** Segredo do pseudônimo do suporte: gerado a cada execução, nunca fixo no código. */
+const CHAVE_SUPORTE = randomBytes(32);
+const ATENDENTE = 'atendente-ficticio-01';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -79,6 +87,21 @@ beforeAll(async () => {
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
   await api.http().post('/profissionais').set(cab(adminB)).send({ nome: 'Prof B', especialidade: 'Psico' }).expect(201);
+
+  // Acesso de suporte (fictício) nas duas clínicas, pelo mesmo atendente: pseudônimos diferentes.
+  for (const [tenantId, chamado] of [
+    [clinicaA, 'SUP-1234'],
+    [clinicaB, 'SUP-5678'],
+  ] as const) {
+    await withTenant(api.db.db, tenantId, (tx) =>
+      recordSupportAudit(
+        tx,
+        CHAVE_SUPORTE,
+        { tenantId, atendenteId: ATENDENTE, chamado, motivo: 'pedido_da_clinica' },
+        { action: 'read', scope: 'patients', metadata: { count: 1 } },
+      ),
+    );
+  }
 
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
@@ -115,7 +138,7 @@ describe('G2 — cobertura da exportação contra o catálogo', () => {
         JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relname = ${tabela} AND a.attnum > 0 AND NOT a.attisdropped`;
       const chave = CHAVE_NO_PACOTE[tabela];
-      const dado = (pkg.json.data as Record<string, unknown>)[chave];
+      const dado = tabela === 'audit_log' ? pkg.auditEvents : (pkg.json.data as Record<string, unknown>)[chave];
       const item = (Array.isArray(dado) ? dado[0] : dado) as Record<string, unknown> | undefined;
       expect(item, `${tabela}: o pacote de teste precisa ter ao menos 1 item`).toBeDefined();
       for (const { coluna } of colunas) {
@@ -139,10 +162,13 @@ describe('G2 — conteúdo do pacote', () => {
         professionals: await n(professionals),
         appointmentTypes: await n(appointmentTypes),
         appointments: await n(appointments),
+        // A linha da própria exportação entra na trilha depois de montado o pacote.
+        auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
     });
     expect(pkg.json.manifest.counts).toEqual(noBanco);
-    expect(noBanco).toEqual({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    expect(noBanco).toMatchObject({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
     expect(tudo).not.toContain('Prof B');
@@ -181,5 +207,112 @@ describe('G2 — conteúdo do pacote', () => {
   it('sem a cifra de campo a exportação falha fechada (não entrega texto cifrado nem incompleto)', async () => {
     const ctx = { tenantId: clinicaA, userId: '00000000-0000-4000-8000-0000000000ee' as UserId, roles: ['admin'] };
     await expect(exportTenantData(api.db.db, ctx)).rejects.toBeInstanceOf(ExportCipherMissingError);
+  });
+});
+
+/** SQLSTATE em qualquer ponto da cadeia de causas. */
+async function sqlstates(p: Promise<unknown>): Promise<unknown[]> {
+  const err: unknown = await p.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  const codigos: unknown[] = [];
+  for (let e: unknown = err; e instanceof Error; e = e.cause) codigos.push((e as { code?: unknown }).code);
+  return codigos;
+}
+
+describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)', () => {
+  it('traz a cadeia inteira da clínica A, nada da B, e o verificador valida o pacote sem banco', () => {
+    const { auditEvents, auditJsonl } = pkg;
+    const { auditChain, counts } = pkg.json.manifest;
+    expect(auditEvents.map((e) => e.seq)).toEqual(auditEvents.map((_, i) => i + 1));
+    expect(auditChain).toEqual({ head: { seq: counts.auditEvents, hash: auditEvents.at(-1)?.hash }, legacy: 0 });
+    const relatorio = verifyExportedAuditTrail(clinicaA, auditEvents, auditChain.head ? { anchor: auditChain.head } : {});
+    expect(relatorio).toMatchObject({ ok: true, checked: counts.auditEvents, legacy: 0, problems: [] });
+    // auditoria.jsonl: um evento por linha, igual ao objeto.
+    const doArquivo = auditJsonl
+      .trimEnd()
+      .split('\n')
+      .map((l) => JSON.parse(l) as ExportedAuditEvent);
+    expect(doArquivo).toEqual(auditEvents);
+    expect(JSON.stringify(auditEvents)).not.toContain(clinicaB);
+    // Contrato do metadata: nenhum valor de paciente na trilha exportada.
+    for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
+      expect(auditJsonl).not.toContain(proibido);
+    }
+    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma']));
+  });
+
+  it('o atendente do suporte sai pseudonimizado por clínica, com chamado e motivo', async () => {
+    const suporte = pkg.auditEvents.filter((e) => e.actorKind === 'suporte_plataforma');
+    expect(suporte).toHaveLength(1);
+    const pseudoA = supportActorPseudonym(CHAVE_SUPORTE, clinicaA, ATENDENTE);
+    expect(suporte[0]).toMatchObject({
+      actorId: pseudoA,
+      metadata: { count: 1, ticket: 'SUP-1234', reason: 'pedido_da_clinica' },
+    });
+    expect(JSON.stringify(pkg)).not.toContain(ATENDENTE);
+    // Na clínica B, o mesmo atendente tem outro pseudônimo: o id não liga as duas clínicas.
+    const linhasB = await withTenant(api.db.db, clinicaB, (tx) =>
+      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')),
+    );
+    expect(linhasB.map((l) => l.actorId)).toEqual([supportActorPseudonym(CHAVE_SUPORTE, clinicaB, ATENDENTE)]);
+    expect(linhasB[0]?.actorId).not.toBe(pseudoA);
+  });
+
+  it('adulterar o pacote (campo, hash, linha apagada ou clínica trocada) é detectado pelo verificador', () => {
+    const ev = pkg.auditEvents;
+    const alvo = 3;
+    const comCampo = ev.map((e) => (e.seq === alvo ? { ...e, actorId: '11111111-1111-4111-8111-111111111111' } : e));
+    expect(verifyExportedAuditTrail(clinicaA, comCampo).problems).toEqual([{ seq: alvo, kind: 'field_mismatch' }]);
+    const comHash = ev.map((e) => (e.seq === alvo ? { ...e, hash: 'f'.repeat(64) } : e));
+    expect(verifyExportedAuditTrail(clinicaA, comHash).ok).toBe(false);
+    const semUma = ev.filter((e) => e.seq !== alvo);
+    expect(verifyExportedAuditTrail(clinicaA, semUma).problems.map((p) => p.kind)).toEqual(
+      expect.arrayContaining(['gap', 'broken_link']),
+    );
+    expect(verifyExportedAuditTrail(clinicaB, ev).ok).toBe(false);
+  });
+
+  it('banco recusa suporte sem chamado e "sistema" com id de usuário (CHECK da 0008)', async () => {
+    const semChamado = withTenant(api.db.db, clinicaA, (tx) =>
+      insertAudit(
+        tx,
+        { tenantId: clinicaA, actorId: supportActorPseudonym(CHAVE_SUPORTE, clinicaA, ATENDENTE), actorKind: 'suporte_plataforma' },
+        { action: 'read', scope: 'patients', metadata: { count: 1 } },
+      ),
+    );
+    expect(await sqlstates(semChamado)).toContain('23514');
+    const sistemaFalso = withTenant(api.db.db, clinicaA, (tx) =>
+      insertAudit(
+        tx,
+        { tenantId: clinicaA, actorId: '22222222-2222-4222-8222-222222222222', actorKind: 'sistema' },
+        { action: 'read', scope: 'patients' },
+      ),
+    );
+    expect(await sqlstates(sistemaFalso)).toContain('23514');
+  });
+
+  it('linha sem actor_kind (anterior à 0008) mantém o JSON canônico v1 da 0005: a cadeia antiga não quebra', async () => {
+    const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ atual: string; v1: string }>(sql`
+        select audit_log_canonical(jsonb_populate_record(a, '{"actor_kind": null}'::jsonb)) as atual,
+               jsonb_build_object(
+                 'v', 1, 'tenant_id', a.tenant_id, 'seq', a.seq, 'prev_hash', a.prev_hash, 'id', a.id,
+                 'actor_id', a.actor_id, 'action', a.action, 'scope', a.scope, 'metadata', a.metadata,
+                 'created_at', to_char(a.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+               )::text as v1
+        from audit_log a where a.tenant_id = ${clinicaA} and a.seq is not null`),
+    );
+    expect(linhas.length).toBeGreaterThan(0);
+    for (const l of linhas) expect(l.atual).toBe(l.v1);
+    // E toda linha nova tem tipo de ator.
+    const semTipo = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(auditLog)
+        .where(and(sql`seq is not null`, isNull(auditLog.actorKind))),
+    );
+    expect(semTipo[0]?.n).toBe(0);
   });
 });

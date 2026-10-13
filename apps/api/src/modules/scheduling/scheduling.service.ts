@@ -216,8 +216,15 @@ export class SchedulingService {
       const novo = statusParaDb(novoFront);
       if (atual.status === novo) return { statusAnterior: statusParaFront(atual.status) };
       if (!transicaoPermitida(atual.status, novo)) throw new ConflitoError('transicao_invalida');
-      if (exigeAtendimento(atual.status, novo) && !temPermissao(perfis, 'agenda:atender')) {
-        throw new ProibidoError();
+      if (exigeAtendimento(atual.status, novo)) {
+        if (!temPermissao(perfis, 'agenda:atender')) throw new ProibidoError();
+        // R1 do parecer PR #57: o perfil não basta; só o profissional DO agendamento atende. O status
+        // "em atendimento" será o gatilho do vínculo de cuidado e do escriba.
+        const [profissional] = await tx
+          .select({ userId: professionals.userId })
+          .from(professionals)
+          .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, atual.professionalId)));
+        if (!profissional?.userId || profissional.userId !== ctx.userId) throw new ProibidoError();
       }
       const agora = new Date();
       await tx

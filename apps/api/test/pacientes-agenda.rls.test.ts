@@ -178,13 +178,28 @@ describe('cifragem dos campos sensíveis do paciente', () => {
 
 describe('pacientes: rotas, permissões e paginação', () => {
   it('busca sem acento e paginação limitada', async () => {
-    const res = await api.http().get('/pacientes').query({ busca: 'agata' }).set(cab(finA)).expect(200);
+    const res = await api.http().post('/pacientes/busca').send({ busca: 'agata' }).set(cab(finA)).expect(200);
     expect((res.body as { itens: { id: string }[] }).itens.map((p) => p.id)).toEqual([pacienteA]);
     await api.http().get('/pacientes').query({ limite: '101' }).set(cab(recepA)).expect(400);
     await api.http().get('/pacientes').query({ pagina: '0' }).set(cab(recepA)).expect(400);
     const pag = await api.http().get('/pacientes').query({ limite: '1' }).set(cab(recepA)).expect(200);
     expect(pag.body).toMatchObject({ pagina: 1, limite: 1, temMais: true });
     expect((pag.body as { itens: unknown[] }).itens).toHaveLength(1);
+  });
+
+  it('busca no corpo: limite até 100 e termo mínimo; termo na URL (ou nome no path) dá 400 sem eco', async () => {
+    await api.http().post('/pacientes/busca').send({ busca: 'agata', limite: 101 }).set(cab(recepA)).expect(400);
+    await api.http().post('/pacientes/busca').send({ busca: 'a' }).set(cab(recepA)).expect(400);
+    await api.http().post('/pacientes/busca').send({ busca: 'agata' }).set(cab(profA)).expect(200);
+    for (const chave of ['busca', 'q', 'termo', 'nome', 'cpf', 'telefone']) {
+      const r = await api.http().get('/pacientes').query({ [chave]: 'agata' }).set(cab(recepA));
+      expect(r.status, chave).toBe(400);
+      expect(r.body).toEqual({ statusCode: 400, message: 'Dados inválidos', campos: ['busca_na_url'] });
+    }
+    // Path só aceita id opaco: texto livre no lugar do id é recusado antes de qualquer consulta.
+    const r = await api.http().get('/pacientes/agata').set(cab(recepA));
+    expect(r.status).toBe(400);
+    expect(JSON.stringify(r.body)).not.toContain('agata');
   });
 
   it('validação estrita: campo desconhecido, CPF inválido e telefone ausente dão 400 sem eco do valor', async () => {
@@ -260,7 +275,14 @@ describe('agenda: capacidade (AGD-01.5), encaixe, remarcar, status', () => {
     // Recepção não marca "em atendimento" (ato do profissional); o profissional marca.
     await api.http().post(`/agendamentos/${id}/status`).set(cab(recepA)).send({ status: 'em_atendimento' }).expect(403);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(adminA)).send({ status: 'em_atendimento' }).expect(403);
+    // R1 (parecer PR #57): outro profissional da MESMA clínica não atende agendamento que não é dele,
+    // nem com admin + profissional.
+    const outroProf = api.sessao(clinicaA, 'profissional');
+    const adminProf = api.sessao(clinicaA, 'admin', 'profissional');
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(outroProf)).send({ status: 'em_atendimento' }).expect(403);
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(adminProf)).send({ status: 'em_atendimento' }).expect(403);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(profA)).send({ status: 'em_atendimento' }).expect(200, { statusAnterior: 'chegou' });
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(outroProf)).send({ status: 'atendido' }).expect(403);
     await api.http().post(`/agendamentos/${id}/remarcar`).set(cab(recepA)).send({ data: '2030-03-07', hora: '11:00' }).expect(409);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(profA)).send({ status: 'atendido' }).expect(200);
 
@@ -310,7 +332,7 @@ describe('auditoria', () => {
       tx.select({ n: sql<number>`count(*)::int` }).from(auditLog).where(eq(auditLog.tenantId, clinicaA)),
     );
     await api.http().get(`/pacientes/${pacienteA}`).set(cab(recepA)).expect(200);
-    await api.http().get('/pacientes').query({ busca: 'agata' }).set(cab(recepA)).expect(200);
+    await api.http().post('/pacientes/busca').send({ busca: 'agata' }).set(cab(recepA)).expect(200);
     const depois = await withTenant(api.db.db, clinicaA, (tx) =>
       tx.select({ n: sql<number>`count(*)::int` }).from(auditLog).where(eq(auditLog.tenantId, clinicaA)),
     );
