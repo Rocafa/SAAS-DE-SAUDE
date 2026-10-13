@@ -143,9 +143,15 @@ resource "aws_db_instance" "this" {
   }
 }
 
-# --- ElastiCache Redis (TLS + AUTH) ------------------------------------------------------
+# --- ElastiCache Redis (privado, TLS obrigatório + AUTH) ---------------------------------
+# Privado: só nas sub-redes de dados (sem rota para a internet) e o SG só aceita a API.
+# AUTH: o token NUNCA aparece em código nem no estado do Terraform. Ele nasce efêmero a cada
+# execução e vai, na MESMA execução, write-only para o ElastiCache (auth_token_wo) e para o
+# Secrets Manager (secret_string_wo, segredo "redis"). Os dois só recebem o valor quando
+# var.redis_auth_versao muda; nas outras execuções o valor efêmero é descartado sem uso.
+# A API lê REDIS_URL (rediss://) do Secrets Manager pelo papel de execução do ECS.
 
-resource "random_password" "redis_auth" {
+ephemeral "random_password" "redis_auth" {
   length  = 64
   special = false # AUTH do ElastiCache aceita só parte dos especiais; 64 alfanuméricos bastam.
 }
@@ -163,6 +169,7 @@ resource "aws_cloudwatch_log_group" "redis" {
 }
 
 resource "aws_elasticache_replication_group" "this" {
+  #checkov:skip=CKV_AWS_31:TLS obrigatório e AUTH ligados; o token vai em auth_token_wo (write-only, fora do estado), que o checkov ainda não reconhece.
   replication_group_id = local.nome
   description          = "Rate limit e filas (BullMQ) da ${local.nome}"
   engine               = "redis"
@@ -180,7 +187,10 @@ resource "aws_elasticache_replication_group" "this" {
   kms_key_id                 = aws_kms_key.this["redis"].arn
   transit_encryption_enabled = true
   transit_encryption_mode    = "required"
-  auth_token                 = random_password.redis_auth.result
+  auth_token_wo              = ephemeral.random_password.redis_auth.result
+  auth_token_wo_version      = var.redis_auth_versao
+  # ROTATE: o token novo entra e o antigo continua válido até a próxima troca com SET, então as
+  # tarefas da API em execução não caem durante a rotação (ver infra-staging.md, "Rotação").
   auth_token_update_strategy = "ROTATE"
 
   snapshot_retention_limit   = 7
@@ -196,10 +206,12 @@ resource "aws_elasticache_replication_group" "this" {
 }
 
 # --- Segredos da aplicação ---------------------------------------------------------------
-# Senhas de app_user e app_migrator geradas aqui; o bootstrap (infra/rds/bootstrap.sh) lê as
-# mesmas senhas do Secrets Manager e cria os papéis. O estado é cifrado por KMS (bootstrap-state).
+# Senhas de app_user e app_migrator e o token do Redis: efêmeros, gravados write-only no Secrets
+# Manager (nunca no estado). O bootstrap (infra/rds/bootstrap.sh) lê as senhas do Secrets Manager
+# e cria os papéis. Rotação: incrementar a variável de versão do segredo e aplicar (o valor novo é
+# gerado e gravado na mesma execução); para o banco, reexecutar o bootstrap em seguida.
 
-resource "random_password" "banco" {
+ephemeral "random_password" "banco" {
   for_each = toset(["app_user", "app_migrator"])
   length   = 40
   special  = false # vai dentro de URL; sem especiais não precisa de escape
@@ -207,34 +219,43 @@ resource "random_password" "banco" {
 
 locals {
   host_banco = aws_db_instance.this.address
+
+  # Parte NÃO efêmera (nome, descrição, versão): pode ir em for_each.
   segredos_app = {
     "banco-app-user" = {
       descricao = "DATABASE_URL da API (papel app_user, RLS sempre aplicado)"
-      valor = jsonencode({
-        username = "app_user"
-        password = random_password.banco["app_user"].result
-        url      = "postgres://app_user:${random_password.banco["app_user"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
-      })
+      versao    = var.banco_senhas_versao
     }
     "banco-app-migrator" = {
       descricao = "DATABASE_MIGRATOR_URL (papel app_migrator, só na tarefa de migração)"
-      valor = jsonencode({
-        username = "app_migrator"
-        password = random_password.banco["app_migrator"].result
-        url      = "postgres://app_migrator:${random_password.banco["app_migrator"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
-      })
+      versao    = var.banco_senhas_versao
     }
     "redis" = {
       descricao = "REDIS_URL com TLS (rediss://) e AUTH"
-      valor = jsonencode({
-        url = "rediss://:${random_password.redis_auth.result}@${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
-      })
+      versao    = var.redis_auth_versao
     }
+  }
+
+  # Parte efêmera (o conteúdo): só existe durante a execução e só vai para atributos write-only.
+  valores_segredos = {
+    "banco-app-user" = jsonencode({
+      username = "app_user"
+      password = ephemeral.random_password.banco["app_user"].result
+      url      = "postgres://app_user:${ephemeral.random_password.banco["app_user"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
+    })
+    "banco-app-migrator" = jsonencode({
+      username = "app_migrator"
+      password = ephemeral.random_password.banco["app_migrator"].result
+      url      = "postgres://app_migrator:${ephemeral.random_password.banco["app_migrator"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
+    })
+    "redis" = jsonencode({
+      url = "rediss://:${ephemeral.random_password.redis_auth.result}@${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
+    })
   }
 }
 
 resource "aws_secretsmanager_secret" "app" {
-  #checkov:skip=CKV2_AWS_57:Rotação automática entra com o I4 (Lambda de rotação); hoje rotaciona-se trocando o random_password e reexecutando o bootstrap.
+  #checkov:skip=CKV2_AWS_57:Rotação automática entra com o I4 (Lambda de rotação); hoje rotaciona-se pela variável de versão (ver infra-staging.md).
   for_each = local.segredos_app
 
   name                    = "${local.nome}/${each.key}"
@@ -246,6 +267,7 @@ resource "aws_secretsmanager_secret" "app" {
 resource "aws_secretsmanager_secret_version" "app" {
   for_each = local.segredos_app
 
-  secret_id     = aws_secretsmanager_secret.app[each.key].id
-  secret_string = each.value.valor
+  secret_id                = aws_secretsmanager_secret.app[each.key].id
+  secret_string_wo         = local.valores_segredos[each.key]
+  secret_string_wo_version = each.value.versao
 }

@@ -4,16 +4,17 @@
 #   terraform init -backend-config=backend.hcl
 # (backend.hcl recebe o output backend_hcl; não tem segredo, mas fica fora do git por ter o ID da conta.)
 terraform {
-  required_version = ">= 1.10.0, < 2.0.0"
+  # 1.11+: atributos write-only (senhas e token do Redis fora do estado).
+  required_version = ">= 1.11.0, < 2.0.0"
 
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 6.60.0, < 7.0.0"
+      version = ">= 6.68.0, < 7.0.0" # validado com 6.68.0 (auth_token_wo, secret_string_wo)
     }
     random = {
       source  = "hashicorp/random"
-      version = ">= 3.6.0, < 4.0.0"
+      version = ">= 3.7.0, < 4.0.0" # 3.7+: ephemeral "random_password"
     }
   }
 
