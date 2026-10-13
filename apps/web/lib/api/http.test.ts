@@ -48,7 +48,7 @@ describe('adaptador HTTP: sessão e clínica', () => {
   it('nunca envia tenant/clínica: só Accept, Content-Type e Authorization (dev); cookies incluídos', async () => {
     const { chamadas, fetch } = simular((c) => {
       if (c.url.pathname === '/sessao') return respostaJson(200, { usuarioId: U(1), clinicaId: U(9), perfis: ['recepcao'] });
-      if (c.url.pathname === '/pacientes') return respostaJson(200, { itens: [], temMais: false });
+      if (c.url.pathname.startsWith('/pacientes')) return respostaJson(200, { itens: [], temMais: false });
       if (c.url.pathname === '/agendamentos' && c.metodo === 'GET') return respostaJson(200, { itens: [], truncado: false });
       if (c.url.pathname === '/agendamentos') return respostaJson(201, { id: U(5), pacienteId: U(2), profissionalId: U(3), tipoId: U(4), data: '2026-10-14', hora: '09:00', minutos: 50, status: 'agendado', encaixe: false });
       return respostaJson(200, { statusAnterior: 'agendado' });
