@@ -254,9 +254,12 @@ describe('auditoria append-only', () => {
         .where(eq(patients.tenantId, b.ctx.tenantId))
         .returning({ id: patients.id });
       expect(upd).toHaveLength(0);
-      const del = await tx.delete(patients).where(eq(patients.tenantId, b.ctx.tenantId)).returning({ id: patients.id });
-      expect(del).toHaveLength(0);
     });
+    // DELETE nem chega ao RLS: o runtime não tem o privilégio em patients (0009, retenção).
+    const del = await errorText(
+      withTenant(h.db, a.ctx.tenantId, (tx) => tx.delete(patients).where(eq(patients.tenantId, b.ctx.tenantId))),
+    );
+    expect(del).toMatch(/permission denied|permissão negada/);
     const ins = await errorText(
       withTenant(h.db, a.ctx.tenantId, (tx) =>
         tx.insert(patients).values({ tenantId: b.ctx.tenantId, displayName: 'Intruso Ficticio' }),
