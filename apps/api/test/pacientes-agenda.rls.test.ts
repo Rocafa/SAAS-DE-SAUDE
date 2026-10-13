@@ -275,7 +275,14 @@ describe('agenda: capacidade (AGD-01.5), encaixe, remarcar, status', () => {
     // Recepção não marca "em atendimento" (ato do profissional); o profissional marca.
     await api.http().post(`/agendamentos/${id}/status`).set(cab(recepA)).send({ status: 'em_atendimento' }).expect(403);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(adminA)).send({ status: 'em_atendimento' }).expect(403);
+    // R1 (parecer PR #57): outro profissional da MESMA clínica não atende agendamento que não é dele,
+    // nem com admin + profissional.
+    const outroProf = api.sessao(clinicaA, 'profissional');
+    const adminProf = api.sessao(clinicaA, 'admin', 'profissional');
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(outroProf)).send({ status: 'em_atendimento' }).expect(403);
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(adminProf)).send({ status: 'em_atendimento' }).expect(403);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(profA)).send({ status: 'em_atendimento' }).expect(200, { statusAnterior: 'chegou' });
+    await api.http().post(`/agendamentos/${id}/status`).set(cab(outroProf)).send({ status: 'atendido' }).expect(403);
     await api.http().post(`/agendamentos/${id}/remarcar`).set(cab(recepA)).send({ data: '2030-03-07', hora: '11:00' }).expect(409);
     await api.http().post(`/agendamentos/${id}/status`).set(cab(profA)).send({ status: 'atendido' }).expect(200);
 
