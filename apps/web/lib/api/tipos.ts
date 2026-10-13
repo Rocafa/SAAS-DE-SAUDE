@@ -192,3 +192,31 @@ export const NOME_STATUS: Record<StatusAgendamento, string> = {
 export function nomeExibido(p: Pick<Paciente, 'nome' | 'nomeSocial'>): string {
   return p.nomeSocial ?? p.nome;
 }
+
+/** Controle simples de guia de convênio (M1, sem XML TISS). */
+export interface Guia {
+  id: string;
+  pacienteId: string;
+  convenio: string;
+  numero: string;
+  sessoesAutorizadas: number;
+  sessoesUsadas: number;
+  /** AAAA-MM-DD */
+  validade: string;
+}
+
+export interface NovaGuia {
+  pacienteId: string;
+  convenio: string;
+  numero: string;
+  sessoesAutorizadas: number;
+  validade: string;
+}
+
+/** Prévia da caixa de mensagens do WhatsApp (M2). Nada é enviado. */
+export interface Conversa {
+  id: string;
+  pacienteId: string;
+  naoLidas: number;
+  mensagens: { de: 'paciente' | 'clinica'; texto: string; hora: string }[];
+}

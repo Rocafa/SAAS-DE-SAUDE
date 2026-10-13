@@ -17,7 +17,12 @@ const TELAS: [string, string][] = [
   ['atendimento-recepcao', '/atendimento'],
   ['documentos-vazio', '/documentos'],
   ['prontuario-sigiloso', '/pacientes/p04/prontuario'],
-  ['em-construcao', '/financeiro'],
+  ['financeiro', '/financeiro'],
+  ['recibos', '/financeiro/recibos'],
+  ['guias', '/guias'],
+  ['mensagens', '/mensagens'],
+  ['relatorios', '/relatorios'],
+  ['em-construcao', '/configuracoes/clinica'],
 ];
 
 const PASTA = new URL('../../../docs/02-produto/telas/', import.meta.url).pathname;

@@ -9,7 +9,7 @@
 | 1 | Design system em cinza + estrutura (menu lateral e barra inferior) + camada de dados fake + **Ajudante completo** + Início | 🟢 aberto, pede revisão do Guardião |
 | 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | 🟢 aberto, empilhado sobre o PR 1 |
 | 3 | Atendimento/Prontuário + Documentos | 🟢 aberto, empilhado sobre o PR 2 |
-| 4 | Financeiro + Guias + Mensagens + Relatórios | ⬜ |
+| 4 | Financeiro + Guias + Mensagens + Relatórios | 🟢 aberto, empilhado sobre o PR 3 |
 | 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | ⬜ |
 | 6 | Portal do paciente + PWA + páginas de erro | ⬜ |
 
@@ -54,3 +54,11 @@
 - **Documentos:** atestado (1 a 15 dias por extenso; CID só com autorização do paciente), declaração de comparecimento e recibo, com prévia em folha e "Imprimir" (a impressão sai só com a folha). ICP-Brasil marcado como "em breve".
 - **Demonstração:** em Mais › "Demonstração: entrar como", troca entre recepção, fisioterapeuta e psicólogo para ver as permissões.
 - Números do PR 3: Vitest 163 no web; Playwright 93 verdes + 1 pulado de propósito.
+
+## O que o PR 4 entrega
+
+- **Financeiro:** recebido hoje (total e por forma), contas a receber com "Receber" (dinheiro, cartão ou Pix) e desfazer, pacotes e saldo, todos os recibos com "Imprimir". Pix com QR e baixa automática marcado como "em breve" (D5).
+- **Guias de convênio** (controle simples do M1, sem TISS): cadastro com erros que dizem o que fazer; avisos "vence em X dias", "só resta 1 sessão", "guia vencida".
+- **Mensagens:** prévia da caixa do WhatsApp (M2) com conversas fictícias; nada é enviado; campo de resposta desligado.
+- **Relatórios:** atendimentos, faltas, taxa de faltas e recebido em 7 dias, 30 dias ou no mês; gráfico em cinza (atendidos em preto, faltas listradas) e a mesma informação em tabela.
+- Números do PR 4: Vitest 172 no web; Playwright 117 verdes + 1 pulado de propósito.
