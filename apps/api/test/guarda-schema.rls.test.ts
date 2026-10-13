@@ -38,6 +38,10 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // UPDATE só nas colunas do ciclo de vida, por isso aparece via has_any_column_privilege.
   tenant_master_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   tenant_data_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Domínio de agenda (migração 0007): sem DELETE/TRUNCATE — inativar/cancelar, nunca apagar.
+  professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

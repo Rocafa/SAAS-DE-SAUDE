@@ -1,4 +1,4 @@
-import { bigint, customType, foreignKey, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, foreignKey, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -24,6 +24,75 @@ export const patients = pgTable('patients', {
     .references(() => tenants.id),
   displayName: text('display_name').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // Migração 0007: cadastro mínimo. Os `*Enc` guardam SÓ o formato cifrado v1 (FieldCipher).
+  socialName: text('social_name'),
+  /** Nome normalizado (minúsculas, sem acento) para a busca; derivado de nome + nome social. */
+  searchName: text('search_name').notNull().default(''),
+  cpfEnc: text('cpf_enc'),
+  phoneEnc: text('phone_enc'),
+  birthDateEnc: text('birth_date_enc'),
+  active: boolean('active').notNull().default(true),
+  inactivatedAt: timestamp('inactivated_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
+export const professionals = pgTable('professionals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  /** Usuário da sessão vinculado: liga o perfil "profissional" à própria agenda. */
+  userId: uuid('user_id'),
+  displayName: text('display_name').notNull(),
+  specialty: text('specialty').notNull(),
+  capacity: integer('capacity').notNull().default(1),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Tipos de atendimento (migração 0007): duração e capacidade do horário (atendimento em grupo). */
+export const appointmentTypes = pgTable('appointment_types', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  name: text('name').notNull(),
+  durationMinutes: integer('duration_minutes').notNull(),
+  capacity: integer('capacity').notNull().default(1),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Mesmos valores do CHECK de appointments.status e de AppointmentStatus (packages/shared). */
+export const APPOINTMENT_STATUSES = [
+  'scheduled',
+  'confirmed',
+  'checked_in',
+  'in_progress',
+  'completed',
+  'cancelled',
+  'no_show',
+] as const;
+export type AppointmentStatusDb = (typeof APPOINTMENT_STATUSES)[number];
+
+/** Agendamentos (migração 0007): um paciente por linha; FK compostas amarram tudo à mesma clínica. */
+export const appointments = pgTable('appointments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  professionalId: uuid('professional_id').notNull(),
+  appointmentTypeId: uuid('appointment_type_id').notNull(),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+  endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+  status: text('status', { enum: APPOINTMENT_STATUSES }).notNull().default('scheduled'),
+  isWalkIn: boolean('is_walk_in').notNull().default(false),
+  checkedInAt: timestamp('checked_in_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
@@ -90,4 +159,13 @@ export const tenantDataKeys = pgTable(
   ],
 );
 
-export const schema = { tenants, patients, auditLog, tenantMasterKeys, tenantDataKeys };
+export const schema = {
+  tenants,
+  patients,
+  auditLog,
+  tenantMasterKeys,
+  tenantDataKeys,
+  professionals,
+  appointmentTypes,
+  appointments,
+};
