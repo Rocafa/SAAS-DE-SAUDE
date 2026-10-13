@@ -63,15 +63,60 @@ resource "aws_db_parameter_group" "pg16" {
     name  = "log_disconnections"
     value = "1"
   }
-  # Nunca logar parâmetros de query: podem conter dado de saúde.
+  # Log do Postgres NUNCA leva valor de linha nem SQL (V2 do parecer do PR #58, item 13):
+  # - log_statement = none: "ddl" gravaria o ALTER ROLE ... PASSWORD do bootstrap (senha em log);
+  # - log_min_duration_statement = -1 e log_min_duration_sample = -1: sem SQL de query lenta;
+  # - log_error_verbosity = terse: corta DETAIL/HINT/QUERY/CONTEXT ("Failing row contains (...)",
+  #   "Key (...)=(...)" trazem nome de paciente numa violação de CHECK/UNIQUE);
+  # - log_min_error_statement = panic: não grava o SQL que causou o erro;
+  # - log_parameter_max_length(_on_error) = 0: nunca grava valor de parâmetro de bind.
   parameter {
     name  = "log_statement"
-    value = "ddl"
+    value = "none"
   }
   parameter {
     name  = "log_min_duration_statement"
     value = "-1"
   }
+  parameter {
+    name  = "log_min_duration_sample"
+    value = "-1"
+  }
+  parameter {
+    name  = "log_error_verbosity"
+    value = "terse"
+  }
+  parameter {
+    name  = "log_min_error_statement"
+    value = "panic"
+  }
+  parameter {
+    name  = "log_parameter_max_length"
+    value = "0"
+  }
+  parameter {
+    name  = "log_parameter_max_length_on_error"
+    value = "0"
+  }
+}
+
+# Grupos que o RDS criaria sozinho ("nunca expira", sem KMS). Declarados ANTES da instância para
+# nascerem com retenção e a chave de logs (V2). Log técnico: retenção curta (logs_retencao_dias).
+resource "aws_cloudwatch_log_group" "rds" {
+  #checkov:skip=CKV_AWS_338:Log técnico do banco (sem dado pessoal após o V2): retenção curta, alinhada à matriz-retencao/D7.
+  for_each = toset(["postgresql", "upgrade"])
+
+  name              = "/aws/rds/instance/${local.nome}/${each.key}"
+  retention_in_days = var.logs_retencao_dias
+  kms_key_id        = aws_kms_key.this["logs"].arn
+}
+
+# Enhanced Monitoring escreve métricas de SO no grupo da conta "RDSOSMetrics" (sem dado pessoal).
+resource "aws_cloudwatch_log_group" "rds_os_metrics" {
+  #checkov:skip=CKV_AWS_338:Métrica de SO, sem dado pessoal: retenção curta.
+  name              = "RDSOSMetrics"
+  retention_in_days = var.logs_retencao_dias
+  kms_key_id        = aws_kms_key.this["logs"].arn
 }
 
 data "aws_iam_policy_document" "rds_monitoramento_confianca" {
@@ -135,8 +180,10 @@ resource "aws_db_instance" "this" {
   enabled_cloudwatch_logs_exports     = ["postgresql", "upgrade"]
   monitoring_interval                 = 60
   monitoring_role_arn                 = aws_iam_role.rds_monitoramento.arn
-  performance_insights_enabled        = true
-  performance_insights_kms_key_id     = aws_kms_key.this["rds"].arn
+  # Os grupos de log precisam existir antes do primeiro export (senão o RDS os cria sem expiração).
+  depends_on                      = [aws_cloudwatch_log_group.rds, aws_cloudwatch_log_group.rds_os_metrics]
+  performance_insights_enabled    = true
+  performance_insights_kms_key_id = aws_kms_key.this["rds"].arn
 
   lifecycle {
     prevent_destroy = true

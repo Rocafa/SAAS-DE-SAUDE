@@ -105,6 +105,14 @@ jobs:
                --include='*.tf' -r .; then
             echo "Segredo persistido no estado; use ephemeral + atributo write-only (_wo)."; exit 1
           fi
+          # Export de log do RDS só com o grupo declarado (retenção + KMS); senão nasce "nunca expira".
+          if grep -rq --include='*.tf' 'enabled_cloudwatch_logs_exports' . \
+             && ! grep -rq --include='*.tf' '"/aws/rds/instance/' .; then
+            echo "enabled_cloudwatch_logs_exports sem aws_cloudwatch_log_group do RDS declarado."; exit 1
+          fi
+          # Postgres nunca loga valor de linha nem SQL (V2 do PR #58).
+          grep -Eq 'name *= *"log_error_verbosity"' staging/dados.tf
+          grep -Eq 'name *= *"log_min_error_statement"' staging/dados.tf
           # Região: somente sa-east-1.
           if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
             echo "Região fora de sa-east-1."; exit 1

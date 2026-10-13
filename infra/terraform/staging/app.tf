@@ -125,6 +125,15 @@ resource "aws_ecs_cluster" "this" {
     name  = "containerInsights"
     value = "enhanced"
   }
+  depends_on = [aws_cloudwatch_log_group.container_insights]
+}
+
+# O Container Insights criaria este grupo sozinho, sem expiração e sem KMS (V2 do PR #58).
+resource "aws_cloudwatch_log_group" "container_insights" {
+  #checkov:skip=CKV_AWS_338:Métrica de desempenho, sem dado pessoal: retenção curta.
+  name              = "/aws/ecs/containerinsights/${local.nome}/performance"
+  retention_in_days = var.logs_retencao_dias
+  kms_key_id        = aws_kms_key.this["logs"].arn
 }
 
 resource "aws_cloudwatch_log_group" "api" {
@@ -473,5 +482,9 @@ resource "aws_wafv2_web_acl_logging_configuration" "this" {
     single_header {
       name = "cookie"
     }
+  }
+  # Query string pode trazer texto de busca (nome de paciente): nunca vai para o log (R1 do PR #58).
+  redacted_fields {
+    query_string {}
   }
 }
