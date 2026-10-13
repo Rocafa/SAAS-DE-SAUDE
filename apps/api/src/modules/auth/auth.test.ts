@@ -29,6 +29,16 @@ describe('provedor de autenticação plugável', () => {
     expect(() => AppModule.forRoot(config)).toThrow(/produção/);
   });
 
+  it('sessão fictícia só com NODE_ENV development/test: staging, vazio ou qualquer outro valor recusa subir', () => {
+    for (const nodeEnv of ['staging', 'homolog', 'prod', 'Production', '', undefined]) {
+      expect(() => createAuthProvider({ NODE_ENV: nodeEnv })).toThrow(/produção|staging/);
+    }
+    // undefined no construtor cai no padrão (process.env.NODE_ENV, que no Vitest é 'test').
+    for (const nodeEnv of ['staging', 'homolog', 'prod', 'Production', '']) {
+      expect(() => new DevSessionProvider(nodeEnv)).toThrow();
+    }
+  });
+
   it('fora de produção usa a sessão fictícia; provedor desconhecido é erro', () => {
     expect(createAuthProvider({ NODE_ENV: 'test' }).tipo).toBe('dev');
     expect(() => createAuthProvider({ NODE_ENV: 'development', AUTH_PROVIDER: 'zitadel' })).toThrow();

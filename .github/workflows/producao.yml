@@ -108,6 +108,9 @@ jobs:
       - name: Build da API
         run: pnpm turbo run build --filter=@plataforma/api
       - name: Subir a API compilada (node puro, como em produção)
+        # Sem login real (D4) a API só sobe em development/test: a carga usa a sessão fictícia.
+        env:
+          NODE_ENV: test
         run: |
           node apps/api/dist/main.js > api.log 2>&1 &
           echo $! > api.pid

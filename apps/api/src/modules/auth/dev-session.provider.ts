@@ -9,7 +9,7 @@ const TOKEN_RE = /^Bearer ([A-Za-z0-9_-]{43})$/;
 /**
  * Sessão FICTÍCIA para desenvolvimento e teste, guardada em memória NO SERVIDOR. Imita o desenho
  * recomendado na D4: o cliente só tem um token opaco; clínica, usuário e perfis ficam do lado do
- * servidor. Recusa NODE_ENV=production (como o LocalKeyProvider).
+ * servidor. Só aceita NODE_ENV development ou test (lista fechada).
  *
  * Não há login: as sessões são criadas por código (testes, script de dev). O mapa guarda o
  * SHA-256 do token, não o token.
@@ -19,8 +19,8 @@ export class DevSessionProvider implements AuthProvider {
   private readonly sessoes = new Map<string, AuthContext>();
 
   constructor(nodeEnv: string | undefined = process.env.NODE_ENV) {
-    if (nodeEnv === 'production') {
-      throw new Error('DevSessionProvider é só para dev/teste: em produção use o provedor real (D4)');
+    if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+      throw new Error('DevSessionProvider é só para development/test: em produção ou staging use o provedor real (D4)');
     }
   }
 
