@@ -14,9 +14,9 @@
 | Rodada 9.5: **#54** economia de minutos do Actions (PRs de docs sem CI; ZAP só na main; timeouts; Dependabot agrupado). **Só entra depois que o CI voltar e rodar verde** | Maestro @Rocafa | 13/10/2026 | PR #54 |
 | Rodada 9.3: parecer do Guardião commitado (#42/#43/#45 aprovados com ressalvas; **#44, #46, #47 VETADOS**, comentários nos PRs). ✅ #42 mergeado (com correção de caminhos no Windows). **#43 pronto** (main juntada, 12/12 local), **parado: GitHub Actions sem minutos/pagamento**. Correções B1–B3 das telas vetadas: com o front (@Lopesloro) | Maestro @Rocafa | 12/10/2026 | PRs |
 | Rodada 9.4: atualizar RELATORIO-GERAL (rodadas 6–8), CONTEXTO.md e orquestra.html | Maestro @Rocafa | 12/10/2026 | — |
-| Rodada 11.1: rotas de negócio da API (pacientes e agenda) seguindo a `ApiClinica`, com autenticação plugável (pronta para Better Auth, D4 recomendada) | Maestro @Rocafa (agente engenharia) | 13/10/2026 | branch `eng/rotas-pacientes-agenda` |
-| Rodada 11.2: PR do Terraform do staging + `infra.yml` + requisitos do Guardião | Maestro @Rocafa (agente devops-ci) | 13/10/2026 | branch `devops/terraform-staging-b` |
-| Rodada 11.3: golden sets de IA, 50 por nicho (sintéticos) + checklist de revisão clínica | Maestro @Rocafa (agente ia-llm) | 13/10/2026 | branch `ia/golden-sets-50` |
+| Rodada 11.1: ✅ **PR #57** (rotas de pacientes e agenda, auth plugável, exportação G2) — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #57 |
+| Rodada 11.2: ✅ **PR #58** (Terraform do staging + infra.yml) — aguarda CI (checkov só roda lá) | Maestro @Rocafa | 13/10/2026 | PR #58 |
+| Rodada 11.3: ✅ **PR #56** (golden sets 50/nicho) — aguarda CI e revisão clínica humana | Maestro @Rocafa | 13/10/2026 | PR #56 |
 
 ## Livre (pegue colocando seu nome)
 
