@@ -112,12 +112,40 @@ export function validarAlteracaoPaciente(corpo: unknown): AlteracaoPaciente {
   return out;
 }
 
+/**
+ * Chaves de texto livre que NUNCA podem vir na URL (V1 do parecer PR #57): a query string vai para os
+ * logs de acesso do ALB, do WAF, de proxies e de APM, fora do nosso controle de retenção. A busca por
+ * nome é `POST /pacientes/busca`, com o termo no corpo.
+ */
+export const TEXTO_LIVRE_NA_URL = ['busca', 'q', 'termo', 'nome', 'nomeSocial', 'cpf', 'telefone', 'nascimento'] as const;
+
+/** `GET /pacientes`: só situação e paginação na query; termo de busca na URL é recusado (400). */
 export function validarFiltroPacientes(query: unknown): FiltroPacientes {
-  const v = new Validador(exigirObjeto(query ?? {}, ['busca', 'situacao', 'pagina', 'limite']));
-  const busca = v.texto('busca', { min: 2, max: 80 });
+  if (
+    typeof query === 'object' &&
+    query !== null &&
+    TEXTO_LIVRE_NA_URL.some((k) => Object.prototype.hasOwnProperty.call(query, k))
+  ) {
+    throw new EntradaInvalidaError(['busca_na_url']);
+  }
+  const v = new Validador(exigirObjeto(query ?? {}, ['situacao', 'pagina', 'limite']));
   const situacao = v.umDe('situacao', ['ativos', 'inativos', 'todos'] as const, false) ?? 'ativos';
   const pagina = v.inteiroDeTexto('pagina', { min: 1, max: PAGINA_MAXIMA, padrao: 1 });
   const limite = v.inteiroDeTexto('limite', { min: 1, max: LIMITE_MAXIMO, padrao: LIMITE_PADRAO });
   v.concluir();
-  return { situacao, pagina, limite, ...(busca ? { busca: normalizarBusca(busca) } : {}) };
+  return { situacao, pagina, limite };
+}
+
+/** `POST /pacientes/busca`: termo (2 a 80 caracteres) obrigatório no corpo; paginação como no GET. */
+export function validarBuscaPacientes(corpo: unknown): FiltroPacientes & { readonly busca: string } {
+  const v = new Validador(exigirObjeto(corpo, ['busca', 'situacao', 'pagina', 'limite']));
+  const busca = v.texto('busca', { min: 2, max: 80, obrigatorio: true });
+  const situacao = v.umDe('situacao', ['ativos', 'inativos', 'todos'] as const, false) ?? 'ativos';
+  const pagina = v.inteiro('pagina', { min: 1, max: PAGINA_MAXIMA }) ?? 1;
+  const limite = v.inteiro('limite', { min: 1, max: LIMITE_MAXIMO }) ?? LIMITE_PADRAO;
+  v.concluir();
+  const normal = normalizarBusca(busca);
+  // Termo só de acentos/espaços fica vazio depois de normalizar: seria "listar tudo" disfarçado.
+  if (normal.length < 2) throw new EntradaInvalidaError(['busca']);
+  return { busca: normal, situacao, pagina, limite };
 }

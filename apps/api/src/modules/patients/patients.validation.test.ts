@@ -6,6 +6,7 @@ import {
   normalizarCpf,
   normalizarTelefone,
   validarAlteracaoPaciente,
+  validarBuscaPacientes,
   validarFiltroPacientes,
   validarNovoPaciente,
 } from './patients.validation';
@@ -82,8 +83,7 @@ describe('validação estrita de pacientes', () => {
 
   it('filtro: limite máximo 100, página positiva, busca de 2 a 80 caracteres', () => {
     expect(validarFiltroPacientes({})).toEqual({ situacao: 'ativos', pagina: 1, limite: 50 });
-    expect(validarFiltroPacientes({ busca: 'Ána', limite: '100', pagina: '3', situacao: 'todos' })).toEqual({
-      busca: 'ana',
+    expect(validarFiltroPacientes({ limite: '100', pagina: '3', situacao: 'todos' })).toEqual({
       limite: 100,
       pagina: 3,
       situacao: 'todos',
@@ -91,6 +91,29 @@ describe('validação estrita de pacientes', () => {
     expect(campos(() => validarFiltroPacientes({ limite: '101' }))).toEqual(['limite']);
     expect(campos(() => validarFiltroPacientes({ limite: ['1', '2'] }))).toEqual(['limite']);
     expect(campos(() => validarFiltroPacientes({ pagina: '-1' }))).toEqual(['pagina']);
-    expect(campos(() => validarFiltroPacientes({ busca: 'a' }))).toEqual(['busca']);
+  });
+
+  it('termo de busca (ou qualquer texto livre) na query é recusado: a URL vai para logs do ALB/WAF', () => {
+    for (const chave of ['busca', 'q', 'termo', 'nome', 'cpf', 'telefone']) {
+      expect(campos(() => validarFiltroPacientes({ [chave]: 'Ana' })), chave).toEqual(['busca_na_url']);
+    }
+  });
+
+  it('busca no corpo: termo de 2 a 80 caracteres, paginação numérica até 100', () => {
+    expect(validarBuscaPacientes({ busca: 'Ána', limite: 100, pagina: 3, situacao: 'todos' })).toEqual({
+      busca: 'ana',
+      limite: 100,
+      pagina: 3,
+      situacao: 'todos',
+    });
+    expect(validarBuscaPacientes({ busca: 'ana' })).toEqual({ busca: 'ana', situacao: 'ativos', pagina: 1, limite: 50 });
+    expect(campos(() => validarBuscaPacientes({}))).toEqual(['busca']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'a' }))).toEqual(['busca']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'x'.repeat(81) }))).toEqual(['busca']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'á́' }))).toEqual(['busca']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'ana', limite: 101 }))).toEqual(['limite']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'ana', limite: '10' }))).toEqual(['limite']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'ana', pagina: 0 }))).toEqual(['pagina']);
+    expect(campos(() => validarBuscaPacientes({ busca: 'ana', tenantId: 'x' }))).toEqual(['campo_desconhecido']);
   });
 });
