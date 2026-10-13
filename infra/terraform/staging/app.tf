@@ -192,7 +192,7 @@ resource "aws_iam_role_policy" "api_execucao" {
   policy = data.aws_iam_policy_document.api_execucao.json
 }
 
-# Papel da TAREFA (o processo Node): hoje não precisa de nenhuma permissão AWS.
+# Papel da TAREFA (o processo Node): só gera e abre DEK das clínicas (política em kms-clinicas.tf).
 resource "aws_iam_role" "api_tarefa" {
   name               = "${local.nome}-api-tarefa"
   assume_role_policy = data.aws_iam_policy_document.ecs_confianca.json
@@ -388,6 +388,34 @@ resource "aws_wafv2_web_acl" "this" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "AWSManagedRulesKnownBadInputsRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # IPs anônimos (Tor, proxies abertos) bloqueados. HostingProviderIPList só conta: os smoke tests
+  # do CI saem de runners em nuvem e seriam barrados. Também fecha o CKV2_AWS_76 do checkov, que
+  # exige este grupo junto com o KnownBadInputs.
+  rule {
+    name     = "AWSManagedRulesAnonymousIpList"
+    priority = 5
+    override_action {
+      none {}
+    }
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesAnonymousIpList"
+        vendor_name = "AWS"
+        rule_action_override {
+          name = "HostingProviderIPList"
+          action_to_use {
+            count {}
+          }
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AWSManagedRulesAnonymousIpList"
       sampled_requests_enabled   = true
     }
   }

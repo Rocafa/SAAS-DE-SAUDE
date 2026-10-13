@@ -104,3 +104,67 @@ variable "logs_retencao_dias" {
   type        = number
   default     = 30
 }
+
+variable "redis_auth_versao" {
+  description = "Versão do token de AUTH do Redis. Incrementar gera um token novo e o grava (write-only) no ElastiCache e no Secrets Manager na mesma execução."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.redis_auth_versao >= 1 && floor(var.redis_auth_versao) == var.redis_auth_versao
+    error_message = "Inteiro >= 1."
+  }
+}
+
+variable "banco_senhas_versao" {
+  description = "Versão das senhas de app_user e app_migrator. Incrementar gera senhas novas no Secrets Manager; depois, reexecutar infra/rds/bootstrap.sh."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.banco_senhas_versao >= 1 && floor(var.banco_senhas_versao) == var.banco_senhas_versao
+    error_message = "Inteiro >= 1."
+  }
+}
+
+# --- Âncora da auditoria encadeada (R2 do parecer do PR #37) -------------------------------
+
+variable "conta_auditoria_id" {
+  description = "Conta AWS separada que guarda a âncora da auditoria. null = mesma conta de staging (aceitável só em staging, com papel e política separados)."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.conta_auditoria_id == null || can(regex("^[0-9]{12}$", var.conta_auditoria_id))
+    error_message = "conta_auditoria_id deve ter 12 dígitos ou ser null."
+  }
+}
+
+variable "papel_auditoria_arn" {
+  description = "Papel que o Terraform assume na conta de auditoria para criar o bucket da âncora. Obrigatório quando conta_auditoria_id é definido."
+  type        = string
+  default     = null
+  validation {
+    condition     = (var.conta_auditoria_id == null) == (var.papel_auditoria_arn == null)
+    error_message = "Defina conta_auditoria_id e papel_auditoria_arn juntos (ou nenhum dos dois)."
+  }
+}
+
+variable "ancora_retencao_dias" {
+  description = "Retenção em modo COMPLIANCE de cada âncora publicada. Ninguém (nem o root) apaga ou encurta antes do prazo. Staging: 1 dia (dados sintéticos); prod: o prazo da trilha (D7)."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.ancora_retencao_dias >= 1
+    error_message = "Mínimo de 1 dia."
+  }
+}
+
+# --- Chave mestra (KEK) por clínica (item 22 do parecer do PR #35) -------------------------
+
+variable "kek_janela_exclusao_dias" {
+  description = "Janela mínima de ScheduleKeyDeletion aceita para as KEKs das clínicas (7 a 30). A API usa 7 (KMS_DELETION_WINDOW_DAYS)."
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.kek_janela_exclusao_dias >= 7 && var.kek_janela_exclusao_dias <= 30
+    error_message = "Entre 7 e 30 dias (limites do KMS)."
+  }
+}

@@ -28,6 +28,21 @@ output "segredos_app" {
   value       = { for k, s in aws_secretsmanager_secret.app : k => s.arn }
 }
 
+output "ancora_auditoria_bucket" {
+  description = "Bucket (Object Lock COMPLIANCE) onde o job publica a âncora da auditoria encadeada."
+  value       = module.ancora_auditoria.bucket
+}
+
+output "papel_ancora_publicador" {
+  description = "Papel de tarefa do job que publica a âncora (único que grava no bucket)."
+  value       = aws_iam_role.ancora_publicador.arn
+}
+
+output "papel_gestor_chaves" {
+  description = "Papel de tarefa do job de onboarding/eliminação que cria e destrói as KEKs das clínicas."
+  value       = aws_iam_role.gestor_chaves.arn
+}
+
 output "bucket_documentos" {
   description = "Bucket privado de documentos e exportações."
   value       = aws_s3_bucket.documentos.bucket
