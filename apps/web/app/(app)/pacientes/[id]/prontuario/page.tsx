@@ -7,12 +7,18 @@
 import { ArrowLeft, FileText, Lock } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useConsulta } from '@/components/app/dados';
+import { useConsulta, useDados } from '@/components/app/dados';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import { nomeExibido, type Profissional, type Registro } from '@/lib/api/tipos';
-import { MODELOS } from '@/lib/prontuario';
+import { MODELOS, ehPerfilClinico } from '@/lib/prontuario';
+
+const MOTIVO: Record<NonNullable<Registro['motivoOculto']>, string> = {
+  perfil_nao_clinico: 'Conteúdo clínico: só os profissionais que atendem o paciente leem.',
+  sem_vinculo: 'Conteúdo restrito: você não atende este paciente.',
+  sigilo_psicologia: 'Conteúdo restrito ao profissional autor (sigilo profissional).',
+};
 
 function Lista({ registros, profissionais }: { registros: Registro[]; profissionais: Map<string, Profissional> }) {
   return (
@@ -23,10 +29,10 @@ function Lista({ registros, profissionais }: { registros: Registro[]; profission
             {formatarDia(r.data, new Date())} · {profissionais.get(r.profissionalId)?.nome} ·{' '}
             {r.status === 'assinado' ? 'assinado' : 'rascunho (não assinado)'}
           </p>
-          {Object.keys(r.campos).length === 0 ? (
+          {r.conteudoOculto ? (
             <p className="flex items-center gap-2">
               <Lock aria-hidden className="size-5" />
-              Conteúdo restrito ao profissional autor (sigilo profissional).
+              {MOTIVO[r.motivoOculto ?? 'perfil_nao_clinico']}
             </p>
           ) : (
             <dl className="flex flex-col gap-2">
@@ -53,6 +59,8 @@ function Lista({ registros, profissionais }: { registros: Registro[]; profission
 
 export default function PaginaProntuario() {
   const { id } = useParams<{ id: string }>();
+  const { usuario } = useDados();
+  const clinico = ehPerfilClinico(usuario);
   const consulta = useConsulta(
     async (a) => {
       const [paciente, registros, profissionais] = await Promise.all([a.obterPaciente(id), a.listarRegistros(id), a.listarProfissionais()]);
@@ -78,6 +86,12 @@ export default function PaginaProntuario() {
         </Botao>
         <p className="text-[0.95rem] font-bold uppercase tracking-wide text-texto-suave">Prontuário · fictício</p>
         <h1 className="text-[2rem] font-bold leading-tight">{nomeExibido(paciente)}</h1>
+        {!clinico && (
+          <p role="status" className="flex items-start gap-2 rounded-md border-[3px] border-borda-forte p-3 font-bold">
+            <Lock aria-hidden className="mt-0.5 size-6 shrink-0" />
+            Seu perfil não tem acesso ao conteúdo clínico. Aqui aparecem só a data e o profissional de cada registro.
+          </p>
+        )}
       </header>
 
       <section aria-labelledby="t-comuns">

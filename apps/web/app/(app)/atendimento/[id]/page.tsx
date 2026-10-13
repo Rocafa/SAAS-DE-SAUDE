@@ -15,7 +15,7 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import { nomeExibido, type Registro } from '@/lib/api/tipos';
-import { MODELOS, faltasParaAssinar, modeloDoProfissional } from '@/lib/prontuario';
+import { MODELOS, ehPerfilClinico, faltasParaAssinar, modeloDoProfissional } from '@/lib/prontuario';
 
 const CAMPO = 'w-full rounded-md border-2 border-borda-forte bg-fundo p-3 text-lg';
 
@@ -134,8 +134,13 @@ export default function PaginaAtender() {
         </p>
         <h1 className="text-[2rem] font-bold leading-tight">{nome}</h1>
         <p className="text-texto-suave">
-          {profissional?.nome} · {def.nome} ·{' '}
-          <Link href={`/pacientes/${paciente.id}/prontuario`}>Ver prontuário completo</Link>
+          {profissional?.nome} · {def.nome}
+          {ehPerfilClinico(usuario) && (
+            <>
+              {' · '}
+              <Link href={`/pacientes/${paciente.id}/prontuario`}>Ver prontuário completo</Link>
+            </>
+          )}
         </p>
       </header>
 
@@ -279,6 +284,7 @@ export default function PaginaAtender() {
         </section>
       )}
 
+      {ehPerfilClinico(usuario) && (
       <section aria-labelledby="t-historico">
         <h2 id="t-historico" className="mb-3 text-xl font-bold">
           Histórico
@@ -293,7 +299,7 @@ export default function PaginaAtender() {
                   {formatarDia(r.data, new Date())} · {MODELOS[r.modelo].nome}
                   {r.restrito ? ' · sigiloso' : ''}
                 </p>
-                {Object.keys(r.campos).length === 0 ? (
+                {r.conteudoOculto ? (
                   <p className="flex items-center gap-2 text-texto-suave">
                     <Lock aria-hidden className="size-5" />
                     Conteúdo restrito ao profissional autor.
@@ -311,6 +317,7 @@ export default function PaginaAtender() {
           </ul>
         )}
       </section>
+      )}
     </article>
   );
 }
