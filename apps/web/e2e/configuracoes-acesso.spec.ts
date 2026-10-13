@@ -50,6 +50,25 @@ test.describe('Garantias na tela', () => {
 });
 
 test.describe('Configurações, primeiros passos e ajuda', () => {
+  test('B1: tabela de permissões não dá prontuário ao administrador', async ({ page }) => {
+    await page.goto('/configuracoes/usuarios');
+    const linha = page.getByRole('row', { name: /Ler prontuário dos pacientes que atende/ });
+    await expect(linha.getByRole('cell').nth(1)).toHaveText('Não');
+    await expect(linha.getByRole('cell').nth(2)).toHaveText('Sim');
+    await expect(page.getByText(/Administrador que também é profissional de saúde segue a coluna/)).toBeVisible();
+  });
+
+  test('R11: recepção não cancela o plano, não convida e não vê a auditoria', async ({ page }) => {
+    await page.goto('/mais');
+    await page.getByRole('button', { name: /Recepcionista/ }).click();
+    await page.getByRole('link', { name: 'Plano e assinatura' }).click();
+    await expect(page.getByText('Só o administrador da clínica cancela ou muda o plano.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cancelar assinatura' })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Configurações' }).first().click();
+    await page.getByRole('link', { name: /Privacidade e LGPD/ }).click();
+    await expect(page.getByText('Só o administrador da clínica vê quem acessou o quê.')).toBeVisible();
+  });
+
   test('convidar pessoa: e-mail errado diz o que fazer', async ({ page }) => {
     await page.goto('/configuracoes/usuarios');
     await page.getByLabel('E-mail').fill('ana@');

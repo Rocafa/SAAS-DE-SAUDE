@@ -112,7 +112,8 @@ export const ACOES: AcaoAjudante[] = [
     id: 'abrir_prontuario',
     rotulo: 'Abrir prontuário',
     sinonimos: ['evolucao', 'historico'],
-    permissao: ['admin', 'profissional'],
+    // Só perfil clínico (o administrador que também atende entra como 'profissional').
+    permissao: ['profissional'],
     requiresConfirm: false,
     handler: (p) => [ficha(p), { tipo: 'destacar', alvo: 'ficha-prontuario', narracao: 'Prontuário' }],
   },

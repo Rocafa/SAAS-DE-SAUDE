@@ -113,7 +113,9 @@ test.describe('Pacientes', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Alice Prado' })).toBeVisible();
     await page.goto('/pacientes/p01');
     await expect(page.getByRole('heading', { name: 'Linha do tempo' })).toBeVisible();
-    await expect(page.getByText(/Raio-x do joelho/).first()).toBeVisible();
+    // Como administradora (não clínica), o anexo clínico aparece sem nome (R3 do Guardião).
+    await expect(page.getByText(/Anexo clínico \(só o profissional que atende vê o nome\)/).first()).toBeVisible();
+    await expect(page.getByText(/Carteirinha do convênio/).first()).toBeVisible();
     await expect(page.getByText(/Saldo: 7 sessões/)).toBeVisible();
   });
 
