@@ -1,0 +1,111 @@
+name: Infra (Terraform)
+
+# Checagem estática do Terraform: fmt, init sem backend, validate, tflint e checkov.
+# NADA aqui fala com a AWS: sem credencial, sem OIDC, sem plan, sem apply. O apply é manual e
+# exige aprovação dos sócios (docs/04-arquitetura/infra-staging.md §3).
+
+on:
+  # Economia de minutos do Actions (billing): só roda quando o PR mexe na infra.
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+  schedule:
+    - cron: '23 6 * * 1' # semanal: pega regra nova do checkov/tflint e provider com problema
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: '1'
+  TF_INPUT: '0'
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+  # Garante que nenhum provider tente achar credencial no metadata do runner.
+  AWS_EC2_METADATA_DISABLED: 'true'
+  # Raízes do Terraform (módulos em infra/terraform/modules entram pelas raízes que os chamam).
+  RAIZES: bootstrap-state staging
+  # Imagem oficial do checkov fixada por digest (3.3.19, publicada em 17/09/2026).
+  CHECKOV_IMAGE: bridgecrew/checkov@sha256:d3e96adafdb315ca82e792ca8708c01adae85292800fb064c8b309b3d0cb7b80
+
+jobs:
+  terraform:
+    name: fmt, validate, tflint e checkov
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Cache dos providers do Terraform
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('infra/terraform/**/.terraform.lock.hcl') }}
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.64.0
+          # SHA-256 oficial de tflint_linux_amd64.zip (checksums.txt da release v0.64.0).
+          checksums: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+          cache: true
+          tflint_config_path: infra/terraform/.tflint.hcl
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init (sem backend) e validate
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for raiz in $RAIZES; do
+            echo "::group::$raiz"
+            terraform -chdir="$raiz" init -backend=false -lockfile=readonly
+            terraform -chdir="$raiz" validate
+            echo "::endgroup::"
+          done
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # download do ruleset aws sem estourar o rate limit
+        run: |
+          tflint --init --config "$PWD/.tflint.hcl"
+          for raiz in $RAIZES; do
+            echo "::group::$raiz"
+            tflint --chdir="$raiz" --config "$PWD/.tflint.hcl" --format compact
+            echo "::endgroup::"
+          done
+
+      - name: checkov
+        run: |
+          docker run --rm -v "$PWD:/tf:ro" "$CHECKOV_IMAGE" \
+            --directory /tf --framework terraform --compact --quiet \
+            --skip-path '\.terraform/' --download-external-modules false
+
+      # Travas de desenho que nenhum linter conhece.
+      - name: Travas do projeto
+        run: |
+          # ALB usa liveness (/health), nunca /health/ready (ver comentário em staging/app.tf).
+          grep -Eq 'alb_health_check_path *= *"/health"' staging/app.tf
+          # Bootstrap do RDS repete o REVOKE TEMPORARY (I14).
+          grep -Eiq 'REVOKE +TEMPORARY' ../rds/bootstrap.sql
+          # Nenhuma senha/token no estado: segredo nasce efêmero e vai só para atributo *_wo
+          # (ou é gerado pelo próprio RDS em manage_master_user_password).
+          if grep -En '^\s*(auth_token|secret_string|master_password)\s*=|resource\s+"random_password"' \
+               --include='*.tf' -r .; then
+            echo "Segredo persistido no estado; use ephemeral + atributo write-only (_wo)."; exit 1
+          fi
+          # Região: somente sa-east-1.
+          if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
+            echo "Região fora de sa-east-1."; exit 1
+          fi
