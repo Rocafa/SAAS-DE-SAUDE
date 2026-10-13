@@ -10,7 +10,7 @@
 | 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | 🟢 aberto, empilhado sobre o PR 1 |
 | 3 | Atendimento/Prontuário + Documentos | 🟢 aberto, empilhado sobre o PR 2 |
 | 4 | Financeiro + Guias + Mensagens + Relatórios | 🟢 aberto, empilhado sobre o PR 3 |
-| 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | ⬜ |
+| 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | 🟢 aberto, empilhado sobre o PR 4 |
 | 6 | Portal do paciente + PWA + páginas de erro | ⬜ |
 
 ## O que o PR 1 entrega
@@ -62,3 +62,14 @@
 - **Mensagens:** prévia da caixa do WhatsApp (M2) com conversas fictícias; nada é enviado; campo de resposta desligado.
 - **Relatórios:** atendimentos, faltas, taxa de faltas e recebido em 7 dias, 30 dias ou no mês; gráfico em cinza (atendidos em preto, faltas listradas) e a mesma informação em tabela.
 - Números do PR 4: Vitest 172 no web; Playwright 117 verdes + 1 pulado de propósito.
+
+## O que o PR 5 entrega
+
+- **Configurações:** dados da clínica; usuários e permissões (convidar, tirar acesso com desfazer, nunca sem administrador, tabela "o que cada um pode fazer"); horários; tipos de atendimento; modelos de prontuário.
+- **Privacidade e LGPD:** "Baixar todos os dados da clínica" (G2) com código do autenticador, ciência do sigilo, aprovação do responsável técnico e link pessoal de 24 h com 3 downloads (fluxo de demonstração, aguarda D4 e a API); "Quem acessou o quê" (auditoria, sem conteúdo clínico, com filtro por pessoa). Recepção não pode pedir a exportação.
+- **Plano e assinatura:** cancelar em 3 cliques a partir de "Mais" (G4, testado no E2E), sem multa e sem ligação; depois de cancelar, 90 dias de leitura e exportação (G3) com avisos D-30/D-7/D-1; "Desfazer" e "Voltar a assinar". Preço marcado como valor de exemplo (preço é decisão pendente).
+- **Primeiros passos:** 5 passos (clínica, quem atende, horários, tipos, trazer dados do sistema antigo com simulação e desfazer — em breve).
+- **Ajuda:** "Como faço…" com busca, os mesmos artigos do Ajudante.
+- **Acesso (aguarda D4):** entrar com senha e código do autenticador, esqueci a senha (não revela se o e-mail existe), primeiro acesso por convite (regras de senha visíveis antes de errar + MFA) e escolher clínica.
+- Achado do E2E: no celular o botão flutuante do Ajudante cobria o último botão da página; o rodapé ganhou espaço para rolar.
+- Números do PR 5: Vitest 180 no web; Playwright 163 verdes + 1 pulado de propósito.

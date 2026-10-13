@@ -5,10 +5,16 @@
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
+import { fimDaJanela } from '../conta';
 import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   Agendamento,
   Anexo,
+  Assinatura,
+  DadosClinica,
+  EventoAuditoria,
+  MembroEquipe,
+  PedidoExportacao,
   Conversa,
   Guia,
   NovaGuia,
@@ -256,6 +262,25 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'c2', pacienteId: 'p12', naoLidas: 2, mensagens: [{ de: 'paciente', texto: 'Bom dia, posso trocar meu horário de hoje para amanhã?', hora: '07:40' }, { de: 'paciente', texto: 'Pode ser à tarde.', hora: '07:41' }] },
         { id: 'c3', pacienteId: 'p05', naoLidas: 0, mensagens: [{ de: 'clinica', texto: 'Sua consulta de amanhã às 10:00 está confirmada.', hora: 'ontem' }] },
       ];
+  let clinica: DadosClinica = { nome: 'Clínica Demonstração', cnpj: '', telefone: '(11) 3000-0000', endereco: 'Rua Fictícia, 100 — São Paulo/SP' };
+  const equipe: MembroEquipe[] = [
+    { id: 'm1', nome: 'Administradora (demonstração)', email: 'administracao@exemplo.test', papel: 'admin', situacao: 'ativo' },
+    { id: 'm2', nome: 'Dra. Beatriz Nogueira', email: 'beatriz@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm3', nome: 'Dr. Henrique Sales', email: 'henrique@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm4', nome: 'Dra. Lúcia Prates', email: 'lucia@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm5', nome: 'Recepcionista (demonstração)', email: 'recepcionista@exemplo.test', papel: 'recepcao', situacao: 'ativo' },
+  ];
+  const auditoria: EventoAuditoria[] = [
+    { id: 'v1', quando: `${hojeIso} 08:02`, quem: 'Dra. Beatriz Nogueira', acao: 'Abriu o prontuário de Maria Silva' },
+    { id: 'v2', quando: `${hojeIso} 08:40`, quem: 'Dra. Beatriz Nogueira', acao: 'Assinou uma evolução de Maria Silva' },
+    { id: 'v3', quando: `${hojeIso} 09:05`, quem: 'Recepcionista (demonstração)', acao: 'Marcou consulta para João Pereira' },
+    { id: 'v4', quando: `${hojeIso} 09:10`, quem: 'Recepcionista (demonstração)', acao: 'Abriu a ficha de Ana Souza' },
+    { id: 'v5', quando: `${paraIsoLocal(somarDias(agora, -1))} 17:30`, quem: 'Administradora (demonstração)', acao: 'Exportou a lista de pacientes (CSV)' },
+  ];
+  const registrar = (acao: string) =>
+    auditoria.unshift({ id: novoId('v'), quando: `${hojeIso} ${new Date().toTimeString().slice(0, 5)}`, quem: usuario.nome, acao });
+  let assinatura: Assinatura = { plano: 'Clínica (até 5 profissionais)', valorMensal: 349, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 18)) };
+  const exportacoes: PedidoExportacao[] = [];
   const anexos: Anexo[] = vazio
     ? []
     : [
@@ -280,6 +305,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         if (!temVinculo(d.pacienteId)) throw new Error('Você não atendeu este paciente. O atestado é do profissional que atendeu.');
       }
       emissoes.push({ ...d, por: usuario.id, em: hojeIso });
+      // Imprimir documento é ação auditável (R5): tipo, paciente e quem; nunca o texto.
+      const p = pacientes.find((x) => x.id === d.pacienteId);
+      registrar(`Emitiu ${d.tipo === 'atestado' ? 'atestado' : d.tipo === 'declaracao' ? 'declaração de comparecimento' : 'recibo'} para ${p ? (p.nomeSocial ?? p.nome) : 'paciente'}`);
       await resposta(null);
     },
     async entrarComo(id) {
@@ -542,6 +570,66 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       await resposta(null);
     },
     listarConversas: () => resposta(conversas),
+
+    obterClinica: () => resposta(clinica),
+    async salvarClinica(d) {
+      if (!d.nome.trim()) throw new Error('Falta o nome da clínica.');
+      clinica = { ...d, nome: d.nome.trim() };
+      registrar('Alterou os dados da clínica');
+      return resposta(clinica);
+    },
+    listarEquipe: () => resposta(equipe),
+    async convidar(email, papel) {
+      if (equipe.some((m) => m.email === email.trim().toLowerCase())) throw new Error('Essa pessoa já está na equipe.');
+      const m: MembroEquipe = { id: novoId('m'), nome: email.split('@')[0]!, email: email.trim().toLowerCase(), papel, situacao: 'convite_enviado' };
+      equipe.push(m);
+      registrar(`Convidou ${m.email} como ${papel}`);
+      return resposta(m);
+    },
+    async removerAcesso(id) {
+      const i = equipe.findIndex((m) => m.id === id);
+      if (i < 0) return resposta(null);
+      if (equipe.filter((m) => m.papel === 'admin').length === 1 && equipe[i]!.papel === 'admin') throw new Error('A clínica precisa de pelo menos um administrador.');
+      const [m] = equipe.splice(i, 1);
+      registrar(`Tirou o acesso de ${m!.nome}`);
+      return resposta(m!);
+    },
+    async devolverAcesso(m) {
+      if (!equipe.some((x) => x.id === m.id)) equipe.push(m);
+      registrar(`Devolveu o acesso de ${m.nome}`);
+      await resposta(null);
+    },
+    listarAuditoria: () => resposta(auditoria),
+    obterAssinatura: () => resposta(assinatura),
+    async cancelarAssinatura() {
+      const { proximaCobranca: _ignorado, ...resto } = assinatura;
+      void _ignorado;
+      assinatura = { ...resto, status: 'cancelada', canceladaEm: hojeIso, disponivelAte: fimDaJanela(hojeIso) };
+      registrar('Cancelou a assinatura');
+      return resposta(assinatura);
+    },
+    async reativarAssinatura() {
+      assinatura = { plano: assinatura.plano, valorMensal: assinatura.valorMensal, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 30)) };
+      registrar('Reativou a assinatura');
+      return resposta(assinatura);
+    },
+    async pedirExportacao(codigo) {
+      if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
+      if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
+      const p: PedidoExportacao = { id: novoId('x'), status: 'aguardando_rt', pedidoEm: hojeIso };
+      exportacoes.push(p);
+      registrar('Pediu a exportação total dos dados');
+      return resposta(p);
+    },
+    async aprovarExportacao(id) {
+      const p = exportacoes.find((x) => x.id === id);
+      if (!p) throw new Error('Pedido não encontrado.');
+      p.status = 'pronto';
+      p.expiraEm = paraIsoLocal(somarDias(agora, 1));
+      p.downloadsRestantes = 3;
+      registrar('Responsável técnico aprovou a exportação');
+      return resposta(p);
+    },
   };
 }
 
