@@ -127,7 +127,7 @@ describe('B2 do Guardião: atestado só pelo profissional que atendeu', () => {
     const api = criarApiFake({ agora });
     await api.entrarComo('u2');
     await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01', profissionalId: 'pr2' })).rejects.toThrow(/próprio nome/);
-    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p04', profissionalId: 'pr1' })).rejects.toThrow(/não atendeu/);
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p05', profissionalId: 'pr1' })).rejects.toThrow(/não atendeu/);
     await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01', profissionalId: 'pr1' })).resolves.toBeUndefined();
   });
 });
