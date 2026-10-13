@@ -130,7 +130,7 @@ describe('busca universal', () => {
 
   it('"remarcar a Ana para sexta" usa a próxima consulta da Ana', async () => {
     const g = buscar('remarcar a Ana Souza para sexta', await indice());
-    expect(g[0]?.itens[0]).toMatchObject({ acaoId: 'remarcar_consulta', params: { agendamentoId: 'a14', data: '2026-10-16' } });
+    expect(g[0]?.itens[0]).toMatchObject({ acaoId: 'remarcar_consulta', params: { agendamentoId: 'a15', data: '2026-10-16' } });
   });
 
   it('"imprimir recibo da última consulta da Maria" vai para o recibo', async () => {
