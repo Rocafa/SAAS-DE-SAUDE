@@ -72,3 +72,17 @@ pnpm --filter @plataforma/api db:migrate        # DATABASE_MIGRATOR_URL (app_mig
 pnpm --filter @plataforma/api test:rls          # inclui pacientes-agenda e a guarda de schema
 pnpm --filter @plataforma/api test:security     # inclui sessao-tenant (regra 1 da D4)
 ```
+
+## 7. Ligando o front (rodada 12.2)
+
+Branch `front/adaptador-http-pacientes-agenda` (API do #57 + telas do #43). Sem dado real.
+
+- **Seleção:** `NEXT_PUBLIC_API_MODO=fake|http` (padrão `fake`, nada muda). Com `http`, `NEXT_PUBLIC_API_ORIGIN` é obrigatória (`esquema://host[:porta]`, só https em produção) e é a **única** origem extra no `connect-src` da CSP (`origemDaApi` em `apps/web/next.config.ts`). Nenhuma das duas é segredo.
+- **O que vai para a API** (`apps/web/lib/api/http.ts`): sessão, pacientes (listar, detalhe, criar, inativar, busca), profissionais, tipos, agenda (listar, marcar, remarcar, status, check-in, cancelar), série (N marcações, tudo ou nada) e pendências do dia. O resto (atendimento, financeiro, espera, recibos, pacotes, anexos, linha do tempo) continua no fake (`lib/api/selecionar.ts`).
+- **Sessão:** `credentials: 'include'` (cookie HttpOnly do provedor real, D4). O token `Bearer` da sessão fictícia só é passado em teste (`obterToken`). O adaptador **nunca** envia tenant/clínica; os únicos cabeçalhos são `Accept`, `Content-Type` e, em teste, `Authorization` (teste unitário e de integração conferem).
+- **Busca:** `POST /pacientes/busca` com o termo **no corpo** (veto do Guardião: nome não vai para URL nem para log de ALB/WAF). Nenhuma URL leva nome, CPF ou telefone (teste unitário). Entra na versão corrigida do #57; o teste de integração da busca pula enquanto a rota não existir.
+- **Erros:** `ErroApi` com texto fixo em pt-BR (401 sessão, 403 permissão/assinatura, 404, 409 lotado/transição/inativo, 429, 503, rede, timeout de 10 s). Nada de `console`; a mensagem nunca carrega valor de campo.
+- **Ressalva R1 (parecer front-r8), no modo http:** retrato de pacientes = projeção `paraIndice` (id, nome, nome social, telefone, 4 últimos do CPF, situação; a lista da API hoje nem traz telefone/CPF); agenda em memória só na janela −30/+90 dias, pedida em janelas de ≤ 31 dias (teto 180); `limpar()` em 401, troca de usuário/clínica e saída; nada em storage.
+- **Lacunas conhecidas (viram 4xx com mensagem):** responsável do paciente, reativar, motivo da inativação, pacote de sessões, valor do tipo. "Desfazer" de cadastro inativa (a API não apaga). Sem tela de login até a D4: no navegador o modo http responde "Sua sessão terminou".
+
+Verificar: `pnpm --filter @plataforma/web test` (adaptador com fetch simulado) e `pnpm --filter @plataforma/api test:rls` (inclui `test/adaptador-web.rls.test.ts`: API real numa porta local + Postgres real; recepção fictícia cadastra, agenda e faz check-in pelo adaptador).
