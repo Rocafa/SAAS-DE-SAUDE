@@ -1,17 +1,19 @@
 'use client';
 
-/** Portal: meus documentos (recibos). Atestados e receitas aparecem aqui quando a clínica emitir. */
+/** Portal: meus documentos (recibos). A impressão sai só com a folha do recibo escolhido. */
 import { FileText, Printer } from 'lucide-react';
-import { useConsulta } from '@/components/app/dados';
+import { useState } from 'react';
+import { useConsultaPortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
+import type { ReciboPortal } from '@/lib/api/portal';
 import { NOME_FORMA } from '@/lib/financeiro';
-import { PACIENTE_PORTAL } from '@/lib/portal';
 import { reais } from '@/lib/utils';
 
 export default function PortalDocumentos() {
-  const consulta = useConsulta((a) => a.listarRecibos(PACIENTE_PORTAL));
+  const consulta = useConsultaPortal((a) => a.meusRecibos());
+  const [folha, setFolha] = useState<ReciboPortal | null>(null);
   return (
     <>
       <h1 className="mb-1 text-[1.75rem] font-bold">Meus documentos</h1>
@@ -29,7 +31,14 @@ export default function PortalDocumentos() {
                 <span className="flex-1">
                   <strong>Recibo</strong> · {formatarDia(r.data, new Date())} · {reais(r.valor)} ({NOME_FORMA[r.forma]})
                 </span>
-                <Botao variante="contorno" tamanho="pequeno" onClick={() => window.print()}>
+                <Botao
+                  variante="contorno"
+                  tamanho="pequeno"
+                  onClick={() => {
+                    setFolha(r);
+                    setTimeout(() => window.print(), 50);
+                  }}
+                >
                   <Printer aria-hidden />
                   Imprimir
                 </Botao>
@@ -37,6 +46,13 @@ export default function PortalDocumentos() {
             ))}
           </ul>
         ))}
+      {folha && (
+        <div data-imprimir className="sr-only print:not-sr-only">
+          <p>Clínica Demonstração</p>
+          <h2>Recibo</h2>
+          <p>{folha.texto}</p>
+        </div>
+      )}
     </>
   );
 }

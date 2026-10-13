@@ -3,61 +3,68 @@
 /** Portal: minhas consultas, com "Confirmar presença" e "Não vou conseguir ir". */
 import { CheckCircle2, MessageCircle, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import { useConsulta, useDados } from '@/components/app/dados';
 import { useAviso } from '@/components/app/desfazer';
+import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
-import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
-import { nomeExibido, type Agendamento } from '@/lib/api/tipos';
-import { PACIENTE_PORTAL } from '@/lib/portal';
+import { formatarDia } from '@/lib/ajudante/datas';
+import type { ConsultaPortal } from '@/lib/api/portal';
 
 export default function PortalConsultas() {
-  const { api, atualizar } = useDados();
+  const { api, atualizar } = usePortal();
   const avisar = useAviso();
   const [cancelando, setCancelando] = useState<string | null>(null);
-  const hoje = paraIsoLocal(new Date());
-  const consulta = useConsulta(async (a) => {
-    const [p, ags, profs] = await Promise.all([a.obterPaciente(PACIENTE_PORTAL), a.listarAgendamentos({ pacienteId: PACIENTE_PORTAL, de: hoje }), a.listarProfissionais()]);
-    return { p, ags: ags.filter((x) => x.status !== 'cancelado'), profs: new Map(profs.map((x) => [x.id, x])) };
-  }, [hoje]);
+  const [erro, setErro] = useState('');
+  const consulta = useConsultaPortal(async (a) => ({ nome: await a.primeiroNome(), ags: (await a.minhasConsultas()).filter((x) => x.status !== 'cancelado') }));
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
-  const { p, ags, profs } = consulta.dados;
+  const { nome, ags } = consulta.dados;
 
-  async function mudar(a: Agendamento, status: 'confirmado' | 'cancelado', texto: string) {
-    const anterior = await api.alterarStatus(a.id, status);
-    setCancelando(null);
-    atualizar();
-    avisar({
-      texto,
-      desfazer: async () => {
-        await api.alterarStatus(a.id, anterior);
-        atualizar();
-      },
-    });
+  async function responder(c: ConsultaPortal, acao: 'confirmar' | 'ausencia', texto: string) {
+    try {
+      if (acao === 'confirmar') await api.confirmarPresenca(c.id);
+      else await api.avisarAusencia(c.id);
+      setCancelando(null);
+      setErro('');
+      atualizar();
+      avisar({
+        texto,
+        desfazer: async () => {
+          await api.desfazerResposta(c.id);
+          atualizar();
+        },
+      });
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Não deu certo. Tente de novo.');
+    }
   }
 
   return (
     <>
-      <h1 className="mb-1 text-[1.75rem] font-bold">Olá, {p ? nomeExibido(p).split(' ')[0] : ''}</h1>
+      <h1 className="mb-1 text-[1.75rem] font-bold">Olá, {nome}</h1>
       <p className="mb-6 text-texto-suave">Suas próximas consultas.</p>
+      {erro && (
+        <p role="alert" className="mb-4 font-bold">
+          ⚠ {erro}
+        </p>
+      )}
       {ags.length === 0 ? (
         <Vazio titulo="Nenhuma consulta marcada" oQueFazer="Para marcar, fale com a clínica pelo WhatsApp ou pelo telefone." />
       ) : (
         <ul className="flex flex-col gap-3">
-          {ags.map((a) => (
-            <li key={a.id} className="flex flex-col gap-3 rounded-md border-2 border-borda p-4">
+          {ags.map((c) => (
+            <li key={c.id} className="flex flex-col gap-3 rounded-md border-2 border-borda p-4">
               <p className="text-xl font-bold">
-                {formatarDia(a.data, new Date())} às {a.hora}
+                {formatarDia(c.data, new Date())} às {c.hora}
               </p>
-              <p>{profs.get(a.profissionalId)?.nome}</p>
-              <Status status={a.status} />
-              {cancelando === a.id ? (
+              <p>{c.profissional}</p>
+              <Status status={c.status} />
+              {cancelando === c.id ? (
                 <div role="alertdialog" aria-label="Confirmar" className="flex flex-col gap-2 rounded-md border-[3px] border-borda-forte p-3">
                   <p className="font-bold">Avisar a clínica que você não vai?</p>
                   <p>O horário fica livre para outra pessoa. Para marcar outro dia, fale com a clínica.</p>
                   <div className="flex flex-wrap gap-2">
-                    <Botao variante="perigo" onClick={() => mudar(a, 'cancelado', 'Pronto, a clínica foi avisada.')}>
+                    <Botao variante="perigo" onClick={() => responder(c, 'ausencia', 'Pronto, a clínica foi avisada.')}>
                       Sim, não vou
                     </Botao>
                     <Botao variante="suave" onClick={() => setCancelando(null)}>
@@ -67,13 +74,13 @@ export default function PortalConsultas() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  {a.status === 'agendado' && (
-                    <Botao tamanho="grande" onClick={() => mudar(a, 'confirmado', 'Presença confirmada. Até lá!')}>
+                  {c.status === 'agendado' && (
+                    <Botao tamanho="grande" onClick={() => responder(c, 'confirmar', 'Presença confirmada. Até lá!')}>
                       <CheckCircle2 aria-hidden />
                       Confirmar presença
                     </Botao>
                   )}
-                  <Botao variante="contorno" tamanho="grande" onClick={() => setCancelando(a.id)}>
+                  <Botao variante="contorno" tamanho="grande" onClick={() => setCancelando(c.id)}>
                     <XCircle aria-hidden />
                     Não vou conseguir ir
                   </Botao>

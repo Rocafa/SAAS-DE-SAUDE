@@ -100,7 +100,7 @@ test.describe('PWA e páginas de erro', () => {
 
   test('sessão expirada leva de volta para entrar', async ({ page }) => {
     await page.goto('/sessao-expirada');
-    await expect(page.getByText(/30 minutos sem uso/)).toBeVisible();
+    await expect(page.getByText(/15 minutos sem uso/)).toBeVisible();
     await page.getByRole('link', { name: 'Entrar de novo' }).click();
     await expect(page).toHaveURL(/\/entrar$/);
   });

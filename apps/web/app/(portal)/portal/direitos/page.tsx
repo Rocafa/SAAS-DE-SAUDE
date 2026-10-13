@@ -6,21 +6,21 @@
  */
 import { ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
-import { useConsulta, useDados } from '@/components/app/dados';
 import { useAviso } from '@/components/app/desfazer';
+import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
-import { CONSENTIMENTOS, DIREITOS, PACIENTE_PORTAL, PRAZO_RESPOSTA_DIAS, type Resposta } from '@/lib/portal';
+import { CONSENTIMENTOS, DIREITOS, PRAZO_RESPOSTA_DIAS, type Resposta } from '@/lib/portal';
 import { cn } from '@/lib/utils';
 
 const TEXTO_RESPOSTA: Record<Resposta, string> = { sim: 'Você aceitou', nao: 'Você recusou', nao_respondido: 'Ainda não respondido (vale como não)' };
 
 export default function PortalDireitos() {
-  const { api, atualizar } = useDados();
+  const { api, atualizar } = usePortal();
   const avisar = useAviso();
-  const consulta = useConsulta(async (a) => {
-    const [cons, pedidos] = await Promise.all([a.listarConsentimentos(PACIENTE_PORTAL), a.listarPedidosTitular(PACIENTE_PORTAL)]);
+  const consulta = useConsultaPortal(async (a) => {
+    const [cons, pedidos] = await Promise.all([a.meusConsentimentos(), a.meusPedidos()]);
     return { cons, pedidos };
   });
   const [confirmando, setConfirmando] = useState<string | null>(null);
@@ -29,19 +29,20 @@ export default function PortalDireitos() {
   const { cons, pedidos } = consulta.dados;
 
   async function responder(id: string, r: 'sim' | 'nao') {
-    const anterior = await api.alterarConsentimento(PACIENTE_PORTAL, id, r);
+    // Consentimento é histórico: responder e desfazer gravam eventos novos (R15).
+    await api.responderConsentimento(id, r);
     atualizar();
     avisar({
       texto: r === 'sim' ? 'Autorização registrada.' : 'Pronto, não autorizado.',
       desfazer: async () => {
-        await api.voltarConsentimento(PACIENTE_PORTAL, id, anterior);
+        await api.desfazerConsentimento(id);
         atualizar();
       },
     });
   }
 
   async function pedir(tipo: (typeof DIREITOS)[number]['tipo']) {
-    const r = await api.abrirPedidoTitular(PACIENTE_PORTAL, tipo);
+    const r = await api.abrirPedido(tipo);
     setConfirmando(null);
     atualizar();
     avisar({ texto: `Pedido enviado. Protocolo ${r.protocolo}. A clínica responde até ${formatarDia(r.prazo, new Date())}.` });

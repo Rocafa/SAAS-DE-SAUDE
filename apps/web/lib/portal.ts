@@ -45,6 +45,3 @@ export function prazoResposta(abertoEm: string): string {
 export function protocolo(abertoEm: string, seq: number): string {
   return `${abertoEm.replace(/-/g, '')}-${String(seq).padStart(4, '0')}`;
 }
-
-/** Na demonstração, o portal é sempre da paciente fictícia Maria Silva. */
-export const PACIENTE_PORTAL = 'p01';

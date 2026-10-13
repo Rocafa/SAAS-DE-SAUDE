@@ -3,30 +3,27 @@
 /** Portal: meus dados. Mudanças viram pedido de correção para a clínica conferir. */
 import { PenLine } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { useConsulta, useDados } from '@/components/app/dados';
 import { useAviso } from '@/components/app/desfazer';
+import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
-import { cpfMascarado } from '@/lib/ajudante/busca';
 import { formatarDia } from '@/lib/ajudante/datas';
-import { PACIENTE_PORTAL } from '@/lib/portal';
 
 export default function PortalDados() {
-  const { api } = useDados();
+  const { api } = usePortal();
   const avisar = useAviso();
-  const consulta = useConsulta((a) => a.obterPaciente(PACIENTE_PORTAL));
+  const consulta = useConsultaPortal((a) => a.meusDados());
   const [corrigindo, setCorrigindo] = useState(false);
   const [texto, setTexto] = useState('');
   const [erro, setErro] = useState('');
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
-  const p = consulta.dados;
-  if (!p) return null;
+  const d = consulta.dados;
 
   async function pedir(e: FormEvent) {
     e.preventDefault();
     try {
-      const r = await api.abrirPedidoTitular(PACIENTE_PORTAL, 'corrigir', texto);
+      const r = await api.abrirPedido('corrigir', texto);
       setCorrigindo(false);
       setTexto('');
       setErro('');
@@ -37,10 +34,10 @@ export default function PortalDados() {
   }
 
   const linhas: [string, string][] = [
-    ['Nome', p.nomeSocial ?? p.nome],
-    ...(p.nomeSocial ? ([['Nome de registro', p.nome]] as [string, string][]) : []),
-    ['Telefone', p.telefone],
-    ['CPF', cpfMascarado(p.cpf)],
+    ['Nome', d.nomeSocial ?? d.nome],
+    ...(d.nomeSocial ? ([['Nome de registro', d.nome]] as [string, string][]) : []),
+    ['Telefone', d.telefone],
+    ['CPF', d.cpfMascarado],
   ];
 
   return (

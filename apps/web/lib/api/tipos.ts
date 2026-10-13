@@ -262,12 +262,3 @@ export interface DadosClinica {
   telefone: string;
   endereco: string;
 }
-
-export interface PedidoTitular {
-  protocolo: string;
-  tipo: 'ver_dados' | 'corrigir' | 'baixar' | 'apagar' | 'compartilhamento';
-  abertoEm: string;
-  prazo: string;
-  detalhe?: string;
-  situacao: 'aberto' | 'respondido';
-}

@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * Portal do paciente: celular primeiro, 4 itens no menu, letra grande. Sem Ajudante da equipe e
- * sem analytics com identificação (metricas-produto.md: superfície de paciente não leva user_hash).
+ * Portal do paciente: celular primeiro, 4 itens no menu, letra grande. Usa SÓ o contrato do portal
+ * (ApiPortal, veto B3): nada da clínica no navegador do paciente. Sem Ajudante da equipe e sem
+ * analytics com identificação (metricas-produto.md: superfície de paciente não leva user_hash).
  */
 import { CalendarDays, FileText, ShieldCheck, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { DadosProvider, useOnline } from '@/components/app/dados';
 import { AvisosProvider } from '@/components/app/desfazer';
+import { PortalProvider, useOnlinePortal } from '@/components/portal/dados-portal';
 import { SemInternet } from '@/components/ui/estados';
 import { cn } from '@/lib/utils';
 
@@ -22,7 +23,7 @@ const MENU = [
 
 function Estrutura({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const online = useOnline();
+  const online = useOnlinePortal();
   return (
     <div className="min-h-dvh pb-28 md:pb-10">
       {!online && <SemInternet />}
@@ -61,10 +62,10 @@ function Estrutura({ children }: { children: ReactNode }) {
 
 export default function LayoutPortal({ children }: { children: ReactNode }) {
   return (
-    <DadosProvider>
+    <PortalProvider>
       <AvisosProvider>
         <Estrutura>{children}</Estrutura>
       </AvisosProvider>
-    </DadosProvider>
+    </PortalProvider>
   );
 }
