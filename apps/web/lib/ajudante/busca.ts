@@ -237,6 +237,8 @@ function acoesDaIntencao(intencao: Intencao, indice: IndiceBusca): Resultado[] {
         out.push(r('acao-recibo', `Imprimir o recibo da última consulta de ${nome}`, 'imprimir_recibo', base));
         break;
       case 'emitir_documento':
+        // Atestado é ato do profissional que atendeu: não oferecer a perfil não clínico.
+        if (intencao.documento === 'atestado' && indice.papel !== 'profissional') break;
         out.push(
           r(
             'acao-doc',

@@ -80,3 +80,54 @@ describe('fake: registro clínico', () => {
     expect(comAdendo.campos.queixa).toBe('Chegou bem');
   });
 });
+
+describe('B1 do Guardião: conteúdo clínico só para perfil clínico com vínculo de cuidado', () => {
+  const agora = new Date(2026, 9, 12, 10);
+  const fisioDe = (rs: Awaited<ReturnType<ReturnType<typeof criarApiFake>['listarRegistros']>>) => rs.filter((r) => !r.restrito);
+
+  it('administradora não clínica e recepção veem só data e profissional', async () => {
+    for (const u of ['u1', 'u4']) {
+      const api = criarApiFake({ agora });
+      await api.entrarComo(u);
+      const rs = fisioDe(await api.listarRegistros('p01'));
+      expect(rs.length).toBeGreaterThan(0);
+      for (const r of rs) expect(r).toMatchObject({ campos: {}, adendos: [], conteudoOculto: true, motivoOculto: 'perfil_nao_clinico' });
+    }
+  });
+
+  it('fisioterapeuta com vínculo lê; profissional sem vínculo não lê', async () => {
+    const api = criarApiFake({ agora });
+    await api.entrarComo('u2');
+    expect(fisioDe(await api.listarRegistros('p01')).every((r) => !r.conteudoOculto && Object.keys(r.campos).length > 0)).toBe(true);
+    await api.entrarComo('u5'); // administradora que também é TO, sem consulta com p01
+    expect(fisioDe(await api.listarRegistros('p01')).every((r) => r.motivoOculto === 'sem_vinculo')).toBe(true);
+  });
+
+  it('anexo clínico sem nome para quem não cuida; documento administrativo aparece', async () => {
+    const api = criarApiFake({ agora });
+    const comoAdmin = await api.listarAnexos('p01');
+    expect(comoAdmin.filter((x) => x.clinico).every((x) => x.conteudoOculto && x.nome === 'Anexo clínico')).toBe(true);
+    expect(comoAdmin.find((x) => !x.clinico)?.nome).toMatch(/Carteirinha/);
+    await api.entrarComo('u2');
+    expect((await api.listarAnexos('p01')).some((x) => x.nome.startsWith('Raio-x'))).toBe(true);
+  });
+});
+
+describe('B2 do Guardião: atestado só pelo profissional que atendeu', () => {
+  const agora = new Date(2026, 9, 12, 10);
+  it('recepção e administradora não emitem atestado; recibo e declaração sim', async () => {
+    const api = criarApiFake({ agora });
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01', profissionalId: 'pr1' })).rejects.toThrow(/profissional que atendeu/);
+    await api.entrarComo('u4');
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01' })).rejects.toThrow(/profissional que atendeu/);
+    await expect(api.registrarEmissaoDocumento({ tipo: 'recibo', pacienteId: 'p01' })).resolves.toBeUndefined();
+    await expect(api.registrarEmissaoDocumento({ tipo: 'declaracao', pacienteId: 'p01' })).resolves.toBeUndefined();
+  });
+  it('profissional só em nome próprio e com vínculo', async () => {
+    const api = criarApiFake({ agora });
+    await api.entrarComo('u2');
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01', profissionalId: 'pr2' })).rejects.toThrow(/próprio nome/);
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p05', profissionalId: 'pr1' })).rejects.toThrow(/não atendeu/);
+    await expect(api.registrarEmissaoDocumento({ tipo: 'atestado', pacienteId: 'p01', profissionalId: 'pr1' })).resolves.toBeUndefined();
+  });
+});

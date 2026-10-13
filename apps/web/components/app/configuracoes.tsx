@@ -77,15 +77,28 @@ function SecaoClinica() {
   );
 }
 
-const PERMISSOES: [string, boolean, boolean, boolean][] = [
-  ['Ver e marcar agenda', true, true, true],
-  ['Cadastrar pacientes', true, true, true],
-  ['Ler e assinar prontuário', true, true, false],
-  ['Ler registro de psicologia', false, true, false],
-  ['Receber pagamentos', true, false, true],
-  ['Convidar pessoas e mudar permissões', true, false, false],
-  ['Baixar todos os dados da clínica', true, false, false],
+// Conteúdo clínico só para perfil clínico com vínculo de cuidado (requisitos §3; veto B1 do Guardião).
+const PERMISSOES: [string, string, string, string][] = [
+  ['Ver e marcar agenda', 'Sim', 'Sim', 'Sim'],
+  ['Cadastrar pacientes', 'Sim', 'Sim', 'Sim'],
+  ['Ler prontuário dos pacientes que atende', 'Não', 'Sim', 'Não'],
+  ['Assinar o próprio registro', 'Não', 'Sim', 'Não'],
+  ['Ler registro de psicologia', 'Não', 'Só o autor', 'Não'],
+  ['Emitir atestado', 'Não', 'Sim, em nome próprio', 'Não'],
+  ['Receber pagamentos', 'Sim', 'Não', 'Sim'],
+  ['Convidar pessoas e mudar permissões', 'Sim', 'Não', 'Não'],
+  ['Ver quem acessou o quê', 'Sim', 'Não', 'Não'],
+  ['Cancelar ou mudar o plano', 'Sim', 'Não', 'Não'],
+  ['Baixar todos os dados da clínica', 'Sim', 'Não', 'Não'],
 ];
+
+function SoAdmin({ children, oQue }: { children: ReactNode; oQue: string }) {
+  const { usuario } = useDados();
+  if (usuario && usuario.papel !== 'admin') {
+    return <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica {oQue}.</p>;
+  }
+  return <>{children}</>;
+}
 
 function SecaoUsuarios() {
   const { api, atualizar } = useDados();
@@ -220,8 +233,8 @@ function SecaoUsuarios() {
                 <tr key={o} className="border-b border-borda">
                   <td className="p-2">{o}</td>
                   {v.map((x, i) => (
-                    <td key={i} className="p-2 font-bold">
-                      {x ? 'Sim' : 'Não'}
+                    <td key={i} className={x === 'Não' ? 'p-2' : 'p-2 font-bold'}>
+                      {x}
                     </td>
                   ))}
                 </tr>
@@ -229,7 +242,10 @@ function SecaoUsuarios() {
             </tbody>
           </table>
         </div>
-        <p className="mt-2 text-texto-suave">Registro de psicologia: só o psicólogo autor lê (sigilo profissional).</p>
+        <p className="mt-2 text-texto-suave">
+          Administrador que também é profissional de saúde segue a coluna “Profissional” para o que é clínico. Registro de
+          psicologia: só o psicólogo autor lê (sigilo profissional).
+        </p>
       </section>
     </div>
   );
@@ -399,11 +415,12 @@ function SecaoPrivacidade() {
         <p className="mt-3 text-texto-suave">Fluxo de demonstração: a exportação de verdade entra com o login (D4) e a API de exportação.</p>
       </section>
 
+      {admin ? (
       <section aria-labelledby="t-auditoria">
         <h2 id="t-auditoria" className="mb-2 text-xl font-bold">
           Quem acessou o quê
         </h2>
-        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser apagado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
+        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser alterado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
         <label htmlFor="a-filtro" className="font-bold">
           Filtrar por pessoa
         </label>
@@ -441,6 +458,9 @@ function SecaoPrivacidade() {
             );
           })()}
       </section>
+      ) : (
+        <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica vê quem acessou o quê.</p>
+      )}
     </div>
   );
 }
@@ -477,6 +497,7 @@ function SecaoPlano() {
         ) : (
           <p className="font-bold" data-testid="situacao-assinatura">
             Cancelada. Até {a.disponivelAte ? formatarDia(a.disponivelAte, new Date()) : '—'} você consulta tudo e baixa os dados da clínica.
+            Depois desse prazo, os dados são eliminados com certificado.
           </p>
         )}
       </section>
@@ -495,6 +516,7 @@ function SecaoPlano() {
               <li>Sem multa e sem ligação.</li>
               <li>Por {JANELA_SAIDA_DIAS} dias você continua lendo tudo e pode baixar os dados da clínica. Avisamos 30, 7 e 1 dia antes do fim.</li>
               <li>A guarda legal do prontuário é da clínica: baixe os dados antes do fim do prazo.</li>
+              <li>Depois desse prazo, os dados são eliminados com certificado.</li>
             </ul>
             <div className="flex flex-wrap gap-2">
               <Botao variante="perigo" onClick={cancelar} data-testid="confirmar-cancelamento">
@@ -529,10 +551,26 @@ function SecaoPlano() {
 
 export const SECOES: Record<string, { titulo: string; descricao: string; Componente: () => ReactNode }> = {
   clinica: { titulo: 'Dados da clínica', descricao: 'Nome, endereço e telefone que aparecem nos documentos.', Componente: SecaoClinica },
-  usuarios: { titulo: 'Usuários e permissões', descricao: 'Quem usa o sistema e o que cada um pode fazer.', Componente: SecaoUsuarios },
+  usuarios: {
+    titulo: 'Usuários e permissões',
+    descricao: 'Quem usa o sistema e o que cada um pode fazer.',
+    Componente: () => (
+      <SoAdmin oQue="convida pessoas e muda permissões">
+        <SecaoUsuarios />
+      </SoAdmin>
+    ),
+  },
   horarios: { titulo: 'Horários de atendimento', descricao: 'Dias e horários em que a clínica atende.', Componente: SecaoHorarios },
   tipos: { titulo: 'Tipos de atendimento', descricao: 'Duração e valor de cada tipo de consulta ou sessão.', Componente: SecaoTipos },
   modelos: { titulo: 'Modelos de prontuário', descricao: 'Os campos da evolução de cada especialidade.', Componente: SecaoModelos },
   privacidade: { titulo: 'Privacidade e LGPD', descricao: 'Baixar os dados da clínica e ver quem acessou o quê.', Componente: SecaoPrivacidade },
-  plano: { titulo: 'Plano e assinatura', descricao: 'Seu plano, a próxima cobrança e o cancelamento.', Componente: SecaoPlano },
+  plano: {
+    titulo: 'Plano e assinatura',
+    descricao: 'Seu plano, a próxima cobrança e o cancelamento.',
+    Componente: () => (
+      <SoAdmin oQue="cancela ou muda o plano">
+        <SecaoPlano />
+      </SoAdmin>
+    ),
+  },
 };

@@ -6,7 +6,7 @@ import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { fimDaJanela } from '../conta';
-import { ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
+import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   Agendamento,
   Anexo,
@@ -202,10 +202,11 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       ];
   const pacotes: Pacote[] = vazio ? [] : [{ id: 'k1', pacienteId: 'p01', nome: 'Pacote de 10 sessões de fisioterapia', total: 10, usadas: 3 }];
   const USUARIOS: Usuario[] = [
-    { id: 'u1', nome: 'Recepção (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
+    { id: 'u1', nome: 'Administradora (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
     { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
     { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
     { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
+    { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
   ];
   let usuario: Usuario = USUARIOS[0]!;
   const registros: Registro[] = vazio
@@ -232,8 +233,21 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
             restrito: ehRestrito(modelo),
           };
         });
-  const podeLer = (r: Registro) => !r.restrito || usuario.profissionalId === r.profissionalId;
-  const visivel = (r: Registro): Registro => (podeLer(r) ? r : { ...r, campos: {}, adendos: [] });
+  /** Emissões de documento (auditoria: tipo, paciente, quem; nunca o texto). */
+  const emissoes: { tipo: string; pacienteId: string; profissionalId?: string; por: string; em: string }[] = [];
+  const temVinculo = (pacienteId: string) =>
+    !!usuario.profissionalId && agendamentos.some((a) => a.pacienteId === pacienteId && a.profissionalId === usuario.profissionalId);
+  const motivoOculto = (r: Registro): Registro['motivoOculto'] | null => {
+    if (!ehPerfilClinico(usuario)) return 'perfil_nao_clinico';
+    if (r.restrito) return usuario.profissionalId === r.profissionalId ? null : 'sigilo_psicologia';
+    return temVinculo(r.pacienteId) ? null : 'sem_vinculo';
+  };
+  const visivel = (r: Registro): Registro => {
+    const motivo = motivoOculto(r);
+    return motivo ? { ...r, campos: {}, adendos: [], conteudoOculto: true, motivoOculto: motivo } : r;
+  };
+  const anexoVisivel = (x: Anexo): Anexo =>
+    x.clinico && !(ehPerfilClinico(usuario) && temVinculo(x.pacienteId)) ? { ...x, nome: 'Anexo clínico', conteudoOculto: true } : x;
   const guias: Guia[] = vazio
     ? []
     : [
@@ -250,7 +264,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       ];
   let clinica: DadosClinica = { nome: 'Clínica Demonstração', cnpj: '', telefone: '(11) 3000-0000', endereco: 'Rua Fictícia, 100 — São Paulo/SP' };
   const equipe: MembroEquipe[] = [
-    { id: 'm1', nome: 'Recepção (demonstração)', email: 'recepcao@exemplo.test', papel: 'admin', situacao: 'ativo' },
+    { id: 'm1', nome: 'Administradora (demonstração)', email: 'administracao@exemplo.test', papel: 'admin', situacao: 'ativo' },
     { id: 'm2', nome: 'Dra. Beatriz Nogueira', email: 'beatriz@exemplo.test', papel: 'profissional', situacao: 'ativo' },
     { id: 'm3', nome: 'Dr. Henrique Sales', email: 'henrique@exemplo.test', papel: 'profissional', situacao: 'ativo' },
     { id: 'm4', nome: 'Dra. Lúcia Prates', email: 'lucia@exemplo.test', papel: 'profissional', situacao: 'ativo' },
@@ -259,9 +273,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   const auditoria: EventoAuditoria[] = [
     { id: 'v1', quando: `${hojeIso} 08:02`, quem: 'Dra. Beatriz Nogueira', acao: 'Abriu o prontuário de Maria Silva' },
     { id: 'v2', quando: `${hojeIso} 08:40`, quem: 'Dra. Beatriz Nogueira', acao: 'Assinou uma evolução de Maria Silva' },
-    { id: 'v3', quando: `${hojeIso} 09:05`, quem: 'Recepção (demonstração)', acao: 'Marcou consulta para João Pereira' },
+    { id: 'v3', quando: `${hojeIso} 09:05`, quem: 'Recepcionista (demonstração)', acao: 'Marcou consulta para João Pereira' },
     { id: 'v4', quando: `${hojeIso} 09:10`, quem: 'Recepcionista (demonstração)', acao: 'Abriu a ficha de Ana Souza' },
-    { id: 'v5', quando: `${paraIsoLocal(somarDias(agora, -1))} 17:30`, quem: 'Recepção (demonstração)', acao: 'Exportou a lista de pacientes (CSV)' },
+    { id: 'v5', quando: `${paraIsoLocal(somarDias(agora, -1))} 17:30`, quem: 'Administradora (demonstração)', acao: 'Exportou a lista de pacientes (CSV)' },
   ];
   const registrar = (acao: string) =>
     auditoria.unshift({ id: novoId('v'), quando: `${hojeIso} ${new Date().toTimeString().slice(0, 5)}`, quem: usuario.nome, acao });
@@ -270,8 +284,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   const anexos: Anexo[] = vazio
     ? []
     : [
-        { id: 'x1', pacienteId: 'p01', nome: 'Raio-x do joelho (fictício).pdf', tipo: 'exame', data: paraIsoLocal(somarDias(agora, -20)) },
-        { id: 'x2', pacienteId: 'p01', nome: 'Encaminhamento médico (fictício).pdf', tipo: 'documento', data: paraIsoLocal(somarDias(agora, -21)) },
+        { id: 'x1', pacienteId: 'p01', nome: 'Raio-x do joelho (fictício).pdf', tipo: 'exame', data: paraIsoLocal(somarDias(agora, -20)), clinico: true },
+        { id: 'x2', pacienteId: 'p01', nome: 'Encaminhamento médico (fictício).pdf', tipo: 'laudo', data: paraIsoLocal(somarDias(agora, -21)), clinico: true },
+        { id: 'x3', pacienteId: 'p01', nome: 'Carteirinha do convênio (fictício).pdf', tipo: 'documento', data: paraIsoLocal(somarDias(agora, -21)), clinico: false },
       ];
 
   async function resposta<T>(valor: T): Promise<T> {
@@ -283,6 +298,18 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   return {
     usuarioAtual: () => resposta<Usuario>(usuario),
     usuariosDemo: () => resposta(USUARIOS),
+    async registrarEmissaoDocumento(d) {
+      if (d.tipo === 'atestado') {
+        if (!ehPerfilClinico(usuario)) throw new Error('O atestado é emitido pelo profissional que atendeu.');
+        if (d.profissionalId && d.profissionalId !== usuario.profissionalId) throw new Error('Você só assina atestado em seu próprio nome.');
+        if (!temVinculo(d.pacienteId)) throw new Error('Você não atendeu este paciente. O atestado é do profissional que atendeu.');
+      }
+      emissoes.push({ ...d, por: usuario.id, em: hojeIso });
+      // Imprimir documento é ação auditável (R5): tipo, paciente e quem; nunca o texto.
+      const p = pacientes.find((x) => x.id === d.pacienteId);
+      registrar(`Emitiu ${d.tipo === 'atestado' ? 'atestado' : d.tipo === 'declaracao' ? 'declaração de comparecimento' : 'recibo'} para ${p ? (p.nomeSocial ?? p.nome) : 'paciente'}`);
+      await resposta(null);
+    },
     async entrarComo(id) {
       const u = USUARIOS.find((x) => x.id === id);
       if (!u) throw new Error('Usuário não existe.');
@@ -458,7 +485,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       delete p.inativacao;
       await resposta(null);
     },
-    listarAnexos: (pacienteId) => resposta(anexos.filter((x) => x.pacienteId === pacienteId)),
+    listarAnexos: (pacienteId) => resposta(anexos.filter((x) => x.pacienteId === pacienteId).map(anexoVisivel)),
     linhaDoTempo: (pacienteId) => {
       const ev: EventoLinhaTempo[] = [];
       for (const a of agendamentos.filter((x) => x.pacienteId === pacienteId && x.data <= hojeIso)) {
@@ -468,7 +495,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         else if (a.status === 'cancelado') ev.push({ data: a.data, hora: a.hora, tipo: 'cancelamento', texto: `Consulta cancelada com ${prof}` });
       }
       for (const r of recibos.filter((x) => x.pacienteId === pacienteId)) ev.push({ data: r.data, tipo: 'recibo', texto: `Pagamento recebido: R$ ${r.valor},00` });
-      for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${x.nome}` });
+      for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${anexoVisivel(x).nome}` });
       return resposta(ev.sort((a, b) => (b.data + (b.hora ?? '')).localeCompare(a.data + (a.hora ?? ''))));
     },
 
