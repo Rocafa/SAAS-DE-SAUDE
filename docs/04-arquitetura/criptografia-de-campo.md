@@ -54,7 +54,7 @@ Não há janela de indisponibilidade: leitores que já têm a DEK antiga em cach
 
 1. **Transação 1, comitada antes de qualquer chamada ao KMS:**
    - DEKs e chaves mestras vivas (`active` e `retired`) passam a `destroying`. Daí em diante nada decifra, em nenhuma instância;
-   - o evento `crypto.key.destroy` é gravado com o ator. Se a gravação falhar, nada segue.
+   - o evento `key_destroy` (escopo `crypto.key.destroy`) é gravado com o ator. Se a gravação falhar, nada segue. As outras operações gravam `key_provision` e `key_rotate` (ações da migração 0006).
 2. **Provedor:** `ScheduleKeyDeletion` para **todas** as chaves mestras da clínica, com 7 dias de espera. É idempotente: chave que já está `PendingDeletion` conta como feita.
 3. **Transação 2:** `destroying` vira `destroyed` e a DEK cifrada é apagada do banco.
 
