@@ -20,3 +20,16 @@ coverage/
 next-env.d.ts
 .claude/worktrees/
 plataforma-saude/
+
+# Terraform: estado, planos e configuração por conta nunca vão para o git (o lock vai).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+backend.hcl
+# Módulos não fixam provider (quem fixa é a raiz que os chama).
+infra/terraform/modules/**/.terraform.lock.hcl
