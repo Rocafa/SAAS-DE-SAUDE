@@ -3,9 +3,10 @@
  * Ver docs/04-arquitetura/garantia-de-saida.md.
  */
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { appointments, appointmentTypes, patients, professionals, type SubscriptionStatus } from '../../db/schema';
 import { withTenant, type Database, type TenantTx } from '../../db/tenant-transaction';
+import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../audit/audit-chain';
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
@@ -17,22 +18,24 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
 /**
  * Versão do contrato do pacote. Mudança incompatível => major; campo novo => minor.
  * 1.1.0: cadastro do paciente (campos decifrados), profissionais, tipos de atendimento e agendamentos.
+ * 1.2.0: trilha de auditoria da clínica (`auditoria.jsonl`) com os campos da cadeia de hash e o JSON
+ *        canônico, para a clínica verificar (Decisão 1 do Guardião, parecer PR #57); manifesto com a
+ *        contagem e o último elo (`auditChain.head`).
  */
-export const EXPORT_SCHEMA_VERSION = '1.1.0';
+export const EXPORT_SCHEMA_VERSION = '1.2.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
-export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv' } as const;
+export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
 /**
  * Cobertura da exportação, conferida contra o catálogo do banco por test/exportacao-cobertura.rls.test.ts:
  * toda tabela de `public` com `tenant_id` precisa estar em EXPORTED_TABLES ou em EXPORT_EXCLUDED_TABLES
  * (com o motivo). Tabela nova sem decisão reprova o test:rls.
  */
-export const EXPORTED_TABLES = ['tenants', 'patients', 'professionals', 'appointment_types', 'appointments'] as const;
+export const EXPORTED_TABLES = ['tenants', 'patients', 'professionals', 'appointment_types', 'appointments', 'audit_log'] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
-  audit_log: 'trilha de acesso: guardada pelo operador (G3, Marco Civil art. 15); entregue sob pedido, não no pacote',
 };
 
 export interface ExportManifest {
@@ -52,7 +55,15 @@ export interface ExportManifest {
     readonly professionals: number;
     readonly appointmentTypes: number;
     readonly appointments: number;
+    /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
+    readonly auditEvents: number;
   };
+  /**
+   * Cadeia da trilha no momento da exportação: último elo (para conferir com a âncora publicada) e
+   * quantas linhas são anteriores à 0005 (sem hash). O evento desta própria exportação entra na
+   * trilha DEPOIS e aparece no próximo pacote.
+   */
+  readonly auditChain: { readonly head: ChainAnchor | null; readonly legacy: number };
   readonly files: typeof EXPORT_FILES;
   readonly encoding: 'utf-8';
 }
@@ -122,6 +133,10 @@ export interface TenantExportPackage {
   readonly json: TenantExportDocument;
   /** Conteúdo de `pacientes.csv`. */
   readonly patientsCsv: string;
+  /** Conteúdo de `auditoria.jsonl`: um ExportedAuditEvent por linha, em ordem de `seq`. */
+  readonly auditJsonl: string;
+  /** Os mesmos eventos já como objetos (para quem monta o arquivo e para o verificador). */
+  readonly auditEvents: readonly ExportedAuditEvent[];
 }
 
 export interface ExportOptions {
@@ -191,6 +206,47 @@ export async function exportInTransaction(
       .orderBy(asc(appointments.startsAt), asc(appointments.id)),
     ctx.tenantId,
   );
+
+  // Trilha da clínica, inteira e sem reescrita: os campos da cadeia e o JSON canônico vêm do banco
+  // (data com microssegundos, como no hash). O ator interno já está pseudonimizado desde o INSERT (0008).
+  const auditRows = await tx.execute<{
+    tenant_id: string;
+    id: string;
+    actor_id: string;
+    actor_kind: string | null;
+    action: string;
+    scope: string;
+    metadata: Record<string, unknown>;
+    created_at: string;
+    seq: string | null;
+    prev_hash: string | null;
+    hash: string | null;
+    canonical: string | null;
+  }>(sql`
+    select a.tenant_id, a.id, a.actor_id, a.actor_kind, a.action, a.scope, a.metadata,
+           to_char(a.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+           a.seq::text as seq, a.prev_hash, a.hash,
+           case when a.seq is null then null else audit_log_canonical(a) end as canonical
+    from audit_log a
+    where a.tenant_id = ${ctx.tenantId}
+    order by a.seq asc nulls first, a.created_at asc, a.id asc`);
+  const auditEvents: ExportedAuditEvent[] = soDaClinica(
+    auditRows.map((r) => ({ ...r, tenantId: r.tenant_id })),
+    ctx.tenantId,
+  ).map((r) => ({
+    id: r.id,
+    actorId: r.actor_id,
+    actorKind: r.actor_kind,
+    action: r.action,
+    scope: r.scope,
+    metadata: r.metadata,
+    createdAt: r.created_at,
+    seq: r.seq === null ? null : Number(r.seq),
+    prevHash: r.prev_hash,
+    hash: r.hash,
+    canonical: r.canonical,
+  }));
+  const auditHead = await auditChainHead(tx, ctx.tenantId);
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -264,7 +320,9 @@ export async function exportInTransaction(
       professionals: exportedProfessionals.length,
       appointmentTypes: exportedTypes.length,
       appointments: exportedAppointments.length,
+      auditEvents: auditEvents.length,
     },
+    auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
     files: EXPORT_FILES,
     encoding: 'utf-8',
   };
@@ -292,13 +350,14 @@ export async function exportInTransaction(
     scope: EXPORT_AUDIT_SCOPE,
     metadata: {
       schemaVersion: EXPORT_SCHEMA_VERSION,
-      formats: 'json+csv',
+      formats: 'json+csv+jsonl',
       subscriptionStatus: tenant.status,
       tenants: manifest.counts.tenants,
       patients: manifest.counts.patients,
       professionals: manifest.counts.professionals,
       appointmentTypes: manifest.counts.appointmentTypes,
       appointments: manifest.counts.appointments,
+      auditEvents: manifest.counts.auditEvents,
     },
   });
 
@@ -314,6 +373,8 @@ export async function exportInTransaction(
       },
     },
     patientsCsv,
+    auditJsonl: auditEvents.map((e) => `${JSON.stringify(e)}\n`).join(''),
+    auditEvents,
   };
 }
 
