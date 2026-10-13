@@ -17,12 +17,14 @@
 | Rodada 11.1: ✅ **PR #57** (rotas de pacientes e agenda, auth plugável, exportação G2) — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #57 |
 | Rodada 11.2: ✅ **PR #58** (Terraform do staging + infra.yml) — aguarda CI (checkov só roda lá) | Maestro @Rocafa | 13/10/2026 | PR #58 |
 | Rodada 11.3: ✅ **PR #56** (golden sets 50/nicho) — aguarda CI e revisão clínica humana | Maestro @Rocafa | 13/10/2026 | PR #56 |
+| Rodada 12.1: revisão do Guardião LGPD dos PRs #56, #57, #58 (+ decisões audit_log na exportação e código do revisor clínico) | Maestro @Rocafa (agente guardiao-lgpd) | 13/10/2026 | pareceres em revisoes/ |
+| Rodada 12.2: ligar as telas de pacientes e agenda à API real (adaptador HTTP), empilhado sobre #43 + #57; lista fechada no provedor de chaves (crypto) | Maestro @Rocafa (agente engenharia) | 13/10/2026 | branch `front/adaptador-http-pacientes-agenda` |
+| Rodada 12.3: Dockerfile da API + `imagem.yml` + job de E2E do front no CI | Maestro @Rocafa (agente devops-ci) | 13/10/2026 | branch `devops/imagem-api-e2e` |
 
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
-| Dockerfile + `imagem.yml` + job de E2E do front no CI | idem §3 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
