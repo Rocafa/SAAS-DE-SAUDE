@@ -8,6 +8,7 @@ Visão geral técnica da plataforma SaaS multi-tenant de gestão para clínicas 
 | [modelo-de-dados.md](modelo-de-dados.md) | Entidades, ER, criptografia em nível de campo |
 | [seguranca-na-arquitetura.md](seguranca-na-arquitetura.md) | RLS, criptografia, segredos, auditoria, backups, CI de segurança |
 | [integracoes.md](integracoes.md) | WhatsApp, Pix, NFS-e, ICP-Brasil, Memed, vídeo, TISS, RNDS |
+| [api-dominio.md](api-dominio.md) | Rotas de pacientes e agenda, perfis e permissões, sessão plugável (rodada 11.1) |
 | [ambientes-e-devops.md](ambientes-e-devops.md) | Ambientes, CI/CD, branches, commits, revisão |
 
 ## 1. Princípios arquiteturais
