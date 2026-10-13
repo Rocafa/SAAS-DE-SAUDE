@@ -1,7 +1,7 @@
 # Memorandos de decisão para os sócios
 
 > Um memo de 1 página por decisão pendente. **Nenhum memo decide nada:** a decisão é dos sócios (N0) e, quando tomada, vai para o [registro de decisões](../decisoes.md).
-> Preparados em 10/10/2026. D1–D9 estão na `main`. D10–D14 vêm do branch `pesquisa/necessidades-producao` (rodada 7), que ainda não foi incorporado.
+> Preparados em 10/10/2026. D1–D9 estão na `main`. D10–D14 vêm da rodada 7 (PR #27, já na `main`) e estão em `decisoes.md`.
 
 | # | Decisão | Urgência | O que trava se adiar | Memo |
 |---|---|---|---|---|
