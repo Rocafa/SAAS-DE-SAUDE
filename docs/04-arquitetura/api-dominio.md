@@ -61,7 +61,7 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 
 1. **Adaptador HTTP** em `apps/web/lib/api/` implementando `ApiClinica` com `fetch` (credenciais incluídas) e trocar o `fake.ts` por ele. Mapeamentos: `listarPacientes` pagina (o fake devolve tudo); a lista não traz telefone/CPF (tela usa `obterPaciente`); `criarAgendamento` exige `profissionalId` e `tipoId` (o fake tem padrão); `removerAgendamento` = cancelar; `alterarStatus` devolve `{statusAnterior}`; a agenda precisa sempre de `de`/`ate`.
 2. **Provedor de login real (D4)** implementando `AuthProvider` (Better Auth recomendado: sessão em cookie `HttpOnly`, MFA por perfil, troca de clínica, nome do usuário em `/sessao`).
-3. **Fora desta rodada:** responsáveis do paciente, recibos e pendências do dia, valor do tipo de atendimento, fuso por clínica, busca por CPF (exige índice cego), exportação G3 com os campos novos decifrados, retirar o DELETE do runtime em `patients` (hoje sem rota; as suítes de segurança e resiliência ainda o usam como sonda), KMS em produção.
+3. **Fora desta rodada:** responsáveis do paciente, recibos e pendências do dia, valor do tipo de atendimento, fuso por clínica, busca por CPF (exige índice cego), retirar o DELETE do runtime em `patients` (hoje sem rota; as suítes de segurança e resiliência ainda o usam como sonda), KMS em produção.
 
 ## 6. Como verificar localmente
 

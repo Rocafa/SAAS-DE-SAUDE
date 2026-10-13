@@ -101,7 +101,7 @@ describe('G2 — exportação total do tenant', () => {
     const { manifest, data } = pkg.json;
     expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     expect(manifest.tenant.id).toBe(a.ctx.tenantId);
-    expect(manifest.counts).toEqual({ tenants: 1, patients: 2 });
+    expect(manifest.counts).toEqual({ tenants: 1, patients: 2, professionals: 0, appointmentTypes: 0, appointments: 0 });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();
     expect(data.patients.map((p) => p.displayName).sort()).toEqual([...a.patientNames].sort());
 
@@ -203,6 +203,9 @@ describe('G3 — auditoria append-only da exportação', () => {
       subscriptionStatus: 'active',
       tenants: 1,
       patients: 3,
+      professionals: 0,
+      appointmentTypes: 0,
+      appointments: 0,
     });
     const serial = JSON.stringify(row);
     for (const nome of t.patientNames) expect(serial).not.toContain(nome);

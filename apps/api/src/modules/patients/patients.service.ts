@@ -11,6 +11,7 @@ import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
 import {
   normalizarBusca,
   type AlteracaoPaciente,
@@ -43,9 +44,6 @@ export interface PaginaDePacientes {
   readonly limite: number;
   readonly temMais: boolean;
 }
-
-/** Colunas cifradas (FieldCipher: AAD = clínica + tabela + coluna + id da linha). */
-type ColunaCifrada = 'cpf' | 'phone' | 'birth_date';
 
 const SCOPE = 'patients';
 
@@ -215,12 +213,8 @@ export class PatientsService {
     return escreverNaClinica(this.db, ctx, fn);
   }
 
-  private ref(tenantId: TenantId, rowId: string, column: ColunaCifrada) {
-    return { tenantId, table: 'patients', column, rowId };
-  }
-
-  private async cifrar(tx: TenantTx, ctx: RequestContext, rowId: string, coluna: ColunaCifrada, valor: string): Promise<string> {
-    const ref = this.ref(ctx.tenantId, rowId, coluna);
+  private async cifrar(tx: TenantTx, ctx: RequestContext, rowId: string, coluna: PatientEncryptedColumn, valor: string): Promise<string> {
+    const ref = patientFieldRef(ctx.tenantId, rowId, coluna);
     try {
       return await this.cipher.encrypt(tx, ref, valor);
     } catch (e) {
@@ -235,14 +229,14 @@ export class PatientsService {
     tx: TenantTx,
     ctx: RequestContext,
     rowId: string,
-    coluna: ColunaCifrada,
+    coluna: PatientEncryptedColumn,
     valor: string | undefined,
   ): Promise<string | null> {
     return valor === undefined ? null : this.cifrar(tx, ctx, rowId, coluna, valor);
   }
 
-  private async decifrar(tx: TenantTx, tenantId: TenantId, rowId: string, coluna: ColunaCifrada, valor: string | null) {
-    return valor === null ? null : this.cipher.decryptString(tx, this.ref(tenantId, rowId, coluna), valor);
+  private async decifrar(tx: TenantTx, tenantId: TenantId, rowId: string, coluna: PatientEncryptedColumn, valor: string | null) {
+    return valor === null ? null : this.cipher.decryptString(tx, patientFieldRef(tenantId, rowId, coluna), valor);
   }
 
   private async paraDto(tx: TenantTx, tenantId: TenantId, linha: typeof patients.$inferSelect): Promise<PacienteDto> {

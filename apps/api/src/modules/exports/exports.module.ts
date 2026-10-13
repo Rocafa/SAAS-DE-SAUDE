@@ -1,5 +1,8 @@
 import { type DynamicModule, Inject, Injectable, Module } from '@nestjs/common';
 import type { RequestContext } from '@plataforma/shared';
+import type { TenantTx } from '../../db/tenant-transaction';
+import { FIELD_CIPHER } from '../crypto/crypto.module';
+import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { exportInTransaction, type TenantExportPackage } from './tenant-export';
 
@@ -14,11 +17,12 @@ export class ExportsService {
   constructor(
     @Inject(TenantDatabase) private readonly tenantDb: TenantDatabase,
     @Inject(EXIT_WINDOW_DAYS_TOKEN) private readonly exitWindowDays: number,
+    @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
   ) {}
 
   exportTenantData(ctx: RequestContext, now: Date = new Date()): Promise<TenantExportPackage> {
     return this.tenantDb.run(ctx.tenantId, (tx) =>
-      exportInTransaction(tx, ctx, { now, exitWindowDays: this.exitWindowDays }),
+      exportInTransaction(tx, ctx, { now, exitWindowDays: this.exitWindowDays, cipher: this.cipher }),
     );
   }
 }
