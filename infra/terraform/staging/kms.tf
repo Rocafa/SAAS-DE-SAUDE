@@ -1,12 +1,13 @@
 # Uma chave KMS por domínio: revogar ou auditar uma não afeta as outras.
 locals {
   chaves_kms = {
-    rds      = "RDS PostgreSQL (dados e Performance Insights)"
-    redis    = "ElastiCache Redis"
-    s3       = "Buckets S3 de documentos e exportações"
-    segredos = "Secrets Manager"
-    logs     = "CloudWatch Logs (app, VPC flow logs, WAF)"
-    ecr      = "Imagens no ECR"
+    rds         = "RDS PostgreSQL (dados e Performance Insights)"
+    redis       = "ElastiCache Redis"
+    s3          = "Bucket S3 de documentos assinados"
+    exportacoes = "Bucket S3 de exportações (efêmero; chave própria para revogar o acesso a todas de uma vez)"
+    segredos    = "Secrets Manager"
+    logs        = "CloudWatch Logs (app, RDS, Redis, Container Insights, VPC flow logs, WAF)"
+    ecr         = "Imagens no ECR"
   }
 }
 

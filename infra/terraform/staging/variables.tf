@@ -94,9 +94,23 @@ variable "github_repositorio" {
 }
 
 variable "object_lock_dias" {
-  description = "Retenção padrão (modo GOVERNANCE em staging) dos objetos do bucket de documentos."
+  description = "Retenção padrão (GOVERNANCE) dos objetos do bucket de documentos. Anti-ransomware, não custódia do prontuário (V1 do PR #58): no máximo 35 dias."
   type        = number
   default     = 1
+  validation {
+    condition     = var.object_lock_dias >= 1 && var.object_lock_dias <= 35
+    error_message = "Entre 1 e 35 dias: Object Lock longo tornaria falsa a eliminação prometida na G3."
+  }
+}
+
+variable "exportacao_expiracao_dias" {
+  description = "Dias até o S3 expirar um pacote de exportação (G2: link de 24 h). Máximo 7 (V1 do PR #58)."
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.exportacao_expiracao_dias >= 1 && var.exportacao_expiracao_dias <= 7
+    error_message = "Entre 1 e 7 dias."
+  }
 }
 
 variable "logs_retencao_dias" {

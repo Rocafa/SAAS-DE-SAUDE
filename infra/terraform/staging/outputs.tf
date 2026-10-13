@@ -43,6 +43,11 @@ output "papel_gestor_chaves" {
   value       = aws_iam_role.gestor_chaves.arn
 }
 
+output "bucket_exportacoes" {
+  description = "Bucket efêmero dos pacotes de exportação (G2), só para a tarefa da API."
+  value       = aws_s3_bucket.exportacoes.bucket
+}
+
 output "bucket_documentos" {
   description = "Bucket privado de documentos e exportações."
   value       = aws_s3_bucket.documentos.bucket

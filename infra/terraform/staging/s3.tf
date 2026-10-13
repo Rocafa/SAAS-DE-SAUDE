@@ -1,6 +1,9 @@
-# Buckets S3 (I15). "documentos": exportações e documentos assinados, privado, SSE-KMS, versionado,
-# com Object Lock. "logs": logs de acesso do ALB e do bucket de documentos (esses serviços só
-# entregam em bucket com SSE-S3, por isso ele não usa KMS).
+# Buckets S3 (I15).
+# - "documentos": documentos assinados, privado, SSE-KMS, versionado, Object Lock curto (anti-ransomware).
+# - "exportacoes": pacotes de exportação G2, efêmeros (expiram em <= 7 dias), SEM Object Lock
+#   (V1 do parecer do PR #58); definido em exportacoes.tf.
+# - "logs": logs de acesso do ALB e dos buckets (esses serviços só entregam em bucket com SSE-S3,
+#   por isso ele não usa KMS).
 
 locals {
   bucket_documentos = "${local.nome}-documentos-${local.conta}"
@@ -53,8 +56,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "documentos" {
   }
 }
 
-# Staging usa GOVERNANCE (dados sintéticos podem ser apagados por quem tem
-# s3:BypassGovernanceRetention). Produção usará COMPLIANCE com o prazo de guarda do prontuário.
+# Object Lock aqui é proteção contra ransomware/apagamento acidental, NÃO custódia do prontuário
+# (V1 do parecer do PR #58). Staging: GOVERNANCE, 1 dia. Prod: GOVERNANCE ou COMPLIANCE CURTO
+# (ex.: 35 dias, igual ao PITR), nunca o prazo de 20 anos: a guarda legal é da clínica (G3), e os
+# documentos são cifrados na aplicação com a DEK da clínica para o crypto-shredding valer no S3.
 resource "aws_s3_bucket_object_lock_configuration" "documentos" {
   bucket = aws_s3_bucket.documentos.id
   rule {
