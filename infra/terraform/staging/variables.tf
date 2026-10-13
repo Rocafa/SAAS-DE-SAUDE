@@ -103,6 +103,16 @@ variable "object_lock_dias" {
   }
 }
 
+variable "trilha_retencao_dias" {
+  description = "Retenção (Object Lock COMPLIANCE) dos arquivos do CloudTrail. 365 = 12 meses (proposta da D7 para registros de acesso; Marco Civil art. 15 exige no mínimo 6 meses)."
+  type        = number
+  default     = 365
+  validation {
+    condition     = var.trilha_retencao_dias >= 180
+    error_message = "Mínimo de 180 dias (Marco Civil, art. 15)."
+  }
+}
+
 variable "exportacao_expiracao_dias" {
   description = "Dias até o S3 expirar um pacote de exportação (G2: link de 24 h). Máximo 7 (V1 do PR #58)."
   type        = number

@@ -19,7 +19,7 @@ locals {
   # As chaves de infraestrutura e a da âncora nunca podem receber a tag tenant_id.
   chaves_infra_arn = concat(
     [for k in aws_kms_key.this : k.arn],
-    [module.ancora_auditoria.kms_key_arn],
+    [module.ancora_auditoria.kms_key_arn, aws_kms_key.trilha.arn],
   )
 }
 
