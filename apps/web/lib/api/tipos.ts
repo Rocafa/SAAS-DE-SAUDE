@@ -34,6 +34,12 @@ export interface Registro {
   adendos: Adendo[];
   /** Psicologia: compartimento separado; só o profissional autor lê o conteúdo. */
   restrito: boolean;
+  /**
+   * true quando quem pediu não pode ler o conteúdo: aí `campos` e `adendos` vêm vazios e só os
+   * metadados (data e profissional) aparecem. A tela decide a mensagem por este campo.
+   */
+  conteudoOculto?: boolean;
+  motivoOculto?: 'perfil_nao_clinico' | 'sem_vinculo' | 'sigilo_psicologia';
 }
 
 export interface Responsavel {
@@ -121,6 +127,9 @@ export interface Anexo {
   nome: string;
   tipo: 'exame' | 'laudo' | 'documento' | 'imagem';
   data: string;
+  /** Exame, laudo e imagem são conteúdo clínico: o nome só aparece para quem cuida do paciente. */
+  clinico: boolean;
+  conteudoOculto?: boolean;
 }
 
 export interface EventoLinhaTempo {

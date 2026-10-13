@@ -13,7 +13,7 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido } from '@/lib/api/tipos';
-import { textoAtestado, textoDeclaracao, validarCid } from '@/lib/prontuario';
+import { ehPerfilClinico, textoAtestado, textoDeclaracao, validarCid } from '@/lib/prontuario';
 import { cn, reais } from '@/lib/utils';
 
 type Tipo = 'atestado' | 'declaracao' | 'recibo';
@@ -40,7 +40,8 @@ function dataLonga(iso: string) {
 
 function Documentos() {
   const params = useSearchParams();
-  const { usuario } = useDados();
+  const { api, usuario, agendamentos } = useDados();
+  const clinico = ehPerfilClinico(usuario);
   const pedidoTipo = params.get('tipo');
   const [tipo, setTipo] = useState<Tipo>(TIPOS.some((t) => t.id === pedidoTipo) ? (pedidoTipo as Tipo) : 'atestado');
   const [pacienteId, setPacienteId] = useState(params.get('paciente') ?? '');
@@ -50,7 +51,8 @@ function Documentos() {
   const [autorizouCid, setAutorizouCid] = useState(false);
   const [inicio, setInicio] = useState('09:00');
   const [fim, setFim] = useState('10:00');
-  const [reciboId, setReciboId] = useState('');
+  const [reciboId, setReciboId] = useState(params.get('recibo') ?? '');
+  const [erroEmissao, setErroEmissao] = useState('');
   const hoje = paraIsoLocal(new Date());
 
   useEffect(() => {
@@ -72,24 +74,33 @@ function Documentos() {
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
   const { pacientes, profissionais } = consulta.dados;
+  // Atestado é ato do profissional que atendeu: só perfil clínico, assinado por ele mesmo (B2).
+  const permitidos = clinico ? TIPOS : TIPOS.filter((t) => t.id !== 'atestado');
+  const tipoAtual: Tipo = permitidos.some((t) => t.id === tipo) ? tipo : permitidos[0]!.id;
   const paciente = pacientes.find((p) => p.id === pacienteId);
-  const prof = profissionais.find((p) => p.id === profissionalId);
+  const assinante = tipoAtual === 'atestado' ? (usuario?.profissionalId ?? '') : profissionalId;
+  const prof = profissionais.find((p) => p.id === assinante);
+  const semVinculo =
+    tipoAtual === 'atestado' && paciente && !agendamentos.some((a) => a.pacienteId === paciente.id && a.profissionalId === assinante)
+      ? 'Você não atendeu este paciente. O atestado é do profissional que atendeu.'
+      : null;
+  
   const recibo = recibosDoPaciente.find((r) => r.id === reciboId) ?? recibosDoPaciente[0];
   const nDias = Number(dias);
-  const erroDias = tipo === 'atestado' && !(Number.isInteger(nDias) && nDias >= 1 && nDias <= 15) ? 'Afastamento de 1 a 15 dias. Acima disso, siga o fluxo do INSS.' : null;
-  const erroCid = tipo === 'atestado' ? validarCid(cid) : null;
-  const erroCidSemAutorizacao = tipo === 'atestado' && cid.trim() && !autorizouCid ? 'O CID só entra com a autorização do paciente. Marque a caixa ou apague o CID.' : null;
-  const erroHorario = tipo === 'declaracao' && fim <= inicio ? 'O horário de saída tem que ser depois da chegada.' : null;
+  const erroDias = tipoAtual === 'atestado' && !(Number.isInteger(nDias) && nDias >= 1 && nDias <= 15) ? 'Afastamento de 1 a 15 dias. Acima disso, siga o fluxo do INSS.' : null;
+  const erroCid = tipoAtual === 'atestado' ? validarCid(cid) : null;
+  const erroCidSemAutorizacao = tipoAtual === 'atestado' && cid.trim() && !autorizouCid ? 'O CID só entra com a autorização do paciente. Marque a caixa ou apague o CID.' : null;
+  const erroHorario = tipoAtual === 'declaracao' && fim <= inicio ? 'O horário de saída tem que ser depois da chegada.' : null;
   const faltaPaciente = !paciente ? 'Falta o paciente. Escolha na lista.' : null;
-  const erroRecibo = tipo === 'recibo' && paciente && !recibo ? 'Este paciente ainda não tem pagamento registrado.' : null;
-  const erros = [faltaPaciente, erroDias, erroCid, erroCidSemAutorizacao, erroHorario, erroRecibo].filter(Boolean) as string[];
+  const erroRecibo = tipoAtual === 'recibo' && paciente && !recibo ? 'Este paciente ainda não tem pagamento registrado.' : null;
+  const erros = [faltaPaciente, semVinculo, erroDias, erroCid, erroCidSemAutorizacao, erroHorario, erroRecibo].filter(Boolean) as string[];
 
   let corpo = '';
   if (paciente && !erros.length) {
     const nome = nomeExibido(paciente);
-    if (tipo === 'atestado')
-      corpo = textoAtestado({ paciente: nome, profissional: prof?.nome ?? '', registro: REGISTRO[profissionalId] ?? '', data: dataLonga(hoje), dias: nDias, cid, autorizouCid });
-    else if (tipo === 'declaracao') corpo = textoDeclaracao({ paciente: nome, data: dataLonga(hoje), inicio, fim });
+    if (tipoAtual === 'atestado')
+      corpo = textoAtestado({ paciente: nome, profissional: prof?.nome ?? '', registro: REGISTRO[assinante] ?? '', data: dataLonga(hoje), dias: nDias, cid, autorizouCid });
+    else if (tipoAtual === 'declaracao') corpo = textoDeclaracao({ paciente: nome, data: dataLonga(hoje), inicio, fim });
     else if (recibo)
       corpo = `Recebi de ${paciente.nome}${paciente.cpf ? `, CPF ${paciente.cpf}` : ''}, a quantia de ${reais(recibo.valor)}, referente a atendimento de ${prof?.especialidade.toLowerCase()} em ${dataLonga(recibo.data)}, pago em ${recibo.forma === 'pix' ? 'Pix' : recibo.forma === 'cartao' ? 'cartão' : 'dinheiro'}.`;
   }
@@ -101,12 +112,17 @@ function Documentos() {
         <form className="flex flex-col gap-5" onSubmit={(e) => e.preventDefault()}>
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-2 text-lg font-bold">1. Qual documento</legend>
-            {TIPOS.map((t) => (
+            {!clinico && pedidoTipo === 'atestado' && (
+              <p role="status" className="mb-2 rounded-md border-2 border-dashed border-borda p-3">
+                O atestado é emitido pelo profissional que atendeu. Aqui você emite declaração de comparecimento e recibo.
+              </p>
+            )}
+            {permitidos.map((t) => (
               <label
                 key={t.id}
-                className={cn('flex min-h-14 items-center gap-3 rounded-md border-2 px-4 text-lg', tipo === t.id ? 'border-borda-forte font-bold' : 'border-borda')}
+                className={cn('flex min-h-14 items-center gap-3 rounded-md border-2 px-4 text-lg', tipoAtual === t.id ? 'border-borda-forte font-bold' : 'border-borda')}
               >
-                <input type="radio" name="tipo" value={t.id} checked={tipo === t.id} onChange={() => setTipo(t.id)} className="size-6 accent-[var(--texto)]" />
+                <input type="radio" name="tipo" value={t.id} checked={tipoAtual === t.id} onChange={() => setTipo(t.id)} className="size-6 accent-[var(--texto)]" />
                 {t.rotulo}
               </label>
             ))}
@@ -124,19 +140,25 @@ function Documentos() {
               ))}
             </select>
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="doc-prof" className="text-lg font-bold">
-              3. Profissional que assina
-            </label>
-            <select id="doc-prof" value={profissionalId} onChange={(e) => setProfissionalId(e.target.value)} className={CAMPO}>
-              {profissionais.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-          {tipo === 'atestado' && (
+          {tipoAtual === 'atestado' ? (
+            <p className="rounded-md border-2 border-borda p-3">
+              <strong>3. Assinado por:</strong> {prof?.nome ?? 'você'} (você). O atestado só sai em nome de quem atendeu.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <label htmlFor="doc-prof" className="text-lg font-bold">
+                3. Profissional do atendimento
+              </label>
+              <select id="doc-prof" value={profissionalId} onChange={(e) => setProfissionalId(e.target.value)} className={CAMPO}>
+                {profissionais.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {tipoAtual === 'atestado' && (
             <>
               <div className="flex flex-col gap-2">
                 <label htmlFor="doc-dias" className="text-lg font-bold">
@@ -159,7 +181,7 @@ function Documentos() {
               </div>
             </>
           )}
-          {tipo === 'declaracao' && (
+          {tipoAtual === 'declaracao' && (
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-2">
                 <label htmlFor="doc-inicio" className="font-bold">
@@ -175,7 +197,7 @@ function Documentos() {
               </div>
             </div>
           )}
-          {tipo === 'recibo' && recibosDoPaciente.length > 0 && (
+          {tipoAtual === 'recibo' && recibosDoPaciente.length > 0 && (
             <div className="flex flex-col gap-2">
               <label htmlFor="doc-recibo" className="text-lg font-bold">
                 Qual pagamento
@@ -206,21 +228,40 @@ function Documentos() {
           </h2>
           <div data-imprimir className="flex min-h-96 flex-col gap-6 rounded-md border-2 border-borda-forte bg-white p-8 text-black">
             <p className="text-center font-bold uppercase tracking-wide">Clínica Demonstração</p>
-            <h3 className="text-center text-xl font-bold">{TIPOS.find((t) => t.id === tipo)?.rotulo}</h3>
+            <h3 className="text-center text-xl font-bold">{TIPOS.find((t) => t.id === tipoAtual)?.rotulo}</h3>
             <p className="flex-1 whitespace-pre-wrap" data-testid="texto-documento">
               {corpo || 'Preencha ao lado para ver o documento.'}
             </p>
             <p>São Paulo, {dataLonga(hoje)}.</p>
             <div className="mt-8 border-t-2 border-black pt-2 text-center">
               <p className="font-bold">{prof?.nome}</p>
-              <p>{REGISTRO[profissionalId]}</p>
+              <p>{REGISTRO[assinante]}</p>
             </div>
           </div>
           <p className="flex items-start gap-2 rounded-md border-2 border-dashed border-borda p-3">
             <FileSignature aria-hidden className="mt-0.5 size-6 shrink-0" />
             Assinatura digital ICP-Brasil: em breve. Por enquanto, imprima e assine à mão.
           </p>
-          <Botao tamanho="grande" disabled={!corpo} onClick={() => window.print()} className="self-start" data-testid="imprimir-documento">
+          {erroEmissao && (
+            <p role="alert" className="font-bold">
+              ⚠ {erroEmissao}
+            </p>
+          )}
+          <Botao
+            tamanho="grande"
+            disabled={!corpo}
+            onClick={async () => {
+              try {
+                await api.registrarEmissaoDocumento({ tipo: tipoAtual, pacienteId, profissionalId: assinante });
+                setErroEmissao('');
+                window.print();
+              } catch (e) {
+                setErroEmissao(e instanceof Error ? e.message : 'Não deu para emitir.');
+              }
+            }}
+            className="self-start"
+            data-testid="imprimir-documento"
+          >
             <Printer aria-hidden />
             Imprimir
           </Botao>

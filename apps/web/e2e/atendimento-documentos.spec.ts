@@ -58,7 +58,8 @@ test.describe('Atendimento e prontuário', () => {
   test('psicologia fica em compartimento sigiloso; só o autor lê', async ({ page }, info) => {
     await page.goto('/pacientes/p04/prontuario');
     await expect(page.getByRole('heading', { name: 'Psicologia — compartimento sigiloso' })).toBeVisible();
-    await expect(page.getByText(/Conteúdo restrito ao profissional autor/).first()).toBeVisible();
+    await expect(page.getByText(/Seu perfil não tem acesso ao conteúdo clínico/)).toBeVisible();
+    await expect(page.getByText(/Conteúdo fictício de demonstração/)).toHaveCount(0);
     await semViolacaoSeria(page);
     await page.screenshot({ path: `${PASTA}${info.project.name}-prontuario.png`, fullPage: true });
 
@@ -70,9 +71,50 @@ test.describe('Atendimento e prontuário', () => {
   });
 });
 
+test.describe('B1: conteúdo clínico só para quem cuida do paciente', () => {
+  const TEXTO_CLINICO = /Relata melhora|Fortalecimento de quadríceps/;
+
+  test('administradora não clínica abre o prontuário e vê só data e profissional', async ({ page }) => {
+    await page.goto('/pacientes/p01/prontuario');
+    await expect(page.getByText(/Seu perfil não tem acesso ao conteúdo clínico/)).toBeVisible();
+    await expect(page.getByText(TEXTO_CLINICO)).toHaveCount(0);
+  });
+
+  test('administradora abrindo a tela de atendimento não vê histórico clínico', async ({ page }) => {
+    await page.goto('/atendimento/a02');
+    await expect(page.getByRole('heading', { level: 1, name: 'Maria Silva' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Histórico' })).toHaveCount(0);
+    await expect(page.getByText(TEXTO_CLINICO)).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Ver prontuário completo' })).toHaveCount(0);
+  });
+
+  test('recepção: ficha sem "Abrir prontuário" e anexo clínico sem nome; prontuário fechado', async ({ page }) => {
+    await entrarComo(page, /Recepcionista/);
+    await irPeloMenu(page, 'Pacientes');
+    await page.getByRole('link', { name: /^Maria Silva\b/ }).click();
+    await expect(page.getByText('O conteúdo clínico é só para os profissionais que atendem este paciente.')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Abrir prontuário' })).toHaveCount(0);
+    await expect(page.getByText(/Raio-x/)).toHaveCount(0);
+    await expect(page.getByText(/Carteirinha do convênio/).first()).toBeVisible();
+  });
+
+  test('fisioterapeuta com vínculo lê a evolução', async ({ page }) => {
+    await entrarComo(page, /Dra\. Beatriz/);
+    await irPeloMenu(page, 'Pacientes');
+    await page.getByRole('link', { name: /^Maria Silva\b/ }).click();
+    await page.getByRole('link', { name: 'Abrir prontuário' }).click();
+    await expect(page.getByText(TEXTO_CLINICO).first()).toBeVisible();
+  });
+});
+
 test.describe('Documentos', () => {
-  test('atestado: CID só com autorização; imprimir liberado', async ({ page }, info) => {
-    await page.goto('/documentos?tipo=atestado&paciente=p01');
+  test('atestado (profissional que atendeu): CID só com autorização; imprimir liberado', async ({ page }, info) => {
+    await entrarComo(page, /Dra\. Beatriz/);
+    await page.getByRole('link', { name: 'Documentos' }).click();
+    await page.getByLabel('Atestado').check();
+    await page.getByLabel('2. Paciente').selectOption('p01');
+    await expect(page.locator('p').filter({ hasText: 'Assinado por:' })).toContainText('Dra. Beatriz Nogueira');
+    await expect(page.locator('#doc-prof')).toHaveCount(0);
     await expect(page.getByTestId('texto-documento')).toContainText('Maria Silva');
     await expect(page.getByTestId('texto-documento')).toContainText('1 (um) dia');
     await page.getByLabel('CID (opcional)').fill('M54.5');
@@ -96,12 +138,26 @@ test.describe('Documentos', () => {
     await expect(page.getByTestId('texto-documento')).toContainText('Recebi de Maria Silva');
   });
 
-  test('Ajudante leva ao atestado já com o paciente', async ({ page }) => {
-    await page.goto('/inicio');
+  test('Ajudante leva o profissional ao atestado já com o paciente', async ({ page }) => {
+    await entrarComo(page, /Dra\. Beatriz/);
     await page.getByTestId('abrir-ajudante').click();
-    await page.getByRole('combobox', { name: 'O que você precisa?' }).fill('atestado para Helena');
+    await page.getByRole('combobox', { name: 'O que você precisa?' }).fill('atestado para Maria Silva');
     await page.keyboard.press('Enter');
     await page.getByTestId('fazer-por-mim').click();
-    await expect(page.getByTestId('texto-documento')).toContainText('Helena Moura', { timeout: 10_000 });
+    await expect(page.getByTestId('texto-documento')).toContainText('Maria Silva', { timeout: 10_000 });
+  });
+
+  test('B2: recepção não vê "Atestado"; fica com declaração e recibo', async ({ page }) => {
+    await entrarComo(page, /Recepcionista/);
+    await page.getByRole('link', { name: 'Documentos' }).click();
+    await expect(page.getByLabel('Declaração de comparecimento')).toBeVisible();
+    await expect(page.getByLabel('Recibo')).toBeVisible();
+    await expect(page.getByLabel('Atestado')).toHaveCount(0);
+  });
+
+  test('B2: pedido de atestado por perfil não clínico explica o motivo', async ({ page }) => {
+    await page.goto('/documentos?tipo=atestado&paciente=p01');
+    await expect(page.getByText(/O atestado é emitido pelo profissional que atendeu/)).toBeVisible();
+    await expect(page.getByLabel('Atestado')).toHaveCount(0);
   });
 });

@@ -138,6 +138,16 @@ describe('busca universal', () => {
     expect(g[0]?.itens[0]).toMatchObject({ acaoId: 'imprimir_recibo', params: { pacienteId: 'p01' } });
   });
 
+  it('B2: só perfil clínico recebe "fazer atestado"', async () => {
+    expect(buscar('atestado para Maria Silva', await indice('recepcao')).find((g) => g.grupo === 'Fazer')).toBeUndefined();
+    expect(buscar('atestado para Maria Silva', await indice('admin')).find((g) => g.grupo === 'Fazer')).toBeUndefined();
+    expect(buscar('atestado para Maria Silva', await indice('profissional'))[0]?.itens[0]?.titulo).toMatch(/atestado/i);
+  });
+
+  it('administrador não clínico não recebe a ação de abrir prontuário', async () => {
+    expect(buscar('abrir prontuário do Pedro', await indice('admin')).find((x) => x.grupo === 'Fazer')).toBeUndefined();
+  });
+
   it('recepção não recebe a ação de abrir prontuário', async () => {
     const g = buscar('abrir prontuário do Pedro', await indice('recepcao'));
     expect(g.find((x) => x.grupo === 'Fazer')).toBeUndefined();
@@ -184,6 +194,7 @@ describe('registro de ações', () => {
 
   it('permissões por papel', () => {
     expect(acoesPermitidas('recepcao').map((a) => a.id)).not.toContain('abrir_prontuario');
+    expect(acoesPermitidas('admin').map((a) => a.id)).not.toContain('abrir_prontuario');
     expect(acoesPermitidas('profissional').map((a) => a.id)).toContain('abrir_prontuario');
   });
 

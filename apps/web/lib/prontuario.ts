@@ -2,7 +2,15 @@
  * Regras do prontuário e dos documentos (sem tela, testadas no Vitest).
  * Modelos de evolução por nicho, validação para assinar e texto de atestado/declaração.
  */
-import type { Profissional } from './api/tipos';
+import type { Profissional, Usuario } from './api/tipos';
+
+/**
+ * Perfil clínico = profissional de saúde (inclusive o administrador que também atende).
+ * Recepção e administrador só administrativo NÃO veem conteúdo clínico (requisitos §3).
+ */
+export function ehPerfilClinico(u: Pick<Usuario, 'papel' | 'profissionalId'> | null | undefined): boolean {
+  return !!u?.profissionalId;
+}
 
 export type Modelo = 'fisio' | 'to' | 'psicologia';
 
