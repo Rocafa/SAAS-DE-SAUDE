@@ -12,7 +12,7 @@
 Princípios:
 - **Build uma vez, promove a mesma imagem** (tag por SHA do commit) de staging para prod.
 - Configuração por variável de ambiente; segredos injetados do Secrets Manager (nunca no repo).
-- Infra como código (Terraform) em `infra/` (a criar), com plano revisado em PR.
+- Infra como código (Terraform) em `infra/terraform/`, com plano revisado em PR. Staging: [infra-staging.md](infra-staging.md).
 - Feature flags para liberar funcionalidades por tenant (ex.: IA, TISS).
 
 ## 2. Fluxo Git
