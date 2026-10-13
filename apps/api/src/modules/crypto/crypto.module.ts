@@ -14,8 +14,10 @@ export const FIELD_CIPHER = Symbol('FIELD_CIPHER');
  * (base64, >= 32 bytes, opcional) mantém as chaves entre reinícios; sem ele, vivem só na memória.
  */
 export function createKeyProvider(env: NodeJS.ProcessEnv = process.env): KeyProvider {
-  if (env.NODE_ENV === 'production') {
-    throw new Error('KMS não configurado: o provedor de chave local é proibido em produção');
+  // Lista fechada: chave local só em development/test. Produção, staging, vazio ou qualquer outro
+  // valor recusam subir (o KMS ainda não está ligado — Portão A).
+  if (env.NODE_ENV !== 'development' && env.NODE_ENV !== 'test') {
+    throw new Error(`KMS não configurado: o provedor de chave local é proibido fora de development/test, inclusive em produção e staging (NODE_ENV=${env.NODE_ENV ?? 'vazio'})`);
   }
   const raiz = env.FIELD_KEYS_DEV_ROOT_SECRET;
   return new LocalKeyProvider({
