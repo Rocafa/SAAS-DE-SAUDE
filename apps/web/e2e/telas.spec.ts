@@ -36,6 +36,14 @@ const TELAS: [string, string][] = [
   ['esqueci-senha', '/esqueci-senha'],
   ['convite', '/convite'],
   ['escolher-clinica', '/escolher-clinica'],
+  ['sessao-expirada', '/sessao-expirada'],
+  ['portal-entrar', '/portal/entrar'],
+  ['portal-consultas', '/portal'],
+  ['portal-documentos', '/portal/documentos'],
+  ['portal-dados', '/portal/dados'],
+  ['portal-direitos', '/portal/direitos'],
+  ['sem-conexao', '/offline'],
+  ['pagina-404', '/nao-existe-esta-pagina'],
 ];
 
 const PASTA = new URL('../../../docs/02-produto/telas/', import.meta.url).pathname;

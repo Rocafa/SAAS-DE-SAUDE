@@ -630,6 +630,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       registrar('Responsável técnico aprovou a exportação');
       return resposta(p);
     },
+
   };
 }
 

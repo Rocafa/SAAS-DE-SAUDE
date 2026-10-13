@@ -59,3 +59,9 @@ export const PASSOS_PRIMEIRO_USO = [
   { id: 'tipos', titulo: 'Tipos de atendimento' },
   { id: 'importar', titulo: 'Trazer dados do sistema antigo' },
 ] as const;
+
+/**
+ * Tempo sem uso até sair sozinho (requisitos §3: 15 min para perfil clínico em estação
+ * compartilhada). Configurável por clínica quando a API real entrar.
+ */
+export const TEMPO_SESSAO_MINUTOS = 15;

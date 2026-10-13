@@ -11,7 +11,7 @@
 | 3 | Atendimento/Prontuário + Documentos | 🟢 aberto, empilhado sobre o PR 2 |
 | 4 | Financeiro + Guias + Mensagens + Relatórios | 🟢 aberto, empilhado sobre o PR 3 |
 | 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | 🟢 aberto, empilhado sobre o PR 4 |
-| 6 | Portal do paciente + PWA + páginas de erro | ⬜ |
+| 6 | Portal do paciente + PWA + páginas de erro | 🟢 aberto, empilhado sobre o PR 5 |
 
 ## O que o PR 1 entrega
 
@@ -73,3 +73,14 @@
 - **Acesso (aguarda D4):** entrar com senha e código do autenticador, esqueci a senha (não revela se o e-mail existe), primeiro acesso por convite (regras de senha visíveis antes de errar + MFA) e escolher clínica.
 - Achado do E2E: no celular o botão flutuante do Ajudante cobria o último botão da página; o rodapé ganhou espaço para rolar.
 - Números do PR 5: Vitest 180 no web; Playwright 163 verdes + 1 pulado de propósito.
+
+## O que o PR 6 entrega
+
+- **Portal do paciente** (celular primeiro, 4 itens no menu): minhas consultas (Confirmar presença, "Não vou conseguir ir" com confirmação e desfazer), meus documentos, meus dados (corrigir vira pedido à clínica), **meus direitos** (ver, corrigir, baixar, apagar com a explicação da guarda legal, saber com quem compartilham), cada pedido com protocolo e prazo de 15 dias; consentimentos em 3 estados ("ainda não respondido" vale como não, ressalva R1). Entrada por celular + código (aguarda D4).
+- **PWA:** manifesto (instala no celular, abre em /inicio), ícones em cinza (gerados por `scripts/gerar-icones.mjs`) e service worker que guarda **só** a tela "sem conexão" e os arquivos estáticos — nunca página com dado de paciente (testado no E2E lendo o cache).
+- **Páginas de erro:** 404 com caminho de volta, sem conexão, sessão expirada ("o rascunho ficou guardado") e erro inesperado sem detalhe técnico.
+- Números do PR 6: Vitest 186 no web; Playwright 197 verdes + 1 pulado de propósito.
+
+## ORDEM-001: estado final
+
+Os 6 PRs estão abertos, em pilha, com CI verde: #42 → #43 → #44 → #45 → #46 → #47. Falta: revisão do Guardião (#42, #44, #46, #47), merge na ordem e, depois, trocar a base de cada um para `main`. O E2E ainda não roda no CI (job novo é da DevOps).
