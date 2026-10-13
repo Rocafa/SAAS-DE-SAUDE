@@ -29,6 +29,8 @@ Toda funcionalidade de IA tem um **conjunto de avaliação versionado** (sintét
 | | Resolução sem humano (contenção) e satisfação | Produção | contenção > 60% em agendamento |
 | **No-show (ML)** | AUC-ROC, Brier, calibração; diferença de desempenho entre grupos | Validação temporal (treina passado, testa futuro) | AUC ≥ 0,70; sem disparidade relevante |
 
+**Escriba:** o procedimento detalhado, os limiares do gate do M3 e o teste de alucinação clínica estão em [protocolo-avaliacao-escriba.md](protocolo-avaliacao-escriba.md); a semente sintética (fisio/TO e psicologia) está em [golden-sets/](golden-sets/).
+
 ### Como montar os evals
 - 100–300 casos por funcionalidade × nicho para começar; crescer com casos de produção em que o profissional editou muito.
 - Casos difíceis obrigatórios: áudio ruidoso, sotaques regionais, duas pessoas falando, paciente criança, termos raros, negações ("nega alergia"), números por extenso.

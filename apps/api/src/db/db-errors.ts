@@ -39,11 +39,15 @@ const CONNECTION_CODES = new Set([
 
 /**
  * SQLSTATE transitórios: classe 08 (conexão), 53 (recursos), 57 (intervenção do operador:
- * 57014 statement_timeout/cancel, 57P01 admin_shutdown, 57P03 cannot_connect_now) e
- * 25P03 (idle_in_transaction_session_timeout), 40001/40P01 (serialização/deadlock).
+ * 57014 statement_timeout/cancel, 57P01 admin_shutdown, 57P03 cannot_connect_now),
+ * 25P03 (idle_in_transaction_session_timeout), 40001/40P01 (serialização/deadlock) e
+ * 25006 (read_only_sql_transaction): escrita caiu num banco somente leitura, o que acontece
+ * durante o failover (conexão antiga ainda no nó que virou réplica) ou em manutenção.
  */
+const TRANSIENT_SQLSTATES = new Set(['25P03', '25006', '40001', '40P01']);
+
 function isTransientSqlState(code: string): boolean {
-  return /^(08|53|57)/.test(code) || code === '25P03' || code === '40001' || code === '40P01';
+  return /^(08|53|57)/.test(code) || TRANSIENT_SQLSTATES.has(code);
 }
 
 function codeOf(err: unknown): string | undefined {

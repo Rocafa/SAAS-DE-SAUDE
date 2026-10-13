@@ -4,8 +4,10 @@
 >
 > 🚀 **O que falta para produção (rodada 7, 10/10/2026):** [checklist P0/P1/P2 + pesquisa regulatória atualizada](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
 >
+> 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
+>
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 08/10/2026 (rodada 2: ver [relatório](docs/relatorios/2026-10-08-rodada-2.md)). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 12/10/2026 (rodada 9: §4, §6 e §8 revisadas com as rodadas 6 a 9). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -37,6 +39,7 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Garantias ao cliente** contra as queixas nº 1 do mercado (prontuário bloqueado, cancelamento difícil): [garantias-ao-cliente.md](docs/02-produto/garantias-ao-cliente.md).
 - **Backlog do MVP:** 24 épicos, 176 histórias, 898 pontos (M0+M1: 79 histórias, 377 pontos), incluindo controle de guia simples e pacotes no M1. Também prontos: definição de pronto, métricas e plano de piloto (30 clínicas).
 - **Nicho de entrada recomendado:** fisio/TO + psicólogos autônomos; TEA/ABA na onda 2 ([relatório executivo](docs/01-mercado/relatorio-executivo-mercado.md)).
+- **Telas (rodada 8):** já existem, mas com **dados fictícios** e **sem falar com a API**. Na `main` (PR #42): design system em cinza (alto contraste, letra grande), o **Ajudante** (busca e ações digitadas em português, processadas só no navegador), Hoje, Agenda e Pacientes. Em PR: agenda e pacientes completos (#43, pronto, parado sem CI); atendimento/prontuário/documentos (#44), configurações (#46) e portal do paciente (#47) **vetados pelo Guardião** (recepção lendo evoluções, atestado com CID por qualquer perfil, portal usando o contrato da clínica); financeiro/guias/mensagens (#45) aprovado com ressalvas, mas empilhado sobre o #44. Capturas em `docs/02-produto/telas/`; parecer em [front-r8](docs/03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md).
   → [PRD](docs/02-produto/PRD.md) · [WBS](docs/02-produto/WBS-micropartes.md) · [roadmap](docs/02-produto/roadmap.md) · [jornadas](docs/02-produto/jornadas.md)
 
 ## 5. LGPD e regulação (inegociável)
@@ -52,8 +55,15 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Stack:** monorepo pnpm + Turborepo; Next.js + shadcn no front; NestJS na API.
 - **Dados:** PostgreSQL com isolamento por clínica (RLS); Redis/BullMQ para filas.
 - **Hospedagem:** AWS São Paulo.
-- **Código:** API, banco com isolamento por clínica (RLS), garantia de saída e 9 checks de CI **rodam e estão verdes** na `main`.
-  Ainda **não há** login, telas de negócio nem ambiente na AWS.
+- **Código na `main` (12/10/2026):**
+  - isolamento por clínica (RLS) com **guarda de schema** (o CI reprova tabela nova sem a trava);
+  - **criptografia por clínica** (cada clínica tem a própria chave; apagar a chave torna os dados dela ilegíveis, até nos backups);
+  - **auditoria encadeada** (cada registro carrega a impressão digital do anterior, então alterar ou apagar deixa rastro);
+  - garantia de saída, **rate limit em Redis**, NestJS 12, interface de IA só com adaptador falso;
+  - 9 checks de CI, verdes na última execução.
+- **Ainda não há:** login (depende da **D4**, o gargalo), rotas de negócio na API (só `/health`), ligação das telas com a API, nem ambiente na AWS.
+- **Parados:** Terraform do staging (branch `devops/terraform-staging-b`, sem PR) e imagem Docker da API (só levantamento).
+- ⚠️ **O GitHub Actions parou por falta de pagamento da conta:** hoje nenhum CI roda, e sem CI verde não se faz merge de código ([fila.md](docs/00-governanca/fila.md)).
 - **O que falta para produção** (infra, regulação, custos e checklist de go-live): [rodada 7](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
   → [arquitetura](docs/04-arquitetura/)
 
@@ -66,9 +76,11 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Custo do escriba:** cerca de R$ 0,30–0,58 por consulta.
   → [estratégia de IA](docs/05-ia-llm/)
 
-## 8. Decisões pendentes dos sócios
-Nicho de entrada · preço · provedor de LLM · autenticação · Pix · vídeo · retenção de auditoria · advogado ·
-receita controlada (SNCR) · inscrição no CRM · certificação SBIS · orçamento de infra e pentest · escopo do Receita Saúde.
+## 8. Decisões pendentes dos sócios (D1–D14 + DPO)
+Todas pendentes; cada uma tem um memo de 1 página em [memos/](docs/00-governanca/memos/README.md) (o memo recomenda, não decide).
+- **Mais urgentes:** **D4** autenticação (gargalo; a PoC #36 mediu Zitadel × Better Auth) · **D8** advogado de saúde + LGPD · nomear o **DPO** (encarregado de dados) · **D13** orçamento de infra e pentest.
+- **Dependem de entrevistas com clínicas:** **D1** nicho de entrada · **D2** preço · **D14** Receita Saúde no MVP.
+- **Demais:** **D3** provedor de LLM no Brasil · **D5** Pix · **D6** vídeo · **D7** retenção da auditoria (proposta: 20 anos prontuário, 5 anos administrativa, 12 meses logs de acesso) · **D9** Carta de Compromissos · **D10** receita controlada (SNCR) · **D11** inscrição no CRM · **D12** certificação SBIS.
 → [decisoes.md](docs/00-governanca/decisoes.md)
 
 ## 9. Como começar (sócio novo)

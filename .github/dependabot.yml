@@ -14,6 +14,11 @@ updates:
       # typescript-eslint publicar suporte ao TS 7.
       - dependency-name: typescript
         versions: [">=7.0.0"]
+      # @types/node acompanha o Node de produção (22 LTS; CI e imagem usam 22). Tipos do Node 26
+      # deixariam compilar APIs que não existem no 22 e só quebrariam em execução (PR #18, 10/10/2026).
+      # Subir junto com o runtime, não antes.
+      - dependency-name: "@types/node"
+        versions: [">=23.0.0"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
