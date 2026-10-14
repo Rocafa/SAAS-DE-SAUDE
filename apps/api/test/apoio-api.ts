@@ -10,7 +10,7 @@ import type { TenantId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
+import { AppModule, type AppAdapters } from '../src/app.module';
 import { loadConfig } from '../src/config';
 import { tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
@@ -30,7 +30,7 @@ export interface ApiDeTeste {
   fechar(): Promise<void>;
 }
 
-export async function subirApi(): Promise<ApiDeTeste> {
+export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia'> = {}): Promise<ApiDeTeste> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória');
   const sessoes = new DevSessionProvider('test');
@@ -39,6 +39,7 @@ export async function subirApi(): Promise<ApiDeTeste> {
       AppModule.forRoot(loadConfig(process.env), {
         authProvider: sessoes,
         keyProvider: new LocalKeyProvider({ nodeEnv: 'test' }),
+        ...adapters,
       }),
     ],
   }).compile();

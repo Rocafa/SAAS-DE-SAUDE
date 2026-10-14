@@ -9,13 +9,22 @@ import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module'
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
 import { PatientsModule } from './modules/patients/patients.module';
+import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
+import { createRateLimitStore, loadRateLimitHashKey, type RateLimitStore } from './security/rate-limit-store';
 
 /** Peças plugáveis escolhidas no boot (testes injetam as suas). */
 export interface AppAdapters {
   readonly authProvider?: AuthProvider;
   readonly keyProvider?: KeyProvider;
+  /**
+   * Store dos contadores por usuário (R5). O main.ts passa o MESMO store do rate limit por IP
+   * (Redis com fallback); sem ele, cria um pelo ambiente e o fecha no shutdown.
+   */
+  readonly rateLimitStore?: RateLimitStore;
+  /** Limites da vigilância de leitura de pacientes; padrão: ambiente (loadVigilanciaConfig). */
+  readonly vigilancia?: VigilanciaConfig;
 }
 
 @Module({})
@@ -27,6 +36,7 @@ export class AppModule {
   static forRoot(config: AppConfig, adapters: AppAdapters = {}): DynamicModule {
     const authProvider = adapters.authProvider ?? createAuthProvider(process.env);
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
+    const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
     return {
       module: AppModule,
       imports: [
@@ -36,7 +46,12 @@ export class AppModule {
         AuthModule.forRoot(authProvider),
         CryptoModule.forRoot(keyProvider),
         ExportsModule.forRoot({ exitWindowDays: config.exitWindowDays }),
-        PatientsModule,
+        PatientsModule.forRoot({
+          store,
+          fecharStore: adapters.rateLimitStore === undefined,
+          hashKey: loadRateLimitHashKey(process.env),
+          config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),
+        }),
         SchedulingModule,
       ],
     };
