@@ -117,10 +117,12 @@ export async function verifyAuditChain(
 
 /** Último elo da clínica, para ser publicado como âncora fora do banco. */
 export async function auditChainHead(tx: TenantTx, tenantId: TenantId): Promise<ChainAnchor | null> {
+  // `a.seq` qualificado de propósito: `order by seq` sem prefixo ordena pelo ALIAS texto ('9' > '16')
+  // e devolvia um elo antigo como "último" assim que a clínica passava de 9 eventos.
   const rows = await tx.execute<{ seq: string; hash: string }>(sql`
-    select seq::text as seq, hash from audit_log
-    where tenant_id = ${tenantId} and seq is not null
-    order by seq desc limit 1`);
+    select a.seq::text as seq, a.hash from audit_log a
+    where a.tenant_id = ${tenantId} and a.seq is not null
+    order by a.seq desc limit 1`);
   const row = rows[0];
   return row ? { seq: Number(row.seq), hash: row.hash } : null;
 }
