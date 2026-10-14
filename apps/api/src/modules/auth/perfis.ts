@@ -41,9 +41,20 @@ export function temPermissao(perfis: readonly Perfil[], permissao: Permissao): b
   return perfis.some((p) => autorizados.includes(p));
 }
 
-/** Vínculo de cuidado do usuário com o paciente (profissional do atendimento, equipe do caso...). */
+/** De onde veio o vínculo (vinculo-de-cuidado.ts). Vai para a auditoria do acesso clínico. */
+export type BaseDoVinculo = 'atendimento' | 'agenda_do_dia';
+
+declare const calculadoNoServidor: unique symbol;
+
+/**
+ * Vínculo de cuidado do usuário com o paciente (R2 do parecer PR #57). Tipo MARCADO: só
+ * `calcularVinculoDeCuidado` (vinculo-de-cuidado.ts), que deriva o vínculo da agenda no servidor,
+ * produz um valor deste tipo. Um objeto vindo da requisição não satisfaz o tipo.
+ */
 export interface VinculoDeCuidado {
   readonly temVinculo: boolean;
+  readonly base: BaseDoVinculo | null;
+  readonly [calculadoNoServidor]: true;
 }
 
 /**
