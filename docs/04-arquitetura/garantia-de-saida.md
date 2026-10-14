@@ -18,7 +18,7 @@ RBAC/MFA continuam valendo à parte.**
 
 - **G1** — inadimplência (`past_due`, `read_only`) só bloqueia escrita clínica/operacional.
 - **G2** — exportação total em formato aberto, sem custo: `export.json` (contrato versionado,
-  `schemaVersion` = `1.3.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
+  `schemaVersion` = `1.4.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
   contagens por entidade) + `pacientes.csv` (RFC 4180, UTF-8 com BOM, fórmulas neutralizadas).
   Somente dados do próprio tenant (filtro explícito + `withTenant`/RLS FORCE).
   Desde a 1.1.0 (migração 0007): cadastro do paciente com CPF/telefone/nascimento **decifrados**
@@ -35,6 +35,10 @@ RBAC/MFA continuam valendo à parte.**
   Atendentes do suporte da plataforma já estão pseudonimizados na origem (ver auditoria-encadeada.md §4c).
   Desde a 1.3.0 (migração 0011): convênios, guias (número, senha e carteirinha **decifrados**), consumos
   de guia, confirmações do paciente por sessão (com o hash), pacotes de sessões e seus consumos.
+  Desde a 1.4.0 (migração 0012): prontuário — configuração de sigilo, atendimentos (com a
+  finalização e o hash), **todas** as versões da evolução e os adendos, **decifrados**. Notas
+  privadas do profissional só com a decisão expressa do autor (`export_consent`); as demais ficam
+  fora e são contadas em `manifest.counts.privateNotesWithheld` (ver api-dominio.md §8c).
 - **G3** — toda exportação grava 1 linha em `audit_log` **na mesma transação** (sem auditoria,
   sem export): ator, data, escopo `tenant.full_export`, contagens e versão. Nunca conteúdo
   clínico/PII. `audit_log` é append-only: `app_user` só tem `SELECT`/`INSERT`, e um trigger

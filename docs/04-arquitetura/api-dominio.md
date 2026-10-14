@@ -183,3 +183,56 @@ Nenhuma rota devolve conteúdo clínico: guia e pacote não guardam procedimento
 **Fora desta rodada:** XML TISS, foto da guia (URL assinada), procedimento/TUSS, série recorrente vinculada à guia com aviso de cobertura (AGD-02.4), folha de frequência em PDF, notificações de alerta (só o painel/consulta), cobrança do pacote (FIN-01.8), índice cego do número da guia.
 
 **Testes:** `src/modules/insurance/*.test.ts` (regras e validação) e `test/guias-pacotes.rls.test.ts` (Postgres real: isolamento nas 6 tabelas pela API e pelo RLS, concorrência de guia e de pacote, estorno manual e automático, guia vencida e override, assinatura append-only, alertas, relatório batendo com a contagem no banco, permissões e auditoria sem conteúdo).
+
+## 8. Atendimento e prontuário (rodada 14.1, PRO-02.1/02.3/02.6/02.7/03.7/03.8)
+
+> 14/10/2026 · branch `eng/prontuario` (sobre `eng/guias-e-pacotes`) · migração **0012** · fisio/TO e psicologia · **sem IA** · toca dado de saúde: passa pelo Guardião antes do merge.
+
+**Porteiro em tudo.** Toda leitura/escrita de conteúdo clínico chama `exigirConteudoClinico` (§2a) na **mesma transação** que lê/grava e audita; a regra do vínculo não é reimplementada aqui. Perfil não clínico (recepção, financeiro, admin sem perfil `profissional`) recebe `403 {codigo:'sem_vinculo_de_cuidado'}` **antes de qualquer consulta** (nem descobre se o atendimento existe). O guarda HTTP deixa os quatro perfis chegarem à rota (`prontuario:acessar`) só para a tentativa negada ficar na trilha (HU-PRO-006/022). **Abrir atendimento não cria vínculo:** o porteiro roda antes e a abertura não muda o status do agendamento ("em atendimento" continua sendo da agenda, com as regras dela).
+
+**Negação auditada** (`src/modules/records/acesso-clinico.ts`): o 403 desfaz a transação da operação, então a negação é gravada em transação própria, escopo `clinical_access_denied`, metadata `{op, reason, patient_id?, target_id?}`. Motivos: `sem_vinculo_de_cuidado`, `somente_o_autor`, `sigilo_psicologia`, `nota_de_outro_autor`.
+
+### 8a. Rotas
+
+| Método e rota | Quem | Notas |
+|---|---|---|
+| `POST /atendimentos` | profissional DO agendamento, com vínculo | `{agendamentoId, modelo?, consentimentoIa?}`; agendamento em chegou/em atendimento/atendido (senão 409 `agendamento_sem_chegada`); modelo padrão pela especialidade; **idempotente** (200 com o já aberto) |
+| `GET /atendimentos/:id` | clínico com vínculo | registro atual + adendos; psicologia restrita vem com `conteudoOculto: true, motivoOculto: 'sigilo_psicologia'` |
+| `PUT /atendimentos/:id/registro` | autor | `{conteudo, versaoBase}`; cada chamada = **versão nova** (serve ao salvamento automático); `versaoBase` diferente da atual: 409 `versao_desatualizada`; finalizado: 409 `registro_finalizado` |
+| `GET /atendimentos/:id/versoes` | clínico com vínculo que pode ver o conteúdo | todas as versões, da 1ª à atual |
+| `POST /atendimentos/:id/finalizar` | autor | exige os obrigatórios do modelo (409 `registro_incompleto` com `campos`); grava `signed_version` e `signed_hash` (SHA-256 do registro canônico com o conteúdo **cifrado**, `prontuario-regras.ts`); auditoria `sign` (evento "encounter_record_signed" da HU-PRO-007) |
+| `POST /atendimentos/:id/adendos` | clínico com vínculo que pode ver o conteúdo | `{texto}`; só depois de finalizar (409 `registro_nao_finalizado`); autor e data no adendo |
+| `GET /pacientes/:id/prontuario?pagina&limite` | clínico com vínculo | histórico do mais recente ao mais antigo, `limite` ≤ 50; qualquer outra chave na query = 400 `dado_na_url`; conta como ficha aberta na vigilância (R5, §3a) |
+| `GET`/`POST /pacientes/:id/notas-privadas` | autor (lista só as próprias) | `{texto, atendimentoId?, incluirNaExportacao?}` |
+| `GET`/`PATCH /notas-privadas/:id`, `POST /notas-privadas/:id/descartar` | **só o autor** | nota de outro autor = 404 (igual a inexistente) + tentativa auditada |
+| `GET`/`PUT /prontuario/configuracao` | admin (`prontuario:configurar`) | `{psicologia: 'restrito_ao_autor' ou 'prontuario_unico'}`; mudança auditada como `permission_change` `{from, to}` |
+
+### 8b. Modelos por nicho (`src/modules/records/modelos.ts`)
+
+Estrutura flexível validada por schema (chave desconhecida, tipo, tamanho, faixa: 400 com o **nome** do campo, nunca o valor). Cada versão grava `template` e `template_version` (PRO-01.4).
+
+| Modelo | Textos (até 20.000 caracteres, com quebra de linha) | Obrigatórios para finalizar | Estruturados |
+|---|---|---|---|
+| `fisio`, `to` | queixa, avaliacao, conduta, resposta, orientacoes | queixa, conduta | `medidas` (≤ 50): `eva` 0–10 inteiro, `goniometria` 0–360° com rótulo, `forca` MRC 0–5, `perimetria` 0–300 cm com rótulo, `escala` (domínio público, pelo nome); `planoDeSessoes` `{totalSessoes 1–200, frequenciaSemanal? 1–7, metas[≤20] {descricao, progresso 0–100}}` |
+| `psicologia` | tema, intervencoes, evolucao, encaminhamentos | tema, evolucao | `planoDeSessoes` |
+
+Ficam para as próximas micropartes: escore automático e catálogo de escalas com licença verificada (HU-PRO-023), anamnese persistente (HU-PRO-006), anexos (HU-PRO-008), editor de modelos (HU-PRO-001) e a ligação do plano com o saldo do pacote (HU-PRO-021; hoje o saldo cai pelo consumo de pacote da §7).
+
+### 8c. Sigilo da psicologia e notas privadas (pergunta 1.11 em aberto ⚖️)
+
+- **Registro de sessão de psicologia** fica no prontuário único do paciente, num **compartimento** (`encounters.compartment = 'psicologia'`). O sigilo é **configurável por clínica** (`clinical_settings.psych_compartment`) porque a 1.11 do [pacote do advogado](../03-seguranca-lgpd/pacote-advogado.md) (Res. CFP 001/2009, art. 6º) não tem resposta:
+  - `restrito_ao_autor` (**padrão**, o mais protetor): só o psicólogo autor lê o conteúdo; os demais com vínculo veem só os metadados (`conteudoOculto`);
+  - `prontuario_unico`: segue a regra geral (perfil clínico + vínculo).
+  Qualquer das respostas do advogado cabe num dos modos, sem migração de dados.
+- **Anotações privadas** (HU-PRO-009) **não são prontuário**: tabela própria (`private_notes`); só o autor lê, altera ou descarta — nem admin, nem outro profissional com vínculo, **nem no modo `prontuario_unico`**. Nunca entram em relatório, IA ou exportação padrão. "Excluir" = descartar (`discarded_at`): some da API, a linha cifrada fica (o runtime não tem DELETE). O destino da nota descartada e da nota de profissional desligado segue o RIPD (pendente do Guardião, cenário 3 da HU-PRO-009).
+- **Exportação G2 (decisão desta rodada).** A clínica é a controladora e o pacote é dela: o **prontuário inteiro** sai (todas as versões e adendos decifrados, inclusive o compartimento de psicologia, que é prontuário; a exportação por administrador não profissional segue a pergunta 2.9 ⚖️). As **notas privadas** só saem com a **decisão expressa do autor** (`incluirNaExportacao`, coluna `export_consent`), como promete a HU-PRO-009; as demais ficam fora e são **contadas** no manifesto (`privateNotesWithheld`), para a clínica saber que existem. A cobertura não fica silenciosa: `private_notes` está em `EXPORTED_TABLES` (exportação parcial) e `test/exportacao-cobertura.rls.test.ts` prova que a nota marcada sai, a não marcada não sai e é contada.
+
+### 8d. Dados, integridade e LGPD
+
+- Migração `0012_prontuario.sql`: `clinical_settings`, `encounters`, `clinical_record_versions`, `clinical_addenda`, `private_notes` — RLS FORCE com `app_current_tenant()`, FK compostas com `tenant_id` (o atendimento aponta para `(id, tenant_id, patient_id, professional_id)` do agendamento: paciente e profissional são os do agendamento), sem DELETE/TRUNCATE para o runtime. Declaradas na guarda de schema e no pacote G2 (`schemaVersion` **1.4.0**). Não toca o CHECK de `audit_log.action`.
+- **Nada é apagado nem reescrito.** Versões e adendos: o runtime só tem SELECT/INSERT e um trigger recusa UPDATE/DELETE/TRUNCATE para **qualquer papel**. Atendimento: trigger mantém a identidade imutável, a versão só avança e **finalizado é terminal** (qualquer UPDATE dá `55000`). Versão nova só em atendimento aberto, em sequência e no modelo do atendimento; adendo só em finalizado — os dois checados no banco com `FOR SHARE` no atendimento (sem corrida com a finalização).
+- **Cifra:** conteúdo da versão (JSON do modelo), texto do adendo e da nota ficam só no formato `v1:` do `FieldCipher` (chave da clínica; AAD = clínica + tabela + coluna + id da linha; `CHECK app_is_sealed_field`). O hash da finalização usa a cifra, nunca o texto.
+- **Auditoria** na mesma transação, escopos `encounters` (create/read/sign), `clinical_records` (update/read, inclusive histórico e versões), `clinical_addenda`, `private_notes`, `clinical_settings` (`permission_change`) e `clinical_access_denied`. Metadata só com ids, versão, modelo, contagens, página, `hidden`, `care_basis` (base do vínculo), `ai_consent` e o hash — nunca texto clínico (o teste procura os marcadores no banco e na trilha).
+- **Consentimento de IA** (RIPD do escriba, R12): `encounters.ai_consent` em 3 estados (`nao_informado`, padrão, que **nega**; `informado_nao_recusou`; `recusou`), registrado na abertura. Não há IA nesta rodada; o consentimento duradouro por paciente entra com o escriba.
+
+**Testes:** `src/modules/records/modelos.test.ts` (modelos, faixas, obrigatórios, sigilo, hash) e `test/prontuario.rls.test.ts` (Postgres real: perfis não clínicos e profissional sem vínculo negados e auditados; abrir não cria vínculo; só o profissional do agendamento abre; versões e 409 de versão; validação sem eco; só o autor edita; consulta direta só vê `v1:`; o banco recusa texto em claro, UPDATE/DELETE de versão e DELETE de atendimento; finalizado não edita pela API nem pelo banco; adendo; sigilo da psicologia nos dois modos; notas privadas só do autor, inclusive no modo prontuário único; isolamento pela API e pelo RLS; trilha sem conteúdo). Rotas novas na prova de 401 de `test/security/sessao-tenant.security.test.ts`.
