@@ -18,7 +18,7 @@ RBAC/MFA continuam valendo à parte.**
 
 - **G1** — inadimplência (`past_due`, `read_only`) só bloqueia escrita clínica/operacional.
 - **G2** — exportação total em formato aberto, sem custo: `export.json` (contrato versionado,
-  `schemaVersion` = `1.2.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
+  `schemaVersion` = `1.3.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
   contagens por entidade) + `pacientes.csv` (RFC 4180, UTF-8 com BOM, fórmulas neutralizadas).
   Somente dados do próprio tenant (filtro explícito + `withTenant`/RLS FORCE).
   Desde a 1.1.0 (migração 0007): cadastro do paciente com CPF/telefone/nascimento **decifrados**
@@ -33,6 +33,8 @@ RBAC/MFA continuam valendo à parte.**
   clínica verifica sem banco com `verifyExportedAuditTrail` (`src/modules/audit/audit-chain.ts`).
   A linha da própria exportação entra na trilha depois de montado o pacote (aparece no próximo).
   Atendentes do suporte da plataforma já estão pseudonimizados na origem (ver auditoria-encadeada.md §4c).
+  Desde a 1.3.0 (migração 0011): convênios, guias (número, senha e carteirinha **decifrados**), consumos
+  de guia, confirmações do paciente por sessão (com o hash), pacotes de sessões e seus consumos.
 - **G3** — toda exportação grava 1 linha em `audit_log` **na mesma transação** (sem auditoria,
   sem export): ator, data, escopo `tenant.full_export`, contagens e versão. Nunca conteúdo
   clínico/PII. `audit_log` é append-only: `app_user` só tem `SELECT`/`INSERT`, e um trigger
