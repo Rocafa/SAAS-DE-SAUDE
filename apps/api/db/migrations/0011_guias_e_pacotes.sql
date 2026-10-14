@@ -14,6 +14,11 @@
 -- - session_packages / package_sessions: pacote particular de sessões com saldo e histórico.
 -- Todas com RLS FORÇADO, policy pelo contexto travado (app_current_tenant, 0003), FK compostas com
 -- tenant_id (nada aponta para outra clínica) e sem DELETE/TRUNCATE para o runtime (retenção).
+--
+-- Empilhamento: esta migração vem DEPOIS da 0010 (alerta de anomalia, branch eng/ressalvas-api-57),
+-- que redefine o CHECK de audit_log.action. A 0011 NÃO toca esse CHECK: a auditoria de guias e
+-- pacotes usa só ações já existentes (read/create/update/sign) com escopos novos. Não depende de
+-- nenhum objeto da 0010 e roda igual com ou sem ela aplicada antes.
 
 -- Alvo das FK compostas de guide_sessions/package_sessions (consumo só de agendamento da MESMA clínica).
 ALTER TABLE appointments ADD CONSTRAINT appointments_id_tenant_key UNIQUE (id, tenant_id);
