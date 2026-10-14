@@ -49,6 +49,21 @@ output "bucket_exportacoes" {
 }
 
 output "bucket_documentos" {
-  description = "Bucket privado de documentos e exportações."
+  description = "Bucket privado de documentos assinados."
   value       = aws_s3_bucket.documentos.bucket
+}
+
+output "kms_deny_humanos" {
+  description = "Política (JSON) cujo statement o KmsKeyProvider inclui na key policy de cada KEK de clínica: humano não decifra (R4 do PR #58)."
+  value       = data.aws_iam_policy_document.kms_deny_humanos.json
+}
+
+output "papel_break_glass" {
+  description = "Papel de emergência: humano com MFA, sessão de 1 h, todo uso gera alerta (R4)."
+  value       = aws_iam_role.break_glass.arn
+}
+
+output "papel_investigacao_seguranca" {
+  description = "Papel que lê o bucket de logs de acesso: humano com MFA, sessão de 1 h, uso gera alerta (R2)."
+  value       = aws_iam_role.investigacao_seguranca.arn
 }

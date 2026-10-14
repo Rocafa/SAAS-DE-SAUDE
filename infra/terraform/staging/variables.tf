@@ -92,6 +92,12 @@ variable "papeis_humanos_extra" {
   }
 }
 
+variable "alerta_seguranca_email" {
+  description = "E-mail que recebe o alerta de uso do break-glass e da investigação de segurança. null = só o tópico SNS (assinar quando houver o responsável). Fica no tfvars, fora do git."
+  type        = string
+  default     = null
+}
+
 variable "tls_ate_a_tarefa" {
   description = "TLS também no trecho ALB -> tarefa da API (R6 do PR #58). Exige a API escutando HTTPS (API_TLS=autoassinado, ENG). Proposta: true em prod."
   type        = bool
