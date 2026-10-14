@@ -92,6 +92,22 @@ variable "papeis_humanos_extra" {
   }
 }
 
+variable "backup_mensal_retencao_dias" {
+  description = "Prazo de cada ponto de recuperação MENSAL do AWS Backup (R7 do PR #58). G3 promete até 12 meses: prod 365. Staging (dado sintético): 35."
+  type        = number
+  default     = 35
+  validation {
+    condition     = var.backup_mensal_retencao_dias >= 30 && var.backup_mensal_retencao_dias <= 365
+    error_message = "Entre 30 e 365 dias (G3: no máximo 12 meses)."
+  }
+}
+
+variable "backup_vault_lock_compliance" {
+  description = "Vault lock em modo COMPLIANCE (irreversível 3 dias depois do apply). false = GOVERNANCE. Proposta: true só em prod."
+  type        = bool
+  default     = false
+}
+
 variable "alerta_seguranca_email" {
   description = "E-mail que recebe o alerta de uso do break-glass e da investigação de segurança. null = só o tópico SNS (assinar quando houver o responsável). Fica no tfvars, fora do git."
   type        = string

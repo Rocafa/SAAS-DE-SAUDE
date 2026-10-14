@@ -9,10 +9,11 @@ locals {
     logs        = "CloudWatch Logs (app, RDS, Redis, Container Insights, VPC flow logs, WAF)"
     ecr         = "Imagens no ECR"
     alertas     = "Tópico SNS de alertas de segurança (uso do break-glass)"
+    backup      = "Cofre do AWS Backup (backup mensal imutável, R7)"
   }
 
   # Chaves que guardam dado de clínica ou credencial: humano não decifra (R4 do PR #58).
-  chaves_sem_humanos = ["rds", "s3", "exportacoes", "segredos"]
+  chaves_sem_humanos = ["rds", "s3", "exportacoes", "segredos", "backup"]
 }
 
 # R4 do PR #58: nenhum principal HUMANO (SSO, usuário IAM, root) abre dado com estas chaves, nem
