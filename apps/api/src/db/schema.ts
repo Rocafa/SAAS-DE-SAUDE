@@ -214,6 +214,96 @@ export const packageSessions = pgTable('package_sessions', {
   reversalReason: text('reversal_reason', { enum: PACKAGE_REVERSAL_REASONS }),
 });
 
+/** Modelos de prontuário (CHECK da 0012). O compartimento deriva do modelo. */
+export const RECORD_TEMPLATES = ['fisio', 'to', 'psicologia'] as const;
+export type RecordTemplate = (typeof RECORD_TEMPLATES)[number];
+export const RECORD_COMPARTMENTS = ['geral', 'psicologia'] as const;
+export type RecordCompartment = (typeof RECORD_COMPARTMENTS)[number];
+/** Consentimento de IA em 3 estados (RIPD do escriba, R12): `nao_informado` nega. */
+export const AI_CONSENT_STATES = ['nao_informado', 'informado_nao_recusou', 'recusou'] as const;
+export type AiConsentState = (typeof AI_CONSENT_STATES)[number];
+export const ENCOUNTER_STATUSES = ['open', 'signed'] as const;
+export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
+/** Sigilo do registro de psicologia (pergunta 1.11 do advogado em aberto: configurável). */
+export const PSYCH_COMPARTMENT_MODES = ['restrito_ao_autor', 'prontuario_unico'] as const;
+export type PsychCompartmentMode = (typeof PSYCH_COMPARTMENT_MODES)[number];
+
+/** Configuração de sigilo do prontuário por clínica (0012). Sem linha = padrão `restrito_ao_autor`. */
+export const clinicalSettings = pgTable('clinical_settings', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  psychCompartment: text('psych_compartment', { enum: PSYCH_COMPARTMENT_MODES }).notNull().default('restrito_ao_autor'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+});
+
+/** Atendimento aberto a partir do agendamento (0012). Finalizado é terminal (trigger). */
+export const encounters = pgTable('encounters', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  professionalId: uuid('professional_id').notNull(),
+  appointmentId: uuid('appointment_id').notNull(),
+  authorUserId: uuid('author_user_id').notNull(),
+  template: text('template', { enum: RECORD_TEMPLATES }).notNull(),
+  compartment: text('compartment', { enum: RECORD_COMPARTMENTS }).notNull(),
+  aiConsent: text('ai_consent', { enum: AI_CONSENT_STATES }).notNull().default('nao_informado'),
+  status: text('status', { enum: ENCOUNTER_STATUSES }).notNull().default('open'),
+  currentVersion: integer('current_version').notNull().default(0),
+  openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  signedAt: timestamp('signed_at', { withTimezone: true }),
+  signedBy: uuid('signed_by'),
+  signedVersion: integer('signed_version'),
+  signedHash: text('signed_hash'),
+});
+
+/** Versões da evolução (0012): append-only; conteúdo JSON SÓ cifrado (v1). */
+export const clinicalRecordVersions = pgTable('clinical_record_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  encounterId: uuid('encounter_id').notNull(),
+  version: integer('version').notNull(),
+  template: text('template', { enum: RECORD_TEMPLATES }).notNull(),
+  templateVersion: integer('template_version').notNull(),
+  contentEnc: text('content_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+});
+
+/** Adendos depois da finalização (0012): append-only, texto SÓ cifrado. */
+export const clinicalAddenda = pgTable('clinical_addenda', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  encounterId: uuid('encounter_id').notNull(),
+  textEnc: text('text_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+});
+
+/** Anotações privadas do profissional (0012, HU-PRO-009): fora do prontuário; só o autor lê. */
+export const privateNotes = pgTable('private_notes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  authorUserId: uuid('author_user_id').notNull(),
+  encounterId: uuid('encounter_id'),
+  contentEnc: text('content_enc').notNull(),
+  exportConsent: boolean('export_consent').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  discardedAt: timestamp('discarded_at', { withTimezone: true }),
+});
+
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
@@ -299,4 +389,9 @@ export const schema = {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  clinicalSettings,
+  encounters,
+  clinicalRecordVersions,
+  clinicalAddenda,
+  privateNotes,
 };
