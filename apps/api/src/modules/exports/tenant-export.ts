@@ -7,12 +7,17 @@ import { asc, eq, sql } from 'drizzle-orm';
 import {
   appointments,
   appointmentTypes,
+  clinicalAddenda,
+  clinicalRecordVersions,
+  clinicalSettings,
+  encounters,
   guideSessions,
   guideSessionSignatures,
   insuranceGuides,
   insurers,
   packageSessions,
   patients,
+  privateNotes,
   professionals,
   sessionPackages,
   type SubscriptionStatus,
@@ -23,6 +28,7 @@ import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
+import { CAMPO_ADENDO, CAMPO_NOTA, CAMPO_VERSAO, campoClinicoRef, type CampoClinico } from '../records/record-fields';
 import { canExport, ExitWindowClosedError, exitWindowEndsAt, EXIT_WINDOW_DAYS } from './access-policy';
 import { toCsv } from './csv';
 import { loadTenantSubscription } from './tenant-subscription';
@@ -36,8 +42,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        contagem e o último elo (`auditChain.head`).
  * 1.3.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
  *        paciente por sessão, pacotes de sessões e seus consumos (migração 0011).
+ * 1.4.0: prontuário (migração 0012): configuração de sigilo, atendimentos, TODAS as versões da evolução
+ *        (conteúdo decifrado), adendos e as notas privadas que o AUTOR marcou para exportar; as demais
+ *        notas privadas ficam fora, só contadas no manifesto (`privateNotesWithheld`).
  */
-export const EXPORT_SCHEMA_VERSION = '1.3.0';
+export const EXPORT_SCHEMA_VERSION = '1.4.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -58,6 +67,15 @@ export const EXPORTED_TABLES = [
   'guide_session_signatures',
   'session_packages',
   'package_sessions',
+  'clinical_settings',
+  'encounters',
+  'clinical_record_versions',
+  'clinical_addenda',
+  // Parcial POR DECISÃO EXPRESSA DO AUTOR (HU-PRO-009): só as notas com export_consent = true e não
+  // descartadas entram; as demais são contadas em manifest.counts.privateNotesWithheld (nunca o
+  // conteúdo). A clínica é a controladora e o pacote é dela, mas a anotação pessoal do profissional
+  // não é prontuário e o produto promete que ela não sai sem a decisão dele. Ver api-dominio.md §8.
+  'private_notes',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -89,6 +107,14 @@ export interface ExportManifest {
     readonly guideSessionSignatures: number;
     readonly sessionPackages: number;
     readonly packageSessions: number;
+    readonly clinicalSettings: number;
+    readonly encounters: number;
+    readonly clinicalRecordVersions: number;
+    readonly clinicalAddenda: number;
+    /** Notas privadas exportadas (o autor marcou incluirNaExportacao). */
+    readonly privateNotes: number;
+    /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
+    readonly privateNotesWithheld: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -230,6 +256,63 @@ export interface ExportedPackageSession {
   readonly reversalReason: string | null;
 }
 
+export interface ExportedClinicalSettings {
+  readonly psychCompartment: string;
+  readonly updatedAt: string;
+  readonly updatedBy: string;
+}
+
+export interface ExportedEncounter {
+  readonly id: string;
+  readonly patientId: string;
+  readonly professionalId: string;
+  readonly appointmentId: string;
+  readonly authorUserId: string;
+  readonly template: string;
+  readonly compartment: string;
+  readonly aiConsent: string;
+  readonly status: string;
+  readonly currentVersion: number;
+  readonly openedAt: string;
+  readonly updatedAt: string;
+  readonly signedAt: string | null;
+  readonly signedBy: string | null;
+  readonly signedVersion: number | null;
+  readonly signedHash: string | null;
+}
+
+export interface ExportedClinicalRecordVersion {
+  readonly id: string;
+  readonly encounterId: string;
+  readonly version: number;
+  readonly template: string;
+  readonly templateVersion: number;
+  /** Cifrado no banco; sai DECIFRADO (objeto JSON do modelo) para a própria clínica. */
+  readonly content: unknown;
+  readonly createdAt: string;
+  readonly createdBy: string;
+}
+
+export interface ExportedClinicalAddendum {
+  readonly id: string;
+  readonly encounterId: string;
+  readonly text: string;
+  readonly createdAt: string;
+  readonly createdBy: string;
+}
+
+export interface ExportedPrivateNote {
+  readonly id: string;
+  readonly patientId: string;
+  readonly authorUserId: string;
+  readonly encounterId: string | null;
+  readonly content: string;
+  readonly exportConsent: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly discardedAt: string | null;
+}
+
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
@@ -244,6 +327,12 @@ export interface TenantExportDocument {
     readonly guideSessionSignatures: readonly ExportedGuideSessionSignature[];
     readonly sessionPackages: readonly ExportedSessionPackage[];
     readonly packageSessions: readonly ExportedPackageSession[];
+    /** Sem linha = padrão da plataforma (`restrito_ao_autor`). */
+    readonly clinicalSettings: readonly ExportedClinicalSettings[];
+    readonly encounters: readonly ExportedEncounter[];
+    readonly clinicalRecordVersions: readonly ExportedClinicalRecordVersion[];
+    readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
+    readonly privateNotes: readonly ExportedPrivateNote[];
   };
 }
 
@@ -364,6 +453,37 @@ export async function exportInTransaction(
       .where(eq(packageSessions.tenantId, ctx.tenantId))
       .orderBy(asc(packageSessions.consumedAt), asc(packageSessions.id)),
   );
+  const settingsRows = doTenant(await tx.select().from(clinicalSettings).where(eq(clinicalSettings.tenantId, ctx.tenantId)));
+  const encounterRows = doTenant(
+    await tx
+      .select()
+      .from(encounters)
+      .where(eq(encounters.tenantId, ctx.tenantId))
+      .orderBy(asc(encounters.openedAt), asc(encounters.id)),
+  );
+  const versionRows = doTenant(
+    await tx
+      .select()
+      .from(clinicalRecordVersions)
+      .where(eq(clinicalRecordVersions.tenantId, ctx.tenantId))
+      .orderBy(asc(clinicalRecordVersions.encounterId), asc(clinicalRecordVersions.version)),
+  );
+  const addendumRows = doTenant(
+    await tx
+      .select()
+      .from(clinicalAddenda)
+      .where(eq(clinicalAddenda.tenantId, ctx.tenantId))
+      .orderBy(asc(clinicalAddenda.createdAt), asc(clinicalAddenda.id)),
+  );
+  const noteRows = doTenant(
+    await tx
+      .select()
+      .from(privateNotes)
+      .where(eq(privateNotes.tenantId, ctx.tenantId))
+      .orderBy(asc(privateNotes.createdAt), asc(privateNotes.id)),
+  );
+  // Decisão do autor: só a nota viva marcada para exportar sai; as outras só contam.
+  const notasExportaveis = noteRows.filter((n) => n.exportConsent && n.discardedAt === null);
 
   // Trilha da clínica, inteira e sem reescrita: os campos da cadeia e o JSON canônico vêm do banco
   // (data com microssegundos, como no hash). O ator interno já está pseudonimizado desde o INSERT (0008).
@@ -540,6 +660,71 @@ export async function exportInTransaction(
     reversalReason: s.reversalReason,
   }));
 
+  const decryptClinical = async (rowId: string, campo: CampoClinico, value: string): Promise<string> => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher.decryptString(tx, campoClinicoRef(ctx.tenantId, rowId, campo), value);
+  };
+  const exportedSettings: ExportedClinicalSettings[] = settingsRows.map((c) => ({
+    psychCompartment: c.psychCompartment,
+    updatedAt: c.updatedAt.toISOString(),
+    updatedBy: c.updatedBy,
+  }));
+  const exportedEncounters: ExportedEncounter[] = encounterRows.map((e) => ({
+    id: e.id,
+    patientId: e.patientId,
+    professionalId: e.professionalId,
+    appointmentId: e.appointmentId,
+    authorUserId: e.authorUserId,
+    template: e.template,
+    compartment: e.compartment,
+    aiConsent: e.aiConsent,
+    status: e.status,
+    currentVersion: e.currentVersion,
+    openedAt: e.openedAt.toISOString(),
+    updatedAt: e.updatedAt.toISOString(),
+    signedAt: iso(e.signedAt),
+    signedBy: e.signedBy,
+    signedVersion: e.signedVersion,
+    signedHash: e.signedHash,
+  }));
+  const exportedVersions: ExportedClinicalRecordVersion[] = [];
+  for (const v of versionRows) {
+    exportedVersions.push({
+      id: v.id,
+      encounterId: v.encounterId,
+      version: v.version,
+      template: v.template,
+      templateVersion: v.templateVersion,
+      content: JSON.parse(await decryptClinical(v.id, CAMPO_VERSAO, v.contentEnc)) as unknown,
+      createdAt: v.createdAt.toISOString(),
+      createdBy: v.createdBy,
+    });
+  }
+  const exportedAddenda: ExportedClinicalAddendum[] = [];
+  for (const a of addendumRows) {
+    exportedAddenda.push({
+      id: a.id,
+      encounterId: a.encounterId,
+      text: await decryptClinical(a.id, CAMPO_ADENDO, a.textEnc),
+      createdAt: a.createdAt.toISOString(),
+      createdBy: a.createdBy,
+    });
+  }
+  const exportedNotes: ExportedPrivateNote[] = [];
+  for (const n of notasExportaveis) {
+    exportedNotes.push({
+      id: n.id,
+      patientId: n.patientId,
+      authorUserId: n.authorUserId,
+      encounterId: n.encounterId,
+      content: await decryptClinical(n.id, CAMPO_NOTA, n.contentEnc),
+      exportConsent: n.exportConsent,
+      createdAt: n.createdAt.toISOString(),
+      updatedAt: n.updatedAt.toISOString(),
+      discardedAt: iso(n.discardedAt),
+    });
+  }
+
   const manifest: ExportManifest = {
     format: EXPORT_FORMAT,
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -565,6 +750,12 @@ export async function exportInTransaction(
       guideSessionSignatures: exportedSignatures.length,
       sessionPackages: exportedPackages.length,
       packageSessions: exportedPackageSessions.length,
+      clinicalSettings: exportedSettings.length,
+      encounters: exportedEncounters.length,
+      clinicalRecordVersions: exportedVersions.length,
+      clinicalAddenda: exportedAddenda.length,
+      privateNotes: exportedNotes.length,
+      privateNotesWithheld: noteRows.length - exportedNotes.length,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -605,6 +796,11 @@ export async function exportInTransaction(
       // Resumo de guias e pacotes (o metadata tem teto de 16 chaves; o detalhe está no manifesto).
       guides: manifest.counts.insuranceGuides,
       packages: manifest.counts.sessionPackages,
+      // Prontuário (0012): só contagens; o conteúdo vai no pacote, nunca na trilha.
+      encounters: manifest.counts.encounters,
+      recordVersions: manifest.counts.clinicalRecordVersions,
+      privateNotes: manifest.counts.privateNotes,
+      privateNotesWithheld: manifest.counts.privateNotesWithheld,
       auditEvents: manifest.counts.auditEvents,
     },
   });
@@ -624,6 +820,11 @@ export async function exportInTransaction(
         guideSessionSignatures: exportedSignatures,
         sessionPackages: exportedPackages,
         packageSessions: exportedPackageSessions,
+        clinicalSettings: exportedSettings,
+        encounters: exportedEncounters,
+        clinicalRecordVersions: exportedVersions,
+        clinicalAddenda: exportedAddenda,
+        privateNotes: exportedNotes,
       },
     },
     patientsCsv,

@@ -51,6 +51,14 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
   session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Prontuário (migração 0012): sem DELETE/TRUNCATE. Versões e adendos são append-only (sem UPDATE;
+  // um trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel). Finalizar = UPDATE do atendimento
+  // aberto (depois disso o trigger torna a linha terminal); nota privada é descartada, nunca apagada.
+  clinical_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  encounters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinical_record_versions: { privilegios: ['SELECT', 'INSERT'] },
+  clinical_addenda: { privilegios: ['SELECT', 'INSERT'] },
+  private_notes: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
