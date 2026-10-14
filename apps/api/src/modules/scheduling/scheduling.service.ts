@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, count, eq, gt, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
@@ -12,15 +12,18 @@ import { statusConsome } from '../insurance/guias-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
   capacidadeDoHorario,
+  dentroDaJanelaDeAtendimento,
   exigeAtendimento,
   janelaDeDias,
   noFusoDaClinica,
   paraInstante,
+  STATUS_CLINICOS,
   STATUS_QUE_OCUPAM,
   STATUS_REMARCAVEIS,
   statusParaDb,
   statusParaFront,
   transicaoPermitida,
+  type JanelaDeAtendimento,
   type StatusFront,
 } from './agenda-regras';
 import {
@@ -62,6 +65,10 @@ export interface TipoAtendimentoDto {
 }
 
 const SCOPE = 'appointments';
+const DIA_MS = 86_400_000;
+
+/** Janela de atendimento e limiar do alerta de autoagendamento (provida pelo SchedulingModule). */
+export const JANELA_DE_ATENDIMENTO = Symbol('JANELA_DE_ATENDIMENTO');
 
 function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
   const { data, hora } = noFusoDaClinica(a.startsAt);
@@ -88,7 +95,12 @@ function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
  */
 @Injectable()
 export class SchedulingService {
-  constructor(@Inject(TenantDatabase) private readonly db: TenantDatabase) {}
+  private readonly logger = new Logger('agenda');
+
+  constructor(
+    @Inject(TenantDatabase) private readonly db: TenantDatabase,
+    @Inject(JANELA_DE_ATENDIMENTO) private readonly janela: JanelaDeAtendimento,
+  ) {}
 
   listar(ctx: RequestContext, filtro: FiltroAgenda): Promise<{ itens: AgendamentoDto[]; truncado: boolean }> {
     return this.leitura(ctx, async (tx) => {
@@ -157,13 +169,21 @@ export class SchedulingService {
           startsAt: inicio,
           endsAt: fim,
           isWalkIn: dados.encaixe,
+          // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
+          // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
+          createdBy: ctx.userId,
         })
         .returning();
       if (!linha) throw new Error('falha ao criar agendamento');
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: SCOPE,
-        metadata: { appointment_id: linha.id, patient_id: linha.patientId, walk_in: linha.isWalkIn },
+        metadata: {
+          appointment_id: linha.id,
+          patient_id: linha.patientId,
+          walk_in: linha.isWalkIn,
+          self_scheduled: profissional.userId === ctx.userId,
+        },
       });
       return paraDto(linha);
     });
@@ -229,6 +249,11 @@ export class SchedulingService {
         if (!profissional?.userId || profissional.userId !== ctx.userId) throw new ProibidoError();
       }
       const agora = new Date();
+      // V1 do parecer #61: "em atendimento"/"atendido" só dentro da janela do horário. Consulta do
+      // futuro ou de muito tempo atrás não vira atendimento (e, portanto, não vira vínculo).
+      if (STATUS_CLINICOS.includes(novo) && !dentroDaJanelaDeAtendimento(atual.startsAt, atual.endsAt, agora, this.janela)) {
+        throw new ConflitoError('fora_do_horario');
+      }
       await tx
         .update(appointments)
         .set({
@@ -247,6 +272,10 @@ export class SchedulingService {
       // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
       // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
       if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
+      const autoagendado = atual.createdBy !== null && atual.createdBy === ctx.userId;
+      if (autoagendado && STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status)) {
+        await this.alertarAutoagendamento(tx, ctx, atual.professionalId, agora);
+      }
       return { statusAnterior: statusParaFront(atual.status) };
     });
   }
@@ -350,6 +379,36 @@ export class SchedulingService {
     if (exceto) condicoes.push(ne(appointments.id, exceto));
     const [r] = await tx.select({ n: count() }).from(appointments).where(and(...condicoes));
     return r?.n ?? 0;
+  }
+
+  /**
+   * Autoagendamento atendido: o vínculo de cuidado nasce de um agendamento que o próprio profissional
+   * criou para si (V1 do parecer #61). Grava `anomaly_alert` (regra `vinculo_autoagendado`) na MESMA
+   * transação da mudança de status quando o número de pacientes distintos atendidos assim nas últimas
+   * 24 h passa do limiar (padrão 0: todo caso alerta). Só regra, janela, limiar e contagem.
+   */
+  private async alertarAutoagendamento(tx: TenantTx, ctx: RequestContext, profissionalId: string, agora: Date): Promise<void> {
+    const [linha] = await tx
+      .select({ pacientes: sql<number>`count(distinct ${appointments.patientId})::int` })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.tenantId, ctx.tenantId),
+          eq(appointments.professionalId, profissionalId),
+          eq(appointments.createdBy, ctx.userId),
+          inArray(appointments.status, [...STATUS_CLINICOS]),
+          gte(appointments.startsAt, new Date(agora.getTime() - DIA_MS)),
+        ),
+      );
+    const contagem = linha?.pacientes ?? 0;
+    const limiar = this.janela.alertaAutoagendadosPorDia;
+    if (contagem <= limiar) return;
+    this.logger.warn('ALERTA_ANOMALIA regra=vinculo_autoagendado');
+    await recordAudit(tx, ctx, {
+      action: AuditAction.AnomalyAlert,
+      scope: SCOPE,
+      metadata: { rule: 'vinculo_autoagendado', window_s: DIA_MS / 1000, threshold: limiar, count: contagem },
+    });
   }
 
   private leitura<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {

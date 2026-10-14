@@ -15,6 +15,7 @@ import {
   patients,
   professionals,
   sessionPackages,
+  tenants,
   type SubscriptionStatus,
 } from '../../db/schema';
 import { withTenant, type Database, type TenantTx } from '../../db/tenant-transaction';
@@ -34,10 +35,12 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.2.0: trilha de auditoria da clínica (`auditoria.jsonl`) com os campos da cadeia de hash e o JSON
  *        canônico, para a clínica verificar (Decisão 1 do Guardião, parecer PR #57); manifesto com a
  *        contagem e o último elo (`auditChain.head`).
- * 1.3.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
+ * 1.3.0: `tenant.careLinkDays` (janela de continuidade do vínculo de cuidado) e
+ *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013 (PR #61).
+ * 1.4.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
  *        paciente por sessão, pacotes de sessões e seus consumos (migração 0011).
  */
-export const EXPORT_SCHEMA_VERSION = '1.3.0';
+export const EXPORT_SCHEMA_VERSION = '1.4.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -149,6 +152,8 @@ export interface ExportedAppointment {
   readonly cancelledAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Usuário que criou (0013); null em agendamentos anteriores à migração. */
+  readonly createdBy: string | null;
 }
 
 export interface ExportedInsurer {
@@ -233,7 +238,7 @@ export interface ExportedPackageSession {
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
-    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string };
+    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string; readonly careLinkDays: number };
     readonly patients: readonly ExportedPatient[];
     readonly professionals: readonly ExportedProfessional[];
     readonly appointmentTypes: readonly ExportedAppointmentType[];
@@ -296,6 +301,8 @@ export async function exportInTransaction(
   const tenant = await loadTenantSubscription(tx, ctx.tenantId);
   // G1/G4: inadimplência nunca bloqueia; cancelado só fora da janela de saída.
   if (!canExport(tenant.status, tenant.cancelledAt, now, windowDays)) throw new ExitWindowClosedError();
+  const [config] = await tx.select({ careLinkDays: tenants.careLinkDays }).from(tenants).where(eq(tenants.id, ctx.tenantId));
+  if (!config) throw new Error('tenant não encontrado no contexto atual');
 
   const patientRows = soDaClinica(
     await tx.select().from(patients).where(eq(patients.tenantId, ctx.tenantId)).orderBy(asc(patients.createdAt), asc(patients.id)),
@@ -457,6 +464,7 @@ export async function exportInTransaction(
     cancelledAt: iso(a.cancelledAt),
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
+    createdBy: a.createdBy,
   }));
 
   const decryptGuide = async (rowId: string, column: GuideEncryptedColumn, value: string | null): Promise<string | null> => {
@@ -613,7 +621,12 @@ export async function exportInTransaction(
     json: {
       manifest,
       data: {
-        tenant: { id: tenant.id, displayName: tenant.displayName, createdAt: tenant.createdAt.toISOString() },
+        tenant: {
+          id: tenant.id,
+          displayName: tenant.displayName,
+          createdAt: tenant.createdAt.toISOString(),
+          careLinkDays: config.careLinkDays,
+        },
         patients: exportedPatients,
         professionals: exportedProfessionals,
         appointmentTypes: exportedTypes,

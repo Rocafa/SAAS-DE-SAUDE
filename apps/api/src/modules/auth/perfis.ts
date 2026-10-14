@@ -55,8 +55,12 @@ export function temPermissao(perfis: readonly Perfil[], permissao: Permissao): b
   return perfis.some((p) => autorizados.includes(p));
 }
 
-/** De onde veio o vínculo (vinculo-de-cuidado.ts). Vai para a auditoria do acesso clínico. */
-export type BaseDoVinculo = 'atendimento' | 'agenda_do_dia';
+/**
+ * De onde veio o vínculo (vinculo-de-cuidado.ts). Vai para a auditoria do acesso clínico.
+ * `autoagendamento`: atendimento efetivo de um agendamento que o próprio profissional criou para si
+ * (V1 do parecer #61); vale como vínculo, mas fica marcado e gera alerta na agenda.
+ */
+export type BaseDoVinculo = 'atendimento' | 'autoagendamento' | 'agenda_do_dia';
 
 declare const calculadoNoServidor: unique symbol;
 
