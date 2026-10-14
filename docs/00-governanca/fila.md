@@ -20,10 +20,10 @@
 | Rodada 12.1: ✅ pareceres #56/#57/#58 + re-revisão: todos APROVADOS COM RESSALVAS | Maestro @Rocafa | 13/10/2026 | concluído |
 | Rodada 12.2: ✅ **PR #60** telas ligadas à API real (empilhado sobre #57) — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #60 |
 | Rodada 12.3: ✅ **PR #59** imagem Docker + E2E no CI — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #59 |
-| Rodada 13.1: ressalvas do Guardião na API (#57): vínculo de cuidado no servidor (R2), alerta de anomalia + limite por usuário na lista de pacientes (R5), segredo do pseudônimo fora do processo (N1) — migração **0010** | Maestro @Rocafa (agente engenharia) | 14/10/2026 | branch `eng/ressalvas-api-57` |
-| Rodada 13.2: API do controle de guias de convênio (sem TISS) e pacotes de sessões (CNV-04.x, HU-CNV-001..006, HU-FIN-004) — migração **0011** | Maestro @Rocafa (agente engenharia) | 14/10/2026 | branch `eng/guias-e-pacotes` |
-| Rodada 13.3: ressalvas do Guardião no Terraform (#58): R2, R4–R7, R9, id opaco da exportação, bucket logs no CloudTrail | Maestro @Rocafa (agente devops-ci) | 14/10/2026 | branch `devops/terraform-staging-b` |
-| Rodada 13.4: atualizar RELATORIO-GERAL e CONTEXTO com as rodadas 10–13 | Maestro @Rocafa | 14/10/2026 | main |
+| Rodada 13.1: ✅ **PR #61** vínculo de cuidado, limite por usuário + alerta, pseudônimo via KMS (migração 0010) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #61 |
+| Rodada 13.2: ✅ **PR #62** guias de convênio e pacotes (migração 0011, empilhado sobre #61) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #62 |
+| Rodada 13.3: ✅ #58 atualizado com R2, R4, R5, R7, N1, N2 (R6/R9 parametrizadas) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #58 |
+| Rodada 13.4: ✅ relatório geral e CONTEXTO com as rodadas 10–13 | Maestro @Rocafa | 14/10/2026 | concluído |
 
 ## Livre (pegue colocando seu nome)
 
