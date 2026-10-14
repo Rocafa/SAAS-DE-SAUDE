@@ -43,6 +43,14 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Guias e pacotes (migração 0011): sem DELETE/TRUNCATE — cancelar/estornar, nunca apagar.
+  insurers: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  insurance_guides: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  guide_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Assinatura do paciente por sessão é prova: append-only (sem UPDATE).
+  guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
+  session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

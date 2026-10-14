@@ -1,4 +1,4 @@
-import { bigint, boolean, customType, foreignKey, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -95,6 +95,125 @@ export const appointments = pgTable('appointments', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Convênios da clínica (migração 0011, CNV-04.1). Sem regras TISS. */
+export const insurers = pgTable('insurers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  name: text('name').notNull(),
+  ansCode: text('ans_code'),
+  sessionValueCents: integer('session_value_cents'),
+  requiresPassword: boolean('requires_password').notNull().default(false),
+  requiresSignature: boolean('requires_signature').notNull().default(false),
+  defaultValidityDays: integer('default_validity_days'),
+  active: boolean('active').notNull().default(true),
+  inactivatedAt: timestamp('inactivated_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Situação gravada de guia e pacote (CHECK da 0011). "Vencida"/"esgotada" são calculadas. */
+export const GUIDE_STATUSES = ['active', 'cancelled'] as const;
+
+/**
+ * Guias de convênio (migração 0011, CNV-04.2/04.3). Número, senha e carteirinha SÓ cifrados (v1).
+ * `usedSessions` é o contador do saldo (CHECK 0 <= usadas <= autorizadas no banco).
+ */
+export const insuranceGuides = pgTable('insurance_guides', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  insurerId: uuid('insurer_id').notNull(),
+  numberEnc: text('number_enc').notNull(),
+  authorizationCodeEnc: text('authorization_code_enc'),
+  cardNumberEnc: text('card_number_enc'),
+  authorizedSessions: integer('authorized_sessions').notNull(),
+  usedSessions: integer('used_sessions').notNull().default(0),
+  issuedOn: date('issued_on', { mode: 'string' }),
+  validUntil: date('valid_until', { mode: 'string' }).notNull(),
+  status: text('status', { enum: GUIDE_STATUSES }).notNull().default('active'),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Mesmos valores dos CHECK da 0011 (códigos; nunca texto livre). */
+export const GUIDE_OVERRIDE_REASONS = ['prorrogacao_da_operadora', 'renovacao_em_andamento', 'decisao_da_clinica'] as const;
+export type GuideOverrideReason = (typeof GUIDE_OVERRIDE_REASONS)[number];
+export const GUIDE_REVERSAL_REASONS = ['status_corrigido', 'lancamento_errado', 'guia_errada'] as const;
+export type GuideReversalReason = (typeof GUIDE_REVERSAL_REASONS)[number];
+export const PACKAGE_REVERSAL_REASONS = ['status_corrigido', 'lancamento_errado', 'pacote_errado'] as const;
+export type PackageReversalReason = (typeof PACKAGE_REVERSAL_REASONS)[number];
+
+/** Consumo de 1 sessão da guia por agendamento (0011). Estorno marca `reversedAt`, nunca apaga. */
+export const guideSessions = pgTable('guide_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  guideId: uuid('guide_id').notNull(),
+  appointmentId: uuid('appointment_id').notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }).notNull().defaultNow(),
+  consumedBy: uuid('consumed_by').notNull(),
+  overrideReason: text('override_reason', { enum: GUIDE_OVERRIDE_REASONS }),
+  reversedAt: timestamp('reversed_at', { withTimezone: true }),
+  reversedBy: uuid('reversed_by'),
+  reversalReason: text('reversal_reason', { enum: GUIDE_REVERSAL_REASONS }),
+});
+
+export const SIGNATURE_METHODS = ['tela', 'papel'] as const;
+export type SignatureMethod = (typeof SIGNATURE_METHODS)[number];
+
+/** Confirmação do paciente por sessão (0011, CNV-04.4). Append-only: runtime só SELECT/INSERT. */
+export const guideSessionSignatures = pgTable('guide_session_signatures', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  guideSessionId: uuid('guide_session_id').notNull(),
+  method: text('method', { enum: SIGNATURE_METHODS }).notNull(),
+  deviceLabel: text('device_label'),
+  signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+  recordedBy: uuid('recorded_by').notNull(),
+  recordHash: text('record_hash').notNull(),
+});
+
+/** Pacote particular de sessões com saldo (0011, FIN-01.5). CHECK 0 <= usadas <= total. */
+export const sessionPackages = pgTable('session_packages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  appointmentTypeId: uuid('appointment_type_id'),
+  name: text('name').notNull(),
+  totalSessions: integer('total_sessions').notNull(),
+  usedSessions: integer('used_sessions').notNull().default(0),
+  validUntil: date('valid_until', { mode: 'string' }),
+  status: text('status', { enum: GUIDE_STATUSES }).notNull().default('active'),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Consumo de 1 sessão do pacote por agendamento (0011): o histórico do pacote. */
+export const packageSessions = pgTable('package_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  packageId: uuid('package_id').notNull(),
+  appointmentId: uuid('appointment_id').notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }).notNull().defaultNow(),
+  consumedBy: uuid('consumed_by').notNull(),
+  reversedAt: timestamp('reversed_at', { withTimezone: true }),
+  reversedBy: uuid('reversed_by'),
+  reversalReason: text('reversal_reason', { enum: PACKAGE_REVERSAL_REASONS }),
+});
+
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
@@ -174,4 +293,10 @@ export const schema = {
   professionals,
   appointmentTypes,
   appointments,
+  insurers,
+  insuranceGuides,
+  guideSessions,
+  guideSessionSignatures,
+  sessionPackages,
+  packageSessions,
 };
