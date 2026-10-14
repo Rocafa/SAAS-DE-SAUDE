@@ -17,12 +17,14 @@
 | Rodada 11.1: ✅ **PR #57** (rotas de pacientes e agenda, auth plugável, exportação G2) — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #57 |
 | Rodada 11.2: ✅ **PR #58** (Terraform do staging + infra.yml) — aguarda CI (checkov só roda lá) | Maestro @Rocafa | 13/10/2026 | PR #58 |
 | Rodada 11.3: ✅ **PR #56** (golden sets 50/nicho) — aguarda CI e revisão clínica humana | Maestro @Rocafa | 13/10/2026 | PR #56 |
+| Rodada 12.1: ✅ pareceres #56/#57/#58 + re-revisão: todos APROVADOS COM RESSALVAS | Maestro @Rocafa | 13/10/2026 | concluído |
+| Rodada 12.2: ✅ **PR #60** telas ligadas à API real (empilhado sobre #57) — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #60 |
+| Rodada 12.3: ✅ **PR #59** imagem Docker + E2E no CI — aguarda CI | Maestro @Rocafa | 13/10/2026 | PR #59 |
 
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
-| Dockerfile + `imagem.yml` + job de E2E do front no CI | idem §3 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
