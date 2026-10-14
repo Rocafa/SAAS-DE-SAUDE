@@ -180,6 +180,39 @@ describe('abertura do atendimento a partir do check-in', () => {
     expect(ats).toHaveLength(0);
   });
 
+  it('autoagendamento com check-in não abre (sem vínculo); depois de "em atendimento" pela agenda, abre com a base marcada', async () => {
+    const paciente = await criarPaciente(adminA);
+    const ag = randomUUID();
+    await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(appointments).values({
+        id: ag,
+        tenantId: clinicaA,
+        patientId: paciente,
+        professionalId: profissionalDe.get(fisioA.userId) as string,
+        appointmentTypeId: tipoA,
+        startsAt: new Date(Date.now() - 10 * 60_000),
+        endsAt: new Date(Date.now() + 40 * 60_000),
+        status: 'checked_in',
+        createdBy: fisioA.userId,
+      }),
+    );
+    const negado = await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag });
+    expect(negado.status).toBe(403);
+    expect(negado.body).toMatchObject({ codigo: 'sem_vinculo_de_cuidado' });
+    // A agenda (com as regras dela: só o profissional do agendamento, dentro da janela) marca o início.
+    const inicio = await api.http().post(`/agendamentos/${ag}/status`).set(cab(fisioA)).send({ status: 'em_atendimento' });
+    expect(inicio.status).toBe(200);
+    const aberto = await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag });
+    expect(aberto.status).toBe(200);
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.scope, 'encounters'), eq(auditLog.action, 'create'), sql`${auditLog.metadata}->>'appointment_id' = ${ag}`)),
+    );
+    expect(linha?.metadata).toMatchObject({ care_basis: 'autoagendamento' });
+  });
+
   it('profissional com vínculo, mas que não é o do agendamento: 403 (só o profissional do agendamento registra)', async () => {
     const res = await api.http().post('/atendimentos').set(cab(outroA)).send({ agendamentoId: agFisio });
     expect(res.status).toBe(403);
