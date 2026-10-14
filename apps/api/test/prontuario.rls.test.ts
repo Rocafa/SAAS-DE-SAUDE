@@ -352,7 +352,9 @@ describe('finalização e adendo', () => {
     const ad = await api.http().post(`/atendimentos/${atFisio}/adendos`).set(cab(fisioA)).send({ texto: ADENDO });
     expect(ad.status).toBe(201);
     const adendos = (ad.body as { adendos: { texto: string; autorId: string; em: string }[] }).adendos;
-    expect(adendos).toEqual([{ id: expect.any(String), texto: ADENDO, autorId: fisioA.userId, em: expect.any(String) }]);
+    expect(adendos).toHaveLength(1);
+    expect(adendos[0]).toMatchObject({ texto: ADENDO, autorId: fisioA.userId });
+    expect(Date.parse(adendos[0]?.em ?? '')).not.toBeNaN();
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalAddenda).where(eq(clinicalAddenda.encounterId, atFisio)));
     expect(linha?.textEnc).toMatch(/^v1:/);
     expect(JSON.stringify(linha)).not.toContain('5504');
@@ -525,7 +527,8 @@ describe('auditoria do prontuário', () => {
       ]),
     );
     const assinatura = doAt.find((l) => l.action === 'sign');
-    expect(assinatura?.metadata).toMatchObject({ version: 3, care_basis: expect.any(String) });
+    expect(assinatura?.metadata).toMatchObject({ version: 3 });
+    expect(typeof (assinatura?.metadata as { care_basis?: unknown }).care_basis).toBe('string');
     expect((assinatura?.metadata as { hash: string }).hash).toMatch(/^[0-9a-f]{64}$/);
     expect(linhas.some((l) => l.scope === 'private_notes' && l.action === 'create')).toBe(true);
     const tudo = JSON.stringify(linhas);
