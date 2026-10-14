@@ -145,11 +145,8 @@ describe('adaptador HTTP do web contra a API real', () => {
     expect(await b.listarAgendamentos({ pacienteId: p.id })).toEqual([]);
   });
 
-  // `POST /pacientes/busca` (termo no corpo) entra na versão corrigida do #57; antes dela, pula.
-  it('busca (POST, termo no corpo) acha o paciente e entra na auditoria sem o termo', async (ctx) => {
+  it('busca (POST, termo no corpo) acha o paciente e entra na auditoria sem o termo', async () => {
     const s = api.sessao(clinicaA, 'recepcao');
-    const sonda = await api.http().post('/pacientes/busca').set(cab(s)).send({ busca: 'xx' });
-    if (sonda.status === 404) ctx.skip();
     const web = mod.criarApiHttp({ baseUrl: base, obterToken: () => tokenDe(s) });
     const p = await web.criarPaciente({ nome: 'Paciente Ficticia Integracao Busca', telefone: '(11) 90000-0104' });
     expect((await web.buscarPacientes('integracao busca')).map((x) => x.id)).toContain(p.id);
