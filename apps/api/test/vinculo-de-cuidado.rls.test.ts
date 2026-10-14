@@ -8,13 +8,14 @@ import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProibidoError } from '../src/common/erros-dominio';
-import { eq } from 'drizzle-orm';
-import { appointments, professionals, type AppointmentStatusDb } from '../src/db/schema';
+import { and, eq } from 'drizzle-orm';
+import { appointments, auditLog, professionals, tenants, type AppointmentStatusDb } from '../src/db/schema';
+import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { withTenant } from '../src/db/tenant-transaction';
 import {
   exigirConteudoClinico,
   VINCULO_AGENDA_HORAS,
-  VINCULO_ATENDIMENTO_DIAS,
+  VINCULO_ATENDIMENTO_DIAS_PADRAO,
   VinculoDeCuidadoService,
 } from '../src/modules/auth/vinculo-de-cuidado';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
@@ -63,11 +64,13 @@ async function tipo(admin: { Authorization: string }): Promise<string> {
 /** Agendamento direto no banco (datas no passado não passam pela rota de agenda). */
 async function agendamento(
   tenantId: TenantId,
-  dados: { paciente: string; profissional: string; tipo: string; inicio: Date; status: AppointmentStatusDb },
-): Promise<void> {
+  dados: { paciente: string; profissional: string; tipo: string; inicio: Date; status: AppointmentStatusDb; criadoPor?: string },
+): Promise<string> {
+  const id = randomUUID();
   await withTenant(api.db.db, tenantId, async (tx) => {
     await tx.insert(appointments).values({
-      id: randomUUID(),
+      id,
+      createdBy: dados.criadoPor ?? null,
       tenantId,
       patientId: dados.paciente,
       professionalId: dados.profissional,
@@ -78,6 +81,35 @@ async function agendamento(
       cancelledAt: dados.status === 'cancelled' ? dados.inicio : null,
     });
   });
+  return id;
+}
+
+/** Agendamento pela ROTA (grava created_by = usuário da sessão). Hora no fuso da clínica. */
+async function marcarPelaRota(
+  s: { Authorization: string },
+  dados: { paciente: string; profissional: string; tipo: string; inicio: Date; encaixe?: boolean },
+): Promise<string> {
+  const { data, hora } = noFusoDaClinica(dados.inicio);
+  const res = await api
+    .http()
+    .post('/agendamentos')
+    .set(cab(s))
+    .send({ pacienteId: dados.paciente, profissionalId: dados.profissional, tipoId: dados.tipo, data, hora, encaixe: dados.encaixe ?? false });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  return (res.body as { id: string }).id;
+}
+
+function status(s: { Authorization: string }, id: string, novo: string) {
+  return api.http().post(`/agendamentos/${id}/status`).set(cab(s)).send({ status: novo });
+}
+
+async function alertasDe(tenantId: TenantId, ator: string): Promise<{ metadata: unknown }[]> {
+  return withTenant(api.db.db, tenantId, (tx) =>
+    tx
+      .select({ metadata: auditLog.metadata })
+      .from(auditLog)
+      .where(and(eq(auditLog.tenantId, tenantId), eq(auditLog.actorId, ator), eq(auditLog.action, 'anomaly_alert'))),
+  );
 }
 
 let adminA: { Authorization: string; userId: string };
@@ -162,7 +194,7 @@ describe('vínculo de cuidado derivado no servidor (R2)', () => {
       paciente: p,
       profissional: profissionalA,
       tipo: tipoA,
-      inicio: new Date(agora.getTime() - (VINCULO_ATENDIMENTO_DIAS + 1) * DIA),
+      inicio: new Date(agora.getTime() - (VINCULO_ATENDIMENTO_DIAS_PADRAO + 1) * DIA),
       status: 'completed',
     });
     expect(await servico.temVinculoDeCuidado(ctx(clinicaA, profA), p, agora)).toMatchObject({ temVinculo: false });
@@ -205,5 +237,165 @@ describe('vínculo de cuidado derivado no servidor (R2)', () => {
     await agendamento(clinicaA, { paciente: p, profissional: outroProfissionalA, tipo: tipoA, inicio: new Date(agora.getTime() - DIA), status: 'completed' });
     expect(await servico.temVinculoDeCuidado(ctx(clinicaA, profA), p, agora)).toMatchObject({ temVinculo: false });
     expect(await servico.temVinculoDeCuidado(ctx(clinicaA, outroProfA), p, agora)).toMatchObject({ temVinculo: true });
+  });
+});
+
+/**
+ * V1 do parecer do Guardião sobre o PR #61: o profissional não fabrica o próprio vínculo. Cada
+ * caminho de ataque do parecer tem um teste negativo; os positivos mostram o fluxo legítimo.
+ * Cada caso usa um profissional novo, para que capacidade e alertas não se misturem.
+ */
+describe('vínculo não autodeclarado (V1 do #61)', () => {
+  async function novoProfissional(): Promise<{ sessao: { Authorization: string; userId: string }; id: string }> {
+    const sessao = api.sessao(clinicaA, 'profissional');
+    return { sessao, id: await profissional(adminA, sessao.userId) };
+  }
+
+  it('ataque 1: encaixe consigo mesmo AGORA não dá vínculo (nem agenda do dia) antes do atendimento', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    await marcarPelaRota(eu.sessao, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(), encaixe: true });
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false, base: null });
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => exigirConteudoClinico(tx, ctx(clinicaA, eu.sessao), p, new Date())),
+    ).rejects.toMatchObject({ response: { codigo: 'sem_vinculo_de_cuidado' } });
+  });
+
+  it('ataque 1 (fim): autoagendamento atendido dentro da janela vira base `autoagendamento` e gera anomaly_alert sem dado pessoal', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(eu.sessao, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(), encaixe: true });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(eu.sessao)).expect(200);
+    expect(await alertasDe(clinicaA, eu.sessao.userId)).toHaveLength(0);
+    await status(eu.sessao, id, 'em_atendimento').expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({
+      temVinculo: true,
+      base: 'autoagendamento',
+    });
+    const alertas = await alertasDe(clinicaA, eu.sessao.userId);
+    expect(alertas).toHaveLength(1);
+    // Só regra, janela, limiar e contagem: nada de paciente, agendamento ou nome.
+    expect(alertas[0]?.metadata).toEqual({ rule: 'vinculo_autoagendado', window_s: 86_400, threshold: 0, count: 1 });
+    // "atendido" depois de "em atendimento" não duplica o alerta.
+    await status(eu.sessao, id, 'atendido').expect(200);
+    expect(await alertasDe(clinicaA, eu.sessao.userId)).toHaveLength(1);
+  });
+
+  it('positivo: agendamento feito pela RECEPÇÃO para agora dá agenda do dia; atendido dá `atendimento` sem alerta', async () => {
+    const eu = await novoProfissional();
+    const recep = api.sessao(clinicaA, 'recepcao');
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date() });
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'agenda_do_dia' });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(recep)).expect(200);
+    await status(eu.sessao, id, 'em_atendimento').expect(200);
+    await status(eu.sessao, id, 'atendido').expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'atendimento' });
+    expect(await alertasDe(clinicaA, eu.sessao.userId)).toHaveLength(0);
+  });
+
+  it('ataque 2: consulta de AMANHÃ marcada "em atendimento" ou "atendido" dá 409 fora_do_horario e não dá vínculo', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(eu.sessao, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + DIA) });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(eu.sessao)).expect(200);
+    for (const novo of ['em_atendimento', 'atendido']) {
+      const r = await status(eu.sessao, id, novo);
+      expect(r.status, novo).toBe(409);
+      expect(r.body).toEqual({ statusCode: 409, message: 'Conflito', codigo: 'fora_do_horario' });
+    }
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+  });
+
+  it('ataque 3: consulta de 100 dias atrás marcada "atendido" dá 409 (retroativo) e não dá vínculo', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(eu.sessao, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() - 100 * DIA) });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(eu.sessao)).expect(200);
+    const r = await status(eu.sessao, id, 'atendido');
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'fora_do_horario' });
+    await status(eu.sessao, id, 'em_atendimento').expect(409);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+  });
+
+  it('janela de atendimento: 30 min antes do início até 60 min depois do fim; fora dela, 409', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const minuto = 60_000;
+    // Tipo de 50 min (tipoA). Fora: começa em 45 min; terminou há 2 h. Dentro: começa em 20 min; terminou há 30 min.
+    const casos: { inicio: Date; esperado: number }[] = [
+      { inicio: new Date(Date.now() + 45 * minuto), esperado: 409 },
+      { inicio: new Date(Date.now() - (50 + 120) * minuto), esperado: 409 },
+      { inicio: new Date(Date.now() + 20 * minuto), esperado: 200 },
+      { inicio: new Date(Date.now() - (50 + 30) * minuto), esperado: 200 },
+    ];
+    for (const c of casos) {
+      const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: c.inicio, status: 'checked_in' });
+      expect((await status(eu.sessao, id, 'em_atendimento')).status, c.inicio.toISOString()).toBe(c.esperado);
+    }
+  });
+
+  it('ataque 4: consulta FUTURA já `in_progress`/`completed` inserida direto no banco não dá vínculo', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    for (const [inicio, st] of [
+      [new Date(Date.now() + 2 * HORA), 'in_progress'],
+      [new Date(Date.now() + 30 * DIA), 'completed'],
+    ] as const) {
+      await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio, status: st });
+    }
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+  });
+
+  it('autoagendamento futuro do dia (agendado/confirmado/check-in) nunca dá agenda do dia', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    for (const st of ['scheduled', 'confirmed', 'checked_in'] as const) {
+      await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + HORA), status: st, criadoPor: eu.sessao.userId });
+    }
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+  });
+
+  it('created_by é imutável no banco (o runtime não "desmarca" um autoagendamento)', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + DIA), status: 'scheduled', criadoPor: eu.sessao.userId });
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ createdBy: randomUUID() }).where(eq(appointments.id, id))),
+    ).rejects.toThrow();
+  });
+});
+
+describe('janela de continuidade por clínica (R1 do #61)', () => {
+  it('padrão 90, teto 180; só o admin muda; auditado; vale só para a clínica dele', async () => {
+    const clinica = await api.novaClinica();
+    const admin = api.sessao(clinica, 'admin');
+    const prof = api.sessao(clinica, 'profissional');
+    const profId = await profissional(admin, prof.userId);
+    const t = await tipo(admin);
+    await api.http().get('/clinica/vinculo-de-cuidado').set(cab(admin)).expect(200, { dias: 90, teto: 180 });
+    await api.http().put('/clinica/vinculo-de-cuidado').set(cab(prof)).send({ dias: 180 }).expect(403);
+    for (const dias of [0, 181, 30.5, '30']) {
+      await api.http().put('/clinica/vinculo-de-cuidado').set(cab(admin)).send({ dias }).expect(400);
+    }
+    const p = await novoPaciente(admin);
+    await agendamento(clinica, { paciente: p, profissional: profId, tipo: t, inicio: new Date(Date.now() - 45 * DIA), status: 'completed' });
+    expect(await servico.temVinculoDeCuidado(ctx(clinica, prof), p, new Date())).toMatchObject({ base: 'atendimento' });
+    await api.http().put('/clinica/vinculo-de-cuidado').set(cab(admin)).send({ dias: 30 }).expect(200, { dias: 30, teto: 180 });
+    expect(await servico.temVinculoDeCuidado(ctx(clinica, prof), p, new Date())).toMatchObject({ temVinculo: false });
+    // Outra clínica segue no padrão.
+    await api.http().get('/clinica/vinculo-de-cuidado').set(cab(adminA)).expect(200, { dias: 90, teto: 180 });
+    const [evento] = await withTenant(api.db.db, clinica, (tx) =>
+      tx
+        .select({ metadata: auditLog.metadata })
+        .from(auditLog)
+        .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'tenants'), eq(auditLog.actorId, admin.userId))),
+    );
+    expect(evento?.metadata).toEqual({ setting: 'care_link_days', from: 90, to: 30 });
+    // O banco recusa acima do teto mesmo sem passar pela API.
+    await expect(
+      withTenant(api.db.db, clinica, (tx) => tx.update(tenants).set({ careLinkDays: 365 }).where(eq(tenants.id, clinica))),
+    ).rejects.toThrow();
   });
 });
