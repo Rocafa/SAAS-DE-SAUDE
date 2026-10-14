@@ -236,12 +236,15 @@ resource "aws_ecs_task_definition" "api" {
     linuxParameters        = { initProcessEnabled = true }
     portMappings           = [{ containerPort = local.api_porta, protocol = "tcp" }]
     mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
-    environment = [
+    environment = concat([
       { name = "NODE_ENV", value = "production" },
       { name = "API_PORT", value = tostring(local.api_porta) },
       # CA do RDS para sslmode=verify-full; o arquivo precisa estar na imagem (item 1, Dockerfile).
       { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-sa-east-1-bundle.pem" },
-    ]
+      ],
+      # R6: a API sobe HTTPS com certificado autoassinado gerado em memória (contrato com a ENG).
+      var.tls_ate_a_tarefa ? [{ name = "API_TLS", value = "autoassinado" }] : [],
+    )
     secrets = [
       { name = "DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.app["banco-app-user"].arn}:url::" },
       { name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app["redis"].arn}:url::" },
@@ -310,15 +313,26 @@ resource "aws_lb" "this" {
   depends_on = [aws_s3_bucket_policy.logs]
 }
 
+# ALB -> tarefa (R6 do parecer do PR #58). Com tls_ate_a_tarefa = true, o target group fala HTTPS
+# com a tarefa (o ALB cifra mas não valida o certificado do alvo; um certificado autoassinado gerado
+# na subida do contêiner basta) e a API recebe API_TLS=autoassinado. Depende da ENG: a API ainda
+# só escuta HTTP, então ligar antes disso derruba o health check. Proposta: true em prod; em
+# staging (dado sintético, R8) fica false até a API suportar.
 resource "aws_lb_target_group" "api" {
-  name                 = "${local.nome}-api"
+  name                 = "${local.nome}-${var.tls_ate_a_tarefa ? "apis" : "api"}" # nome muda: create_before_destroy
   port                 = local.api_porta
-  protocol             = "HTTP"
+  protocol             = var.tls_ate_a_tarefa ? "HTTPS" : "HTTP"
   target_type          = "ip"
   vpc_id               = aws_vpc.this.id
   deregistration_delay = 30
 
+  # Trocar o protocolo recria o target group; o novo nasce antes para o listener não ficar sem alvo.
+  lifecycle {
+    create_before_destroy = true
+  }
+
   health_check {
+    protocol            = var.tls_ate_a_tarefa ? "HTTPS" : "HTTP"
     path                = local.alb_health_check_path
     matcher             = "200"
     interval            = 15

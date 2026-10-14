@@ -82,6 +82,12 @@ variable "api_tarefas" {
   default     = 1
 }
 
+variable "tls_ate_a_tarefa" {
+  description = "TLS também no trecho ALB -> tarefa da API (R6 do PR #58). Exige a API escutando HTTPS (API_TLS=autoassinado, ENG). Proposta: true em prod."
+  type        = bool
+  default     = false
+}
+
 variable "certificado_arn" {
   description = "ARN do certificado ACM do domínio de staging (I10: domínio e DNS ainda não existem)."
   type        = string
