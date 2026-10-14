@@ -160,6 +160,12 @@ variable "logs_bucket_retencao_dias" {
   }
 }
 
+variable "redis_slow_log" {
+  description = "Liga a entrega do slow-log do Redis ao CloudWatch. O slow-log grava os argumentos dos comandos: só ligar quando fila e chaves usarem apenas ids opacos (R5 do PR #58)."
+  type        = bool
+  default     = false
+}
+
 variable "redis_auth_versao" {
   description = "Versão do token de AUTH do Redis. Incrementar gera um token novo e o grava (write-only) no ElastiCache e no Secrets Manager na mesma execução."
   type        = number

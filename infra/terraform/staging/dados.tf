@@ -208,8 +208,13 @@ resource "aws_elasticache_subnet_group" "this" {
   subnet_ids = aws_subnet.dados[*].id
 }
 
+# Slow-log do Redis (R5 do parecer do PR #58): grava os ARGUMENTOS do comando (até 32, 128
+# caracteres cada). Se um job do BullMQ ou uma chave carregar nome, telefone ou texto, isso iria
+# para o log. Por isso fica DESLIGADO por padrão; só ligar (redis_slow_log = true) depois que a
+# regra da ENG "payload de fila e chave do Redis só com ids opacos" estiver no código e testada.
 resource "aws_cloudwatch_log_group" "redis" {
   #checkov:skip=CKV_AWS_338:Log técnico: logs_retencao_dias (staging 30; prod 90 proposto à D7, R9).
+  count             = var.redis_slow_log ? 1 : 0
   name              = "/${local.nome}/redis"
   retention_in_days = var.logs_retencao_dias
   kms_key_id        = aws_kms_key.this["logs"].arn
@@ -244,11 +249,14 @@ resource "aws_elasticache_replication_group" "this" {
   auto_minor_version_upgrade = true
   apply_immediately          = false
 
-  log_delivery_configuration {
-    destination      = aws_cloudwatch_log_group.redis.name
-    destination_type = "cloudwatch-logs"
-    log_format       = "json"
-    log_type         = "slow-log"
+  dynamic "log_delivery_configuration" {
+    for_each = aws_cloudwatch_log_group.redis
+    content {
+      destination      = log_delivery_configuration.value.name
+      destination_type = "cloudwatch-logs"
+      log_format       = "json"
+      log_type         = "slow-log"
+    }
   }
 }
 
