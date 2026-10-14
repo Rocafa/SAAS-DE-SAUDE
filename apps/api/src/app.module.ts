@@ -8,6 +8,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module';
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
+import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
@@ -38,6 +39,7 @@ export class AppModule {
         ExportsModule.forRoot({ exitWindowDays: config.exitWindowDays }),
         PatientsModule,
         SchedulingModule,
+        InsuranceModule,
       ],
     };
   }

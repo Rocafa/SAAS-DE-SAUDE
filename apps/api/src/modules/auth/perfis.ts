@@ -26,6 +26,20 @@ export const PERMISSOES = {
   'agenda:atender': ['profissional'],
   'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'cadastros:gerir': ['admin'],
+  /** Convênios (CNV-04.1): todos leem (forma de atendimento); só o dono cadastra/inativa. */
+  'convenios:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'convenios:gerir': ['admin'],
+  /**
+   * Guias e pacotes (EP-24). Ler saldo/validade/alertas: todos (o profissional vê se a sessão está
+   * coberta). Registrar, alterar e cancelar guia ou pacote: recepção, financeiro e dono. Consumir,
+   * estornar e registrar a confirmação do paciente: também o profissional (sessão atendida). Nada
+   * disto é conteúdo clínico: guia e pacote não levam procedimento, diagnóstico nem evolução.
+   */
+  'guias:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'guias:gerir': ['admin', 'recepcao', 'financeiro'],
+  'guias:consumir': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  /** Relatório por convênio (faturamento, CNV-04.6): dono e financeiro. */
+  'guias:faturar': ['admin', 'financeiro'],
   /**
    * Conteúdo clínico (prontuário, evoluções, anexos clínicos). Não há rota nesta rodada; a regra
    * fica explícita para a API de prontuário: perfil clínico E vínculo de cuidado (ver

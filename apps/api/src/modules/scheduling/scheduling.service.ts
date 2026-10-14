@@ -7,6 +7,8 @@ import { appointments, appointmentTypes, patients, professionals, type Appointme
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { temPermissao, type Perfil } from '../auth/perfis';
+import { estornarConsumosDoAgendamento } from '../insurance/consumos';
+import { statusConsome } from '../insurance/guias-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
   capacidadeDoHorario,
@@ -242,6 +244,9 @@ export class SchedulingService {
         scope: SCOPE,
         metadata: { appointment_id: id, op: 'status', from: atual.status, to: novo },
       });
+      // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
+      // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
+      if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
       return { statusAnterior: statusParaFront(atual.status) };
     });
   }
