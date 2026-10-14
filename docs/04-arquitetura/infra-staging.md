@@ -1,7 +1,7 @@
 # Infraestrutura de staging (Terraform)
 
 > Código: [`infra/terraform/`](../../infra/terraform/) · CI: [`.github/workflows/infra.yml`](../../.github/workflows/infra.yml) · Bootstrap do banco: [`infra/rds/`](../../infra/rds/)
-> Estado em 13/10/2026: **nada foi aplicado na AWS.** Só checagens offline (fmt, validate, tflint, checkov no CI).
+> Estado em 14/10/2026: **nada foi aplicado na AWS.** Só checagens offline (fmt, validate, tflint, checkov no CI).
 > Base: [ambientes-e-devops.md](ambientes-e-devops.md), pareceres do Guardião sobre o [#35](../03-seguranca-lgpd/revisoes/2026-10-11-pr35.md) e o [#37](../03-seguranca-lgpd/revisoes/2026-10-11-pr37.md), item 22 do [checklist de PR](../03-seguranca-lgpd/checklist-pr.md).
 
 ## 1. O que cria
@@ -15,8 +15,10 @@ Duas raízes e um módulo, todos travados em `sa-east-1` (validação da variáv
 | `staging` — dados (`dados.tf`) | RDS PostgreSQL 16 Multi-AZ, `rds.force_ssl=1`, PITR de 35 dias, senha do master gerada e guardada pelo próprio RDS; ElastiCache Redis 7.1 com 2 nós, **privado, TLS obrigatório e AUTH**; segredos da aplicação no Secrets Manager |
 | `staging` — aplicação (`app.tf`) | ECR imutável, ECS Fargate (imagem por SHA, raiz somente leitura, usuário 1000), ALB só HTTPS com health check em `/health`, WAF (IP reputation, Common, KnownBadInputs, SQLi, **AnonymousIpList**, limite por IP) |
 | `staging` — S3 (`s3.tf`, `exportacoes.tf`) | Bucket de documentos (KMS, Object Lock GOVERNANCE de no máximo 35 dias), **bucket `exportacoes` efêmero** e bucket de logs |
-| `staging` — KMS (`kms.tf`, `kms-clinicas.tf`) | Uma chave por domínio (rds, redis, s3, exportacoes, segredos, logs, ecr) e as **permissões das KEKs por clínica** |
-| `staging` — CloudTrail (`cloudtrail.tf`) | **Trilha multirregião** com validação de integridade, data events de S3 e bucket próprio (KMS, Object Lock COMPLIANCE de 12 meses) |
+| `staging` — KMS (`kms.tf`, `kms-clinicas.tf`) | Uma chave por domínio (rds, redis, s3, exportacoes, segredos, logs, ecr, alertas, backup), **Deny de `kms:Decrypt` para humanos** nas chaves de dado e as **permissões das KEKs por clínica** |
+| `staging` — acesso humano (`acesso-humano.tf`) | Papéis `investigacao-seguranca` (lê o bucket de logs) e `break-glass` (decifra em emergência), ambos só com MFA e sessão de 1 h; alerta de uso por EventBridge e SNS cifrado |
+| `staging` — backup (`backup.tf`) | AWS Backup mensal do RDS em cofre de sa-east-1 com chave própria e vault lock, sem cópia entre regiões |
+| `staging` — CloudTrail (`cloudtrail.tf`) | **Trilha multirregião** com validação de integridade, data events de S3 (inclusive as leituras do bucket de logs) e bucket próprio (KMS, Object Lock COMPLIANCE de 12 meses) |
 | `staging` — auditoria (`auditoria.tf`) + `modules/ancora-auditoria` | **Bucket da âncora da auditoria encadeada com Object Lock COMPLIANCE** e o papel que publica a âncora |
 | `staging` — OIDC (`oidc.tf`) | Provedor OIDC do GitHub e papel de deploy restrito ao environment `staging` |
 
@@ -38,7 +40,7 @@ Os **documentos assinados** continuam no bucket `documentos`, com Object Lock s�
 - `log_error_verbosity = terse`: sem `DETAIL`, que traz "Failing row contains (...)";
 - `log_min_error_statement = panic`, `log_parameter_max_length(_on_error) = 0` e `log_min_duration_statement/sample = -1`.
 
-Todos os grupos de log são declarados no Terraform **antes** do recurso que escreve neles, com `logs_retencao_dias` e a chave KMS `logs`: `/aws/rds/instance/*/postgresql` e `/upgrade`, `RDSOSMetrics`, Container Insights, app, Redis, WAF e flow logs. O `infra.yml` falha se houver export do RDS sem grupo declarado, ou sem `log_error_verbosity`/`log_min_error_statement`. O WAF também redige a query string (R1).
+Todos os grupos de log são declarados no Terraform **antes** do recurso que escreve neles, com retenção (`logs_retencao_dias` ou, para app e WAF, `logs_acesso_retencao_dias`) e a chave KMS `logs`: `/aws/rds/instance/*/postgresql` e `/upgrade`, `RDSOSMetrics`, Container Insights, app, Redis (se o slow-log for ligado), WAF e flow logs. O `infra.yml` falha se houver export do RDS sem grupo declarado, ou sem `log_error_verbosity`/`log_min_error_statement`. O WAF também redige a query string (R1).
 
 **CloudTrail (R3, condição para o 1º apply).** Trilha multirregião com:
 - eventos de gerenciamento, que incluem `kms:Decrypt` e `secretsmanager:GetSecretValue`;
@@ -82,11 +84,12 @@ Método igual ao da D13 ([rodada 7 §4](../relatorios/2026-10-10-rodada-7-necess
 | ALB + IPv4 públicos | 1 ALB em 3 sub-redes, LCU baixo | 35–45 |
 | WAF | 1 Web ACL + 6 regras, poucas requisições | 10–12 |
 | VPC endpoints de interface | 5 endpoints × 1 AZ | 37–55 |
-| KMS | 9 chaves fixas (inclui exportacoes e CloudTrail) + KEKs das clínicas de teste (US$ 1 cada) | 10–14 |
+| KMS | 11 chaves fixas (inclui exportacoes, CloudTrail, alertas e backup) + KEKs das clínicas de teste (US$ 1 cada) | 12–16 |
 | Secrets Manager, S3, ECR, DynamoDB | 4 segredos, volume de teste | 4–10 |
+| AWS Backup | 1 ponto de recuperação mensal do RDS (20 GB) guardado 35 dias | 1–4 |
 | CloudWatch | Logs (app, RDS, Redis, WAF, flow logs ALL) e Container Insights | 15–40 |
 | CloudTrail | 1ª trilha de gerenciamento grátis; data events de S3 a ~US$ 0,10 por 100 mil; bucket da trilha | 2–10 |
-| **Total staging** | | **~285–390** |
+| **Total staging** | | **~290–395** |
 
 **Comparação com a D13:** a D13 previu US$ 180–260 para um staging single-AZ. Este Terraform espelha a topologia de prod (RDS Multi-AZ, Redis com réplica), o que custa cerca de US$ 70–120 a mais. Botões para descer até a faixa da D13, se os sócios preferirem:
 - RDS `multi_az = false` (hoje fixo em `dados.tf`): −50 a −60;
@@ -115,12 +118,12 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
 2. **Estado:**
    - rodar `terraform -chdir=infra/terraform/bootstrap-state init && terraform apply -var conta_aws_id=<id>`, com estado local, uma única vez;
    - guardar o output `backend_hcl` em `infra/terraform/staging/backend.hcl`, que fica fora do git (`.gitignore`).
-3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`.
+3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`. Quando houver o responsável, `alerta_seguranca_email` (assinatura do alerta de break-glass).
 4. **Plano:** `terraform init -backend-config=backend.hcl`, depois `terraform plan -var-file=staging.tfvars -out=plano`.
    - Revisar o plano com um sócio, olhando com atenção a criação de `aws_s3_bucket_object_lock_configuration` (COMPLIANCE não se desfaz).
    - Conferir que nada sai de sa-east-1.
 5. **Apply:** `terraform apply plano`.
-6. **Banco:** rodar `infra/rds/bootstrap.sh` de dentro da VPC (tarefa ECS avulsa ou SSM), lendo as senhas dos segredos `banco-app-*` e a do master pelo output `rds_segredo_master`.
+6. **Banco:** rodar `infra/rds/bootstrap.sh` de dentro da VPC (tarefa ECS avulsa ou SSM), lendo as senhas dos segredos `banco-app-*` e a do master pelo output `rds_segredo_master`. Humano não decifra a chave `segredos` (R4): o bootstrap roda com papel de máquina ou, se for manual, pelo `break-glass`, que gera alerta.
 7. **Fumaça:** `/health` pelo ALB e conexão da API ao Redis por `rediss://`.
 
 **Rotação:**
@@ -135,17 +138,41 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
 - **Job gestor de chaves** (onboarding e eliminação) usando o papel `gestor-chaves`, e a dependência `@aws-sdk/client-kms` na API.
 - **Checkov local não rodou nesta rodada:** a máquina não tem Python. Ele roda no `infra.yml`. A rodada 8 tinha 1 falha (CKV2_AWS_76), corrigida aqui com a regra AnonymousIpList; os skips novos têm justificativa no código.
 - **Backend:** migrar a trava do DynamoDB para `use_lockfile = true`, nativo do S3 no Terraform 1.10+. Hoje o `dynamodb_table` funciona, mas está marcado como obsoleto.
-- **Prod:** raiz própria em outra conta, com RDS e Redis maiores, Object Lock **curto** nos documentos (GOVERNANCE, ou COMPLIANCE de até 35 dias; nunca o prazo do prontuário, V1) e endpoints em 3 AZs. Retenção de logs amarrada à D7 e à [matriz-retencao](../03-seguranca-lgpd/matriz-retencao.md): 12 meses para app e WAF (registros de acesso; o mínimo legal é 6), 90 dias para flow logs, Redis e logs técnicos do RDS (R9).
+- **Prod:** raiz própria em outra conta, com RDS e Redis maiores, Object Lock **curto** nos documentos (GOVERNANCE, ou COMPLIANCE de até 35 dias; nunca o prazo do prontuário, V1) e endpoints em 3 AZs. Valores de prod das variáveis de retenção, backup e TLS na §4.2.
 
-### 4.1 Ressalvas do parecer do #58 que ficam rastreadas
+### 4.1 Ressalvas do parecer do #58
 
-| # | O que falta | Prazo |
-|---|---|---|
-| R2 | Política do bucket `logs` com Deny de `GetObject` para todos, exceto um papel de investigação de segurança. Prazo de prod: 6 a 12 meses (D7) | Antes de prod |
-| R4 | Papéis humanos (SSO, MFA, sessão curta), papel de *break-glass* com alerta e Deny de `kms:Decrypt` para humanos nas chaves `rds`, `s3`, `exportacoes` e nas KEKs | Antes de prod |
-| R5 | Payload de fila e chave do Redis só com ids opacos (regra da ENG em `api-dominio.md`), ou desligar o slow-log | Antes da 1ª fila com dado de paciente |
-| R6 | TLS do ALB até a tarefa (target group HTTPS), ou risco aceito pelos sócios | Antes de prod |
-| R7 | AWS Backup com vault lock em sa-east-1, sem cópia entre regiões, e registro de que o *crypto-shredding* cobre o backup | Antes de prod |
-| R9 | Valores de retenção de prod amarrados à D7 (acima) | Com a D7 |
-| ENG | Cifrar documentos com a DEK da clínica; apagar a exportação quando o link vence; job que publica a âncora; job gestor de chaves | Antes de dado real |
+Rodada 13.3 (14/10/2026): resolvido no Terraform tudo o que não depende de decisão dos sócios nem de código da ENG. O `infra.yml` tem uma trava para cada item marcado com ✔︎ CI.
+
+| # | Situação | O que foi feito / o que falta | Prazo do que falta |
+|---|---|---|---|
+| R2 | **Resolvido** ✔︎ CI | Bucket `logs`: Deny de `GetObject`, `GetObjectVersion`, `GetObjectAttributes` e `RestoreObject` para todos, exceto o papel `investigacao-seguranca` (humano com MFA de até 1 h, sessão de 1 h, só sa-east-1). Uso do papel gera alerta. Prazo em `logs_bucket_retencao_dias`: 90 em staging; prod na §4.2 (D7) | Valor de prod com a D7 |
+| R4 | **Resolvido no Terraform** ✔︎ CI; KEKs dependem da ENG | Deny de `kms:Decrypt` e `kms:ReEncrypt*` para humanos (papéis do SSO, usuários IAM, root e `papeis_humanos_extra`) nas chaves `rds`, `s3`, `exportacoes`, `segredos` e `backup`. Papel `break-glass` (MFA, 1 h, só sa-east-1) decifra essas chaves e as KEKs; todo uso dele (e da investigação) dispara regra do EventBridge para o tópico SNS `alertas-seguranca`, cifrado. Efeito colateral aceito: humano não vê Performance Insights nem lê segredo sem o break-glass. **Falta:** (a) o `KmsKeyProvider` incluir o statement do output `kms_deny_humanos` na key policy de cada KEK (ENG); (b) os permission sets do SSO com MFA e sessão curta (I1); (c) assinar o tópico (`alerta_seguranca_email`) | (a) antes de dado real; (b) com o I1; (c) antes do 1º apply |
+| R5 | **Resolvido** ✔︎ CI | Slow-log do Redis desligado por padrão (`redis_slow_log = false`); o grupo de log nem é criado. Só ligar depois da regra da ENG "payload de fila e chave do Redis só com ids opacos" | — (ligar exige a regra da ENG) |
+| R6 | **Parametrizado; depende da ENG** | `tls_ate_a_tarefa` troca target group e health check para HTTPS e passa `API_TLS=autoassinado` à tarefa (o ALB não valida o certificado do alvo). Falta a API escutar HTTPS com certificado autoassinado gerado na subida. Proposta: `true` em prod; a alternativa é o risco aceito pelos sócios | Antes de prod |
+| R7 | **Resolvido** ✔︎ CI | `backup.tf`: plano mensal do RDS, cofre em sa-east-1 com chave `backup`, **sem `copy_action`** (o CI falha se aparecer), vault lock GOVERNANCE em staging e COMPLIANCE em prod (`backup_vault_lock_compliance`), prazo `backup_mensal_retencao_dias` (35 em staging, 365 em prod pela G3). O *crypto-shredding* cobre o backup: a KEK fica no KMS, fora de qualquer ponto de recuperação, e sem ela os campos cifrados por clínica ficam ilegíveis em todos os backups; o resto expira com o prazo | — |
+| R9 | **Parametrizado; valor de prod pendente da D7** | Variáveis separadas: `logs_acesso_retencao_dias` (API, WAF), `logs_retencao_dias` (técnicos) e `logs_bucket_retencao_dias` (ALB e acesso a buckets), com validação. Propostas na §4.2 | Com a D7, antes de prod |
+| N1 | **Resolvido no bucket** ✔︎ CI | Política do bucket `exportacoes` nega `PutObject` cuja chave não seja `????????-????-????-????-????????????` na raiz. Contrato com a API na §4.3 | Teste da rota de exportação (ENG) |
+| N2 | **Resolvido** ✔︎ CI | Seletor do CloudTrail com as **leituras** (`readOnly = true`) do bucket `logs`. As gravações (entrega do ALB e do S3) ficam de fora, porque só gerariam volume | — |
+| ENG | Aberto | Cifrar documentos com a DEK da clínica; apagar a exportação quando o link vence; job que publica a âncora; job gestor de chaves; `kms_deny_humanos` nas KEKs (R4); HTTPS na API (R6) | Antes de dado real (R6: antes de prod) |
+
+### 4.2 Valores propostos para prod (dependem da D7)
+
+| Variável | Staging | Prod (proposta) | Base |
+|---|---|---|---|
+| `logs_acesso_retencao_dias` (API, WAF) | 30 | 365 | Marco Civil art. 15 (mínimo 180) e [matriz-retencao](../03-seguranca-lgpd/matriz-retencao.md) |
+| `logs_bucket_retencao_dias` (ALB, acesso a buckets) | 90 | 365 | Idem |
+| `logs_retencao_dias` (flow logs, Redis, RDS, métricas) | 30 | 90 | Log técnico, sem dado pessoal |
+| `trilha_retencao_dias` (CloudTrail) | 365 | 365 ou o prazo da D7 | Mínimo 180 por validação |
+| `backup_mensal_retencao_dias` | 35 | 365 | G3 ("backups mensais imutáveis até 12 meses") |
+| `backup_vault_lock_compliance` | false | true | Imutável de fato em prod |
+| `tls_ate_a_tarefa` | false | true | R6, depois da ENG |
+| `redis_slow_log` | false | false (true só com ids opacos) | R5 |
+
+### 4.3 Contrato com a API: objeto de exportação (N1)
+
+- **Chave do objeto:** só um UUID v4 em minúsculas, na raiz do bucket (ex.: `3f2b8c1e-9a4d-4c7e-8b1a-2d6f0e5c9a71`). Nada de prefixo, extensão, nome da clínica, CNPJ ou nome de pessoa, porque a chave aparece nos logs de acesso do bucket. O bucket recusa outro formato.
+- **Nome que o usuário vê ao baixar:** genérico (ex.: `exportacao.zip`), nunca com nome de clínica ou pessoa. Se a API usar `response-content-disposition` no link pré-assinado, o valor também vai para o log de acesso, porque faz parte da URL.
+- **Metadados do objeto:** nenhum `x-amz-meta-*` com dado pessoal.
+- **Vida do objeto:** a API apaga o objeto quando o link de 24 h vence; o lifecycle (`exportacao_expiracao_dias`) é a rede de segurança.
 - **Rotação automática de segredos** (Lambda, I4) e **orçamento com alerta** (AWS Budgets), que fica para quando houver o e-mail do responsável.
