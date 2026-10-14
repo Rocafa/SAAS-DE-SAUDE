@@ -144,7 +144,7 @@ resource "aws_vpc_endpoint" "interface" {
 # --- VPC flow logs (rejeitados e aceitos), cifrados ----------------------------------------
 
 resource "aws_cloudwatch_log_group" "flow_logs" {
-  #checkov:skip=CKV_AWS_338:Staging guarda 30 dias; produção terá 1 ano (variável logs_retencao_dias).
+  #checkov:skip=CKV_AWS_338:Log técnico (IP e porta): logs_retencao_dias (staging 30; prod 90 proposto à D7, R9).
   name              = "/${local.nome}/vpc-flow-logs"
   retention_in_days = var.logs_retencao_dias
   kms_key_id        = aws_kms_key.this["logs"].arn

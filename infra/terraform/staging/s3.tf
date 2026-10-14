@@ -182,7 +182,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
     status = "Enabled"
     filter {}
     expiration {
-      days = 90
+      days = var.logs_bucket_retencao_dias
     }
     noncurrent_version_expiration {
       noncurrent_days = 7

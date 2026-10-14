@@ -137,9 +137,9 @@ resource "aws_cloudwatch_log_group" "container_insights" {
 }
 
 resource "aws_cloudwatch_log_group" "api" {
-  #checkov:skip=CKV_AWS_338:Staging guarda 30 dias; produção terá 1 ano.
+  #checkov:skip=CKV_AWS_338:Registro de acesso: logs_acesso_retencao_dias (staging 30; prod 365 proposto à D7, mínimo 180 pelo Marco Civil).
   name              = "/${local.nome}/api"
-  retention_in_days = var.logs_retencao_dias
+  retention_in_days = var.logs_acesso_retencao_dias
   kms_key_id        = aws_kms_key.this["logs"].arn
 }
 
@@ -462,9 +462,9 @@ resource "aws_wafv2_web_acl_association" "alb" {
 }
 
 resource "aws_cloudwatch_log_group" "waf" {
-  #checkov:skip=CKV_AWS_338:Staging guarda 30 dias; produção terá 1 ano.
+  #checkov:skip=CKV_AWS_338:Registro de acesso: logs_acesso_retencao_dias (staging 30; prod 365 proposto à D7, mínimo 180 pelo Marco Civil).
   name              = "aws-waf-logs-${local.nome}" # prefixo exigido pelo WAF
-  retention_in_days = var.logs_retencao_dias
+  retention_in_days = var.logs_acesso_retencao_dias
   kms_key_id        = aws_kms_key.this["logs"].arn
 }
 

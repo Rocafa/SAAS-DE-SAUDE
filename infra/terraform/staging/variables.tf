@@ -123,10 +123,41 @@ variable "exportacao_expiracao_dias" {
   }
 }
 
+# --- Retenção de logs (R9 do parecer do PR #58; os valores de prod dependem da D7) ----------
+# Dois grupos, porque a natureza é diferente:
+#   - registros de ACESSO (log da API e do WAF; ALB e acesso aos buckets, no bucket "logs"):
+#     o Marco Civil (art. 15) pede no mínimo 6 meses em prod. Proposta para a D7: 12 meses.
+#   - logs TÉCNICOS (flow logs, Redis, RDS, métricas), sem dado pessoal. Proposta: 90 dias.
+# Staging (só dado sintético, R8) usa prazos curtos. Tabela em infra-staging.md §4.2.
+
 variable "logs_retencao_dias" {
-  description = "Retenção dos logs no CloudWatch em staging."
+  description = "Retenção dos logs TÉCNICOS no CloudWatch (flow logs, Redis, RDS, Container Insights, RDSOSMetrics). Staging: 30. Proposta de prod (D7): 90."
   type        = number
   default     = 30
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.logs_retencao_dias)
+    error_message = "Use um valor aceito pelo CloudWatch Logs (ex.: 30, 90)."
+  }
+}
+
+variable "logs_acesso_retencao_dias" {
+  description = "Retenção dos REGISTROS DE ACESSO no CloudWatch (log da API e do WAF). Staging: 30. Proposta de prod (D7): 365; mínimo legal em prod: 180 (Marco Civil, art. 15)."
+  type        = number
+  default     = 30
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.logs_acesso_retencao_dias)
+    error_message = "Use um valor aceito pelo CloudWatch Logs (ex.: 30, 180, 365)."
+  }
+}
+
+variable "logs_bucket_retencao_dias" {
+  description = "Dias até expirar um objeto do bucket logs (access logs do ALB e dos buckets). Staging: 90. Proposta de prod (D7): 365; mínimo legal em prod: 180."
+  type        = number
+  default     = 90
+  validation {
+    condition     = var.logs_bucket_retencao_dias >= 30 && var.logs_bucket_retencao_dias <= 400
+    error_message = "Entre 30 e 400 dias."
+  }
 }
 
 variable "redis_auth_versao" {

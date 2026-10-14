@@ -209,7 +209,7 @@ resource "aws_elasticache_subnet_group" "this" {
 }
 
 resource "aws_cloudwatch_log_group" "redis" {
-  #checkov:skip=CKV_AWS_338:Staging guarda 30 dias; produção terá 1 ano.
+  #checkov:skip=CKV_AWS_338:Log técnico: logs_retencao_dias (staging 30; prod 90 proposto à D7, R9).
   name              = "/${local.nome}/redis"
   retention_in_days = var.logs_retencao_dias
   kms_key_id        = aws_kms_key.this["logs"].arn
