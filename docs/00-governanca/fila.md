@@ -24,6 +24,8 @@
 | Rodada 13.2: ✅ **PR #62** guias de convênio e pacotes (migração 0011, empilhado sobre #61) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #62 |
 | Rodada 13.3: ✅ #58 atualizado com R2, R4, R5, R7, N1, N2 (R6/R9 parametrizadas) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #58 |
 | Rodada 13.4: ✅ relatório geral e CONTEXTO com as rodadas 10–13 | Maestro @Rocafa | 14/10/2026 | concluído |
+| Rodada 14.1: API de atendimento e prontuário por nicho (fisio/TO e psicologia), com vínculo de cuidado, notas privadas, assinatura e cifragem por clínica — migração **0012**, empilhado sobre #62 | Maestro @Rocafa (agente engenharia) | 14/10/2026 | branch `eng/prontuario` |
+| Rodada 14.2: revisão do Guardião LGPD dos PRs #61 e #62 | Maestro @Rocafa (agente guardiao-lgpd) | 14/10/2026 | revisoes/ |
 
 ## Livre (pegue colocando seu nome)
 
