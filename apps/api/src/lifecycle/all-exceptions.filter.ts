@@ -29,6 +29,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (res.headersSent) return;
 
     if (exception instanceof HttpException) {
+      // 429 por usuário (LimitePorUsuarioError) informa quando tentar de novo.
+      const retry = (exception as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+      if (typeof retry === 'number' && Number.isInteger(retry) && retry > 0) res.setHeader('Retry-After', String(retry));
       res.status(exception.getStatus()).json(exception.getResponse());
       return;
     }

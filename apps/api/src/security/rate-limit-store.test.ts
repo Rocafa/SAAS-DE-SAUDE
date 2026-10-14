@@ -40,6 +40,20 @@ describe('MemoryRateLimitStore', () => {
     expect(resetMs).toBeGreaterThan(0);
     expect(resetMs).toBeLessThanOrEqual(60_000);
   });
+
+  it('janelas de tamanhos diferentes não zeram uma à outra (limite por IP e por usuário no mesmo store)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = new MemoryRateLimitStore();
+      await s.hit('longa', 600_000);
+      await s.hit('curta', 1_000);
+      vi.advanceTimersByTime(1_500);
+      expect((await s.hit('curta', 1_000)).count).toBe(1); // a curta virou
+      expect((await s.hit('longa', 600_000)).count).toBe(2); // a longa continua
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('rateLimitKey (R1: HMAC com segredo)', () => {

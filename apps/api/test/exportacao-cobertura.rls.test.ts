@@ -26,7 +26,7 @@ import {
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
-import { recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
+import { LocalPseudonymSigner, recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
 import { UTF8_BOM } from '../src/modules/exports/csv';
 import { ExportsService } from '../src/modules/exports/exports.module';
 import {
@@ -150,7 +150,7 @@ beforeAll(async () => {
     await withTenant(api.db.db, tenantId, (tx) =>
       recordSupportAudit(
         tx,
-        CHAVE_SUPORTE,
+        new LocalPseudonymSigner(CHAVE_SUPORTE, 'test'),
         { tenantId, atendenteId: ATENDENTE, chamado, motivo: 'pedido_da_clinica' },
         { action: 'read', scope: 'patients', metadata: { count: 1 } },
       ),

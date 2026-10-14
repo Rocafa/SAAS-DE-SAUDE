@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Query, Use
 import { exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
 import { LIMIARES_GUIA } from './guias-regras';
 import {
   GuiasService,
@@ -40,7 +41,10 @@ import { PacotesService, type ConsumoPacoteDto, type PacoteDto, type ResultadoCo
 @Controller('convenios')
 @UseGuards(SessaoGuard)
 export class ConveniosController {
-  constructor(@Inject(GuiasService) private readonly service: GuiasService) {}
+  constructor(
+    @Inject(GuiasService) private readonly service: GuiasService,
+    @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+  ) {}
 
   @Get()
   @Permissao('convenios:ler')
@@ -74,9 +78,13 @@ export class ConveniosController {
   /** Faturamento: `?de=AAAA-MM-DD&ate=AAAA-MM-DD`, janela de até 31 dias. */
   @Get(':id/relatorio')
   @Permissao('guias:faturar')
-  relatorio(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<RelatorioConvenioDto> {
+  async relatorio(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<RelatorioConvenioDto> {
     const alvo = exigirUuid(id);
-    return this.service.relatorio(paraRequestContext(auth), alvo, validarFiltroRelatorio(query));
+    const filtro = validarFiltroRelatorio(query);
+    const ctx = paraRequestContext(auth);
+    // Lista pacientes com nº de guia decifrado: conta no limite por usuário (R5).
+    await this.vigilancia.listagem(ctx);
+    return this.service.relatorio(ctx, alvo, filtro);
   }
 }
 
@@ -88,19 +96,29 @@ export class ConveniosController {
 @Controller('guias')
 @UseGuards(SessaoGuard)
 export class GuiasController {
-  constructor(@Inject(GuiasService) private readonly service: GuiasService) {}
+  constructor(
+    @Inject(GuiasService) private readonly service: GuiasService,
+    @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+  ) {}
 
+  /** Lista e alertas contam no limite por usuário das listas de pacientes (R5); 429 acima dele. */
   @Get()
   @Permissao('guias:ler')
-  listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<PaginaDeGuias> {
-    return this.service.listarGuias(paraRequestContext(auth), validarFiltroGuias(query));
+  async listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<PaginaDeGuias> {
+    const filtro = validarFiltroGuias(query);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.listagem(ctx);
+    return this.service.listarGuias(ctx, filtro);
   }
 
   /** Antes de `:id`: `?diasVencimento=7&sessoesRestantes=1` (padrões). */
   @Get('alertas')
   @Permissao('guias:ler')
-  alertas(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<{ itens: AlertaDeGuiaDto[]; truncado: boolean }> {
-    return this.service.alertas(paraRequestContext(auth), validarLimiares(query, LIMIARES_GUIA));
+  async alertas(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<{ itens: AlertaDeGuiaDto[]; truncado: boolean }> {
+    const limiares = validarLimiares(query, LIMIARES_GUIA);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.listagem(ctx);
+    return this.service.alertas(ctx, limiares);
   }
 
   @Post()
@@ -111,10 +129,13 @@ export class GuiasController {
 
   @Get(':id')
   @Permissao('guias:ler')
-  obter(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<GuiaDetalheDto> {
+  async obter(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<GuiaDetalheDto> {
     const alvo = exigirUuid(id);
     validarQueryVazia(query);
-    return this.service.obterGuia(paraRequestContext(auth), alvo);
+    const ctx = paraRequestContext(auth);
+    // Detalhe traz senha e carteirinha: conta como ficha distinta aberta (alerta de anomalia, R5).
+    await this.vigilancia.ficha(ctx, `guia:${alvo}`);
+    return this.service.obterGuia(ctx, alvo);
   }
 
   @Patch(':id')
@@ -182,12 +203,18 @@ export class GuiasController {
 @Controller('pacotes')
 @UseGuards(SessaoGuard)
 export class PacotesController {
-  constructor(@Inject(PacotesService) private readonly service: PacotesService) {}
+  constructor(
+    @Inject(PacotesService) private readonly service: PacotesService,
+    @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+  ) {}
 
   @Get()
   @Permissao('guias:ler')
-  listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<{ itens: PacoteDto[]; truncado: boolean }> {
-    return this.service.listar(paraRequestContext(auth), validarFiltroPacotes(query));
+  async listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<{ itens: PacoteDto[]; truncado: boolean }> {
+    const filtro = validarFiltroPacotes(query);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.listagem(ctx);
+    return this.service.listar(ctx, filtro);
   }
 
   @Post()
