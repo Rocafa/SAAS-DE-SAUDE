@@ -8,7 +8,8 @@
 #     o objeto quando o link vence;
 #   - chave KMS própria ("exportacoes"): desabilitá-la invalida todas as exportações de uma vez;
 #   - só o papel da TAREFA da API lê e grava (gera o pacote e assina o link). Deny explícito para
-#     qualquer outro principal, inclusive administradores com s3:* por IAM.
+#     qualquer outro principal, inclusive administradores com s3:* por IAM;
+#   - a chave do objeto é só um UUID (N1): ela aparece nos logs de acesso do bucket.
 
 locals {
   bucket_exportacoes = "${local.nome}-exportacoes-${local.conta}"
@@ -127,6 +128,22 @@ data "aws_iam_policy_document" "exportacoes" {
       test     = "StringNotEquals"
       variable = "aws:PrincipalArn"
       values   = [aws_iam_role.api_tarefa.arn]
+    }
+  }
+
+  # N1 do PR #58: a chave do objeto vai para os server access logs (bucket "logs"). Contrato com a
+  # API: a chave é SÓ um UUID na raiz do bucket (36 caracteres, ex.:
+  # 3f2b8c1e-9a4d-4c7e-8b1a-2d6f0e5c9a71), sem prefixo, extensão, nome de clínica ou de pessoa.
+  # O S3 só aceita curinga * e ? no ARN; "?" fixa o formato 8-4-4-4-12 e o tamanho, o que já
+  # impede nome. O hexadecimal é conferido no teste da rota de exportação (ENG).
+  statement {
+    sid           = "ChaveSoUuidOpaco"
+    effect        = "Deny"
+    actions       = ["s3:PutObject"]
+    not_resources = ["${aws_s3_bucket.exportacoes.arn}/????????-????-????-????-????????????"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
     }
   }
 
