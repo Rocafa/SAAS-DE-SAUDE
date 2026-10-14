@@ -10,6 +10,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, appointmentTypes, auditLog, patients, professionals } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 let api: ApiDeTeste;
@@ -271,6 +272,14 @@ describe('agenda: capacidade (AGD-01.5), encaixe, remarcar, status', () => {
     const id = (criado.body as { id: string }).id;
     const rem = await api.http().post(`/agendamentos/${id}/remarcar`).set(cab(recepA)).send({ data: '2030-03-06', hora: '11:00' }).expect(200);
     expect(rem.body).toEqual({ data: '2030-03-06', hora: '09:00' });
+    // Consulta futura (2030): "em atendimento" fica fora da janela do horário (V1 do parecer #61).
+    const futura = (await marcar(recepA, { tipoId: tipoIndividualA, data: '2030-03-06', hora: '16:00' })).body as { id: string };
+    await api.http().post(`/agendamentos/${futura.id}/check-in`).set(cab(recepA)).expect(200);
+    const fora = await api.http().post(`/agendamentos/${futura.id}/status`).set(cab(profA)).send({ status: 'em_atendimento' });
+    expect(fora.status).toBe(409);
+    expect(fora.body).toMatchObject({ codigo: 'fora_do_horario' });
+    // Traz o agendamento para agora (no fuso da clínica) para atender dentro da janela.
+    await api.http().post(`/agendamentos/${id}/remarcar`).set(cab(recepA)).send(noFusoDaClinica(new Date())).expect(200);
     await api.http().post(`/agendamentos/${id}/check-in`).set(cab(recepA)).expect(200, { statusAnterior: 'agendado' });
     // Recepção não marca "em atendimento" (ato do profissional); o profissional marca.
     await api.http().post(`/agendamentos/${id}/status`).set(cab(recepA)).send({ status: 'em_atendimento' }).expect(403);

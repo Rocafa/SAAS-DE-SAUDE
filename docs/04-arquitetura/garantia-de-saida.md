@@ -26,6 +26,8 @@ RBAC/MFA continuam valendo à parte.**
   Sem a cifra de campo a exportação falha fechada. `test/exportacao-cobertura.rls.test.ts` lê o
   catálogo e reprova tabela com `tenant_id` (ou coluna de tabela exportada) que não esteja no pacote
   nem em `EXPORT_EXCLUDED_TABLES` com motivo (hoje: chaves e contexto do RLS).
+  Desde a 1.3.0 (migração 0013, V1/R1 do parecer PR #61): `tenant.careLinkDays` e
+  `appointments[].createdBy`.
   Desde a 1.2.0 (Decisão 1 do Guardião, parecer PR #57; migração 0008): a trilha de auditoria da
   clínica vai no pacote como `auditoria.jsonl` (um evento por linha, em ordem de `seq`), com os
   campos da cadeia (`seq`, `prevHash`, `hash`), o JSON canônico que o hash cobre e o tipo de ator;
@@ -33,7 +35,7 @@ RBAC/MFA continuam valendo à parte.**
   clínica verifica sem banco com `verifyExportedAuditTrail` (`src/modules/audit/audit-chain.ts`).
   A linha da própria exportação entra na trilha depois de montado o pacote (aparece no próximo).
   Atendentes do suporte da plataforma já estão pseudonimizados na origem (ver auditoria-encadeada.md §4c).
-  Desde a 1.3.0 (migração 0011): convênios, guias (número, senha e carteirinha **decifrados**), consumos
+  Desde a 1.4.0 (migração 0011): convênios, guias (número, senha e carteirinha **decifrados**), consumos
   de guia, confirmações do paciente por sessão (com o hash), pacotes de sessões e seus consumos.
   Desde a 1.4.0 (migração 0012): prontuário — configuração de sigilo, atendimentos (com a
   finalização e o hash), **todas** as versões da evolução e os adendos, **decifrados**. Notas

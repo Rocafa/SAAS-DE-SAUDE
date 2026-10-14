@@ -31,14 +31,22 @@ Há vínculo quando o usuário da sessão é o `user_id` de um profissional **at
 
 | Base | Status do agendamento | Janela (início do agendamento) |
 |---|---|---|
-| `atendimento` | `em_atendimento` ou `atendido` (só o próprio profissional marca, R1) | últimos **180 dias** (`VINCULO_ATENDIMENTO_DIAS`); depois disso o vínculo **expira** |
-| `agenda_do_dia` | `agendado`, `confirmado` ou `chegou` | de **12 h antes a 12 h depois** de agora (`VINCULO_AGENDA_HORAS`), para o preparo da consulta |
+| `atendimento` | `em_atendimento` ou `atendido` (só o próprio profissional marca, R1, e só dentro da janela do horário) | início **já ocorrido** (`starts_at <= agora`) e nos últimos **N dias**, N = `tenants.care_link_days` (padrão **90**, teto **180**; migração 0013); depois disso o vínculo **expira** |
+| `autoagendamento` | igual a `atendimento`, mas o agendamento foi criado pelo **próprio** usuário-profissional (`created_by`, encaixe incluído) | a mesma; a base fica marcada para a auditoria do acesso clínico e a agenda grava `anomaly_alert` |
+| `agenda_do_dia` | `agendado`, `confirmado` ou `chegou`, **nunca** de autoagendamento | de **12 h antes a 12 h depois** de agora (`VINCULO_AGENDA_HORAS`), para o preparo da consulta |
+
+**Vínculo não autodeclarado (V1 do parecer do Guardião sobre o PR #61).** O profissional tem `agenda:escrever` e `agenda:atender`, então podia fabricar o vínculo com qualquer paciente (encaixe consigo mesmo agora, ou consulta futura/retroativa marcada como atendida). Fechado assim:
+
+1. **Janela do atendimento:** entrar em `em_atendimento`/`atendido` só de **30 min antes do início até 60 min depois do fim** (`ATTENDANCE_WINDOW_BEFORE_MIN`/`ATTENDANCE_WINDOW_AFTER_MIN`, tetos 120 e 1440). Fora dela, `409 {codigo:'fora_do_horario'}`. Registro retroativo, se o produto precisar, será fluxo próprio, auditado e sem gerar vínculo.
+2. **Início já ocorrido:** a base `atendimento` exige `starts_at <= agora`; uma consulta futura com status clínico (mesmo inserida direto no banco) não dá vínculo.
+3. **Autoagendamento:** `appointments.created_by` (migração 0013, imutável por trigger) guarda o usuário que criou. Se é o próprio profissional, não há `agenda_do_dia`; o vínculo só nasce com o atendimento dentro da janela (base `autoagendamento`), e nesse momento a agenda grava, na mesma transação, `anomaly_alert` com `{rule:'vinculo_autoagendado', window_s:86400, threshold, count}` (pacientes distintos nas últimas 24 h; padrão `SELF_SCHEDULED_ALERT_PER_DAY=0`, ou seja, todo caso alerta) e log `ALERTA_ANOMALIA`. Nada de id de paciente no alerta. A criação audita `self_scheduled`.
+4. **Janela de continuidade por clínica (R1 do #61):** `GET /clinica/vinculo-de-cuidado` (cadastros:ler) e `PUT /clinica/vinculo-de-cuidado {dias}` (cadastros:gerir, 1..180). Auditado (`scope: tenants`, `{setting:'care_link_days', from, to}`); o banco recusa fora de 1..180 (CHECK).
 
 - Cancelado e falta nunca dão vínculo. Profissional inativado perde o vínculo. Agendamento de **outro** profissional não se transfere.
 - Outra clínica nunca dá vínculo: a consulta roda na transação da clínica da sessão (RLS) e também filtra `tenant_id`; o mesmo usuário com sessão em outra clínica não leva o vínculo junto.
 - Uso: `exigirConteudoClinico(tx, ctx, pacienteId)` na **mesma transação** que lê o conteúdo e grava a auditoria; sem perfil clínico ou sem vínculo, `403 {codigo: 'sem_vinculo_de_cuidado'}` (o mesmo código nos dois casos). Devolve a base, que a rota clínica grava na auditoria (`care_basis`). Fora de transação: `VinculoDeCuidadoService.temVinculoDeCuidado(ctx, pacienteId)`.
 - Equipe do caso (vínculo explícito, registrado e auditado, com validade) entra com a API de prontuário, como terceira base.
-- Provas: `test/vinculo-de-cuidado.rls.test.ts` (Postgres real: com vínculo, consulta do dia, sem vínculo na mesma clínica, perfis não clínicos, outra clínica, expirado, cancelado/falta/fora da janela, profissional inativado).
+- Provas: `test/vinculo-de-cuidado.rls.test.ts` (Postgres real: com vínculo, consulta do dia, sem vínculo na mesma clínica, perfis não clínicos, outra clínica, expirado, cancelado/falta/fora da janela, profissional inativado; V1: encaixe consigo mesmo agora, consulta de amanhã e de 100 dias atrás marcadas como atendidas, bordas da janela, consulta futura `in_progress` inserida no banco, `created_by` imutável, alerta sem dado pessoal; janela por clínica) e `agenda-regras.test.ts` (janela e configuração).
 
 ## 3. Rotas
 
@@ -49,6 +57,8 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | Método e rota | Permissão | ApiClinica | Notas |
 |---|---|---|---|
 | `GET /sessao` | todos | `usuarioAtual` | ids e perfis; o nome do usuário entra com o provedor real |
+| `GET /clinica/vinculo-de-cuidado` | cadastros:ler | — | `{dias, teto}` da janela de continuidade do vínculo |
+| `PUT /clinica/vinculo-de-cuidado` | cadastros:gerir | — | `{dias}` inteiro 1..180; auditado com valor anterior e novo |
 | `GET /pacientes?situacao&pagina&limite` | pacientes:ler | `listarPacientes` (sem termo) | `limite` ≤ 100 (padrão 50); item = `{id, nome, nomeSocial, ativo}`; `busca` (ou `q`, `termo`, `nome`, `cpf`, `telefone`...) na query = 400 `busca_na_url` |
 | `POST /pacientes/busca` | pacientes:ler | `listarPacientes` (com termo) | corpo `{busca, situacao?, pagina?, limite?}`; 200; busca sem acento, 2–80 caracteres; `pagina`/`limite` numéricos, `limite` ≤ 100; auditoria só com contagem, página e "houve busca" |
 | `GET /pacientes/:id` | pacientes:ler | `obterPaciente` | traz CPF, telefone e nascimento decifrados |
@@ -58,7 +68,7 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | `GET /agendamentos?de&ate&profissionalId&pacienteId` | agenda:ler | `listarAgendamentos` | `de`/`ate` obrigatórios, janela ≤ 31 dias, teto de 1000 linhas (`truncado`) |
 | `POST /agendamentos` | agenda:escrever | `criarAgendamento` | `{pacienteId, profissionalId, tipoId, data, hora, encaixe?}`; lotado = 409 `horario_lotado`; `encaixe:true` passa da capacidade |
 | `POST /agendamentos/:id/remarcar` | agenda:escrever | `remarcarAgendamento` | devolve `{data, hora}` anteriores; só agendado/confirmado |
-| `POST /agendamentos/:id/status` | agenda:escrever (+ agenda:atender) | `alterarStatus` | devolve `{statusAnterior}`; transição inválida = 409 |
+| `POST /agendamentos/:id/status` | agenda:escrever (+ agenda:atender) | `alterarStatus` | devolve `{statusAnterior}`; transição inválida = 409; `em_atendimento`/`atendido` fora da janela do horário = 409 `fora_do_horario` |
 | `POST /agendamentos/:id/check-in` | agenda:escrever | — | atalho para `chegou` |
 | `POST /agendamentos/:id/cancelar` | agenda:escrever | `removerAgendamento` | não há exclusão: "remover/desfazer" vira cancelar |
 | `GET /profissionais`, `POST /profissionais` | cadastros:ler / gerir | `listarProfissionais` | `capacidade` 1–20 (AGD-01.5) |
@@ -174,7 +184,7 @@ Nenhuma rota devolve conteúdo clínico: guia e pacote não guardam procedimento
 **Alertas** (calculados no servidor, nunca no front): `vencida` (validade passou e ainda havia saldo), `vence_em_breve` com `dias` (0 = vence hoje), `ultimas_sessoes` com `restantes`, `esgotada`. A validade vale até o fim do dia no fuso da clínica (UTC−03:00).
 
 **Dados e LGPD.**
-- Migração `0011_guias_e_pacotes.sql`: `insurers`, `insurance_guides`, `guide_sessions`, `guide_session_signatures`, `session_packages`, `package_sessions` — RLS FORCE, policy por `app_current_tenant()`, FK compostas `(id, tenant_id)` (inclusive para `appointments`, que ganhou `UNIQUE (id, tenant_id)`), sem DELETE/TRUNCATE para o runtime. Declaradas na guarda de schema e no pacote G2 (`schemaVersion` 1.3.0, ver [garantia-de-saida.md](garantia-de-saida.md)).
+- Migração `0011_guias_e_pacotes.sql`: `insurers`, `insurance_guides`, `guide_sessions`, `guide_session_signatures`, `session_packages`, `package_sessions` — RLS FORCE, policy por `app_current_tenant()`, FK compostas `(id, tenant_id)` (inclusive para `appointments`, que ganhou `UNIQUE (id, tenant_id)`), sem DELETE/TRUNCATE para o runtime. Declaradas na guarda de schema e no pacote G2 (`schemaVersion` 1.4.0, ver [garantia-de-saida.md](garantia-de-saida.md)).
 - Número da guia, senha de autorização e nº da carteirinha só cifrados (`v1:`, chave da clínica, AAD = clínica + `insurance_guides` + coluna + linha); `CHECK` recusa valor em claro. Duplicidade do número decifra as guias não canceladas do convênio sob a trava do convênio; um índice cego (HMAC por clínica) substitui a varredura quando o serviço de chaves expuser HMAC.
 - Confirmação do paciente por sessão (CNV-04.4): registro sem biometria (meio, rótulo do dispositivo, instante, quem registrou) com SHA-256 do registro canônico (`hashDaConfirmacao` em `guias-regras.ts`, recalculável). Tabela **append-only**: o runtime não tem UPDATE nem DELETE (o banco recusa com 42501, testado).
 - Auditoria na mesma transação, escopos `insurers`, `insurers.report`, `insurance_guides`, `insurance_guides.alerts`, `guide_sessions`, `guide_session_signatures` (ação `sign`), `session_packages`, `package_sessions`. Metadata só com ids, contagens, `op`, códigos de motivo, `override` e o hash da confirmação — nunca número, senha, carteirinha, nome ou dispositivo (teste confere).

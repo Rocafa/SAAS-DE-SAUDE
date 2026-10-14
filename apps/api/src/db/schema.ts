@@ -1,4 +1,4 @@
-import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -15,6 +15,8 @@ export const tenants = pgTable('tenants', {
   subscriptionStatus: text('subscription_status', { enum: SUBSCRIPTION_STATUSES }).notNull().default('active'),
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0013: janela de continuidade do vínculo de cuidado, em dias (1..180, padrão 90). */
+  careLinkDays: smallint('care_link_days').notNull().default(90),
 });
 
 export const patients = pgTable('patients', {
@@ -93,6 +95,8 @@ export const appointments = pgTable('appointments', {
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0013: usuário da sessão que criou (imutável). NULL em linhas anteriores à 0013. */
+  createdBy: uuid('created_by'),
 });
 
 /** Convênios da clínica (migração 0011, CNV-04.1). Sem regras TISS. */
