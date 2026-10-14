@@ -3,7 +3,8 @@
 # - "exportacoes": pacotes de exportação G2, efêmeros (expiram em <= 7 dias), SEM Object Lock
 #   (V1 do parecer do PR #58); definido em exportacoes.tf.
 # - "logs": logs de acesso do ALB e dos buckets (esses serviços só entregam em bucket com SSE-S3,
-#   por isso ele não usa KMS).
+#   por isso ele não usa KMS). Leitura só pelo papel investigacao-seguranca (R2), registrada no
+#   CloudTrail (N2); expira em var.logs_bucket_retencao_dias (R9).
 
 locals {
   bucket_documentos = "${local.nome}-documentos-${local.conta}"
@@ -217,6 +218,29 @@ data "aws_iam_policy_document" "logs" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [local.conta]
+    }
+  }
+  # R2 do PR #58: os logs de acesso trazem URL com query, IP e user agent. Ninguém lê, nem
+  # administrador com s3:* por IAM, exceto o papel de investigação de segurança (MFA, 1 h, uso
+  # registrado no CloudTrail por data event de leitura deste bucket).
+  statement {
+    sid    = "LeituraSoPelaInvestigacao"
+    effect = "Deny"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:GetObjectAttributes",
+      "s3:RestoreObject",
+    ]
+    resources = ["${aws_s3_bucket.logs.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = [aws_iam_role.investigacao_seguranca.arn]
     }
   }
   statement {

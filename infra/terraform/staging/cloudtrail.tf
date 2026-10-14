@@ -4,7 +4,8 @@
 #   o que a trava de sa-east-1 deveria impedir). Os arquivos ficam só no bucket em sa-east-1.
 # - Eventos de gerenciamento (inclui KMS Decrypt/GenerateDataKey e Secrets Manager
 #   GetSecretValue: quem abriu chave ou segredo) e data events de S3 nos buckets sensíveis
-#   (estado do Terraform, documentos, exportações e âncora quando estiver nesta conta).
+#   (estado do Terraform, documentos, exportações e âncora quando estiver nesta conta) e as
+#   leituras do bucket "logs" (N2).
 # - Validação de integridade dos arquivos (digest assinado) ligada.
 # - Bucket próprio: SSE-KMS com chave própria, versionado, Object Lock COMPLIANCE pelo prazo
 #   var.trilha_retencao_dias (12 meses, proposta da D7 para registros de acesso; Marco Civil
@@ -285,6 +286,28 @@ resource "aws_cloudtrail" "this" {
     field_selector {
       field       = "resources.ARN"
       starts_with = [for b in local.buckets_auditados : "arn:${data.aws_partition.atual.partition}:s3:::${b}/"]
+    }
+  }
+
+  # Bucket "logs" (N2 do PR #58): só as LEITURAS. As gravações são do ALB e do S3 entregando log a
+  # cada poucos minutos; registrá-las só geraria volume e custo, sem dizer quem leu.
+  advanced_event_selector {
+    name = "Leituras do bucket de logs de acesso"
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Data"]
+    }
+    field_selector {
+      field  = "resources.type"
+      equals = ["AWS::S3::Object"]
+    }
+    field_selector {
+      field  = "readOnly"
+      equals = ["true"]
+    }
+    field_selector {
+      field       = "resources.ARN"
+      starts_with = ["${aws_s3_bucket.logs.arn}/"]
     }
   }
 

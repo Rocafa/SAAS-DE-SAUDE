@@ -82,6 +82,16 @@ variable "api_tarefas" {
   default     = 1
 }
 
+variable "papeis_humanos_extra" {
+  description = "Padrões de ARN (ArnLike) de outros principais humanos além de SSO, usuários IAM e root (ex.: papel federado de outro IdP). Usados nos Deny de leitura de logs e de kms:Decrypt (R2/R4 do PR #58)."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.papeis_humanos_extra : startswith(a, "arn:")])
+    error_message = "Cada item deve ser um ARN (pode ter *)."
+  }
+}
+
 variable "tls_ate_a_tarefa" {
   description = "TLS também no trecho ALB -> tarefa da API (R6 do PR #58). Exige a API escutando HTTPS (API_TLS=autoassinado, ENG). Proposta: true em prod."
   type        = bool
