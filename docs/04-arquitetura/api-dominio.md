@@ -1,6 +1,6 @@
-# API de domínio: pacientes e agenda (rodada 11.1)
+# API de domínio: pacientes e agenda (rodadas 11.1 a 13.1)
 
-> 13/10/2026 · frente Engenharia · branch `eng/rotas-pacientes-agenda` · **sem dado real** (testes geram dados fictícios a cada execução). Passa pelo Guardião LGPD antes do merge.
+> 14/10/2026 · frente Engenharia · branches `eng/rotas-pacientes-agenda` e `eng/ressalvas-api-57` · **sem dado real** (testes geram dados fictícios a cada execução). Passa pelo Guardião LGPD antes do merge.
 
 ## 1. Sessão e clínica (porta plugável)
 
@@ -22,6 +22,23 @@
 | **Conteúdo clínico** | não | **só com vínculo de cuidado** | **nunca** | **nunca** |
 
 A última linha não tem rota nesta rodada (não há prontuário), mas a regra já está no código (`podeLerConteudoClinico` em `perfis.ts`, B1 do parecer front-r8): perfil clínico **e** vínculo. Admin que também atende recebe os dois perfis. Atender exige, além do perfil, que o usuário seja o profissional do agendamento (`professionals.user_id`): outro profissional da clínica recebe 403 (R1 do parecer PR #57).
+
+### 2a. Vínculo de cuidado (R2 do parecer PR #57)
+
+O vínculo é **calculado no servidor** a partir da agenda da clínica da sessão e **nunca** vem da requisição: não existe parâmetro, cabeçalho ou campo que o conceda, e o tipo `VinculoDeCuidado` é marcado (só `calcularVinculoDeCuidado` o produz). Código: `apps/api/src/modules/auth/vinculo-de-cuidado.ts`.
+
+Há vínculo quando o usuário da sessão é o `user_id` de um profissional **ativo** da clínica e esse profissional tem com o paciente ao menos um agendamento que atende a uma das bases:
+
+| Base | Status do agendamento | Janela (início do agendamento) |
+|---|---|---|
+| `atendimento` | `em_atendimento` ou `atendido` (só o próprio profissional marca, R1) | últimos **180 dias** (`VINCULO_ATENDIMENTO_DIAS`); depois disso o vínculo **expira** |
+| `agenda_do_dia` | `agendado`, `confirmado` ou `chegou` | de **12 h antes a 12 h depois** de agora (`VINCULO_AGENDA_HORAS`), para o preparo da consulta |
+
+- Cancelado e falta nunca dão vínculo. Profissional inativado perde o vínculo. Agendamento de **outro** profissional não se transfere.
+- Outra clínica nunca dá vínculo: a consulta roda na transação da clínica da sessão (RLS) e também filtra `tenant_id`; o mesmo usuário com sessão em outra clínica não leva o vínculo junto.
+- Uso: `exigirConteudoClinico(tx, ctx, pacienteId)` na **mesma transação** que lê o conteúdo e grava a auditoria; sem perfil clínico ou sem vínculo, `403 {codigo: 'sem_vinculo_de_cuidado'}` (o mesmo código nos dois casos). Devolve a base, que a rota clínica grava na auditoria (`care_basis`). Fora de transação: `VinculoDeCuidadoService.temVinculoDeCuidado(ctx, pacienteId)`.
+- Equipe do caso (vínculo explícito, registrado e auditado, com validade) entra com a API de prontuário, como terceira base.
+- Provas: `test/vinculo-de-cuidado.rls.test.ts` (Postgres real: com vínculo, consulta do dia, sem vínculo na mesma clínica, perfis não clínicos, outra clínica, expirado, cancelado/falta/fora da janela, profissional inativado).
 
 ## 3. Rotas
 
@@ -47,6 +64,21 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | `GET /profissionais`, `POST /profissionais` | cadastros:ler / gerir | `listarProfissionais` | `capacidade` 1–20 (AGD-01.5) |
 | `GET /tipos-atendimento`, `POST /tipos-atendimento` | cadastros:ler / gerir | `listarTiposAtendimento` | `minutos` 5–480, `capacidade` 1–20 |
 
+### 3a. Limite por usuário e alerta de anomalia (R5 do parecer PR #57)
+
+A paginação deixaria um usuário raspar a base inteira. Código: `apps/api/src/modules/patients/vigilancia-de-leitura.ts`. Os contadores ficam no **mesmo store do rate limit por IP** (Redis compartilhado entre instâncias, fallback em memória), com chave HMAC de clínica + usuário (o store nunca vê id em claro).
+
+| Regra | O que conta | Padrão (variável) | Efeito |
+|---|---|---|---|
+| Limite por usuário | chamadas a `GET /pacientes` + `POST /pacientes/busca` | 60 por minuto (`PATIENT_LIST_USER_MAX`, `PATIENT_LIST_USER_WINDOW_MS`) | `429 {codigo: 'limite_por_usuario'}` com `Retry-After`; outro usuário no mesmo IP não é afetado |
+| `paginas_de_pacientes` | chamadas de lista/busca | mais de 40 em 10 min (`PATIENT_ANOMALY_LIST_PAGES`, `PATIENT_ANOMALY_WINDOW_MS`) | alerta |
+| `fichas_distintas` | fichas **distintas** abertas (`GET /pacientes/:id`) | mais de 40 em 10 min (`PATIENT_ANOMALY_DISTINCT_RECORDS`) | alerta |
+| `limite_por_usuario` | estouro do limite acima | — | alerta |
+
+- **Alerta:** um evento `anomaly_alert` por regra e janela na trilha da clínica (migração `0010_alerta_de_anomalia.sql`), com o próprio usuário como ator e metadata só `{rule, window_s, threshold, count}`. Nunca id de paciente, nome ou termo de busca (teste confere). Grava em transação própria, para ficar mesmo quando a resposta é 429. Log com marcador fixo `ALERTA_ANOMALIA regra=...` para o alarme de operação.
+- Store fora do ar: cai para memória; se mesmo assim falhar, a leitura segue com log `RATE_LIMIT_FAIL_OPEN` (mesma política do limite por IP).
+- Provas: `test/vigilancia-pacientes.rls.test.ts`.
+
 **Capacidade (AGD-01.5):** vagas do horário = menor entre a capacidade do profissional e a do tipo. Contam os agendamentos não cancelados e sem falta que se sobrepõem; a checagem roda sob trava por profissional (duas recepções ao mesmo tempo não estouram a vaga). Encaixe ignora a capacidade e fica marcado.
 
 **Status:** a API fala o vocabulário do front (`agendado`, `confirmado`, `chegou`, `em_atendimento`, `atendido`, `faltou`, `cancelado`) e grava o enum compartilhado (`AppointmentStatus`). Cancelado é final.
@@ -58,6 +90,8 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 - Migração `0007_pacientes_e_agenda.sql`: `professionals`, `appointment_types`, `appointments` (RLS FORCE, policy por `app_current_tenant()`, sem DELETE para o runtime, FK compostas `(id, tenant_id)`), e colunas novas em `patients`. Declaradas na guarda de schema.
 - Migração `0009_patients_sem_delete.sql` (R3): o runtime perdeu `DELETE`/`TRUNCATE` em `patients`; nenhuma tabela da clínica pode ser apagada pela API. A guarda de schema cobra a lista exata.
 - Migração `0008_auditoria_tipo_de_ator.sql`: `audit_log.actor_kind` e pseudônimo do suporte (ver [auditoria-encadeada.md](auditoria-encadeada.md) §4c); a trilha vai no pacote G2 (`schemaVersion` 1.2.0).
+- Migração `0010_alerta_de_anomalia.sql` (R5): ação `anomaly_alert` no CHECK de `audit_log.action` e no enum `AuditAction`. Migração posterior que redefinir esse CHECK precisa manter o valor.
+- **Pseudônimo do suporte fora do processo (N1):** porta `PseudonymSigner` (`ator-suporte.ts`). Staging/produção: `KmsPseudonymSigner`, HMAC-SHA256 por `GenerateMac` numa chave HMAC_256 do KMS (`SUPPORT_PSEUDONYM_KMS_KEY_ID`; política dá ao papel da API só `kms:GenerateMac`), com `verificarChave()` (`GenerateMac` + `VerifyMac` numa sonda fixa); a fórmula do pseudônimo não muda. `LocalPseudonymSigner` só em `development`/`test` (lista fechada). Fora deles, sem KMS a API **não sobe** e `SUPPORT_PSEUDONYM_KEY` é recusada. O cliente KMS (`@aws-sdk/client-kms`) entra no Portão A; até lá a interface `KmsMacApi` é mockada nos testes.
 - `cpf_enc`, `phone_enc`, `birth_date_enc`: só o formato cifrado `v1:` do `FieldCipher` (chave da clínica, AAD amarrando clínica, tabela, coluna e linha). Um `CHECK` no banco recusa valor em claro. A primeira escrita cifrada provisiona a chave da clínica (auditado como `key_provision`).
 - Auditoria na mesma transação (sem registro, sem operação): `read`/`create`/`update` com escopo `patients`, `appointments`, `professionals`, `appointment_types`. O metadata leva só ids, contagens, página, nomes de colunas alteradas e transição de status. Nunca nome, CPF, telefone ou termo de busca (teste confere).
 - Política de assinatura: escrita segue G1 (bloqueada em `past_due`/`read_only`/`cancelled`); leitura, G4 (janela de saída).
@@ -68,12 +102,24 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 2. **Provedor de login real (D4)** implementando `AuthProvider` (Better Auth recomendado: sessão em cookie `HttpOnly`, MFA por perfil, troca de clínica, nome do usuário em `/sessao`).
 3. **Fora desta rodada:** responsáveis do paciente, recibos e pendências do dia, valor do tipo de atendimento, fuso por clínica, busca por CPF (exige índice cego), KMS em produção.
 
+## 5a. Ressalvas do parecer do PR #57
+
+| # | Situação | Onde |
+|---|---|---|
+| V1, R1, R3, R6, R7 | resolvidas (rodada 12) | re-revisão do Guardião |
+| R2 vínculo de cuidado no servidor | **resolvida** (rodada 13.1) | §2a |
+| R4 `usuarioId` do profissional membro da clínica | aberta, com a D4 | — |
+| R5 limite por usuário e alerta de anomalia | **resolvida** (rodada 13.1) | §3a |
+| N1 segredo do pseudônimo fora da API | **resolvida** (rodada 13.1) | §4 |
+| N2 adaptador HTTP só com `POST /pacientes/busca` | aberta, junto do adaptador | — |
+| N3 tabela de usuários no pacote G2 | aberta, com a D4 | — |
+
 ## 6. Como verificar localmente
 
 Postgres real com os papéis de `infra/local/postgres-init.sh`, depois:
 
 ```bash
 pnpm --filter @plataforma/api db:migrate        # DATABASE_MIGRATOR_URL (app_migrator)
-pnpm --filter @plataforma/api test:rls          # inclui pacientes-agenda e a guarda de schema
+pnpm --filter @plataforma/api test:rls          # inclui pacientes-agenda, vínculo de cuidado, vigilância e a guarda de schema
 pnpm --filter @plataforma/api test:security     # inclui sessao-tenant (regra 1 da D4)
 ```
