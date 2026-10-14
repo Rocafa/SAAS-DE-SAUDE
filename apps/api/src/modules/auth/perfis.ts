@@ -46,6 +46,16 @@ export const PERMISSOES = {
    * `podeLerConteudoClinico`). Recepção, financeiro e admin não clínico: nunca.
    */
   'conteudo_clinico:ler': ['profissional'],
+  /**
+   * Rotas de atendimento/prontuário/notas privadas (rodada 14.1). O guarda deixa TODOS os perfis da
+   * clínica chegarem à rota só para que a tentativa negada fique AUDITADA (HU-PRO-006/022: "recebe
+   * 403 e a tentativa é auditada"). Quem decide é o porteiro `exigirConteudoClinico` (perfil clínico
+   * E vínculo de cuidado), chamado antes de qualquer leitura: recepção, financeiro e admin não
+   * clínico recebem 403 `sem_vinculo_de_cuidado` sem que nenhum registro seja consultado.
+   */
+  'prontuario:acessar': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  /** Sigilo do compartimento de psicologia (pergunta 1.11 em aberto): decisão do dono da clínica. */
+  'prontuario:configurar': ['admin'],
 } as const satisfies Record<string, readonly Perfil[]>;
 
 export type Permissao = keyof typeof PERMISSOES;

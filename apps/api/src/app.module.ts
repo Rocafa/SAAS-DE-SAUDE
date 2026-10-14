@@ -13,6 +13,7 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
+import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
 import { createRateLimitStore, loadRateLimitHashKey, type RateLimitStore } from './security/rate-limit-store';
@@ -64,6 +65,8 @@ export class AppModule {
         SchedulingModule,
         // Mesma instância de PatientsModule: guias/pacotes contam no MESMO limite por usuário (R5).
         InsuranceModule.forRoot(pacientes),
+        // Prontuário: o histórico conta como ficha aberta na mesma vigilância (R5).
+        RecordsModule.forRoot(pacientes),
       ],
     };
   }
