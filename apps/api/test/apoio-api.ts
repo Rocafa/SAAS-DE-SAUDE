@@ -30,7 +30,7 @@ export interface ApiDeTeste {
   fechar(): Promise<void>;
 }
 
-export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia'> = {}): Promise<ApiDeTeste> {
+export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseudonymSigner'> = {}): Promise<ApiDeTeste> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória');
   const sessoes = new DevSessionProvider('test');
