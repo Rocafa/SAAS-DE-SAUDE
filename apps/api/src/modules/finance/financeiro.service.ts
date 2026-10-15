@@ -6,6 +6,7 @@ import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { EntradaInvalidaError } from '../../common/validacao';
 import {
+  appointments,
   charges,
   financeSettings,
   packageSessions,
@@ -280,6 +281,7 @@ export class FinanceiroService {
       const tipo = dados.atendimentoPor ?? config.atendimentoPadrao;
       // Atendimento PF (Receita Saúde) exige o profissional emitente.
       if (tipo === 'pf' && !profissionalId) throw new EntradaInvalidaError(['profissionalId']);
+      if (tipo === 'pf' && profissionalId) await this.exigirEmitentePf(tx, ctx, profissionalId, dados.pacoteId ?? null);
 
       const alvo = dados.agendamentoId
         ? eq(charges.appointmentId, dados.agendamentoId)
@@ -540,6 +542,33 @@ export class FinanceiroService {
       .from(patients)
       .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, pacienteId)));
     return p?.nome ?? '';
+  }
+
+  /**
+   * R1 do #65: o recibo PF leva o CPF do profissional e entra no Receita Saúde DELE, então ninguém o
+   * lança em nome de um profissional arbitrário. Exige perfil fiscal com CPF (409
+   * `profissional_sem_perfil_fiscal`). No pacote (que não tem profissional): ou todas as sessões já
+   * consumidas (≥1) são dele, ou quem lança é o próprio profissional (409 `profissional_nao_e_do_pacote`).
+   * O agendamento já fixa o profissional. O banco confere o mesmo (trigger da 0021).
+   */
+  private async exigirEmitentePf(tx: TenantTx, ctx: RequestContext, profissionalId: string, pacoteId: string | null): Promise<void> {
+    const [perfil] = await tx
+      .select({ cpf: professionalFiscalProfiles.cpfEnc })
+      .from(professionalFiscalProfiles)
+      .where(and(eq(professionalFiscalProfiles.tenantId, ctx.tenantId), eq(professionalFiscalProfiles.professionalId, profissionalId)));
+    if (!perfil?.cpf) throw new ConflitoError('profissional_sem_perfil_fiscal');
+    if (!pacoteId) return;
+    const [prof] = await tx
+      .select({ userId: professionals.userId })
+      .from(professionals)
+      .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, profissionalId)));
+    if (prof?.userId === ctx.userId) return;
+    const sessoes = await tx
+      .select({ profissional: appointments.professionalId })
+      .from(packageSessions)
+      .innerJoin(appointments, and(eq(appointments.tenantId, packageSessions.tenantId), eq(appointments.id, packageSessions.appointmentId)))
+      .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.packageId, pacoteId), isNull(packageSessions.reversedAt)));
+    if (sessoes.length === 0 || sessoes.some((s) => s.profissional !== profissionalId)) throw new ConflitoError('profissional_nao_e_do_pacote');
   }
 
   private async exigirProfissional(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {

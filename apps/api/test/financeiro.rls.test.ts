@@ -476,3 +476,50 @@ describe('auditoria sem dado pessoal nem valores', () => {
     }
   });
 });
+
+describe('R1 do #65: cobrança PF não sai em nome de profissional arbitrário', () => {
+  it('exige perfil fiscal com CPF; no pacote, profissional das sessões ou o próprio; o banco confere', async () => {
+    const semPerfil = id(await post(adminA, '/profissionais', { nome: 'Prof Ficticio Sem Perfil', especialidade: 'Fisio' }));
+    const r1 = await post(recepA, '/financeiro/cobrancas', { agendamentoId: await agendamento({ prof: semPerfil }), valorCentavos: 100, atendimentoPor: 'pf' });
+    expect(r1.status).toBe(409);
+    expect(r1.body).toMatchObject({ codigo: 'profissional_sem_perfil_fiscal' });
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302) }).expect(200);
+
+    // Pacote sem sessão consumida: a recepção não escolhe o emitente PF.
+    const vazio = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R1', total: 4 }));
+    const r2 = await post(recepA, '/financeiro/cobrancas', { pacoteId: vazio, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA });
+    expect(r2.status).toBe(409);
+    expect(r2.body).toMatchObject({ codigo: 'profissional_nao_e_do_pacote' });
+    // Pacote cujas sessões são de OUTRO profissional: recusado.
+    const deOutro = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R1b', total: 4 }));
+    const agOutro = await agendamento();
+    expect((await post(recepA, `/agendamentos/${agOutro}/check-in`)).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${deOutro}/consumos`, { agendamentoId: agOutro })).status).toBe(201);
+    expect((await post(recepA, '/financeiro/cobrancas', { pacoteId: deOutro, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA })).body).toMatchObject({
+      codigo: 'profissional_nao_e_do_pacote',
+    });
+    // Pacote com as sessões do profissional: passa.
+    const dele = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R1c', total: 4 }));
+    const agDele = await agendamento({ prof: profissionalPfA });
+    expect((await post(recepA, `/agendamentos/${agDele}/check-in`)).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${dele}/consumos`, { agendamentoId: agDele })).status).toBe(201);
+    await cobranca(recepA, { pacoteId: dele, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA });
+
+    // No banco (ex.: SQL injetado): agendamento de um profissional, emitente outro; pacote vazio pela recepção.
+    const linha = (alvo: { appointmentId?: string; packageId?: string }, prof: string, por: string) => ({
+      tenantId: clinicaA, patientId: pacienteA, ...alvo, professionalId: prof, attendanceKind: 'pf' as const,
+      amountCents: 100, dueDate: '2031-01-01', createdBy: por,
+    });
+    const agA = await agendamento();
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values(linha({ appointmentId: agA }, profissionalPfA, recepA.userId)), recepA.userId))).toContain('42501');
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values(linha({ packageId: vazio }, profissionalPfA, recepA.userId)), recepA.userId))).toContain('42501');
+    // Sem CPF no perfil fiscal: 23514 mesmo direto.
+    const agSem = await agendamento({ prof: semPerfil });
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values(linha({ appointmentId: agSem }, semPerfil, recepA.userId)), recepA.userId))).toContain('23514');
+    // Regra explícita: o PRÓPRIO profissional (usuário vinculado) lança a cobrança PF do pacote.
+    await api.http().put(`/financeiro/profissionais/${profissionalA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(304) }).expect(200);
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values(linha({ packageId: vazio }, profissionalA, profA.userId)), profA.userId);
+    // Cobrança nasce com paid_cents = 0 (R9).
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values({ ...linha({ appointmentId: agA }, profissionalA, recepA.userId), attendanceKind: 'pj', paidCents: 50 }), recepA.userId))).toContain('23514');
+  });
+});

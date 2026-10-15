@@ -508,6 +508,8 @@ export const charges = pgTable('charges', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** R7 (0021): pagador eliminado pela retenção fiscal (prazo vencido, sem retenção legal). */
+  fiscalPurgedAt: timestamp('fiscal_purged_at', { withTimezone: true }),
 });
 
 /** Recebimento (0018): append-only, sempre num caixa aberto. */
@@ -553,9 +555,11 @@ export const receipts = pgTable('receipts', {
     .references(() => tenants.id),
   number: bigint('number', { mode: 'number' }).notNull(),
   paymentId: uuid('payment_id').notNull(),
-  contentEnc: text('content_enc').notNull(),
+  /** Retrato cifrado; NULL só depois da eliminação pela retenção fiscal (R7, 0021). */
+  contentEnc: text('content_enc'),
   issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
   issuedBy: uuid('issued_by').notNull(),
+  fiscalPurgedAt: timestamp('fiscal_purged_at', { withTimezone: true }),
 });
 
 /** Cancelamento de recibo (0018): append-only; um por recibo. */
