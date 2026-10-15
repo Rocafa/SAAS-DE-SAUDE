@@ -98,6 +98,32 @@ resource "aws_db_parameter_group" "pg16" {
     name  = "log_parameter_max_length_on_error"
     value = "0"
   }
+
+  # Registro de DDL e de papéis com pgaudit (R11 do parecer do PR #61): o app_migrator (dono das
+  # tabelas) ou o master podem desligar os triggers de integridade e o FORCE RLS; isso precisa
+  # deixar rastro. Só as classes DDL e ROLE: READ/WRITE gravariam SQL de consulta e dado de
+  # paciente. Sem parâmetros de bind (log_parameter = off) e sem lista de relações (log_relation =
+  # off). O log sai pelo mesmo export "postgresql" (grupo com retenção e KMS, abaixo) e continua
+  # terse. Cuidado: a classe ROLE grava o texto do ALTER ROLE ... PASSWORD; o bootstrap desliga o
+  # pgaudit na própria transação antes de mexer em senha (infra/rds/bootstrap.sql). O alerta está
+  # em auditoria-banco.tf.
+  parameter {
+    name         = "shared_preload_libraries"
+    value        = "pg_stat_statements,pgaudit"
+    apply_method = "pending-reboot" # estático: vale no próximo reboot (feito na janela)
+  }
+  parameter {
+    name  = "pgaudit.log"
+    value = "ddl,role"
+  }
+  parameter {
+    name  = "pgaudit.log_parameter"
+    value = "0"
+  }
+  parameter {
+    name  = "pgaudit.log_relation"
+    value = "0"
+  }
 }
 
 # Grupos que o RDS criaria sozinho ("nunca expira", sem KMS). Declarados ANTES da instância para
