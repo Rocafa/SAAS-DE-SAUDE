@@ -2,6 +2,7 @@ import { Body, Controller, type DynamicModule, Get, Inject, Module, Put, UseGuar
 import { exigirObjeto, Validador } from '../../common/validacao';
 import { AUTH_PROVIDER, paraRequestContext, type AuthContext, type AuthProvider } from './auth-context';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
+import { MembrosController, MembrosService } from './membros';
 import { VINCULO_ATENDIMENTO_DIAS_TETO, VinculoDeCuidadoService } from './vinculo-de-cuidado';
 
 /** `usuarioAtual()` do contrato do front: só ids e perfis, nada de dado pessoal. */
@@ -51,9 +52,9 @@ export class AuthModule {
     return {
       module: AuthModule,
       global: true,
-      controllers: [SessaoController, VinculoDeCuidadoController],
-      providers: [{ provide: AUTH_PROVIDER, useValue: provider }, SessaoGuard, VinculoDeCuidadoService],
-      exports: [AUTH_PROVIDER, SessaoGuard, VinculoDeCuidadoService],
+      controllers: [SessaoController, VinculoDeCuidadoController, MembrosController],
+      providers: [{ provide: AUTH_PROVIDER, useValue: provider }, SessaoGuard, VinculoDeCuidadoService, MembrosService],
+      exports: [AUTH_PROVIDER, SessaoGuard, VinculoDeCuidadoService, MembrosService],
     };
   }
 }

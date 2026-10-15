@@ -121,6 +121,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo), sem dado de paciente; o fato está em audit_log, que sai no pacote',
+  clinic_members:
+    'perfis de acesso dos usuários (R13 do #63): controle de segurança da plataforma, sem dado de paciente nem cadastral; cada concessão e revogação está em audit_log, que sai no pacote',
 };
 
 export interface ExportManifest {
@@ -1020,5 +1022,5 @@ export function exportTenantData(
   ctx: RequestContext,
   options: ExportOptions = {},
 ): Promise<TenantExportPackage> {
-  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options));
+  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId);
 }

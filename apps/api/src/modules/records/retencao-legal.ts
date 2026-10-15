@@ -21,6 +21,7 @@ import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { exigirPerfilNoBanco } from '../auth/membros';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { CAMPO_RETENCAO_MOTIVO, CAMPO_RETENCAO_REFERENCIA, cifrarCampoClinico } from './record-fields';
 
@@ -54,6 +55,7 @@ export class RetencaoLegalService {
   /** Marca a retenção com a referência do processo/ofício. Já marcada: devolve o estado (idempotente). */
   marcar(ctx: RequestContext, pacienteId: string, referencia: string): Promise<EstadoDaRetencao> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      await exigirPerfilNoBanco(tx, ctx, 'admin'); // R13: admin ativo no banco (o trigger da 0020 confere)
       await this.travarPaciente(tx, ctx, pacienteId);
       const ativa = await this.ativa(tx, ctx, pacienteId);
       if (!ativa) {
@@ -78,6 +80,7 @@ export class RetencaoLegalService {
   /** 1ª etapa da retirada: pedido com motivo (cifrado). Já existe pedido pendente: 409. */
   pedirRetirada(ctx: RequestContext, pacienteId: string, motivo: string): Promise<EstadoDaRetencao> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      await exigirPerfilNoBanco(tx, ctx, 'admin'); // R13: admin ativo no banco (o trigger da 0020 confere)
       await this.travarPaciente(tx, ctx, pacienteId);
       const ativa = await this.ativa(tx, ctx, pacienteId);
       if (!ativa) throw new ConflitoError('sem_retencao_legal');
@@ -102,6 +105,7 @@ export class RetencaoLegalService {
   /** 2ª etapa: aprovação por OUTRO admin. O mesmo que pediu: 409 `mesma_pessoa`. */
   aprovarRetirada(ctx: RequestContext, pacienteId: string): Promise<EstadoDaRetencao> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      await exigirPerfilNoBanco(tx, ctx, 'admin'); // R13: admin ativo no banco (o trigger da 0020 confere)
       await this.travarPaciente(tx, ctx, pacienteId);
       const ativa = await this.ativa(tx, ctx, pacienteId);
       if (!ativa) throw new ConflitoError('sem_retencao_legal');

@@ -65,6 +65,7 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // aceitam as transições do fluxo (pedido/aprovação por duas pessoas, aceite do substituto, lido).
   legal_holds: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   note_custodies: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinic_members: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   clinical_notices: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Financeiro (migração 0018): sem DELETE/TRUNCATE. Recebimento, estorno, recibo e cancelamento de
   // recibo são append-only (sem UPDATE; trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel).
