@@ -103,8 +103,12 @@ export class RecibosService {
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
   ) {}
 
-  /** Emite o recibo do recebimento. Idempotente: se já há recibo vivo, devolve o mesmo. */
-  emitir(ctx: RequestContext, recebimentoId: string): Promise<ReciboDto> {
+  /**
+   * Emite o recibo do recebimento. Idempotente: se já há recibo vivo, devolve o mesmo.
+   * R2 do #65: o registro no conselho entra só se pedido NESTE recibo (`incluirRegistroConselho`) e se a
+   * clínica habilitou a opção (409 `registro_conselho_nao_habilitado`); fica gravado no retrato.
+   */
+  emitir(ctx: RequestContext, recebimentoId: string, opcoes: { incluirRegistroConselho: boolean } = { incluirRegistroConselho: false }): Promise<ReciboDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       const [p] = await tx.select().from(payments).where(and(eq(payments.tenantId, ctx.tenantId), eq(payments.id, recebimentoId)));
       if (!p) throw new NaoEncontradoError();
@@ -118,7 +122,10 @@ export class RecibosService {
       const vivo = await reciboVivoDoRecebimento(tx, ctx, recebimentoId);
       if (vivo) return this.lerRecibo(tx, ctx, vivo.id);
 
-      const conteudo = await this.retrato(tx, ctx, c, p);
+      if (opcoes.incluirRegistroConselho && !(await carregarConfig(tx, ctx)).mostrarRegistroConselho) {
+        throw new ConflitoError('registro_conselho_nao_habilitado');
+      }
+      const conteudo = await this.retrato(tx, ctx, c, p, opcoes.incluirRegistroConselho);
       // Contador: INSERT na primeira emissão, UPDATE (+1, travando a linha) nas demais.
       const [contador] = await tx
         .insert(receiptCounters)
@@ -139,6 +146,7 @@ export class RecibosService {
           charge_id: c.id,
           patient_id: c.patientId,
           kind: conteudo.emitente.tipo,
+          council_shown: conteudo.emitente.registroConselho !== null,
           pending: conteudo.pendencias.length,
         },
       });
@@ -321,7 +329,13 @@ export class RecibosService {
   // ---------------------------------------------------------------- apoio
 
   /** Retrato do recibo agora: emitente (clínica ou profissional PF), pagador, beneficiário, texto neutro. */
-  private async retrato(tx: TenantTx, ctx: RequestContext, c: LinhaCobranca, p: typeof payments.$inferSelect): Promise<ConteudoDoRecibo> {
+  private async retrato(
+    tx: TenantTx,
+    ctx: RequestContext,
+    c: LinhaCobranca,
+    p: typeof payments.$inferSelect,
+    incluirRegistroConselho: boolean,
+  ): Promise<ConteudoDoRecibo> {
     const config = await carregarConfig(tx, ctx);
     let emitente: EmitenteDoRecibo;
     if (c.attendanceKind === 'pf' && c.professionalId) {
@@ -337,7 +351,8 @@ export class RecibosService {
         tipo: 'pf',
         nome: prof?.nome ?? '',
         documento: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, c.professionalId, CAMPO_CPF_PROFISSIONAL, perfil?.cpfEnc ?? null),
-        registroConselho: config.mostrarRegistroConselho ? (perfil?.councilRegistration ?? null) : null,
+        // R2: por recibo (padrão oculto); a chave da clínica só habilita a opção.
+        registroConselho: incluirRegistroConselho && config.mostrarRegistroConselho ? (perfil?.councilRegistration ?? null) : null,
         profissionalId: c.professionalId,
       };
     } else {

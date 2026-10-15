@@ -296,3 +296,14 @@ export function validarQueryVazia(query: unknown): void {
 export function validarCorpoVazio(corpo: unknown): void {
   exigirObjeto(corpo ?? {}, []);
 }
+
+/**
+ * Emissão do recibo (R2 do #65): `incluirRegistroConselho` é escolhido POR RECIBO (padrão falso), porque
+ * o conselho revela a profissão a quem recebe o recibo. A configuração da clínica só habilita a opção.
+ */
+export function validarEmissaoRecibo(corpo: unknown): { incluirRegistroConselho: boolean } {
+  const v = new Validador(exigirObjeto(corpo ?? {}, ['incluirRegistroConselho']));
+  const incluir = v.booleano('incluirRegistroConselho');
+  v.concluir();
+  return { incluirRegistroConselho: incluir ?? false };
+}

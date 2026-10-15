@@ -523,3 +523,33 @@ describe('R1 do #65: cobrança PF não sai em nome de profissional arbitrário',
     expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.insert(charges).values({ ...linha({ appointmentId: agA }, profissionalA, recepA.userId), attendanceKind: 'pj', paidCents: 50 }), recepA.userId))).toContain('23514');
   });
 });
+
+describe('R2 do #65: registro no conselho escolhido por recibo', () => {
+  it('padrão oculto; só aparece no recibo que pedir; a clínica só habilita a opção', async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302), registroConselho: CONSELHO }).expect(200);
+    const pagamento = async () => {
+      const c = await cobranca(recepA, { agendamentoId: await agendamento({ prof: profissionalPfA }), valorCentavos: 1500, atendimentoPor: 'pf' });
+      return (await receber(recepA, c.id, { forma: 'dinheiro' })).id;
+    };
+    // Clínica sem a opção habilitada: pedir o conselho é 409.
+    const p0 = await pagamento();
+    expect((await post(recepA, `/financeiro/recebimentos/${p0}/recibo`, { incluirRegistroConselho: true })).body).toMatchObject({
+      codigo: 'registro_conselho_nao_habilitado',
+    });
+    await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ mostrarRegistroConselho: true }).expect(200);
+    try {
+      // Habilitada: o padrão continua oculto.
+      const oculto = await post(recepA, `/financeiro/recebimentos/${p0}/recibo`, {});
+      expect(oculto.body).toMatchObject({ emitente: { registroConselho: null } });
+      expect(JSON.stringify(oculto.body)).not.toContain(CONSELHO);
+      // Só o recibo que pediu leva o conselho (gravado no retrato).
+      const p1 = await pagamento();
+      const comConselho = await post(recepA, `/financeiro/recebimentos/${p1}/recibo`, { incluirRegistroConselho: true });
+      expect(comConselho.body).toMatchObject({ emitente: { registroConselho: CONSELHO } });
+      expect((await get(finA, `/financeiro/recibos/${id(comConselho)}`)).body).toMatchObject({ emitente: { registroConselho: CONSELHO } });
+      expect((await post(recepA, `/financeiro/recebimentos/${p1}/recibo`, { incluirRegistroConselho: 'sim' })).status).toBe(400);
+    } finally {
+      await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ mostrarRegistroConselho: false }).expect(200);
+    }
+  });
+});

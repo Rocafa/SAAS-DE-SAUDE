@@ -11,6 +11,7 @@ import {
   validarCancelamentoRecibo,
   validarConfiguracao,
   validarCorpoVazio,
+  validarEmissaoRecibo,
   validarEstorno,
   validarFechamentoCaixa,
   validarFiltroCaixa,
@@ -157,8 +158,7 @@ export class FinanceiroController {
   @Permissao('financeiro:operar')
   emitirRecibo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ReciboDto> {
     const alvo = exigirUuid(id);
-    validarCorpoVazio(corpo);
-    return this.recibos.emitir(paraRequestContext(auth), alvo);
+    return this.recibos.emitir(paraRequestContext(auth), alvo, validarEmissaoRecibo(corpo));
   }
 
   @Get('recibos')
