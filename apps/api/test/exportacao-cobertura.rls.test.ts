@@ -30,6 +30,7 @@ import {
   privateNotes,
   legalHolds,
   noteCustodies,
+  clinicMembers,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
@@ -72,6 +73,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   appointment_reschedules: 'appointmentReschedules',
   legal_holds: 'legalHolds',
   note_custodies: 'noteCustodies',
+  clinic_members: 'clinicMembers',
   audit_log: 'auditEvents',
 };
 
@@ -312,7 +314,8 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof clinicalRecordVersions
           | typeof clinicalAddenda
           | typeof legalHolds
-          | typeof noteCustodies,
+          | typeof noteCustodies
+          | typeof clinicMembers,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -338,6 +341,7 @@ describe('G2 — conteúdo do pacote', () => {
         appointmentReschedules: await n(appointmentReschedules),
         legalHolds: await n(legalHolds),
         noteCustodies: await n(noteCustodies),
+        clinicMembers: await n(clinicMembers),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -365,6 +369,13 @@ describe('G2 — conteúdo do pacote', () => {
       legalHolds: 1,
       noteCustodies: 1,
     });
+    // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
+    expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
+    const fundador = api.fundador(clinicaA);
+    expect(pkg.json.data.tenant.founderUserId).toBe(fundador);
+    expect(pkg.json.data.clinicMembers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: fundador, role: 'admin', grantedBy: fundador, revokedAt: null })]),
+    );
     // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
     expect(pkg.auditJsonl).not.toContain('7735');

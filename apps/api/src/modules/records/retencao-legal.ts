@@ -23,6 +23,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exigirPerfilNoBanco } from '../auth/membros';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { avisarDemaisAdmins } from './avisos';
 import { CAMPO_RETENCAO_MOTIVO, CAMPO_RETENCAO_REFERENCIA, cifrarCampoClinico } from './record-fields';
 
 export interface EstadoDaRetencao {
@@ -96,7 +97,12 @@ export class RetencaoLegalService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: 'patients',
-        metadata: { patient_id: pacienteId, op: 'legal_hold_release_request', hold_id: ativa.id },
+        metadata: {
+          patient_id: pacienteId,
+          op: 'legal_hold_release_request',
+          hold_id: ativa.id,
+          admins_avisados: await avisarDemaisAdmins(tx, ctx, { tipo: 'retencao_retirada_pedida', retencaoId: ativa.id }),
+        },
       });
       return this.estado(tx, ctx, pacienteId);
     });
@@ -118,7 +124,13 @@ export class RetencaoLegalService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: 'patients',
-        metadata: { patient_id: pacienteId, op: 'legal_hold', active: false, hold_id: ativa.id },
+        metadata: {
+          patient_id: pacienteId,
+          op: 'legal_hold',
+          active: false,
+          hold_id: ativa.id,
+          admins_avisados: await avisarDemaisAdmins(tx, ctx, { tipo: 'retencao_retirada_aprovada', retencaoId: ativa.id }),
+        },
       });
       return this.estado(tx, ctx, pacienteId);
     });

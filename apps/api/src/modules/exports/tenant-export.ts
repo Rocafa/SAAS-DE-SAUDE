@@ -8,6 +8,7 @@ import {
   appointmentReschedules,
   appointments,
   appointmentTypes,
+  clinicMembers,
   clinicalAddenda,
   clinicalRecordVersions,
   clinicalSettings,
@@ -65,8 +66,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        `privateNotes[].custodyState`/`custodyDeadline`, da migração 0015 (B1, D1 e D2 do parecer #63).
  * 1.8.0: retenções legais (`legalHolds`, referência e motivo da retirada decifrados) e custódias das
  *        notas lacradas (`noteCustodies`), da migração 0017 (R2 e R12 do parecer #63).
+ * 1.9.0: perfis da clínica (`clinicMembers`: usuário, perfil, concessão e revogação; 0020) e
+ *        `tenant.founderUserId` (0022), pela R16 da re-revisão 3 do parecer #63: a tabela é dado pessoal da
+ *        equipe da controladora e prova o controle de acesso (LGPD arts. 37 e 46).
  */
-export const EXPORT_SCHEMA_VERSION = '1.8.0';
+export const EXPORT_SCHEMA_VERSION = '1.9.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -99,6 +103,7 @@ export const EXPORTED_TABLES = [
   'private_notes',
   'legal_holds',
   'note_custodies',
+  'clinic_members',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -106,9 +111,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
   clinical_notices:
-    'caixa de avisos interna ao usuário (troca de sigilo), sem dado de paciente; o fato está em audit_log, que sai no pacote',
-  clinic_members:
-    'perfis de acesso dos usuários (R13 do #63): controle de segurança da plataforma, sem dado de paciente nem cadastral; cada concessão e revogação está em audit_log, que sai no pacote',
+    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
 };
 
 export interface ExportManifest {
@@ -145,6 +148,7 @@ export interface ExportManifest {
     readonly appointmentReschedules: number;
     readonly legalHolds: number;
     readonly noteCustodies: number;
+    readonly clinicMembers: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -382,6 +386,17 @@ export interface ExportedLegalHold {
   readonly releasedAt: string | null;
 }
 
+/** Perfil de um usuário da equipe na clínica (0020); revogado fica com quem e quando. */
+export interface ExportedClinicMember {
+  readonly id: string;
+  readonly userId: string;
+  readonly role: string;
+  readonly grantedBy: string;
+  readonly grantedAt: string;
+  readonly revokedBy: string | null;
+  readonly revokedAt: string | null;
+}
+
 /** Custódia das notas lacradas (0017). */
 export interface ExportedNoteCustody {
   readonly id: string;
@@ -395,7 +410,7 @@ export interface ExportedNoteCustody {
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
-    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string; readonly careLinkDays: number };
+    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string; readonly careLinkDays: number; readonly founderUserId: string | null };
     readonly patients: readonly ExportedPatient[];
     readonly professionals: readonly ExportedProfessional[];
     readonly appointmentTypes: readonly ExportedAppointmentType[];
@@ -415,6 +430,7 @@ export interface TenantExportDocument {
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
     readonly legalHolds: readonly ExportedLegalHold[];
     readonly noteCustodies: readonly ExportedNoteCustody[];
+    readonly clinicMembers: readonly ExportedClinicMember[];
   };
 }
 
@@ -467,7 +483,7 @@ export async function exportInTransaction(
   const tenant = await loadTenantSubscription(tx, ctx.tenantId);
   // G1/G4: inadimplência nunca bloqueia; cancelado só fora da janela de saída.
   if (!canExport(tenant.status, tenant.cancelledAt, now, windowDays)) throw new ExitWindowClosedError();
-  const [config] = await tx.select({ careLinkDays: tenants.careLinkDays }).from(tenants).where(eq(tenants.id, ctx.tenantId));
+  const [config] = await tx.select({ careLinkDays: tenants.careLinkDays, founderUserId: tenants.founderUserId }).from(tenants).where(eq(tenants.id, ctx.tenantId));
   if (!config) throw new Error('tenant não encontrado no contexto atual');
 
   const patientRows = soDaClinica(
@@ -588,6 +604,15 @@ export async function exportInTransaction(
       .from(noteCustodies)
       .where(eq(noteCustodies.tenantId, ctx.tenantId))
       .orderBy(asc(noteCustodies.designatedAt), asc(noteCustodies.id)),
+    ctx.tenantId,
+  );
+
+  const memberRows = soDaClinica(
+    await tx
+      .select()
+      .from(clinicMembers)
+      .where(eq(clinicMembers.tenantId, ctx.tenantId))
+      .orderBy(asc(clinicMembers.grantedAt), asc(clinicMembers.id)),
     ctx.tenantId,
   );
 
@@ -872,6 +897,16 @@ export async function exportInTransaction(
     acceptedAt: iso(c.acceptedAt),
   }));
 
+  const exportedMembers: ExportedClinicMember[] = memberRows.map((m) => ({
+    id: m.id,
+    userId: m.userId,
+    role: m.role,
+    grantedBy: m.grantedBy,
+    grantedAt: m.grantedAt.toISOString(),
+    revokedBy: m.revokedBy,
+    revokedAt: iso(m.revokedAt),
+  }));
+
   const manifest: ExportManifest = {
     format: EXPORT_FORMAT,
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -906,6 +941,7 @@ export async function exportInTransaction(
       appointmentReschedules: exportedReschedules.length,
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
+      clinicMembers: exportedMembers.length,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -965,6 +1001,7 @@ export async function exportInTransaction(
           displayName: tenant.displayName,
           createdAt: tenant.createdAt.toISOString(),
           careLinkDays: config.careLinkDays,
+          founderUserId: config.founderUserId,
         },
         patients: exportedPatients,
         professionals: exportedProfessionals,
@@ -984,6 +1021,7 @@ export async function exportInTransaction(
         appointmentReschedules: exportedReschedules,
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
+        clinicMembers: exportedMembers,
       },
     },
     patientsCsv,
