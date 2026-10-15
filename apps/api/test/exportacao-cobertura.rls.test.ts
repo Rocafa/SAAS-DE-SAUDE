@@ -16,6 +16,7 @@ import {
   professionals,
   appointmentTypes,
   appointments,
+  appointmentReschedules,
   insurers,
   insuranceGuides,
   guideSessions,
@@ -66,6 +67,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   clinical_record_versions: 'clinicalRecordVersions',
   clinical_addenda: 'clinicalAddenda',
   private_notes: 'privateNotes',
+  appointment_reschedules: 'appointmentReschedules',
   audit_log: 'auditEvents',
 };
 
@@ -120,6 +122,13 @@ beforeAll(async () => {
     hora: '08:00',
   });
   expect(ag.status).toBe(201);
+  // Uma remarcação (para o histórico da 0014 entrar no pacote).
+  await api
+    .http()
+    .post(`/agendamentos/${(ag.body as { id: string }).id}/remarcar`)
+    .set(cab(admin))
+    .send({ data: '2030-05-07', hora: '09:00' })
+    .expect(200);
   // Guias e pacotes (0011): convênio, guia com campos cifrados, consumo + confirmação, pacote + consumo.
   const pacienteId = (pac.body as { id: string }).id;
   const agId = (ag.body as { id: string }).id;
@@ -265,6 +274,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof professionals
           | typeof appointmentTypes
           | typeof appointments
+          | typeof appointmentReschedules
           | typeof insurers
           | typeof insuranceGuides
           | typeof guideSessions
@@ -297,6 +307,7 @@ describe('G2 — conteúdo do pacote', () => {
         privateNotes: (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, true)))[0]?.n ?? -1,
         privateNotesWithheld:
           (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, false)))[0]?.n ?? -1,
+        appointmentReschedules: await n(appointmentReschedules),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -308,6 +319,7 @@ describe('G2 — conteúdo do pacote', () => {
       professionals: 1,
       appointmentTypes: 1,
       appointments: 3,
+      appointmentReschedules: 1,
       insurers: 1,
       insuranceGuides: 1,
       guideSessions: 1,

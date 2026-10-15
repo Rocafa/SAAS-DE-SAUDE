@@ -5,6 +5,7 @@
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
 import {
+  appointmentReschedules,
   appointments,
   appointmentTypes,
   clinicalAddenda,
@@ -45,11 +46,13 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013 (PR #61).
  * 1.4.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
  *        paciente por sessão, pacotes de sessões e seus consumos (migração 0011).
- * 1.4.0: prontuário (migração 0012): configuração de sigilo, atendimentos, TODAS as versões da evolução
+ * 1.5.0: `appointments[].rescheduledBy`/`rescheduleLocked` e o histórico de remarcações
+ *        (`appointmentReschedules`, contagem própria), da migração 0014.
+ * 1.6.0: prontuário (migração 0012): configuração de sigilo, atendimentos, TODAS as versões da evolução
  *        (conteúdo decifrado), adendos e as notas privadas que o AUTOR marcou para exportar; as demais
  *        notas privadas ficam fora, só contadas no manifesto (`privateNotesWithheld`).
  */
-export const EXPORT_SCHEMA_VERSION = '1.4.0';
+export const EXPORT_SCHEMA_VERSION = '1.6.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -64,6 +67,7 @@ export const EXPORTED_TABLES = [
   'professionals',
   'appointment_types',
   'appointments',
+  'appointment_reschedules',
   'insurers',
   'insurance_guides',
   'guide_sessions',
@@ -118,6 +122,7 @@ export interface ExportManifest {
     readonly privateNotes: number;
     /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
     readonly privateNotesWithheld: number;
+    readonly appointmentReschedules: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -180,6 +185,22 @@ export interface ExportedAppointment {
   readonly updatedAt: string;
   /** Usuário que criou (0013); null em agendamentos anteriores à migração. */
   readonly createdBy: string | null;
+  /** Último usuário que remarcou (0014); null se nunca remarcado. */
+  readonly rescheduledBy: string | null;
+  /** Horário travado depois de atendimento ou falta (0014). */
+  readonly rescheduleLocked: boolean;
+}
+
+/** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
+export interface ExportedAppointmentReschedule {
+  readonly id: string;
+  readonly appointmentId: string;
+  readonly fromStartsAt: string;
+  readonly fromEndsAt: string;
+  readonly toStartsAt: string;
+  readonly toEndsAt: string;
+  readonly rescheduledBy: string;
+  readonly createdAt: string;
 }
 
 export interface ExportedInsurer {
@@ -338,6 +359,7 @@ export interface TenantExportDocument {
     readonly clinicalRecordVersions: readonly ExportedClinicalRecordVersion[];
     readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
     readonly privateNotes: readonly ExportedPrivateNote[];
+    readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
   };
 }
 
@@ -492,6 +514,15 @@ export async function exportInTransaction(
   // Decisão do autor: só a nota viva marcada para exportar sai; as outras só contam.
   const notasExportaveis = noteRows.filter((n) => n.exportConsent && n.discardedAt === null);
 
+  const rescheduleRows = soDaClinica(
+    await tx
+      .select()
+      .from(appointmentReschedules)
+      .where(eq(appointmentReschedules.tenantId, ctx.tenantId))
+      .orderBy(asc(appointmentReschedules.createdAt), asc(appointmentReschedules.id)),
+    ctx.tenantId,
+  );
+
   // Trilha da clínica, inteira e sem reescrita: os campos da cadeia e o JSON canônico vêm do banco
   // (data com microssegundos, como no hash). O ator interno já está pseudonimizado desde o INSERT (0008).
   const auditRows = await tx.execute<{
@@ -585,6 +616,18 @@ export async function exportInTransaction(
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     createdBy: a.createdBy,
+    rescheduledBy: a.rescheduledBy,
+    rescheduleLocked: a.rescheduleLocked,
+  }));
+  const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
+    id: r.id,
+    appointmentId: r.appointmentId,
+    fromStartsAt: r.fromStartsAt.toISOString(),
+    fromEndsAt: r.fromEndsAt.toISOString(),
+    toStartsAt: r.toStartsAt.toISOString(),
+    toEndsAt: r.toEndsAt.toISOString(),
+    rescheduledBy: r.rescheduledBy,
+    createdAt: r.createdAt.toISOString(),
   }));
 
   const decryptGuide = async (rowId: string, column: GuideEncryptedColumn, value: string | null): Promise<string | null> => {
@@ -764,6 +807,7 @@ export async function exportInTransaction(
       clinicalAddenda: exportedAddenda.length,
       privateNotes: exportedNotes.length,
       privateNotesWithheld: noteRows.length - exportedNotes.length,
+      appointmentReschedules: exportedReschedules.length,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -809,6 +853,7 @@ export async function exportInTransaction(
       recordVersions: manifest.counts.clinicalRecordVersions,
       privateNotes: manifest.counts.privateNotes,
       privateNotesWithheld: manifest.counts.privateNotesWithheld,
+      appointmentReschedules: manifest.counts.appointmentReschedules,
       auditEvents: manifest.counts.auditEvents,
     },
   });
@@ -838,6 +883,7 @@ export async function exportInTransaction(
         clinicalRecordVersions: exportedVersions,
         clinicalAddenda: exportedAddenda,
         privateNotes: exportedNotes,
+        appointmentReschedules: exportedReschedules,
       },
     },
     patientsCsv,

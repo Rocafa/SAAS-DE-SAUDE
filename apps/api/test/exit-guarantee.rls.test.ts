@@ -119,6 +119,7 @@ describe('G2 — exportação total do tenant', () => {
       clinicalAddenda: 0,
       privateNotes: 0,
       privateNotesWithheld: 0,
+      appointmentReschedules: 0,
       auditEvents: pkg.auditEvents.length,
     });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();
@@ -231,6 +232,7 @@ describe('G3 — auditoria append-only da exportação', () => {
       recordVersions: 0,
       privateNotes: 0,
       privateNotesWithheld: 0,
+      appointmentReschedules: 0,
       auditEvents: 0,
     });
     const serial = JSON.stringify(row);

@@ -59,6 +59,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   clinical_record_versions: { privilegios: ['SELECT', 'INSERT'] },
   clinical_addenda: { privilegios: ['SELECT', 'INSERT'] },
   private_notes: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Histórico de remarcações (migração 0014): append-only; o INSERT só passa vindo do trigger.
+  appointment_reschedules: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

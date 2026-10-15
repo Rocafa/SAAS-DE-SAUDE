@@ -14,7 +14,8 @@
  *   0013). Só o profissional do agendamento marca esses status (R1 do #57) e só dentro da janela do
  *   horário (agenda-regras.ts, 409 `fora_do_horario`): consulta futura ou retroativa não vira vínculo;
  * - `autoagendamento`: o mesmo, mas o agendamento foi criado pelo próprio usuário-profissional
- *   (`created_by` = usuário da sessão; encaixe incluído). Vale, mas fica marcado na base para a
+ *   (`created_by` = usuário da sessão; encaixe incluído) OU remarcado por ele por último
+ *   (`rescheduled_by`, migração 0014; V2 do #61). Vale, mas fica marcado na base para a
  *   auditoria do acesso clínico, e a agenda grava `anomaly_alert` (regra `vinculo_autoagendado`);
  * - `agenda_do_dia`: status `scheduled`, `confirmed` ou `checked_in` com início entre
  *   agora − VINCULO_AGENDA_HORAS e agora + VINCULO_AGENDA_HORAS (preparo da consulta do dia), e
@@ -76,7 +77,8 @@ export async function calcularVinculoDeCuidado(
   const agendaAte = new Date(agora.getTime() + VINCULO_AGENDA_HORAS * HORA_MS);
   // Autoagendamento: criado pelo próprio usuário da sessão (que aqui é sempre o profissional). Linhas
   // anteriores à 0013 têm created_by NULL e seguem as regras comuns.
-  const autoagendado = sql<boolean>`(${appointments.createdBy} IS NOT DISTINCT FROM ${ctx.userId}::uuid)`;
+  // V2-c do #61: remarcado pelo próprio usuário (rescheduled_by, 0014) também é autoagendamento.
+  const autoagendado = sql<boolean>`(${appointments.createdBy} IS NOT DISTINCT FROM ${ctx.userId}::uuid OR ${appointments.rescheduledBy} IS NOT DISTINCT FROM ${ctx.userId}::uuid)`;
   const atendido = and(
     inArray(appointments.status, [...STATUS_ATENDIDO]),
     gte(appointments.startsAt, desdeAtendimento),
