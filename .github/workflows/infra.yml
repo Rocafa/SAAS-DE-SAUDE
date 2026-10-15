@@ -113,6 +113,19 @@ jobs:
           # Postgres nunca loga valor de linha nem SQL (V2 do PR #58).
           grep -Eq 'name *= *"log_error_verbosity"' staging/dados.tf
           grep -Eq 'name *= *"log_min_error_statement"' staging/dados.tf
+          # R11 do PR #61: pgaudit só com DDL e ROLE (nunca read/write/all), sem bind nem relação,
+          # alarme de DDL sensível no SNS e bootstrap sem senha no log.
+          grep -Eq 'value *= *"[^"]*pgaudit[^"]*"' staging/dados.tf
+          grep -A1 'name *= *"pgaudit.log"' staging/dados.tf | grep -Eq 'value *= *"ddl, ?role"'
+          grep -A1 'name *= *"pgaudit.log_parameter"' staging/dados.tf | grep -Eq 'value *= *"(0|off)"'
+          grep -A1 'name *= *"pgaudit.log_relation"' staging/dados.tf | grep -Eq 'value *= *"(0|off)"'
+          grep -q 'log_group_name *= *aws_cloudwatch_log_group.rds\["postgresql"\].name' staging/auditoria-banco.tf
+          grep -q 'alarm_actions *= *\[aws_sns_topic.alertas_seguranca.arn\]' staging/auditoria-banco.tf
+          for f in disable-trigger drop-trigger alter-role no-force-rls; do
+            grep -Eq "^\s*$f\s*=" staging/auditoria-banco.tf || { echo "filtro $f ausente"; exit 1; }
+          done
+          grep -Eiq 'CREATE EXTENSION IF NOT EXISTS pgaudit' ../rds/bootstrap.sql
+          grep -Eq "SET LOCAL pgaudit.log = 'none'" ../rds/bootstrap.sql
           # Ressalvas do PR #58 (infra-staging.md §4.1).
           # R2: bucket de logs de acesso só lido pelo papel de investigação; N2: leituras no CloudTrail.
           grep -q 'sid *= *"LeituraSoPelaInvestigacao"' staging/s3.tf
