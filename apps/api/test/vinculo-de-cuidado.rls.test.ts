@@ -8,7 +8,7 @@ import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProibidoError } from '../src/common/erros-dominio';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { appointmentReschedules, appointments, auditLog, professionals, tenants, type AppointmentStatusDb } from '../src/db/schema';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -67,10 +67,12 @@ async function agendamento(
   dados: { paciente: string; profissional: string; tipo: string; inicio: Date; status: AppointmentStatusDb; criadoPor?: string },
 ): Promise<string> {
   const id = randomUUID();
+  // O banco exige created_by = usuário da sessão (0016): sem criadoPor, um usuário qualquer da recepção.
+  const criador = dados.criadoPor ?? randomUUID();
   await withTenant(api.db.db, tenantId, async (tx) => {
     await tx.insert(appointments).values({
       id,
-      createdBy: dados.criadoPor ?? null,
+      createdBy: criador,
       tenantId,
       patientId: dados.paciente,
       professionalId: dados.profissional,
@@ -80,7 +82,7 @@ async function agendamento(
       status: dados.status,
       cancelledAt: dados.status === 'cancelled' ? dados.inicio : null,
     });
-  });
+  }, criador);
   return id;
 }
 
@@ -577,6 +579,61 @@ describe('remarcação e "Desfazer" não fabricam vínculo (V2 do #61)', () => {
     expect(deB).toHaveLength(0);
     // E a remarcação pela sessão de B dá 404 (o agendamento de A não existe para B).
     await remarcar(adminB, id, new Date(Date.now() + 3 * DIA)).expect(404);
+  });
+
+  it('R8: a recepção remarcar depois NÃO lava a marca de autoagendamento (vale o histórico inteiro)', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + 3 * DIA) });
+    await remarcar(eu.sessao, id, new Date(Date.now() + 2 * DIA)).expect(200);
+    await remarcar(recep, id, new Date()).expect(200);
+    expect((await linha(id))?.rescheduledBy).toBe(recep.userId);
+    expect(await historico(id)).toHaveLength(2);
+    // Último remarcador é a recepção, mas o profissional remarcou antes: continua autoagendado.
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false, base: null });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(recep)).expect(200);
+    await status(eu.sessao, id, 'em_atendimento').expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'autoagendamento' });
+    const alertas = await alertasDe(clinicaA, eu.sessao.userId);
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]?.metadata).toMatchObject({ rule: 'vinculo_autoagendado', count: 1 });
+  });
+
+  it('R9: o banco exige created_by e rescheduled_by = usuário da sessão travado na transação', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const base = { tenantId: clinicaA, patientId: p, professionalId: eu.id, appointmentTypeId: tipoA };
+    const inicio = new Date(Date.now() + 5 * DIA);
+    const novo = (criadoPor: string | null) => ({
+      ...base,
+      createdBy: criadoPor,
+      startsAt: inicio,
+      endsAt: new Date(inicio.getTime() + 50 * 60_000),
+    });
+    // INSERT: criador forjado (a recepção "assina" um agendamento que o profissional criou), NULL, ou sem usuário na transação.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values(novo(recep.userId)), eu.sessao.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values(novo(null)), eu.sessao.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values(novo(eu.sessao.userId)))).rejects.toThrow();
+    // O usuário fica travado: trocar no meio da transação é recusado; sem tenant antes, também.
+    await expect(
+      withTenant(api.db.db, clinicaA, async (tx) => {
+        await tx.execute(sql`select app_set_user(${recep.userId}::uuid)`);
+      }, eu.sessao.userId),
+    ).rejects.toThrow();
+    await expect(api.db.db.transaction((tx) => tx.execute(sql`select app_set_user(${recep.userId}::uuid)`))).rejects.toThrow();
+    // Remarcação: o profissional não pode gravar a recepção como remarcadora (e não pode remarcar sem usuário).
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio });
+    const mover = (quem: string) => (tx: TenantTx) =>
+      tx
+        .update(appointments)
+        .set({ startsAt: new Date(inicio.getTime() + DIA), endsAt: new Date(inicio.getTime() + DIA + 50 * 60_000), rescheduledBy: quem })
+        .where(eq(appointments.id, id));
+    await expect(withTenant(api.db.db, clinicaA, mover(recep.userId), eu.sessao.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, mover(recep.userId))).rejects.toThrow();
+    expect(await historico(id)).toHaveLength(0);
+    // Com o usuário certo, passa (é o que a rota faz).
+    await withTenant(api.db.db, clinicaA, mover(eu.sessao.userId), eu.sessao.userId);
+    expect((await historico(id))[0]?.rescheduledBy).toBe(eu.sessao.userId);
   });
 });
 
