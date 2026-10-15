@@ -134,6 +134,26 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, '/prontuario/notas-privadas/ciclo'],
       [RequestMethod.POST, `/prontuario/profissionais/${id}/desligamento`],
       [RequestMethod.PUT, `/prontuario/pacientes/${id}/retencao-legal`],
+      // Financeiro (rodada 15.2).
+      [RequestMethod.GET, '/financeiro/configuracao'],
+      [RequestMethod.PUT, '/financeiro/configuracao'],
+      [RequestMethod.GET, `/financeiro/profissionais/${id}/perfil-fiscal`],
+      [RequestMethod.PUT, `/financeiro/profissionais/${id}/perfil-fiscal`],
+      [RequestMethod.POST, '/financeiro/cobrancas'],
+      [RequestMethod.GET, '/financeiro/contas-a-receber'],
+      [RequestMethod.GET, `/financeiro/cobrancas/${id}`],
+      [RequestMethod.POST, `/financeiro/cobrancas/${id}/cancelar`],
+      [RequestMethod.POST, `/financeiro/cobrancas/${id}/recebimentos`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/estornar`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/recibo`],
+      [RequestMethod.POST, '/financeiro/caixas'],
+      [RequestMethod.GET, '/financeiro/caixas'],
+      [RequestMethod.GET, `/financeiro/caixas/${id}`],
+      [RequestMethod.POST, `/financeiro/caixas/${id}/fechar`],
+      [RequestMethod.GET, '/financeiro/recibos'],
+      [RequestMethod.GET, `/financeiro/recibos/${id}`],
+      [RequestMethod.POST, `/financeiro/recibos/${id}/cancelar`],
+      [RequestMethod.POST, '/financeiro/receita-saude/lotes'],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));

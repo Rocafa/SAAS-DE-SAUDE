@@ -61,6 +61,18 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   private_notes: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Histórico de remarcações (migração 0014): append-only; o INSERT só passa vindo do trigger.
   appointment_reschedules: { privilegios: ['SELECT', 'INSERT'] },
+  // Financeiro (migração 0018): sem DELETE/TRUNCATE. Recebimento, estorno, recibo e cancelamento de
+  // recibo são append-only (sem UPDATE; trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel).
+  // Cobrança e caixa mudam só pelos caminhos guardados por trigger (receber/cancelar; fechar).
+  finance_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  professional_fiscal_profiles: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  cash_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  charges: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  payments: { privilegios: ['SELECT', 'INSERT'] },
+  payment_reversals: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  receipts: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
