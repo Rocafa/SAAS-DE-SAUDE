@@ -195,6 +195,21 @@ data "aws_iam_policy_document" "alertas_seguranca" {
       values   = [aws_cloudwatch_event_rule.papeis_de_excecao.arn]
     }
   }
+  # Alarme de DDL sensível no banco (auditoria-banco.tf, R11 do PR #61).
+  statement {
+    sid       = "CloudWatchAlarmePublica"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alertas_seguranca.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_cloudwatch_metric_alarm.ddl_sensivel.arn]
+    }
+  }
 }
 
 resource "aws_sns_topic_policy" "alertas_seguranca" {

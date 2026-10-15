@@ -82,7 +82,7 @@ data "aws_iam_policy_document" "kms" {
     }
   }
 
-  # EventBridge publica no tópico SNS cifrado de alertas.
+  # EventBridge e alarmes do CloudWatch publicam no tópico SNS cifrado de alertas.
   dynamic "statement" {
     for_each = each.key == "alertas" ? [1] : []
     content {
@@ -91,7 +91,7 @@ data "aws_iam_policy_document" "kms" {
       resources = ["*"]
       principals {
         type        = "Service"
-        identifiers = ["events.amazonaws.com"]
+        identifiers = ["events.amazonaws.com", "cloudwatch.amazonaws.com"]
       }
       condition {
         test     = "StringEquals"
