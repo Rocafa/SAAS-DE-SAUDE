@@ -131,6 +131,9 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/notas-privadas/${id}/descartar`],
       [RequestMethod.GET, '/prontuario/configuracao'],
       [RequestMethod.PUT, '/prontuario/configuracao'],
+      [RequestMethod.POST, '/prontuario/notas-privadas/ciclo'],
+      [RequestMethod.POST, `/prontuario/profissionais/${id}/desligamento`],
+      [RequestMethod.PUT, `/prontuario/pacientes/${id}/retencao-legal`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));

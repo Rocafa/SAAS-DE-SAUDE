@@ -1,10 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { encounters, patients, privateNotes } from '../../db/schema';
+import { encounters, patients, privateNotes, type PrivateNoteCustodyState } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
@@ -26,6 +26,10 @@ export interface NotaPrivadaDto {
 }
 
 const SCOPE_NOTAS = 'private_notes';
+/** Estados em que o AUTOR ainda vê e decide a nota no aplicativo (D2 do #63). */
+const VISIVEIS_AO_AUTOR: PrivateNoteCustodyState[] = ['ativa', 'aguardando_decisao'];
+/** D1 do #63: a linha descartada é expurgada em até 30 dias (salvo retenção legal). */
+export const DIAS_ATE_EXPURGO = 30;
 type LinhaNota = typeof privateNotes.$inferSelect;
 
 /**
@@ -34,8 +38,8 @@ type LinhaNota = typeof privateNotes.$inferSelect;
  * nem o compartimento de psicologia em modo "prontuário único". Toda consulta filtra
  * `author_user_id = usuário da sessão`; nota de outro autor responde 404 (não revela que existe) e
  * a tentativa vai para a trilha. Nunca entram em relatório, IA ou exportação padrão: só no pacote
- * G2 se o autor marcar `incluirNaExportacao` (decisão expressa). Descartar não apaga a linha (sem
- * DELETE para o runtime): ela some da API e segue a retenção do RIPD (pendente do Guardião).
+ * G2 se o autor marcar `incluirNaExportacao` (decisão expressa). Descartar troca o conteúdo por
+ * lápide na hora e a linha é expurgada em 30 dias (D1 do parecer #63; ciclo-notas-privadas.ts).
  * Toda operação passa pelo porteiro `exigirConteudoClinico` (perfil clínico + vínculo).
  */
 @Injectable()
@@ -59,6 +63,7 @@ export class NotasPrivadasService {
               eq(privateNotes.authorUserId, ctx.userId),
               eq(privateNotes.patientId, pacienteId),
               isNull(privateNotes.discardedAt),
+              inArray(privateNotes.custodyState, VISIVEIS_AO_AUTOR),
             ),
           )
           .orderBy(desc(privateNotes.createdAt), desc(privateNotes.id))
@@ -124,7 +129,7 @@ export class NotasPrivadasService {
     return comNegacaoAuditada(this.db, ctx, { op: 'nota_ler', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const n = await this.doAutor(tx, ctx, id, false);
-        const vinculo = await exigirConteudoClinico(tx, ctx, n.patientId);
+        const vinculo = await this.porteiro(tx, ctx, n);
         await recordAudit(tx, ctx, {
           action: AuditAction.Read,
           scope: SCOPE_NOTAS,
@@ -139,7 +144,7 @@ export class NotasPrivadasService {
     return comNegacaoAuditada(this.db, ctx, { op: 'nota_alterar', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const n = await this.doAutor(tx, ctx, id, true);
-        const vinculo = await exigirConteudoClinico(tx, ctx, n.patientId);
+        const vinculo = await this.porteiro(tx, ctx, n);
         const contentEnc = dados.texto !== undefined ? await cifrarCampoClinico(this.cipher, tx, ctx, id, CAMPO_NOTA, dados.texto) : undefined;
         const [atual] = await tx
           .update(privateNotes)
@@ -166,27 +171,39 @@ export class NotasPrivadasService {
     );
   }
 
-  descartar(ctx: RequestContext, id: string): Promise<{ id: string; descartadaEm: string }> {
+  /**
+   * Descarte (D1 do parecer do Guardião sobre o #63): irreversível. No MESMO UPDATE o conteúdo vira
+   * uma LÁPIDE cifrada (cifra de "" com o mesmo AAD) e a marcação de exportação é zerada: o texto
+   * deixa de existir no banco vivo na hora. A linha (só metadados) é expurgada em até 30 dias por
+   * `app_purge_discarded_private_notes` (salvo retenção legal). A trilha guarda só id e `op: discard`.
+   */
+  descartar(ctx: RequestContext, id: string): Promise<{ id: string; descartadaEm: string; expurgoAte: string }> {
     return comNegacaoAuditada(this.db, ctx, { op: 'nota_descartar', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const n = await this.doAutor(tx, ctx, id, true);
-        const vinculo = await exigirConteudoClinico(tx, ctx, n.patientId);
+        const vinculo = await this.porteiro(tx, ctx, n);
         const agora = new Date();
-        await tx
-          .update(privateNotes)
-          .set({ discardedAt: agora, updatedAt: agora, exportConsent: false })
-          .where(and(eq(privateNotes.tenantId, ctx.tenantId), eq(privateNotes.id, id)));
+        await descartarComLapide(this.cipher, tx, ctx, id, agora);
         await recordAudit(tx, ctx, {
           action: AuditAction.Update,
           scope: SCOPE_NOTAS,
           metadata: { note_id: id, patient_id: n.patientId, op: 'discard', care_basis: vinculo.base },
         });
-        return { id, descartadaEm: agora.toISOString() };
+        return { id, descartadaEm: agora.toISOString(), expurgoAte: new Date(agora.getTime() + DIAS_ATE_EXPURGO * 86_400_000).toISOString() };
       }),
     );
   }
 
   // ---------------------------------------------------------------- apoio
+
+  /**
+   * Porteiro da nota do próprio autor: perfil clínico + vínculo de cuidado; durante o desligamento
+   * (D2, `aguardando_decisao`), o autor decide as PRÓPRIAS notas sem vínculo (e sem prontuário).
+   */
+  private async porteiro(tx: TenantTx, ctx: RequestContext, n: LinhaNota): Promise<{ readonly base: string | null }> {
+    if (n.custodyState === 'aguardando_decisao') return { base: 'desligamento' };
+    return exigirConteudoClinico(tx, ctx, n.patientId);
+  }
 
   private async pacienteExiste(tx: TenantTx, ctx: RequestContext, pacienteId: string): Promise<void> {
     const [p] = await tx
@@ -201,7 +218,14 @@ export class NotasPrivadasService {
     const q = tx
       .select()
       .from(privateNotes)
-      .where(and(eq(privateNotes.tenantId, ctx.tenantId), eq(privateNotes.id, id), isNull(privateNotes.discardedAt)));
+      .where(
+        and(
+          eq(privateNotes.tenantId, ctx.tenantId),
+          eq(privateNotes.id, id),
+          isNull(privateNotes.discardedAt),
+          inArray(privateNotes.custodyState, VISIVEIS_AO_AUTOR),
+        ),
+      );
     const [n] = travar ? await q.for('update') : await q;
     if (!n) throw new NaoEncontradoError();
     if (n.authorUserId !== ctx.userId) throw new NotaDeOutroAutorError(id);
@@ -219,4 +243,22 @@ export class NotasPrivadasService {
       atualizadaEm: n.updatedAt.toISOString(),
     };
   }
+}
+
+/**
+ * Descarte com LÁPIDE (D1): troca o conteúdo pela cifra de "" (mesmo AAD da linha), zera a marcação
+ * de exportação e marca `discarded_at`. Usado pelo autor e pelo ciclo de custódia (D2).
+ */
+export async function descartarComLapide(
+  cipher: FieldCipher<TenantTx>,
+  tx: TenantTx,
+  ctx: RequestContext,
+  id: string,
+  agora: Date,
+): Promise<void> {
+  const lapide = await cifrarCampoClinico(cipher, tx, ctx, id, CAMPO_NOTA, '');
+  await tx
+    .update(privateNotes)
+    .set({ contentEnc: lapide, discardedAt: agora, updatedAt: agora, exportConsent: false })
+    .where(and(eq(privateNotes.tenantId, ctx.tenantId), eq(privateNotes.id, id)));
 }

@@ -4,8 +4,9 @@ import type { PsychCompartmentMode } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
+import { CicloNotasPrivadasService, type ResultadoDoCiclo } from './ciclo-notas-privadas';
 import { NotasPrivadasService, type NotaPrivadaDto } from './notas-privadas.service';
-import { ProntuarioService, type AtendimentoDto, type PaginaDeHistorico, type VersaoDto } from './prontuario.service';
+import { ProntuarioService, type AtendimentoDto, type PaginaDeHistorico, type RespostaConfiguracao, type VersaoDto } from './prontuario.service';
 import {
   validarAbertura,
   validarAdendo,
@@ -15,6 +16,7 @@ import {
   validarNovaNota,
   validarPaginacao,
   validarQueryVaziaClinica,
+  validarRetencaoLegal,
   validarSalvamento,
 } from './prontuario.validation';
 
@@ -162,7 +164,44 @@ export class ConfiguracaoProntuarioController {
 
   @Put('configuracao')
   @Permissao('prontuario:configurar')
-  definir(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<{ psicologia: PsychCompartmentMode }> {
+  definir(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<RespostaConfiguracao> {
     return this.service.definirConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
+  }
+}
+
+/**
+ * Ciclo das notas privadas e retenção legal (D1 e D2 do parecer #63). Só o dono da clínica, e ele
+ * nunca vê conteúdo: só contagens.
+ */
+@Controller('prontuario')
+@UseGuards(SessaoGuard)
+export class CicloNotasPrivadasController {
+  constructor(@Inject(CicloNotasPrivadasService) private readonly ciclo: CicloNotasPrivadasService) {}
+
+  /** Prazos de custódia e expurgo sob demanda (o job diário chama o mesmo serviço). Idempotente. */
+  @Post('notas-privadas/ciclo')
+  @HttpCode(200)
+  @Permissao('prontuario:configurar')
+  executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ResultadoDoCiclo> {
+    validarCorpoVazioClinico(corpo);
+    return this.ciclo.executarCicloDasNotas(paraRequestContext(auth));
+  }
+
+  /** Desligamento do profissional: as notas dele ficam aguardando decisão por 30 dias (só a contagem). */
+  @Post('profissionais/:id/desligamento')
+  @HttpCode(200)
+  @Permissao('prontuario:configurar')
+  desligar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ notas: number; prazo: string }> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazioClinico(corpo);
+    return this.ciclo.iniciarDesligamento(paraRequestContext(auth), alvo);
+  }
+
+  /** Retenção legal do paciente (requisição judicial, da ANPD ou processo ético): suspende o expurgo. */
+  @Put('pacientes/:id/retencao-legal')
+  @Permissao('prontuario:configurar')
+  retencao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ retencaoLegalDesde: string | null }> {
+    const alvo = exigirUuid(id);
+    return this.ciclo.definirRetencaoLegal(paraRequestContext(auth), alvo, validarRetencaoLegal(corpo));
   }
 }
