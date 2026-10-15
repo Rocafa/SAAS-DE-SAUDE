@@ -40,6 +40,19 @@ Os **documentos assinados** continuam no bucket `documentos`, com Object Lock s�
 - `log_error_verbosity = terse`: sem `DETAIL`, que traz "Failing row contains (...)";
 - `log_min_error_statement = panic`, `log_parameter_max_length(_on_error) = 0` e `log_min_duration_statement/sample = -1`.
 
+**Registro de DDL com pgaudit (R11 do [parecer do #61](../03-seguranca-lgpd/revisoes/2026-10-14-pr61.md)).** O `app_migrator` (dono das tabelas) e o master podem desligar os triggers de integridade (0013–0018) ou o `FORCE ROW LEVEL SECURITY`. Para isso deixar rastro sem gravar dado:
+- `shared_preload_libraries = pg_stat_statements,pgaudit` (estático: vale no próximo reboot, feito na janela de manutenção);
+- `pgaudit.log = ddl,role`. **Nunca** `read`, `write` nem `all`: gravariam SQL de consulta e dado de paciente;
+- `pgaudit.log_parameter = off` (sem valor de bind) e `pgaudit.log_relation = off`;
+- os parâmetros endurecidos do V2 continuam: `log_statement = none` (o pgaudit não depende dele), `terse`, `log_min_error_statement = panic`, `log_parameter_max_length(_on_error) = 0`;
+- as linhas `AUDIT:` saem pelo mesmo export `postgresql`, no grupo `/aws/rds/instance/*/postgresql`, com retenção e chave `logs`.
+
+Alerta (`auditoria-banco.tf`): metric filters nesse grupo somam na métrica `PlataformaSaude/Banco/DdlSensivel` quando aparece `DISABLE TRIGGER`, `DROP TRIGGER`, `ALTER ROLE`, `NO FORCE ROW LEVEL SECURITY` ou `DISABLE ROW LEVEL SECURITY` (regex sem diferença de caixa). O alarme `*-ddl-sensivel` (soma ≥ 1 em 1 min) publica no tópico `alertas-seguranca`; a key policy da chave `alertas` e a política do tópico liberam `cloudwatch.amazonaws.com`, restrito ao ARN do alarme. Uma migração legítima que altere papel ou trigger também alerta: é o esperado, e quem aplicou responde no alerta.
+
+Bootstrap (`infra/rds/bootstrap.sql`): roda `CREATE EXTENSION IF NOT EXISTS pgaudit;` (falha se a biblioteca ainda não estiver carregada; nesse caso, reiniciar a instância na janela e repetir). A classe `role` grava o texto do comando, então o `ALTER ROLE ... PASSWORD` levaria a senha ao log: o bootstrap faz `SET LOCAL pgaudit.log = 'none'` só na transação das senhas e volta ao padrão logo depois. Se o master não puder fazer esse `SET`, o bootstrap para antes de qualquer senha (falha fechada). No fim, confere que `pgaudit.log` tem `ddl` e `role` e nada de `read`/`write`/`all`.
+
+**Limite:** `SET session_replication_role = replica` é da classe `misc`, que fica fora (registraria todo `SET` da aplicação). Só o master (`rds_superuser`) consegue usá-lo, e humano só lê a senha do master pelo break-glass, que dispara alerta (R4 do #58). O `app_user` não é dono de tabela e não faz nada disso.
+
 Todos os grupos de log são declarados no Terraform **antes** do recurso que escreve neles, com retenção (`logs_retencao_dias` ou, para app e WAF, `logs_acesso_retencao_dias`) e a chave KMS `logs`: `/aws/rds/instance/*/postgresql` e `/upgrade`, `RDSOSMetrics`, Container Insights, app, Redis (se o slow-log for ligado), WAF e flow logs. O `infra.yml` falha se houver export do RDS sem grupo declarado, ou sem `log_error_verbosity`/`log_min_error_statement`. O WAF também redige a query string (R1).
 
 **CloudTrail (R3, condição para o 1º apply).** Trilha multirregião com:
@@ -123,7 +136,7 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
    - Revisar o plano com um sócio, olhando com atenção a criação de `aws_s3_bucket_object_lock_configuration` (COMPLIANCE não se desfaz).
    - Conferir que nada sai de sa-east-1.
 5. **Apply:** `terraform apply plano`.
-6. **Banco:** rodar `infra/rds/bootstrap.sh` de dentro da VPC (tarefa ECS avulsa ou SSM), lendo as senhas dos segredos `banco-app-*` e a do master pelo output `rds_segredo_master`. Humano não decifra a chave `segredos` (R4): o bootstrap roda com papel de máquina ou, se for manual, pelo `break-glass`, que gera alerta.
+6. **Banco:** rodar `infra/rds/bootstrap.sh` de dentro da VPC (tarefa ECS avulsa ou SSM), lendo as senhas dos segredos `banco-app-*` e a do master pelo output `rds_segredo_master`. Humano não decifra a chave `segredos` (R4): o bootstrap roda com papel de máquina ou, se for manual, pelo `break-glass`, que gera alerta. Antes, confirmar que a instância já reiniciou com o parameter group (o `pgaudit` em `shared_preload_libraries` só vale após reboot); o bootstrap roda `CREATE EXTENSION IF NOT EXISTS pgaudit;` e para se a biblioteca não estiver carregada.
 7. **Fumaça:** `/health` pelo ALB e conexão da API ao Redis por `rediss://`.
 
 **Rotação:**
