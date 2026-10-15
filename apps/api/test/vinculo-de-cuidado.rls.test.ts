@@ -635,6 +635,56 @@ describe('remarcação e "Desfazer" não fabricam vínculo (V2 do #61)', () => {
     await withTenant(api.db.db, clinicaA, mover(eu.sessao.userId), eu.sessao.userId);
     expect((await historico(id))[0]?.rescheduledBy).toBe(eu.sessao.userId);
   });
+
+  it('R10: transação sem usuário trava o slot com o sentinela de sistema; SQL injetado não define usuário', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const codigos = async (q: Promise<unknown>): Promise<unknown[]> => {
+      const err: unknown = await q.then(() => undefined, (e: unknown) => e);
+      expect(err, 'era esperado erro').toBeDefined();
+      const out: unknown[] = [];
+      for (let e: unknown = err; e instanceof Error; e = e.cause) out.push((e as { code?: unknown }).code);
+      return out;
+    };
+    // Job do sistema (sem userId): o banco vê sessão de sistema e nenhum usuário.
+    const estado = await withTenant(api.db.db, clinicaA, async (tx) =>
+      (await tx.execute<{ sis: boolean; u: string | null }>(sql`select app_is_system_session() as sis, app_current_user() as u`))[0],
+    );
+    expect(estado).toEqual({ sis: true, u: null });
+    // SQL injetado tentando se declarar usuário depois (qualquer UUID, inclusive o de um admin): 42501.
+    expect(
+      await codigos(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_set_user(${eu.sessao.userId}::uuid)`))),
+    ).toContain('42501');
+    expect(
+      await codigos(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_set_user(${adminA.userId}::uuid)`))),
+    ).toContain('42501');
+    // Injeção "empilhada" com savepoint também não libera o slot.
+    expect(
+      await codigos(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.transaction((sp) => sp.execute(sql`select app_set_user(${eu.sessao.userId}::uuid)`)),
+        ),
+      ),
+    ).toContain('42501');
+    // Ninguém se declara sistema pela porta do usuário, nem troca usuário por sistema.
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_set_user('00000000-0000-0000-0000-000000000000'::uuid)`), eu.sessao.userId),
+    ).rejects.toThrow();
+    expect(
+      await codigos(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_set_system_user()`), eu.sessao.userId)),
+    ).toContain('42501');
+    await expect(withTenant(api.db.db, clinicaA, () => Promise.resolve(undefined), '00000000-0000-0000-0000-000000000000')).rejects.toThrow(
+      /user_id inválido/,
+    );
+    // Sentinela não é autor: o job do sistema não cria agendamento, nem gravando o sentinela como criador.
+    const inicio = new Date(Date.now() + 6 * DIA);
+    const linha = (criadoPor: string) => ({
+      tenantId: clinicaA, patientId: p, professionalId: eu.id, appointmentTypeId: tipoA, createdBy: criadoPor,
+      startsAt: inicio, endsAt: new Date(inicio.getTime() + 50 * 60_000),
+    });
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values(linha('00000000-0000-0000-0000-000000000000')))).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values(linha(eu.sessao.userId)))).rejects.toThrow();
+  });
 });
 
 describe('janela de continuidade por clínica (R1 do #61)', () => {
