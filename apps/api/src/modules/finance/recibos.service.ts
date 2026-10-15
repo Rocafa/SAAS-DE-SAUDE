@@ -387,6 +387,8 @@ export class RecibosService {
       .leftJoin(receiptCancellations, and(eq(receiptCancellations.tenantId, receipts.tenantId), eq(receiptCancellations.receiptId, receipts.id)))
       .where(and(eq(receipts.tenantId, ctx.tenantId), eq(receipts.id, id)));
     if (!l) throw new NaoEncontradoError();
+    // R7: retrato eliminado pela retenção fiscal (ficam número, valor e datas, sem dado pessoal).
+    if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
     const conteudo = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
     return {
       ...conteudo,

@@ -10,7 +10,6 @@ import {
   validarCancelamentoCobranca,
   validarCancelamentoRecibo,
   validarConfiguracao,
-  validarCorpoVazio,
   validarEmissaoRecibo,
   validarEstorno,
   validarFechamentoCaixa,

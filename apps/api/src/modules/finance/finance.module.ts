@@ -3,6 +3,7 @@ import { CaixaService } from './caixa.service';
 import { FinanceiroController } from './financeiro.controller';
 import { FinanceiroService } from './financeiro.service';
 import { RecibosService } from './recibos.service';
+import { RetencaoFiscalController, RetencaoFiscalService } from './retencao-fiscal';
 
 /**
  * Financeiro do MVP (rodada 15.2): cobranças, recebimentos, estornos, caixa, recibos e insumo do
@@ -15,9 +16,9 @@ export class FinanceModule {
     return {
       module: FinanceModule,
       imports: [pacientes],
-      controllers: [FinanceiroController],
-      providers: [FinanceiroService, CaixaService, RecibosService],
-      exports: [FinanceiroService, CaixaService, RecibosService],
+      controllers: [FinanceiroController, RetencaoFiscalController],
+      providers: [FinanceiroService, CaixaService, RecibosService, RetencaoFiscalService],
+      exports: [FinanceiroService, CaixaService, RecibosService, RetencaoFiscalService],
     };
   }
 }
