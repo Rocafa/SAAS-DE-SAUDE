@@ -79,7 +79,8 @@ export interface LoteReceitaSaudeDto {
   readonly lacuna: string;
   readonly geradoEm: string;
   readonly periodo: { readonly de: string; readonly ate: string };
-  readonly emitente: { readonly profissionalId: string; readonly nome: string; readonly cpf: string | null; readonly registroConselho: string | null };
+  /** R5: só nome e CPF do emitente (o registro no conselho e o id interno não vão no insumo). */
+  readonly emitente: { readonly nome: string; readonly cpf: string | null };
   readonly itens: readonly ItemReceitaSaude[];
   readonly totais: { readonly quantidade: number; readonly valorCentavos: number };
   readonly pendencias: readonly string[];
@@ -240,7 +241,6 @@ export class RecibosService {
         .select()
         .from(professionalFiscalProfiles)
         .where(and(eq(professionalFiscalProfiles.tenantId, ctx.tenantId), eq(professionalFiscalProfiles.professionalId, prof.id)));
-      const config = await carregarConfig(tx, ctx);
       const { inicio, fim } = janelaDeDias(filtro.de, filtro.ate);
       const linhas = await tx
         .select({ p: payments, c: charges, paciente: patients, estorno: paymentReversals.id })
@@ -281,14 +281,11 @@ export class RecibosService {
           ? { nome: l.c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, l.c.id, CAMPO_CPF_PAGADOR, l.c.payerCpfEnc) }
           : beneficiario;
         itens.push({
-          recebimentoId: l.p.id,
-          cobrancaId: l.c.id,
           reciboNumero: numeros.get(l.p.id) ?? null,
           dataPagamento: noFusoDaClinica(l.p.receivedAt).data,
           valorCentavos: l.p.amountCents,
           pagador,
           beneficiario,
-          descricao: config.descricao,
           pendencias: pendenciasDoItem({ pagador, beneficiario }),
         });
       }
@@ -317,7 +314,7 @@ export class RecibosService {
         lacuna: INSUMO_RECEITA_SAUDE.lacuna,
         geradoEm: new Date().toISOString(),
         periodo: { de: filtro.de, ate: filtro.ate },
-        emitente: { profissionalId: prof.id, nome: prof.nome, cpf: cpfProf, registroConselho: perfil?.councilRegistration ?? null },
+        emitente: { nome: prof.nome, cpf: cpfProf },
         itens,
         totais: { quantidade: itens.length, valorCentavos: itens.reduce((s, i) => s + i.valorCentavos, 0) },
         pendencias,

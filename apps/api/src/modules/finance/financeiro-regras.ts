@@ -112,25 +112,24 @@ export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'ver
  * Receita Saúde v2.1 (perguntas 24 e 25), que NÃO está no repositório: aqui sai um insumo ESTRUTURADO
  * com os dados que o recibo eletrônico pede (emitente PF, pagador, beneficiário, valor, data do
  * pagamento), para um conversor ao layout oficial depois de validado com um contador. Não é o arquivo
- * oficial e não deve ser vendido como tal.
+ * oficial e não deve ser vendido como tal. Fica DENTRO da plataforma (nada é enviado a terceiros).
+ * R5 do #65: minimizado ao que o recibo eletrônico pede; o número do recibo serve de referência.
  */
 export const INSUMO_RECEITA_SAUDE = {
   formato: 'plataforma-saude/receita-saude-insumo',
-  versao: '0.1.0',
+  // 0.2.0 (R5 do #65): só o necessário — sem descrição livre, ids internos nem registro no conselho.
+  versao: '0.2.0',
   oficial: false,
   dependeDe: ['D14', 'manual_receita_saude_v2.1_perguntas_24_25'],
   lacuna: 'layout oficial do arquivo de integração não está no repositório; converter depois de validar com contador',
 } as const;
 
 export interface ItemReceitaSaude {
-  readonly recebimentoId: string;
-  readonly cobrancaId: string;
   readonly reciboNumero: number | null;
   readonly dataPagamento: string;
   readonly valorCentavos: number;
   readonly pagador: PessoaDoRecibo;
   readonly beneficiario: PessoaDoRecibo;
-  readonly descricao: string;
   readonly pendencias: readonly string[];
 }
 

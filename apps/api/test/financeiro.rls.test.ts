@@ -553,3 +553,23 @@ describe('R2 do #65: registro no conselho escolhido por recibo', () => {
     }
   });
 });
+
+describe('R5 do #65: insumo do Receita Saúde minimizado', () => {
+  it('itens só com número do recibo, data, valor, pagador, beneficiário e pendências; sem descrição, ids ou conselho', async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302), registroConselho: CONSELHO }).expect(200);
+    const c = await cobranca(recepA, { agendamentoId: await agendamento({ prof: profissionalPfA }), valorCentavos: 700, atendimentoPor: 'pf' });
+    const p = await receber(recepA, c.id, { forma: 'pix_manual' });
+    const hoje = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const l = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje, ate: hoje });
+    expect(l.status).toBe(200);
+    const lote = l.body as { versao: string; emitente: Record<string, unknown>; itens: Record<string, unknown>[] };
+    expect(lote.versao).toBe('0.2.0');
+    expect(Object.keys(lote.emitente).sort()).toEqual(['cpf', 'nome']);
+    expect(lote.itens.length).toBeGreaterThan(0);
+    for (const i of lote.itens) {
+      expect(Object.keys(i).sort()).toEqual(['beneficiario', 'dataPagamento', 'pagador', 'pendencias', 'reciboNumero', 'valorCentavos']);
+    }
+    const serial = JSON.stringify(lote);
+    for (const proibido of [CONSELHO, c.id, p.id, profissionalPfA, 'descricao', 'Atendimento']) expect(serial).not.toContain(proibido);
+  });
+});
