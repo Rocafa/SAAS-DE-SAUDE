@@ -76,8 +76,10 @@ async function agendamento(
   status: AppointmentStatusDb = 'checked_in',
 ): Promise<string> {
   const id = randomUUID();
+  const recepcao = randomUUID();
   await withTenant(api.db.db, tenantId, (tx) =>
     tx.insert(appointments).values({
+      createdBy: recepcao,
       id,
       tenantId,
       patientId: paciente,
@@ -88,7 +90,7 @@ async function agendamento(
       status,
       checkedInAt: status === 'checked_in' ? new Date() : null,
     }),
-  );
+  recepcao);
   return id;
 }
 
@@ -195,7 +197,7 @@ describe('abertura do atendimento a partir do check-in', () => {
         status: 'checked_in',
         createdBy: fisioA.userId,
       }),
-    );
+    fisioA.userId);
     const negado = await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag });
     expect(negado.status).toBe(403);
     expect(negado.body).toMatchObject({ codigo: 'sem_vinculo_de_cuidado' });
@@ -323,7 +325,7 @@ describe('evolução versionada e cifrada', () => {
         contentEnc: '{"queixa":"texto em claro"}',
         createdBy: fisioA.userId,
       }),
-    );
+    fisioA.userId);
     expect(await sqlstates(emClaro)).toContain('23514');
   });
 

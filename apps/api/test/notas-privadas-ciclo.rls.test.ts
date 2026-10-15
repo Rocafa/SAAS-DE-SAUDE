@@ -42,6 +42,7 @@ async function paciente(): Promise<string> {
 
 /** Atendimento de agora (recepção fictícia criou): dá vínculo `agenda_do_dia` ao profissional. */
 async function agendaDeHoje(pacienteId: string, profissionalId: string): Promise<void> {
+  const recepcao = randomUUID();
   await withTenant(api.db.db, clinica, (tx) =>
     tx.insert(appointments).values({
       tenantId: clinica,
@@ -52,8 +53,9 @@ async function agendaDeHoje(pacienteId: string, profissionalId: string): Promise
       endsAt: new Date(Date.now() + 40 * 60_000),
       status: 'checked_in',
       checkedInAt: new Date(),
+      createdBy: recepcao,
     }),
-  );
+  recepcao);
 }
 
 async function novaNota(s: Sessao, pacienteId: string, incluirNaExportacao = false): Promise<string> {

@@ -184,8 +184,10 @@ beforeAll(async () => {
   // Prontuário (0012): atendimento com 2 versões, finalizado, com adendo; sigilo configurado; duas
   // notas privadas, só UMA com a decisão do autor de exportar.
   const ag3 = randomUUID();
+  const recepcao = randomUUID();
   await withTenant(api.db.db, clinicaA, (tx) =>
     tx.insert(appointments).values({
+      createdBy: recepcao,
       id: ag3,
       tenantId: clinicaA,
       patientId: pacienteId,
@@ -195,7 +197,7 @@ beforeAll(async () => {
       endsAt: new Date(Date.now() + 30 * 60_000),
       status: 'checked_in',
     }),
-  );
+  recepcao);
   const at = await api.http().post('/atendimentos').set(cab(admin)).send({ agendamentoId: ag3 });
   expect(at.status).toBe(200);
   const atId = (at.body as { id: string }).id;
