@@ -22,8 +22,17 @@
 
 ALTER TABLE appointments ADD COLUMN rescheduled_by uuid;
 ALTER TABLE appointments ADD COLUMN reschedule_locked boolean NOT NULL DEFAULT false;
--- Alvo da FK composta do histórico (mesma clínica).
-ALTER TABLE appointments ADD CONSTRAINT appointments_id_tenant_key UNIQUE (id, tenant_id);
+-- Alvo da FK composta do histórico (mesma clínica). A 0011 (guias e pacotes, PR #62) cria a mesma
+-- restrição; aqui só se ela ainda não existir, para as duas ordens de merge funcionarem.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'appointments_id_tenant_key' AND conrelid = 'appointments'::regclass
+  ) THEN
+    ALTER TABLE appointments ADD CONSTRAINT appointments_id_tenant_key UNIQUE (id, tenant_id);
+  END IF;
+END;
+$$;
 
 CREATE FUNCTION appointments_guarda_remarcacao() RETURNS trigger
   LANGUAGE plpgsql
