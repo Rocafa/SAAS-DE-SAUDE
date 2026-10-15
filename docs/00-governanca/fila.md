@@ -29,6 +29,9 @@
 | Rodada 15.1: ✅ ressalvas #61 (0016) e #63 (0017) — aprovados com ressalvas — aguarda CI | Maestro @Rocafa | 15/10/2026 | PRs #61, #63 |
 | Rodada 15.2: ✅ **PR #65** financeiro (0018), aprovado com ressalvas — aguarda CI | Maestro @Rocafa | 15/10/2026 | PR #65 |
 | Rodada 15.3: ✅ pareceres #61, #63, #65 | Maestro @Rocafa | 15/10/2026 | concluído |
+| Rodada 16.1: ressalvas em sequência na pilha — #61 R10 (userId em toda transação + sentinela; migração **0019**), #63 R13/R14 (banco sabe quem é admin/psicólogo; **0020**), #65 R1, R2, R5, R7, R9, R10 (**0021**) | Maestro @Rocafa (agente engenharia) | 15/10/2026 | pilha #61→#62→#63→#65 |
+| Rodada 16.2: R11 do #61 — registro de DDL no RDS (pgaudit) no Terraform | Maestro @Rocafa (agente devops-ci) | 15/10/2026 | PR #58 |
+| Rodada 16.3: R6 do #65 (financeiro no ROPA) + relatório geral e CONTEXTO com as rodadas 14–15 | Maestro @Rocafa | 15/10/2026 | main |
 
 ## Livre (pegue colocando seu nome)
 
