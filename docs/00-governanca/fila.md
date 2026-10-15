@@ -26,6 +26,9 @@
 | Rodada 13.4: ✅ relatório geral e CONTEXTO com as rodadas 10–13 | Maestro @Rocafa | 14/10/2026 | concluído |
 | Rodada 14.1: ✅ **PR #63** prontuário (migrações 0012/0015), aprovado com ressalvas após 1 veto; #61 e #62 atualizados (0013/0014) — aguarda CI | Maestro @Rocafa | 14/10/2026 | PR #63 |
 | Rodada 14.2: ✅ pareceres #61 (2 vetos → aprovado c/ ressalvas), #62 e #63 | Maestro @Rocafa | 14/10/2026 | concluído |
+| Rodada 15.1: ressalvas do Guardião — #61 R8/R9 (migração **0016**) e #63 R10, R2 (custódia do psicólogo substituto), R9 (aviso de mudança de sigilo), R11, R12 (migração **0017**), em sequência na pilha | Maestro @Rocafa (agente engenharia) | 15/10/2026 | pilha #61→#62→#63 |
+| Rodada 15.2: financeiro do MVP — recebimentos (dinheiro/cartão/Pix manual), contas a receber, recibos, cobrança de pacotes, insumo do Receita Saúde em lote (D14 pendente) — migração **0018**, empilhado sobre #63 | Maestro @Rocafa (agente engenharia) | 15/10/2026 | branch `eng/financeiro` |
+| Rodada 15.3: revisão do Guardião (ressalvas + financeiro) | Maestro @Rocafa (agente guardiao-lgpd) | 15/10/2026 | revisoes/ |
 
 ## Livre (pegue colocando seu nome)
 
