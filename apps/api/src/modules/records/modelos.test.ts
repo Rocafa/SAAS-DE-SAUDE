@@ -85,12 +85,12 @@ describe('modelos de registro por nicho', () => {
 });
 
 describe('regras do prontuário', () => {
-  const psi = { compartment: 'psicologia' as const, authorUserId: 'autor' };
-  it('compartimento de psicologia: restrito ao autor por padrão; prontuário único abre para quem tem vínculo', () => {
-    expect(podeVerConteudo(psi, 'autor', 'restrito_ao_autor')).toBe(true);
-    expect(podeVerConteudo(psi, 'outro', 'restrito_ao_autor')).toBe(false);
-    expect(podeVerConteudo(psi, 'outro', 'prontuario_unico')).toBe(true);
-    expect(podeVerConteudo({ compartment: 'geral', authorUserId: 'autor' }, 'outro', 'restrito_ao_autor')).toBe(true);
+  const psi = { compartment: 'psicologia' as const, authorUserId: 'autor', confidentiality: 'restrito_ao_autor' as const };
+  it('compartimento de psicologia: decide pelo sigilo GRAVADO no atendimento (B1 do #63)', () => {
+    expect(podeVerConteudo(psi, 'autor')).toBe(true);
+    expect(podeVerConteudo(psi, 'outro')).toBe(false);
+    expect(podeVerConteudo({ ...psi, confidentiality: 'prontuario_unico' }, 'outro')).toBe(true);
+    expect(podeVerConteudo({ compartment: 'geral', authorUserId: 'autor', confidentiality: 'restrito_ao_autor' }, 'outro')).toBe(true);
   });
 
   it('hash da finalização: determinístico e sensível a qualquer campo', () => {

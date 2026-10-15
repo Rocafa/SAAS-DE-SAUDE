@@ -133,9 +133,24 @@ export function validarAlteracaoNota(corpo: unknown): AlteracaoNota {
   return { ...(texto !== undefined ? { texto } : {}), ...(incluir !== undefined ? { incluirNaExportacao: incluir } : {}) };
 }
 
-export function validarConfiguracao(corpo: unknown): PsychCompartmentMode {
-  const v = new Validador(exigirObjeto(corpo, ['psicologia']));
-  const modo = v.umDe('psicologia', PSYCH_COMPARTMENT_MODES, true);
+/** Retenção legal do paciente (D1.4 do #63): só liga/desliga; o motivo fica fora (nada de texto livre). */
+export function validarRetencaoLegal(corpo: unknown): boolean {
+  const v = new Validador(exigirObjeto(corpo, ['ativa']));
+  const ativa = v.booleano('ativa');
+  if (ativa === undefined) v.falhar('ativa');
   v.concluir();
-  return modo as PsychCompartmentMode;
+  return ativa === true;
+}
+
+/**
+ * Troca do sigilo da psicologia. `restringirAnteriores` só existe no sentido mais protetor
+ * (`restrito_ao_autor`); com `prontuario_unico` é 400: abrir registro antigo não é configuração.
+ */
+export function validarConfiguracao(corpo: unknown): { psicologia: PsychCompartmentMode; restringirAnteriores?: boolean } {
+  const v = new Validador(exigirObjeto(corpo, ['psicologia', 'restringirAnteriores']));
+  const modo = v.umDe('psicologia', PSYCH_COMPARTMENT_MODES, true) as PsychCompartmentMode;
+  const restringir = v.booleano('restringirAnteriores');
+  if (restringir === true && modo !== 'restrito_ao_autor') v.falhar('restringirAnteriores');
+  v.concluir();
+  return { psicologia: modo, ...(restringir !== undefined ? { restringirAnteriores: restringir } : {}) };
 }

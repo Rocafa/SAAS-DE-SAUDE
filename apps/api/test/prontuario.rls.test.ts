@@ -428,16 +428,44 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     expect(comBusca.body).toMatchObject({ campos: ['dado_na_url'] });
   });
 
-  it('o dono muda para prontuario_unico (auditado como permission_change): quem tem vínculo passa a ler', async () => {
+  it('B1: a troca para prontuario_unico NÃO abre os registros antigos; só os atendimentos novos seguem o modo novo', async () => {
     expect((await api.http().put('/prontuario/configuracao').set(cab(recepA)).send({ psicologia: 'prontuario_unico' })).status).toBe(403);
     expect((await api.http().put('/prontuario/configuracao').set(cab(fisioA)).send({ psicologia: 'prontuario_unico' })).status).toBe(403);
+    // "Restringir anteriores" só existe no sentido mais protetor.
+    const invalido = await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'prontuario_unico', restringirAnteriores: true });
+    expect(invalido.status).toBe(400);
     const res = await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'prontuario_unico' });
     expect(res.status).toBe(200);
-    const outro = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
-    expect(outro.body).toMatchObject({ conteudoOculto: false, conteudo: { tema: PSICO } });
+    expect(res.body).toEqual({ psicologia: 'prontuario_unico', valeSoParaNovos: true, anterioresRestringidos: 0 });
+    // O registro escrito sob "só o autor lê" continua só do autor, depois da troca.
+    const antigo = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
+    expect(antigo.body).toMatchObject({ conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null, sigilo: 'restrito_ao_autor' });
+    expect(JSON.stringify(antigo.body)).not.toContain('5505');
+    expect((await api.http().get(`/atendimentos/${atPsi}/versoes`).set(cab(outroA))).status).toBe(403);
+    const historico = await api.http().get(`/pacientes/${pacienteA}/prontuario`).set(cab(outroA));
+    expect(JSON.stringify(historico.body)).not.toContain('5505');
+    // O atendimento NOVO (aberto depois da troca) grava prontuario_unico e quem tem vínculo lê.
+    const agNovo = await agendamento(clinicaA, pacienteA, profissionalDe.get(psiA.userId) as string, tipoA);
+    const novo = await api.http().post('/atendimentos').set(cab(psiA)).send({ agendamentoId: agNovo });
+    expect(novo.status).toBe(200);
+    expect(novo.body).toMatchObject({ modelo: 'psicologia', sigilo: 'prontuario_unico' });
+    const atNovo = (novo.body as { id: string }).id;
+    await api.http().put(`/atendimentos/${atNovo}/registro`).set(cab(psiA)).send({ versaoBase: 0, conteudo: { tema: 'Tema ficticio novo', evolucao: 'Evolucao ficticia nova' } }).expect(200);
+    const outroNovo = await api.http().get(`/atendimentos/${atNovo}`).set(cab(outroA));
+    expect(outroNovo.body).toMatchObject({ conteudoOculto: false, conteudo: { tema: 'Tema ficticio novo' } });
     const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinical_settings')));
-    expect(trilha.map((l) => [l.action, l.metadata])).toContainEqual(['permission_change', { from: 'restrito_ao_autor', to: 'prontuario_unico' }]);
-    await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'restrito_ao_autor' }).expect(200);
+    expect(trilha.map((l) => [l.action, l.metadata])).toContainEqual([
+      'permission_change',
+      { from: 'restrito_ao_autor', to: 'prontuario_unico', applies_to: 'new_encounters', restricted_existing: 0 },
+    ]);
+    // No banco: o sigilo do atendimento não abre (nem pelo runtime direto)...
+    const abrir = withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ confidentiality: 'prontuario_unico' }).where(eq(encounters.id, atPsi)));
+    expect(await sqlstates(abrir)).toContain('42501');
+    // ...mas a troca de volta pode, opcionalmente, restringir os anteriores (só restringe).
+    const volta = await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'restrito_ao_autor', restringirAnteriores: true });
+    expect(volta.body).toEqual({ psicologia: 'restrito_ao_autor', valeSoParaNovos: true, anterioresRestringidos: 1 });
+    expect((await api.http().get(`/atendimentos/${atNovo}`).set(cab(outroA))).body).toMatchObject({ conteudoOculto: true, sigilo: 'restrito_ao_autor' });
+    expect((await api.http().get(`/atendimentos/${atNovo}`).set(cab(psiA))).body).toMatchObject({ conteudoOculto: false });
     const [cfg] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalSettings));
     expect(cfg?.psychCompartment).toBe('restrito_ao_autor');
   });

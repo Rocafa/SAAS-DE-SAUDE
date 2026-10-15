@@ -9,15 +9,18 @@ export const MODO_PSICOLOGIA_PADRAO: PsychCompartmentMode = 'restrito_ao_autor';
 
 /**
  * Quem já passou pelo porteiro (perfil clínico + vínculo de cuidado) lê o conteúdo, exceto o
- * compartimento de psicologia no modo `restrito_ao_autor`: aí só o autor do registro.
+ * compartimento de psicologia aberto no modo `restrito_ao_autor`: aí só o autor do registro.
+ *
+ * B1 do parecer do Guardião sobre o PR #63: vale o modo GRAVADO NO ATENDIMENTO na abertura
+ * (`encounters.confidentiality`, migração 0015), nunca o da configuração atual da clínica. Trocar a
+ * configuração vale só para atendimentos novos; o registro escrito sob "só o autor lê" continua assim.
  */
 export function podeVerConteudo(
-  registro: { readonly compartment: RecordCompartment; readonly authorUserId: string },
+  registro: { readonly compartment: RecordCompartment; readonly authorUserId: string; readonly confidentiality: PsychCompartmentMode },
   usuarioId: string,
-  modoPsicologia: PsychCompartmentMode,
 ): boolean {
   if (registro.compartment !== 'psicologia') return true;
-  if (modoPsicologia === 'prontuario_unico') return true;
+  if (registro.confidentiality === 'prontuario_unico') return true;
   return registro.authorUserId === usuarioId;
 }
 

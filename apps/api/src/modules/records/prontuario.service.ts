@@ -48,6 +48,8 @@ export interface AtendimentoDto {
   readonly modelo: RecordTemplate;
   /** Compartimento de psicologia (sigilo): true para registros do modelo psicologia. */
   readonly restrito: boolean;
+  /** Sigilo gravado na abertura (B1 do #63): vale para este atendimento, qualquer que seja a configuração atual. */
+  readonly sigilo: PsychCompartmentMode;
   readonly status: 'aberto' | 'finalizado';
   readonly versao: number;
   readonly versaoModelo: number | null;
@@ -61,6 +63,20 @@ export interface AtendimentoDto {
   readonly hashFinalizacao: string | null;
   readonly conteudoOculto: boolean;
   readonly motivoOculto?: 'sigilo_psicologia';
+}
+
+/** Pedido de troca do sigilo da psicologia (B1 do #63). */
+export interface ConfiguracaoDeSigilo {
+  readonly psicologia: PsychCompartmentMode;
+  /** Só com `restrito_ao_autor`: restringe também os atendimentos já abertos em `prontuario_unico`. */
+  readonly restringirAnteriores?: boolean;
+}
+
+export interface RespostaConfiguracao {
+  readonly psicologia: PsychCompartmentMode;
+  /** Sempre true: a troca não muda o sigilo dos atendimentos já abertos (salvo restringir). */
+  readonly valeSoParaNovos: true;
+  readonly anterioresRestringidos: number;
 }
 
 export interface VersaoDto {
@@ -144,10 +160,12 @@ export class ProntuarioService {
             scope: SCOPE_ATENDIMENTOS,
             metadata: { encounter_id: existente.id, patient_id: existente.patientId, care_basis: vinculo.base },
           });
-          return this.montar(tx, ctx, existente, await modoPsicologia(tx, ctx.tenantId));
+          return this.montar(tx, ctx, existente);
         }
         if (!(STATUS_ABRE_ATENDIMENTO as readonly string[]).includes(ag.status)) throw new ConflitoError('agendamento_sem_chegada');
         const modelo = dados.modelo ?? modeloPelaEspecialidade(prof.specialty);
+        // B1 do #63: o sigilo vigente AGORA fica gravado no atendimento e vale para sempre para ele.
+        const sigilo = await modoPsicologia(tx, ctx.tenantId);
         const [e] = await tx
           .insert(encounters)
           .values({
@@ -158,6 +176,7 @@ export class ProntuarioService {
             authorUserId: ctx.userId,
             template: modelo,
             compartment: modelo === 'psicologia' ? 'psicologia' : 'geral',
+            confidentiality: sigilo,
             aiConsent: dados.consentimentoIa ?? 'nao_informado',
           })
           .returning();
@@ -170,11 +189,12 @@ export class ProntuarioService {
             appointment_id: ag.id,
             patient_id: ag.patientId,
             template: modelo,
+            confidentiality: e.confidentiality,
             ai_consent: e.aiConsent,
             care_basis: vinculo.base,
           },
         });
-        return this.montar(tx, ctx, e, await modoPsicologia(tx, ctx.tenantId));
+        return this.montar(tx, ctx, e);
       }),
     );
   }
@@ -184,7 +204,7 @@ export class ProntuarioService {
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
-        const dto = await this.montar(tx, ctx, e, await modoPsicologia(tx, ctx.tenantId));
+        const dto = await this.montar(tx, ctx, e);
         await recordAudit(tx, ctx, {
           action: AuditAction.Read,
           scope: SCOPE_REGISTROS,
@@ -228,7 +248,7 @@ export class ProntuarioService {
           scope: SCOPE_REGISTROS,
           metadata: { encounter_id: e.id, patient_id: e.patientId, version: versao, template: e.template, care_basis: vinculo.base },
         });
-        return this.montar(tx, ctx, atualizado ?? e, await modoPsicologia(tx, ctx.tenantId));
+        return this.montar(tx, ctx, atualizado ?? e);
       }),
     );
   }
@@ -269,7 +289,7 @@ export class ProntuarioService {
           scope: SCOPE_ATENDIMENTOS,
           metadata: { encounter_id: e.id, patient_id: e.patientId, version: v.version, hash, care_basis: vinculo.base },
         });
-        return this.montar(tx, ctx, atualizado ?? e, await modoPsicologia(tx, ctx.tenantId));
+        return this.montar(tx, ctx, atualizado ?? e);
       }),
     );
   }
@@ -280,8 +300,7 @@ export class ProntuarioService {
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
-        const modo = await modoPsicologia(tx, ctx.tenantId);
-        if (!podeVerConteudo(e, ctx.userId, modo)) throw new ProibidoError('sigilo_psicologia');
+        if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
         if (e.status !== 'signed') throw new ConflitoError('registro_nao_finalizado');
         const adendoId = randomUUID();
         const textEnc = await cifrarCampoClinico(this.cipher, tx, ctx, adendoId, CAMPO_ADENDO, texto);
@@ -291,7 +310,7 @@ export class ProntuarioService {
           scope: SCOPE_ADENDOS,
           metadata: { encounter_id: e.id, patient_id: e.patientId, addendum_id: adendoId, care_basis: vinculo.base },
         });
-        return this.montar(tx, ctx, e, modo);
+        return this.montar(tx, ctx, e);
       }),
     );
   }
@@ -302,7 +321,7 @@ export class ProntuarioService {
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
-        if (!podeVerConteudo(e, ctx.userId, await modoPsicologia(tx, ctx.tenantId))) throw new ProibidoError('sigilo_psicologia');
+        if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
         const linhas = await tx
           .select()
           .from(clinicalRecordVersions)
@@ -346,8 +365,7 @@ export class ProntuarioService {
           .limit(pag.limite + 1)
           .offset((pag.pagina - 1) * pag.limite);
         const pagina = linhas.slice(0, pag.limite);
-        const modo = await modoPsicologia(tx, ctx.tenantId);
-        const visiveis = pagina.filter((e) => podeVerConteudo(e, ctx.userId, modo));
+        const visiveis = pagina.filter((e) => podeVerConteudo(e, ctx.userId));
         const ids = visiveis.map((e) => e.id);
         const versoes = ids.length
           ? await tx
@@ -378,7 +396,6 @@ export class ProntuarioService {
               tx,
               ctx,
               e,
-              modo,
               v,
               adendos.filter((a) => a.encounterId === e.id),
             ),
@@ -409,10 +426,32 @@ export class ProntuarioService {
     });
   }
 
-  /** Muda o sigilo do compartimento de psicologia (auditado como mudança de permissão). */
-  definirConfiguracao(ctx: RequestContext, modo: PsychCompartmentMode): Promise<{ psicologia: PsychCompartmentMode }> {
+  /**
+   * Muda o sigilo do compartimento de psicologia (auditado como mudança de permissão). B1 do #63:
+   * vale SÓ para atendimentos abertos depois da troca; os já abertos mantêm o sigilo gravado neles.
+   * A única troca que pode alcançar os anteriores é a MAIS protetora (`restrito_ao_autor` com
+   * `restringirAnteriores: true`), porque só restringe. Abrir registro antigo ao prontuário único
+   * não existe (depende da pergunta 1.11 do advogado, com o autor e auditado).
+   */
+  definirConfiguracao(ctx: RequestContext, conf: ConfiguracaoDeSigilo): Promise<RespostaConfiguracao> {
+    const modo = conf.psicologia;
     return escreverNaClinica(this.db, ctx, async (tx) => {
       const anterior = await modoPsicologia(tx, ctx.tenantId);
+      let restringidos = 0;
+      if (modo === 'restrito_ao_autor' && conf.restringirAnteriores) {
+        const linhas = await tx
+          .update(encounters)
+          .set({ confidentiality: 'restrito_ao_autor' })
+          .where(
+            and(
+              eq(encounters.tenantId, ctx.tenantId),
+              eq(encounters.compartment, 'psicologia'),
+              eq(encounters.confidentiality, 'prontuario_unico'),
+            ),
+          )
+          .returning({ id: encounters.id });
+        restringidos = linhas.length;
+      }
       await tx
         .insert(clinicalSettings)
         .values({ tenantId: ctx.tenantId, psychCompartment: modo, updatedBy: ctx.userId })
@@ -423,9 +462,11 @@ export class ProntuarioService {
       await recordAudit(tx, ctx, {
         action: AuditAction.PermissionChange,
         scope: SCOPE_CONFIGURACAO,
-        metadata: { from: anterior, to: modo },
+        metadata: { from: anterior, to: modo, applies_to: 'new_encounters', restricted_existing: restringidos },
       });
-      return { psicologia: modo };
+      // B1-d: a resposta diz ao admin que a troca só vale para os novos (a interface mostra isso);
+      // o aviso aos psicólogos da clínica entra com o módulo de notificações (fila, antes do piloto).
+      return { psicologia: modo, valeSoParaNovos: true, anterioresRestringidos: restringidos };
     });
   }
 
@@ -460,26 +501,25 @@ export class ProntuarioService {
     return JSON.parse(await decifrarCampoClinico(this.cipher, tx, ctx.tenantId, v.id, CAMPO_VERSAO, v.contentEnc)) as ConteudoRegistro;
   }
 
-  private async montar(tx: TenantTx, ctx: RequestContext, e: LinhaAtendimento, modo: PsychCompartmentMode): Promise<AtendimentoDto> {
-    if (!podeVerConteudo(e, ctx.userId, modo)) return this.dto(tx, ctx, e, modo, null, []);
+  private async montar(tx: TenantTx, ctx: RequestContext, e: LinhaAtendimento): Promise<AtendimentoDto> {
+    if (!podeVerConteudo(e, ctx.userId)) return this.dto(tx, ctx, e, null, []);
     const v = e.currentVersion > 0 ? await this.versaoAtual(tx, ctx, e) : null;
     const adendos = await tx
       .select()
       .from(clinicalAddenda)
       .where(and(eq(clinicalAddenda.tenantId, ctx.tenantId), eq(clinicalAddenda.encounterId, e.id)))
       .orderBy(asc(clinicalAddenda.createdAt), asc(clinicalAddenda.id));
-    return this.dto(tx, ctx, e, modo, v, adendos);
+    return this.dto(tx, ctx, e, v, adendos);
   }
 
   private async dto(
     tx: TenantTx,
     ctx: RequestContext,
     e: LinhaAtendimento,
-    modo: PsychCompartmentMode,
     v: LinhaVersao | null,
     adendos: readonly LinhaAdendo[],
   ): Promise<AtendimentoDto> {
-    const visivel = podeVerConteudo(e, ctx.userId, modo);
+    const visivel = podeVerConteudo(e, ctx.userId);
     const base = {
       id: e.id,
       pacienteId: e.patientId,
@@ -488,6 +528,7 @@ export class ProntuarioService {
       autorId: e.authorUserId,
       modelo: e.template,
       restrito: e.compartment === 'psicologia',
+      sigilo: e.confidentiality,
       status: e.status === 'signed' ? ('finalizado' as const) : ('aberto' as const),
       versao: e.currentVersion,
       consentimentoIa: e.aiConsent,
