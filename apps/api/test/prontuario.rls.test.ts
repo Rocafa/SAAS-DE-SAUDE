@@ -13,6 +13,7 @@ import {
   appointments,
   auditLog,
   clinicalAddenda,
+  clinicalNotices,
   clinicalRecordVersions,
   clinicalSettings,
   encounters,
@@ -438,7 +439,23 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     expect(invalido.status).toBe(400);
     const res = await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'prontuario_unico' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ psicologia: 'prontuario_unico', valeSoParaNovos: true, anterioresRestringidos: 0 });
+    expect(res.body).toMatchObject({ psicologia: 'prontuario_unico', valeSoParaNovos: true, anterioresRestringidos: 0 });
+    expect(Object.keys(res.body as object).sort()).toEqual(['anterioresRestringidos', 'psicologia', 'psicologosAvisados', 'valeSoParaNovos']);
+    // R9: cada psicólogo ativo recebe um aviso na caixa interna, sem dado de paciente; só ele lê e marca lido.
+    expect((res.body as { psicologosAvisados: number }).psicologosAvisados).toBeGreaterThanOrEqual(1);
+    const caixa = await api.http().get('/avisos').set(cab(psiA));
+    expect(caixa.status).toBe(200);
+    const aviso = (caixa.body as { id: string; tipo: string; de: string; para: string; lidoEm: string | null }[])[0];
+    expect(aviso).toMatchObject({ tipo: 'sigilo_psicologia_alterado', de: 'restrito_ao_autor', para: 'prontuario_unico', lidoEm: null });
+    expect(Object.keys(aviso as object).sort()).toEqual(['anterioresRestringidos', 'criadoEm', 'de', 'id', 'lidoEm', 'para', 'tipo']);
+    const caixaOutro = await api.http().get('/avisos').set(cab(outroA));
+    expect((caixaOutro.body as { id: string }[]).map((a) => a.id)).not.toContain(aviso?.id);
+    await api.http().post('/avisos/' + String(aviso?.id) + '/lido').set(cab(outroA)).send({}).expect(404);
+    const lerDireto = withTenant(api.db.db, clinicaA, (tx) => tx.update(clinicalNotices).set({ readAt: new Date() }).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId);
+    expect(await sqlstates(lerDireto)).toContain('42501');
+    const lido = await api.http().post('/avisos/' + String(aviso?.id) + '/lido').set(cab(psiA)).send({});
+    expect(lido.status).toBe(200);
+    expect(((await api.http().get('/avisos').set(cab(psiA))).body as { lidoEm: string | null }[])[0]?.lidoEm).not.toBeNull();
     // O registro escrito sob "só o autor lê" continua só do autor, depois da troca.
     const antigo = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
     expect(antigo.body).toMatchObject({ conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null, sigilo: 'restrito_ao_autor' });
@@ -465,7 +482,7 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     expect(await sqlstates(abrir)).toContain('42501');
     // ...mas a troca de volta pode, opcionalmente, restringir os anteriores (só restringe).
     const volta = await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'restrito_ao_autor', restringirAnteriores: true });
-    expect(volta.body).toEqual({ psicologia: 'restrito_ao_autor', valeSoParaNovos: true, anterioresRestringidos: 1 });
+    expect(volta.body).toMatchObject({ psicologia: 'restrito_ao_autor', valeSoParaNovos: true, anterioresRestringidos: 1 });
     expect((await api.http().get(`/atendimentos/${atNovo}`).set(cab(outroA))).body).toMatchObject({ conteudoOculto: true, sigilo: 'restrito_ao_autor' });
     expect((await api.http().get(`/atendimentos/${atNovo}`).set(cab(psiA))).body).toMatchObject({ conteudoOculto: false });
     const [cfg] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalSettings));

@@ -143,12 +143,12 @@ describe('D1: expurgo em 30 dias, idempotente, salvo retenção legal', () => {
     // Perfis que não são o dono da clínica não rodam o ciclo nem mexem na retenção.
     const prof = api.sessao(clinica, 'profissional');
     expect((await api.http().post('/prontuario/notas-privadas/ciclo').set(cab(prof)).send({})).status).toBe(403);
-    expect((await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(prof)).send({ ativa: true })).status).toBe(403);
+    expect((await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(prof)).send({ referencia: 'Oficio ficticio 1' })).status).toBe(403);
     // O runtime não tem DELETE, nem para linha elegível.
     const direto = withTenant(api.db.db, clinica, (tx) => tx.execute(sql`delete from private_notes where id = ${velha}`));
     await expect(direto).rejects.toThrow();
 
-    const hold = await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(admin)).send({ ativa: true });
+    const hold = await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(admin)).send({ referencia: 'Oficio ficticio 2' });
     expect(hold.status).toBe(200);
     expect((hold.body as { retencaoLegalDesde: string | null }).retencaoLegalDesde).not.toBeNull();
 
@@ -161,14 +161,16 @@ describe('D1: expurgo em 30 dias, idempotente, salvo retenção legal', () => {
     // Idempotente.
     expect((await api.http().post('/prontuario/notas-privadas/ciclo').set(cab(admin)).send({})).body).toMatchObject({ expurgadas: 0 });
     // Retirada a retenção, a linha elegível sai na próxima execução.
-    await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(admin)).send({ ativa: false }).expect(200);
+    // (R12: retirar exige motivo e OUTRO admin.)
+    await api.http().post(`/prontuario/pacientes/${pRetido}/retencao-legal/retirada`).set(cab(admin)).send({ motivo: 'Processo ficticio encerrado' }).expect(200);
+    await api.http().post(`/prontuario/pacientes/${pRetido}/retencao-legal/retirada/aprovacao`).set(cab(api.sessao(clinica, 'admin'))).send({}).expect(200);
     expect((await api.http().post('/prontuario/notas-privadas/ciclo').set(cab(admin)).send({})).body).toMatchObject({ expurgadas: 1 });
     expect(await linha(retida)).toBeUndefined();
     // Trilha: só contagens e a marca de retenção (sem texto).
     const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.actorId, admin.userId)));
     const metas = trilha.map((l) => l.metadata);
     expect(metas).toContainEqual({ op: 'purge', count: 1 });
-    expect(metas).toContainEqual({ patient_id: pRetido, op: 'legal_hold', active: true });
+    expect(metas).toContainEqual(expect.objectContaining({ patient_id: pRetido, op: 'legal_hold', active: true }));
   });
 
   it('o expurgo só alcança a clínica do contexto', async () => {

@@ -133,13 +133,43 @@ export function validarAlteracaoNota(corpo: unknown): AlteracaoNota {
   return { ...(texto !== undefined ? { texto } : {}), ...(incluir !== undefined ? { incluirNaExportacao: incluir } : {}) };
 }
 
-/** Retenção legal do paciente (D1.4 do #63): só liga/desliga; o motivo fica fora (nada de texto livre). */
-export function validarRetencaoLegal(corpo: unknown): boolean {
-  const v = new Validador(exigirObjeto(corpo, ['ativa']));
+/**
+ * Retenção legal do paciente (D1.4 e R12 do #63): marcar exige a REFERÊNCIA do processo ou ofício
+ * (gravada cifrada; nunca na trilha). `ativa` continua aceito só como `true`: retirar é outra rota,
+ * em duas etapas e por duas pessoas.
+ */
+export function validarRetencaoLegal(corpo: unknown): { referencia: string } {
+  const v = new Validador(exigirObjeto(corpo, ['ativa', 'referencia']));
   const ativa = v.booleano('ativa');
-  if (ativa === undefined) v.falhar('ativa');
+  if (ativa === false) v.falhar('ativa');
+  const referencia = v.texto('referencia', { min: 3, max: 300, obrigatorio: true });
   v.concluir();
-  return ativa === true;
+  return { referencia };
+}
+
+/** 1ª etapa da retirada da retenção legal (R12): motivo obrigatório (gravado cifrado). */
+export function validarPedidoDeRetirada(corpo: unknown): { motivo: string } {
+  const v = new Validador(exigirObjeto(corpo, ['motivo']));
+  const motivo = v.texto('motivo', { min: 10, max: 1000, obrigatorio: true });
+  v.concluir();
+  return { motivo };
+}
+
+/** Designação da custódia das lacradas (R2): profissionais por id. */
+export function validarDesignacaoDeCustodia(corpo: unknown): { autorProfissionalId: string; substitutoProfissionalId: string } {
+  const v = new Validador(exigirObjeto(corpo, ['autorProfissionalId', 'substitutoProfissionalId']));
+  const autor = v.uuid('autorProfissionalId', true);
+  const subst = v.uuid('substitutoProfissionalId', true);
+  v.concluir();
+  return { autorProfissionalId: autor as string, substitutoProfissionalId: subst as string };
+}
+
+/** Decisão da custódia sobre uma nota lacrada (R2). */
+export function validarDecisaoDeCustodia(corpo: unknown): 'guarda_clinica' | 'descartar' {
+  const v = new Validador(exigirObjeto(corpo, ['decisao']));
+  const d = v.umDe('decisao', ['guarda_clinica', 'descartar'] as const, true);
+  v.concluir();
+  return d as 'guarda_clinica' | 'descartar';
 }
 
 /**

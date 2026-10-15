@@ -1,14 +1,20 @@
 import { type DynamicModule, Module } from '@nestjs/common';
+import { AvisosService } from './avisos';
 import { CicloNotasPrivadasService } from './ciclo-notas-privadas';
+import { CustodiaService } from './custodia';
 import { NotasPrivadasService } from './notas-privadas.service';
 import {
   AtendimentosController,
+  AvisosController,
+  CustodiaController,
   CicloNotasPrivadasController,
   ConfiguracaoProntuarioController,
   NotasPrivadasController,
   ProntuarioDoPacienteController,
+  RetencaoLegalController,
 } from './prontuario.controller';
 import { ProntuarioService } from './prontuario.service';
+import { RetencaoLegalService } from './retencao-legal';
 
 /**
  * Atendimento, prontuário (evolução versionada, finalização, adendos, histórico) e notas privadas —
@@ -28,9 +34,12 @@ export class RecordsModule {
         NotasPrivadasController,
         ConfiguracaoProntuarioController,
         CicloNotasPrivadasController,
+        RetencaoLegalController,
+        CustodiaController,
+        AvisosController,
       ],
-      providers: [ProntuarioService, NotasPrivadasService, CicloNotasPrivadasService],
-      exports: [ProntuarioService, NotasPrivadasService, CicloNotasPrivadasService],
+      providers: [ProntuarioService, NotasPrivadasService, CicloNotasPrivadasService, RetencaoLegalService, CustodiaService, AvisosService],
+      exports: [ProntuarioService, NotasPrivadasService, CicloNotasPrivadasService, RetencaoLegalService, CustodiaService, AvisosService],
     };
   }
 }

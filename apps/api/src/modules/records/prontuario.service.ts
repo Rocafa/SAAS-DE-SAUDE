@@ -23,6 +23,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { comNegacaoAuditada } from './acesso-clinico';
+import { avisarPsicologosDoSigilo } from './avisos';
 import { faltasParaFinalizar, MODELOS, modeloPelaEspecialidade, validarConteudo, type ConteudoRegistro } from './modelos';
 import { hashDaFinalizacao, MODO_PSICOLOGIA_PADRAO, podeVerConteudo } from './prontuario-regras';
 import type { AberturaDeAtendimento, Paginacao, SalvamentoDeRegistro } from './prontuario.validation';
@@ -77,6 +78,8 @@ export interface RespostaConfiguracao {
   /** Sempre true: a troca não muda o sigilo dos atendimentos já abertos (salvo restringir). */
   readonly valeSoParaNovos: true;
   readonly anterioresRestringidos: number;
+  /** R9: psicólogos ativos da clínica avisados na caixa de avisos (0 se nada mudou). */
+  readonly psicologosAvisados: number;
 }
 
 export interface VersaoDto {
@@ -464,9 +467,11 @@ export class ProntuarioService {
         scope: SCOPE_CONFIGURACAO,
         metadata: { from: anterior, to: modo, applies_to: 'new_encounters', restricted_existing: restringidos },
       });
-      // B1-d: a resposta diz ao admin que a troca só vale para os novos (a interface mostra isso);
-      // o aviso aos psicólogos da clínica entra com o módulo de notificações (fila, antes do piloto).
-      return { psicologia: modo, valeSoParaNovos: true, anterioresRestringidos: restringidos };
+      // B1-d: a resposta diz ao admin que a troca só vale para os novos (a interface mostra isso) e
+      // quantos psicólogos foram avisados; o aviso vai para a caixa interna (R9; avisos.ts), sem dado
+      // de paciente. Só quando algo mudou (modo novo ou atendimentos restringidos).
+      const avisados = anterior !== modo || restringidos > 0 ? await avisarPsicologosDoSigilo(tx, ctx, anterior, modo, restringidos) : 0;
+      return { psicologia: modo, valeSoParaNovos: true, anterioresRestringidos: restringidos, psicologosAvisados: avisados };
     });
   }
 

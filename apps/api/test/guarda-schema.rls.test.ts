@@ -61,6 +61,11 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   private_notes: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Histórico de remarcações (migração 0014): append-only; o INSERT só passa vindo do trigger.
   appointment_reschedules: { privilegios: ['SELECT', 'INSERT'] },
+  // Retenção legal, custódia e caixa de avisos (migração 0017): sem DELETE/TRUNCATE; os triggers só
+  // aceitam as transições do fluxo (pedido/aprovação por duas pessoas, aceite do substituto, lido).
+  legal_holds: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  note_custodies: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinical_notices: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
@@ -272,5 +277,30 @@ describe('guarda de schema: cobertura no teste de isolamento', () => {
   it('toda tabela da aplicação tem espelho tipado em src/db/schema.ts', () => {
     const identificadores = identificadoresDoSchema();
     expect(Object.keys(TABELAS_DA_APLICACAO).filter((t) => !identificadores.has(t))).toEqual([]);
+  });
+});
+
+/**
+ * R11 do parecer #63: a função de expurgo das notas descartadas é SECURITY DEFINER com search_path fixo,
+ * e o dono não é superusuário, nem BYPASSRLS, nem o runtime. O runtime não tem DELETE em nenhuma tabela
+ * de nota ou de prontuário (o expurgo só passa pela função, e o trigger só deixa apagar linha elegível).
+ */
+describe('guarda de schema: expurgo das notas (R11)', () => {
+  it('app_purge_discarded_private_notes: SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
+    const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+      SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+      FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+      WHERE p.oid = 'public.app_purge_discarded_private_notes()'::regprocedure`;
+    expect(f?.secdef).toBe(true);
+    expect(f?.config ?? []).toContain('search_path=pg_catalog, public, pg_temp');
+    expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+    expect(f?.dono).not.toBe(RUNTIME_ROLE);
+  });
+
+  it('o runtime não tem DELETE nem TRUNCATE nas tabelas de notas e de prontuário', async () => {
+    for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
+      const tem = await privilegiosDoRuntime(tabela);
+      expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
   });
 });

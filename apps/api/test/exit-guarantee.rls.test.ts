@@ -120,6 +120,8 @@ describe('G2 — exportação total do tenant', () => {
       privateNotes: 0,
       privateNotesWithheld: 0,
       appointmentReschedules: 0,
+      legalHolds: 0,
+      noteCustodies: 0,
       auditEvents: pkg.auditEvents.length,
     });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();
