@@ -28,6 +28,7 @@ import { withTenant, type Database, type TenantTx } from '../../db/tenant-transa
 import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../audit/audit-chain';
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import { CAMPO_ADENDO, CAMPO_NOTA, CAMPO_VERSAO, campoClinicoRef, type CampoClinico } from '../records/record-fields';
@@ -53,8 +54,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        notas privadas ficam fora, só contadas no manifesto (`privateNotesWithheld`).
  * 1.7.0: `encounters[].confidentiality` (sigilo gravado na abertura), `patients[].legalHoldSince` e
  *        `privateNotes[].custodyState`/`custodyDeadline`, da migração 0015 (B1, D1 e D2 do parecer #63).
+ * 1.8.0: financeiro (migração 0018): configuração, perfil fiscal do profissional PF (CPF decifrado),
+ *        caixas, cobranças (CPF do pagador decifrado), recebimentos, estornos, contador e recibos (retrato
+ *        decifrado) e cancelamentos de recibo, em `data.finance` e `manifest.counts.finance`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.7.0';
+export const EXPORT_SCHEMA_VERSION = '1.8.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -85,6 +89,16 @@ export const EXPORTED_TABLES = [
   // conteúdo). A clínica é a controladora e o pacote é dela, mas a anotação pessoal do profissional
   // não é prontuário e o produto promete que ela não sai sem a decisão dele. Ver api-dominio.md §8.
   'private_notes',
+  // Financeiro (0018): em data.finance.
+  'finance_settings',
+  'professional_fiscal_profiles',
+  'cash_sessions',
+  'charges',
+  'payments',
+  'payment_reversals',
+  'receipt_counters',
+  'receipts',
+  'receipt_cancellations',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -125,6 +139,8 @@ export interface ExportManifest {
     /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
     readonly privateNotesWithheld: number;
     readonly appointmentReschedules: number;
+    /** Financeiro (0018), por tabela. */
+    readonly finance: FinanceCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -369,6 +385,8 @@ export interface TenantExportDocument {
     readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
     readonly privateNotes: readonly ExportedPrivateNote[];
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
+    /** Financeiro (0018). */
+    readonly finance: ExportedFinance;
   };
 }
 
@@ -572,6 +590,10 @@ export async function exportInTransaction(
     canonical: r.canonical,
   }));
   const auditHead = await auditChainHead(tx, ctx.tenantId);
+  const financeiro = await exportarFinanceiro(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -821,6 +843,7 @@ export async function exportInTransaction(
       privateNotes: exportedNotes.length,
       privateNotesWithheld: noteRows.length - exportedNotes.length,
       appointmentReschedules: exportedReschedules.length,
+      finance: financeiro.counts,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -897,6 +920,7 @@ export async function exportInTransaction(
         clinicalAddenda: exportedAddenda,
         privateNotes: exportedNotes,
         appointmentReschedules: exportedReschedules,
+        finance: financeiro.data,
       },
     },
     patientsCsv,
