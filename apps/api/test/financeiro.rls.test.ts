@@ -6,7 +6,7 @@
  * texto neutro; insumo do Receita Saúde; permissões e auditoria sem dado pessoal.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import type { TenantId } from '@plataforma/shared';
+import type { TenantId, UserId } from '@plataforma/shared';
 import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,6 +23,7 @@ import {
   receipts,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { RetencaoFiscalService } from '../src/modules/finance/retencao-fiscal';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -571,5 +572,131 @@ describe('R5 do #65: insumo do Receita Saúde minimizado', () => {
     }
     const serial = JSON.stringify(lote);
     for (const proibido of [CONSELHO, c.id, p.id, profissionalPfA, 'descricao', 'Atendimento']) expect(serial).not.toContain(proibido);
+  });
+});
+
+describe('R7 do #65: retenção fiscal parametrizada, idempotente e respeitando a retenção legal', () => {
+  it('elimina retrato do recibo e pagador vencido o prazo; o recente, o da virada e o retido ficam', async () => {
+    await api.membro(clinicaA, adminA, 'admin');
+    const pol = await get(adminA, '/financeiro/retencao-fiscal');
+    expect(pol.body).toMatchObject({ anos: 5, inicio: 'primeiro_de_janeiro_do_ano_seguinte_ao_pagamento', confirmadaPeloContador: false });
+    expect((pol.body as { nota: string }).nota).toContain('CONTADOR');
+
+    const novoPaciente = async (n: number) =>
+      id(await post(recepA, '/pacientes', { nome: `Paciente Ficticio Fiscal ${n}`, telefone: `1190000${String(n).padStart(4, '0')}`, cpf: cpfFicticio(n) }));
+    /** Cobrança PJ com pagador terceiro, quitada por um recebimento na data dada, e o recibo emitido. */
+    const quitadaEm = async (paciente: string, quando: Date | null) => {
+      const c = await cobranca(recepA, {
+        agendamentoId: await agendamento({ paciente }),
+        valorCentavos: 4200,
+        atendimentoPor: 'pj',
+        pagador: { nome: PAGADOR, cpf: cpfFicticio(399) },
+      });
+      let pagamento: string;
+      if (quando) {
+        // Recebimento antigo (o banco não aceita "envelhecer" pela API): mesmo caminho do runtime, com a data.
+        pagamento = await withTenant(api.db.db, clinicaA, async (tx) => {
+          const [p] = await tx
+            .insert(payments)
+            .values({ tenantId: clinicaA, chargeId: c.id, cashSessionId: caixaA, method: 'dinheiro', amountCents: 4200, receivedAt: quando, receivedBy: recepA.userId })
+            .returning({ id: payments.id });
+          await tx.update(charges).set({ paidCents: 4200 }).where(eq(charges.id, c.id));
+          return p!.id;
+        }, recepA.userId);
+      } else {
+        pagamento = (await receber(recepA, c.id, { forma: 'dinheiro' })).id;
+      }
+      const r = await post(recepA, `/financeiro/recebimentos/${pagamento}/recibo`, {});
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      return { cobranca: c.id, recibo: id(r) };
+    };
+    const velho = await quitadaEm(await novoPaciente(3901), new Date('2019-06-01T12:00:00-03:00'));
+    // Pago em 31/12/2021 (fuso da clínica): prazo conta de 1º/1/2022, vence só em 1º/1/2027.
+    const virada = await quitadaEm(await novoPaciente(3902), new Date('2021-12-31T22:00:00-03:00'));
+    const recente = await quitadaEm(await novoPaciente(3903), null);
+    const pRetido = await novoPaciente(3904);
+    const retido = await quitadaEm(pRetido, new Date('2018-03-01T12:00:00-03:00'));
+    await api.http().put(`/prontuario/pacientes/${pRetido}/retencao-legal`).set(cab(adminA)).send({ referencia: 'Oficio ficticio fiscal 1' }).expect(200);
+
+    // Antes do prazo, nem direto no banco (qualquer papel): o trigger confere o prazo.
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.update(charges).set({ payerName: null, payerCpfEnc: null, fiscalPurgedAt: new Date() }).where(eq(charges.id, recente.cobranca)), recepA.userId),
+      ),
+    ).toContain('55000');
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(receipts).set({ contentEnc: null }).where(eq(receipts.id, velho.recibo)), recepA.userId)),
+    ).toContain('42501');
+
+    // Só o admin executa (recepção não).
+    expect((await post(recepA, '/financeiro/retencao-fiscal/execucao', {})).status).toBe(403);
+    const r1 = await post(adminA, '/financeiro/retencao-fiscal/execucao', {});
+    expect(r1.status, JSON.stringify(r1.body)).toBe(200);
+    expect(r1.body).toMatchObject({ recibosEliminados: 1, cobrancasEliminadas: 1 });
+    // Idempotente.
+    expect((await post(adminA, '/financeiro/retencao-fiscal/execucao', {})).body).toMatchObject({ recibosEliminados: 0, cobrancasEliminadas: 0 });
+    // Como job do sistema (sentinela, sem usuário) também roda e dá zero.
+    const job = await api.app.get(RetencaoFiscalService).executarComoSistema(clinicaA, { tenantId: clinicaA, userId: adminA.userId as UserId, roles: [] });
+    expect(job).toMatchObject({ recibosEliminados: 0, cobrancasEliminadas: 0 });
+
+    const recibo = async (rid: string) => (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(receipts).where(eq(receipts.id, rid))))[0];
+    const cobr = async (cid: string) => (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(charges).where(eq(charges.id, cid))))[0];
+    expect(await recibo(velho.recibo)).toMatchObject({ contentEnc: null });
+    expect((await recibo(velho.recibo))?.fiscalPurgedAt).not.toBeNull();
+    expect(await cobr(velho.cobranca)).toMatchObject({ payerName: null, payerCpfEnc: null, paidCents: 4200, amountCents: 4200 });
+    expect((await get(finA, `/financeiro/recibos/${velho.recibo}`)).body).toMatchObject({ codigo: 'recibo_eliminado_por_retencao_fiscal' });
+    for (const ficou of [virada, recente, retido]) {
+      expect((await recibo(ficou.recibo))?.contentEnc).toMatch(/^v1:/);
+      expect((await cobr(ficou.cobranca))?.payerName).toBe(PAGADOR);
+    }
+    // Eliminado não volta nem se reescreve.
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(charges).set({ payerName: 'Outro', fiscalPurgedAt: null }).where(eq(charges.id, velho.cobranca)), recepA.userId)),
+    ).toContain('42501');
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'finance.fiscal_retention')));
+    expect(trilha.length).toBeGreaterThanOrEqual(3);
+    expect(JSON.stringify(trilha)).not.toContain(PAGADOR);
+  });
+});
+
+describe('R9 e R10 do #65: o banco garante paid_cents e a numeração', () => {
+  it('paid_cents só acompanha os recebimentos; recebimento sem paid_cents é recusado no COMMIT', async () => {
+    const c = await cobranca(recepA, { agendamentoId: await agendamento(), valorCentavos: 800 });
+    const sessao = (fn: Parameters<typeof withTenant>[2]) => withTenant(api.db.db, clinicaA, fn, recepA.userId);
+    // Marcar como paga sem recebimento.
+    expect(await sqlstate(sessao((tx) => tx.update(charges).set({ paidCents: 800 }).where(eq(charges.id, c.id))))).toContain('23514');
+    // Recebimento sem atualizar a cobrança (ou atualizando errado).
+    const pagar = (tx: Parameters<Parameters<typeof withTenant>[2]>[0]) =>
+      tx.insert(payments).values({ tenantId: clinicaA, chargeId: c.id, cashSessionId: caixaA, method: 'dinheiro', amountCents: 300, receivedBy: recepA.userId });
+    expect(await sqlstate(sessao(async (tx) => { await pagar(tx); }))).toContain('23514');
+    expect(await sqlstate(sessao(async (tx) => { await pagar(tx); await tx.update(charges).set({ paidCents: 800 }).where(eq(charges.id, c.id)); }))).toContain('23514');
+    // Pela API continua coerente: recebe, estorna, recebe o saldo.
+    const p = await receber(recepA, c.id, { valorCentavos: 300, forma: 'dinheiro' });
+    await post(finA, `/financeiro/recebimentos/${p.id}/estornar`, { motivo: 'lancamento_errado' }).expect(200);
+    // Estorno sem devolver o saldo: recusado no COMMIT.
+    const p2 = await receber(recepA, c.id, { valorCentavos: 200, forma: 'dinheiro' });
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.insert(paymentReversals).values({ tenantId: clinicaA, paymentId: p2.id, cashSessionId: caixaA, reason: 'lancamento_errado', reversedBy: finA.userId }), finA.userId),
+      ),
+    ).toContain('23514');
+    expect((await receber(recepA, c.id, { forma: 'dinheiro' })).cobranca).toMatchObject({ situacao: 'paga', saldoCentavos: 0 });
+  });
+
+  it('contador nasce em 1; número que não virou recibo é recusado no COMMIT', async () => {
+    const nova = await api.novaClinica();
+    const s = api.sessao(nova, 'admin');
+    // Começar em 500 abre buraco: recusado.
+    expect(await sqlstate(withTenant(api.db.db, nova, (tx) => tx.insert(receiptCounters).values({ tenantId: nova, lastNumber: 500 }), s.userId))).toContain('23514');
+    // Começar em 1 sem emitir o recibo 1: recusado no COMMIT.
+    expect(await sqlstate(withTenant(api.db.db, nova, (tx) => tx.insert(receiptCounters).values({ tenantId: nova, lastNumber: 1 }), s.userId))).toContain('23514');
+    // Na clínica A (que já emite): avançar o contador sem recibo também.
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(receiptCounters).set({ lastNumber: sql`${receiptCounters.lastNumber} + 1` }).where(eq(receiptCounters.tenantId, clinicaA)), recepA.userId),
+      ),
+    ).toContain('23514');
   });
 });
