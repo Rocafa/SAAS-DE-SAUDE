@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - 'infra/**'
+      - 'apps/api/db/migrations/**' # referência da conferência das guardas (R12 do #61)
       - '.github/workflows/infra.yml'
   schedule:
     - cron: '23 6 * * 1' # semanal: pega regra nova do checkov/tflint e provider com problema
@@ -121,7 +122,10 @@ jobs:
           grep -A1 'name *= *"pgaudit.log_relation"' staging/dados.tf | grep -Eq 'value *= *"(0|off)"'
           grep -q 'log_group_name *= *aws_cloudwatch_log_group.rds\["postgresql"\].name' staging/auditoria-banco.tf
           grep -q 'alarm_actions *= *\[aws_sns_topic.alertas_seguranca.arn\]' staging/auditoria-banco.tf
-          for f in disable-trigger drop-trigger alter-role no-force-rls; do
+          # R12: função, policy e dono também alertam; a conferência pós-deploy existe.
+          for f in disable-trigger drop-trigger alter-role no-force-rls disable-rls \
+                   create-function alter-function drop-function \
+                   create-policy alter-policy drop-policy owner-to; do
             grep -Eq "^\s*$f\s*=" staging/auditoria-banco.tf || { echo "filtro $f ausente"; exit 1; }
           done
           grep -Eiq 'CREATE EXTENSION IF NOT EXISTS pgaudit' ../rds/bootstrap.sql
@@ -145,3 +149,19 @@ jobs:
           if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
             echo "Região fora de sa-east-1."; exit 1
           fi
+
+  guardas-banco:
+    # R12 do PR #61: a conferência pós-deploy precisa funcionar ANTES de ser preciso. Sobe um
+    # PostgreSQL 16 descartável no runner (sem rede, sem segredo: senhas geradas na hora), aplica
+    # bootstrap + migrações do repositório e prova que CREATE OR REPLACE FUNCTION, ALTER FUNCTION,
+    # ALTER POLICY e NO FORCE RLS aparecem na comparação.
+    name: conferência das guardas do banco (autoteste)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: autoteste do verificar-guardas
+        env:
+          PG_BIN: /usr/lib/postgresql/16/bin # PostgreSQL 16 já vem na imagem ubuntu-24.04
+        run: sh infra/rds/verificar-guardas.sh autoteste
