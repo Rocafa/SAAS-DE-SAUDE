@@ -36,6 +36,8 @@ export const patients = pgTable('patients', {
   active: boolean('active').notNull().default(true),
   inactivatedAt: timestamp('inactivated_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0015 (D1.4 do #63): retenção legal; enquanto marcada, nada do paciente é expurgado. */
+  legalHoldSince: timestamp('legal_hold_since', { withTimezone: true }),
 });
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
@@ -285,6 +287,11 @@ export const encounters = pgTable('encounters', {
   signedBy: uuid('signed_by'),
   signedVersion: integer('signed_version'),
   signedHash: text('signed_hash'),
+  /**
+   * Migração 0015 (B1 do #63): modo de sigilo da psicologia vigente na ABERTURA. A leitura decide por
+   * ele, nunca pela configuração atual. Só pode ficar mais restrito (trigger).
+   */
+  confidentiality: text('confidentiality', { enum: PSYCH_COMPARTMENT_MODES }).notNull().default('restrito_ao_autor'),
 });
 
 /** Versões da evolução (0012): append-only; conteúdo JSON SÓ cifrado (v1). */
@@ -314,6 +321,14 @@ export const clinicalAddenda = pgTable('clinical_addenda', {
   createdBy: uuid('created_by').notNull(),
 });
 
+/**
+ * Custódia da nota privada (0015, D2 do parecer #63): 'ativa'; 'aguardando_decisao' (autor desligado,
+ * 30 dias); 'lacrada' (psicologia sem decisão: para o psicólogo substituto, 90 dias); 'guarda_clinica'
+ * (o autor marcou para exportar: acompanha o prontuário, ilegível no aplicativo, só no G2).
+ */
+export const PRIVATE_NOTE_CUSTODY_STATES = ['ativa', 'aguardando_decisao', 'lacrada', 'guarda_clinica'] as const;
+export type PrivateNoteCustodyState = (typeof PRIVATE_NOTE_CUSTODY_STATES)[number];
+
 /** Anotações privadas do profissional (0012, HU-PRO-009): fora do prontuário; só o autor lê. */
 export const privateNotes = pgTable('private_notes', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -328,6 +343,9 @@ export const privateNotes = pgTable('private_notes', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   discardedAt: timestamp('discarded_at', { withTimezone: true }),
+  /** Migração 0015 (D2 do #63): ciclo de vida quando o autor sai da clínica. */
+  custodyState: text('custody_state', { enum: PRIVATE_NOTE_CUSTODY_STATES }).notNull().default('ativa'),
+  custodyDeadline: timestamp('custody_deadline', { withTimezone: true }),
 });
 
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
