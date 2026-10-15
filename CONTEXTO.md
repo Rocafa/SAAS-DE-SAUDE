@@ -7,7 +7,7 @@
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 14/10/2026 (rodada 13: §4 e §6 revisadas com as rodadas 10 a 13). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 15/10/2026 (rodada 15: §6 revisada com o prontuário e o financeiro). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -64,9 +64,11 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Prontos em PR, esperando o CI voltar** (testados localmente contra Postgres real):
   - rotas de **pacientes e agenda** (#57);
   - **vínculo de cuidado**, alerta de anomalia e pseudônimo via KMS (#61);
-  - **guias de convênio e pacotes**;
+  - **guias de convênio e pacotes** (#62);
+  - **prontuário** por nicho: cifrado, versionado, só com vínculo de cuidado, notas privadas da psicologia (#63);
+  - **financeiro**: cobranças, caixa, recibos sem buraco, insumo do Receita Saúde (#65);
   - **telas ligadas à API real** (#60).
-- **Ainda não há:** login real (depende da **D4**, o gargalo), prontuário, financeiro, nem ambiente aplicado na AWS.
+- **Ainda não há:** login real (depende da **D4**, o gargalo), importador de dados dos concorrentes, backend do portal do paciente, WhatsApp, nem ambiente aplicado na AWS.
 - **Infra em PR:** Terraform do staging (#58, aprovado com ressalvas, nada aplicado na AWS) e imagem Docker distroless com scan (#59).
 - ⚠️ **O GitHub Actions parou por falta de pagamento da conta:** hoje nenhum CI roda, e sem CI verde não se faz merge de código ([fila.md](docs/00-governanca/fila.md)).
 - **O que falta para produção** (infra, regulação, custos e checklist de go-live): [rodada 7](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
