@@ -51,8 +51,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.6.0: prontuário (migração 0012): configuração de sigilo, atendimentos, TODAS as versões da evolução
  *        (conteúdo decifrado), adendos e as notas privadas que o AUTOR marcou para exportar; as demais
  *        notas privadas ficam fora, só contadas no manifesto (`privateNotesWithheld`).
+ * 1.7.0: `encounters[].confidentiality` (sigilo gravado na abertura), `patients[].legalHoldSince` e
+ *        `privateNotes[].custodyState`/`custodyDeadline`, da migração 0015 (B1, D1 e D2 do parecer #63).
  */
-export const EXPORT_SCHEMA_VERSION = '1.6.0';
+export const EXPORT_SCHEMA_VERSION = '1.7.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -148,6 +150,8 @@ export interface ExportedPatient {
   readonly inactivatedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Retenção legal desde (0015); null se não houver. */
+  readonly legalHoldSince: string | null;
 }
 
 export interface ExportedProfessional {
@@ -305,6 +309,8 @@ export interface ExportedEncounter {
   readonly signedBy: string | null;
   readonly signedVersion: number | null;
   readonly signedHash: string | null;
+  /** Sigilo da psicologia gravado na abertura (0015, B1 do #63). */
+  readonly confidentiality: string;
 }
 
 export interface ExportedClinicalRecordVersion {
@@ -337,6 +343,9 @@ export interface ExportedPrivateNote {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly discardedAt: string | null;
+  /** Custódia (0015, D2 do #63). */
+  readonly custodyState: string;
+  readonly custodyDeadline: string | null;
 }
 
 export interface TenantExportDocument {
@@ -583,6 +592,7 @@ export async function exportInTransaction(
       inactivatedAt: iso(r.inactivatedAt),
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
+      legalHoldSince: iso(r.legalHoldSince),
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({
@@ -737,6 +747,7 @@ export async function exportInTransaction(
     signedBy: e.signedBy,
     signedVersion: e.signedVersion,
     signedHash: e.signedHash,
+    confidentiality: e.confidentiality,
   }));
   const exportedVersions: ExportedClinicalRecordVersion[] = [];
   for (const v of versionRows) {
@@ -773,6 +784,8 @@ export async function exportInTransaction(
       createdAt: n.createdAt.toISOString(),
       updatedAt: n.updatedAt.toISOString(),
       discardedAt: iso(n.discardedAt),
+      custodyState: n.custodyState,
+      custodyDeadline: iso(n.custodyDeadline),
     });
   }
 
