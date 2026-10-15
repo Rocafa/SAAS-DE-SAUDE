@@ -97,6 +97,28 @@ export const appointments = pgTable('appointments', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0013: usuário da sessão que criou (imutável). NULL em linhas anteriores à 0013. */
   createdBy: uuid('created_by'),
+  /** Migração 0014: último usuário que remarcou (só muda junto com o horário; nunca volta a NULL). */
+  rescheduledBy: uuid('rescheduled_by'),
+  /** Migração 0014: trava permanente do horário depois de atendimento ou falta (o banco mantém). */
+  rescheduleLocked: boolean('reschedule_locked').notNull().default(false),
+});
+
+/**
+ * Histórico de remarcações (migração 0014): append-only, gravado SÓ pelo trigger de appointments a
+ * cada mudança de horário. O runtime lê; não insere, não altera, não apaga.
+ */
+export const appointmentReschedules = pgTable('appointment_reschedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  appointmentId: uuid('appointment_id').notNull(),
+  fromStartsAt: timestamp('from_starts_at', { withTimezone: true }).notNull(),
+  fromEndsAt: timestamp('from_ends_at', { withTimezone: true }).notNull(),
+  toStartsAt: timestamp('to_starts_at', { withTimezone: true }).notNull(),
+  toEndsAt: timestamp('to_ends_at', { withTimezone: true }).notNull(),
+  rescheduledBy: uuid('rescheduled_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Convênios da clínica (migração 0011, CNV-04.1). Sem regras TISS. */
@@ -303,4 +325,5 @@ export const schema = {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  appointmentReschedules,
 };

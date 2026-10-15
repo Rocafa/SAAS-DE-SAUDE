@@ -51,6 +51,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
   session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Histórico de remarcações (migração 0014): append-only; o INSERT só passa vindo do trigger.
+  appointment_reschedules: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

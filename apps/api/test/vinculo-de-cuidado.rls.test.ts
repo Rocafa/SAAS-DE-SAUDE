@@ -9,9 +9,9 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ProibidoError } from '../src/common/erros-dominio';
 import { and, eq } from 'drizzle-orm';
-import { appointments, auditLog, professionals, tenants, type AppointmentStatusDb } from '../src/db/schema';
+import { appointmentReschedules, appointments, auditLog, professionals, tenants, type AppointmentStatusDb } from '../src/db/schema';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
-import { withTenant } from '../src/db/tenant-transaction';
+import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import {
   exigirConteudoClinico,
   VINCULO_AGENDA_HORAS,
@@ -310,7 +310,15 @@ describe('vínculo não autodeclarado (V1 do #61)', () => {
   it('ataque 3: consulta de 100 dias atrás marcada "atendido" dá 409 (retroativo) e não dá vínculo', async () => {
     const eu = await novoProfissional();
     const p = await novoPaciente(adminA);
-    const id = await marcarPelaRota(eu.sessao, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() - 100 * DIA) });
+    // A rota não marca mais no passado (R7 do #61): o agendamento antigo entra direto no banco.
+    const id = await agendamento(clinicaA, {
+      paciente: p,
+      profissional: eu.id,
+      tipo: tipoA,
+      inicio: new Date(Date.now() - 100 * DIA),
+      status: 'scheduled',
+      criadoPor: eu.sessao.userId,
+    });
     await api.http().post(`/agendamentos/${id}/check-in`).set(cab(eu.sessao)).expect(200);
     const r = await status(eu.sessao, id, 'atendido');
     expect(r.status).toBe(409);
@@ -364,6 +372,211 @@ describe('vínculo não autodeclarado (V1 do #61)', () => {
     await expect(
       withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ createdBy: randomUUID() }).where(eq(appointments.id, id))),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * V2 da re-revisão do Guardião sobre o PR #61: reaproveitar um agendamento antigo (remarcar, ou
+ * desfazer um status) não cria nem renova vínculo, e a data real do atendimento não se perde.
+ * Os agendamentos antigos são da RECEPÇÃO (created_by = recepção), o caso que o parecer aponta.
+ */
+describe('remarcação e "Desfazer" não fabricam vínculo (V2 do #61)', () => {
+  let recep: { Authorization: string; userId: string };
+
+  beforeAll(() => {
+    recep = api.sessao(clinicaA, 'recepcao');
+  });
+
+  async function novoProfissional(): Promise<{ sessao: { Authorization: string; userId: string }; id: string }> {
+    const sessao = api.sessao(clinicaA, 'profissional');
+    return { sessao, id: await profissional(adminA, sessao.userId) };
+  }
+
+  function remarcar(s: { Authorization: string }, id: string, quando: Date) {
+    return api.http().post(`/agendamentos/${id}/remarcar`).set(cab(s)).send(noFusoDaClinica(quando));
+  }
+
+  async function linha(id: string) {
+    const [a] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, id)));
+    return a;
+  }
+
+  async function historico(id: string) {
+    return withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(appointmentReschedules).where(eq(appointmentReschedules.appointmentId, id)),
+    );
+  }
+
+  it('cenário 1: falta de 2 anos atrás não volta para "agendado", não se remarca e não dá vínculo', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const inicio = new Date(Date.now() - 730 * DIA);
+    const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio, status: 'no_show', criadoPor: recep.userId });
+    for (const novo of ['agendado', 'confirmado']) {
+      const r = await status(eu.sessao, id, novo);
+      expect(r.status, novo).toBe(409);
+      expect(r.body).toEqual({ statusCode: 409, message: 'Conflito', codigo: 'fora_do_horario' });
+    }
+    const r = await remarcar(eu.sessao, id, new Date());
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'status_nao_permite' });
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+    expect((await linha(id))?.startsAt.toISOString()).toBe(inicio.toISOString());
+  });
+
+  it('cenário 1 (variação): falta de HOJE desfeita na janela é permitida, mas o horário fica travado', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() - 10 * 60_000), status: 'scheduled', criadoPor: recep.userId });
+    await status(recep, id, 'faltou').expect(200);
+    await status(recep, id, 'agendado').expect(200);
+    // Já teve falta: não muda de horário (nem pela recepção), e o banco mantém a trava.
+    const r = await remarcar(recep, id, new Date(Date.now() + 2 * HORA));
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'status_nao_permite' });
+    expect((await linha(id))?.rescheduleLocked).toBe(true);
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ rescheduleLocked: false }).where(eq(appointments.id, id))),
+    ).resolves.toBeDefined();
+    expect((await linha(id))?.rescheduleLocked).toBe(true);
+  });
+
+  it('cenário 2: agendamento esquecido (agendado/confirmado de 2 anos atrás) não se remarca para agora', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    for (const st of ['scheduled', 'confirmed'] as const) {
+      const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() - 730 * DIA), status: st, criadoPor: recep.userId });
+      for (const quem of [eu.sessao, recep]) {
+        const r = await remarcar(quem, id, new Date());
+        expect(r.status, st).toBe(409);
+        expect(r.body).toMatchObject({ codigo: 'status_nao_permite' });
+      }
+      expect(await historico(id)).toHaveLength(0);
+    }
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+  });
+
+  it('cenário 3: atendimento antigo deixado "em atendimento" não volta para "chegou" nem muda de data', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const inicio = new Date(Date.now() - 10 * DIA);
+    const id = await agendamento(clinicaA, { paciente: p, profissional: eu.id, tipo: tipoA, inicio, status: 'in_progress', criadoPor: recep.userId });
+    const r = await status(eu.sessao, id, 'chegou');
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'fora_do_horario' });
+    // "atendido" também: o destino clínico já exigia a janela (V1).
+    await status(eu.sessao, id, 'atendido').expect(409);
+    await remarcar(eu.sessao, id, new Date()).expect(409);
+    // O vínculo continua sendo o do atendimento REAL (10 dias atrás), sem renovação.
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'atendimento' });
+    const depoisDaJanela = new Date(inicio.getTime() + (VINCULO_ATENDIMENTO_DIAS_PADRAO + 1) * DIA);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, depoisDaJanela)).toMatchObject({ temVinculo: false });
+    // A data real fica: nem o banco aceita mudar o horário de um agendamento travado.
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) =>
+        tx
+          .update(appointments)
+          .set({ startsAt: new Date(), endsAt: new Date(Date.now() + 50 * 60_000), rescheduledBy: recep.userId })
+          .where(eq(appointments.id, id)),
+      ),
+    ).rejects.toThrow();
+    expect((await linha(id))?.startsAt.toISOString()).toBe(inicio.toISOString());
+  });
+
+  it('cenário 3 (atendido de hoje): "Desfazer" dentro da janela funciona; o horário continua travado', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date() });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(recep)).expect(200);
+    await status(eu.sessao, id, 'em_atendimento').expect(200);
+    await status(eu.sessao, id, 'chegou').expect(200);
+    await status(recep, id, 'agendado').expect(200);
+    await remarcar(recep, id, new Date(Date.now() + DIA)).expect(409);
+  });
+
+  it('remarcar para o passado dá 409 horario_no_passado; marcar no passado também (R7)', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + DIA) });
+    const r = await remarcar(recep, id, new Date(Date.now() - 2 * HORA));
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'horario_no_passado' });
+    const { data, hora } = noFusoDaClinica(new Date(Date.now() - 2 * HORA));
+    const c = await api
+      .http()
+      .post('/agendamentos')
+      .set(cab(recep))
+      .send({ pacienteId: p, profissionalId: eu.id, tipoId: tipoA, data, hora, encaixe: true });
+    expect(c.status).toBe(409);
+    expect(c.body).toMatchObject({ codigo: 'horario_no_passado' });
+  });
+
+  it('V2-c: remarcação pelo PRÓPRIO profissional vira autoagendamento (sem agenda do dia; alerta ao atender)', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const amanha = new Date(Date.now() + DIA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: amanha });
+    await remarcar(eu.sessao, id, new Date()).expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false, base: null });
+    await api.http().post(`/agendamentos/${id}/check-in`).set(cab(recep)).expect(200);
+    expect(await alertasDe(clinicaA, eu.sessao.userId)).toHaveLength(0);
+    await status(eu.sessao, id, 'em_atendimento').expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'autoagendamento' });
+    const alertas = await alertasDe(clinicaA, eu.sessao.userId);
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]?.metadata).toEqual({ rule: 'vinculo_autoagendado', window_s: 86_400, threshold: 0, count: 1 });
+    // O histórico guarda o horário original, quem remarcou e o novo horário.
+    const h = await historico(id);
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatchObject({ rescheduledBy: eu.sessao.userId, tenantId: clinicaA });
+    expect(h[0]?.fromStartsAt.toISOString()).toBe(new Date(Math.floor(amanha.getTime() / 60_000) * 60_000).toISOString());
+    expect((await linha(id))?.rescheduledBy).toBe(eu.sessao.userId);
+  });
+
+  it('positivo: a RECEPÇÃO remarca uma consulta futura para hoje e o vínculo sai como agenda do dia', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + 3 * DIA) });
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ temVinculo: false });
+    await remarcar(recep, id, new Date(Date.now() + HORA)).expect(200);
+    expect(await servico.temVinculoDeCuidado(ctx(clinicaA, eu.sessao), p, new Date())).toMatchObject({ base: 'agenda_do_dia' });
+    const h = await historico(id);
+    expect(h).toHaveLength(1);
+    expect(h[0]?.rescheduledBy).toBe(recep.userId);
+  });
+
+  it('histórico append-only e rescheduled_by só muda com o horário (banco)', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + DIA) });
+    await remarcar(recep, id, new Date(Date.now() + 2 * DIA)).expect(200);
+    const [h] = await historico(id);
+    expect(h).toBeDefined();
+    const tentativas: [string, (tx: TenantTx) => Promise<unknown>][] = [
+      ['insert direto', (tx) => tx.insert(appointmentReschedules).values({ ...h!, id: randomUUID() })],
+      ['update', (tx) => tx.update(appointmentReschedules).set({ rescheduledBy: eu.sessao.userId }).where(eq(appointmentReschedules.id, h!.id))],
+      ['delete', (tx) => tx.delete(appointmentReschedules).where(eq(appointmentReschedules.id, h!.id))],
+      ['rescheduled_by sem mudar horário', (tx) => tx.update(appointments).set({ rescheduledBy: randomUUID() }).where(eq(appointments.id, id))],
+      ['rescheduled_by para NULL', (tx) => tx.update(appointments).set({ rescheduledBy: null }).where(eq(appointments.id, id))],
+    ];
+    for (const [nome, f] of tentativas) {
+      await expect(withTenant(api.db.db, clinicaA, f), nome).rejects.toThrow();
+    }
+    expect(await historico(id)).toHaveLength(1);
+    expect((await linha(id))?.rescheduledBy).toBe(recep.userId);
+  });
+
+  it('histórico de outra clínica é invisível', async () => {
+    const eu = await novoProfissional();
+    const p = await novoPaciente(adminA);
+    const id = await marcarPelaRota(recep, { paciente: p, profissional: eu.id, tipo: tipoA, inicio: new Date(Date.now() + DIA) });
+    await remarcar(recep, id, new Date(Date.now() + 2 * DIA)).expect(200);
+    const deB = await withTenant(api.db.db, clinicaB, (tx) =>
+      tx.select().from(appointmentReschedules).where(eq(appointmentReschedules.appointmentId, id)),
+    );
+    expect(deB).toHaveLength(0);
+    // E a remarcação pela sessão de B dá 404 (o agendamento de A não existe para B).
+    await remarcar(adminB, id, new Date(Date.now() + 3 * DIA)).expect(404);
   });
 });
 

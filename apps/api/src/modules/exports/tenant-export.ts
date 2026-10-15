@@ -5,6 +5,7 @@
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
 import {
+  appointmentReschedules,
   appointments,
   appointmentTypes,
   guideSessions,
@@ -39,8 +40,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013 (PR #61).
  * 1.4.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
  *        paciente por sessão, pacotes de sessões e seus consumos (migração 0011).
+ * 1.5.0: `appointments[].rescheduledBy`/`rescheduleLocked` e o histórico de remarcações
+ *        (`appointmentReschedules`, contagem própria), da migração 0014.
  */
-export const EXPORT_SCHEMA_VERSION = '1.4.0';
+export const EXPORT_SCHEMA_VERSION = '1.5.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -55,6 +58,7 @@ export const EXPORTED_TABLES = [
   'professionals',
   'appointment_types',
   'appointments',
+  'appointment_reschedules',
   'insurers',
   'insurance_guides',
   'guide_sessions',
@@ -92,6 +96,7 @@ export interface ExportManifest {
     readonly guideSessionSignatures: number;
     readonly sessionPackages: number;
     readonly packageSessions: number;
+    readonly appointmentReschedules: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -154,6 +159,22 @@ export interface ExportedAppointment {
   readonly updatedAt: string;
   /** Usuário que criou (0013); null em agendamentos anteriores à migração. */
   readonly createdBy: string | null;
+  /** Último usuário que remarcou (0014); null se nunca remarcado. */
+  readonly rescheduledBy: string | null;
+  /** Horário travado depois de atendimento ou falta (0014). */
+  readonly rescheduleLocked: boolean;
+}
+
+/** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
+export interface ExportedAppointmentReschedule {
+  readonly id: string;
+  readonly appointmentId: string;
+  readonly fromStartsAt: string;
+  readonly fromEndsAt: string;
+  readonly toStartsAt: string;
+  readonly toEndsAt: string;
+  readonly rescheduledBy: string;
+  readonly createdAt: string;
 }
 
 export interface ExportedInsurer {
@@ -249,6 +270,7 @@ export interface TenantExportDocument {
     readonly guideSessionSignatures: readonly ExportedGuideSessionSignature[];
     readonly sessionPackages: readonly ExportedSessionPackage[];
     readonly packageSessions: readonly ExportedPackageSession[];
+    readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
   };
 }
 
@@ -372,6 +394,15 @@ export async function exportInTransaction(
       .orderBy(asc(packageSessions.consumedAt), asc(packageSessions.id)),
   );
 
+  const rescheduleRows = soDaClinica(
+    await tx
+      .select()
+      .from(appointmentReschedules)
+      .where(eq(appointmentReschedules.tenantId, ctx.tenantId))
+      .orderBy(asc(appointmentReschedules.createdAt), asc(appointmentReschedules.id)),
+    ctx.tenantId,
+  );
+
   // Trilha da clínica, inteira e sem reescrita: os campos da cadeia e o JSON canônico vêm do banco
   // (data com microssegundos, como no hash). O ator interno já está pseudonimizado desde o INSERT (0008).
   const auditRows = await tx.execute<{
@@ -465,6 +496,18 @@ export async function exportInTransaction(
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     createdBy: a.createdBy,
+    rescheduledBy: a.rescheduledBy,
+    rescheduleLocked: a.rescheduleLocked,
+  }));
+  const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
+    id: r.id,
+    appointmentId: r.appointmentId,
+    fromStartsAt: r.fromStartsAt.toISOString(),
+    fromEndsAt: r.fromEndsAt.toISOString(),
+    toStartsAt: r.toStartsAt.toISOString(),
+    toEndsAt: r.toEndsAt.toISOString(),
+    rescheduledBy: r.rescheduledBy,
+    createdAt: r.createdAt.toISOString(),
   }));
 
   const decryptGuide = async (rowId: string, column: GuideEncryptedColumn, value: string | null): Promise<string | null> => {
@@ -573,6 +616,7 @@ export async function exportInTransaction(
       guideSessionSignatures: exportedSignatures.length,
       sessionPackages: exportedPackages.length,
       packageSessions: exportedPackageSessions.length,
+      appointmentReschedules: exportedReschedules.length,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -613,6 +657,7 @@ export async function exportInTransaction(
       // Resumo de guias e pacotes (o metadata tem teto de 16 chaves; o detalhe está no manifesto).
       guides: manifest.counts.insuranceGuides,
       packages: manifest.counts.sessionPackages,
+      appointmentReschedules: manifest.counts.appointmentReschedules,
       auditEvents: manifest.counts.auditEvents,
     },
   });
@@ -637,6 +682,7 @@ export async function exportInTransaction(
         guideSessionSignatures: exportedSignatures,
         sessionPackages: exportedPackages,
         packageSessions: exportedPackageSessions,
+        appointmentReschedules: exportedReschedules,
       },
     },
     patientsCsv,

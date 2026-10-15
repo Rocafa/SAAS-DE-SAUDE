@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, count, eq, gt, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { appointments, appointmentTypes, patients, professionals, type AppointmentStatusDb } from '../../db/schema';
@@ -14,12 +14,14 @@ import {
   capacidadeDoHorario,
   dentroDaJanelaDeAtendimento,
   exigeAtendimento,
+  exigeJanelaDeAtendimento,
+  horarioJaPassou,
   janelaDeDias,
+  motivoParaNaoRemarcar,
   noFusoDaClinica,
   paraInstante,
   STATUS_CLINICOS,
   STATUS_QUE_OCUPAM,
-  STATUS_REMARCAVEIS,
   statusParaDb,
   statusParaFront,
   transicaoPermitida,
@@ -151,6 +153,8 @@ export class SchedulingService {
       if (!tipo) throw new NaoEncontradoError();
 
       const inicio = paraInstante(dados.data, dados.hora);
+      // R7 da re-revisão do #61: não se marca no passado (a folga é a mesma da janela de atendimento).
+      if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
       const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
       await this.travarAgenda(tx, ctx, profissional.id);
       if (!dados.encaixe) {
@@ -189,13 +193,20 @@ export class SchedulingService {
     });
   }
 
-  /** Devolve dia e hora anteriores (para o "Desfazer" do front). */
+  /**
+   * Devolve dia e hora anteriores (para o "Desfazer" do front). V2 da re-revisão do #61: o que já
+   * passou (ou já teve atendimento ou falta) não se remarca e não se remarca para o passado (409);
+   * quem remarca fica gravado em `rescheduled_by` e, se for o próprio profissional do agendamento, o
+   * agendamento passa a contar como AUTOAGENDAMENTO no vínculo de cuidado e no alerta. O horário
+   * anterior fica no histórico append-only `appointment_reschedules` (trigger da 0014).
+   */
   remarcar(ctx: RequestContext, id: string, novo: { data: string; hora: string }): Promise<{ data: string; hora: string }> {
     return this.escrita(ctx, async (tx) => {
       const atual = await this.travarAgendamento(tx, ctx, id);
-      if (!STATUS_REMARCAVEIS.includes(atual.status)) throw new ConflitoError('status_nao_permite');
       const duracao = atual.endsAt.getTime() - atual.startsAt.getTime();
       const inicio = paraInstante(novo.data, novo.hora);
+      const motivo = motivoParaNaoRemarcar(atual, inicio, new Date(), this.janela);
+      if (motivo) throw new ConflitoError(motivo);
       const fim = new Date(inicio.getTime() + duracao);
       await this.travarAgenda(tx, ctx, atual.professionalId);
       if (!atual.isWalkIn) {
@@ -215,12 +226,16 @@ export class SchedulingService {
       }
       await tx
         .update(appointments)
-        .set({ startsAt: inicio, endsAt: fim, updatedAt: new Date() })
+        .set({ startsAt: inicio, endsAt: fim, rescheduledBy: ctx.userId, updatedAt: new Date() })
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+      const [profissional] = await tx
+        .select({ userId: professionals.userId })
+        .from(professionals)
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, atual.professionalId)));
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { appointment_id: id, op: 'reschedule' },
+        metadata: { appointment_id: id, op: 'reschedule', self_rescheduled: profissional?.userId === ctx.userId },
       });
       return noFusoDaClinica(atual.startsAt);
     });
@@ -251,7 +266,9 @@ export class SchedulingService {
       const agora = new Date();
       // V1 do parecer #61: "em atendimento"/"atendido" só dentro da janela do horário. Consulta do
       // futuro ou de muito tempo atrás não vira atendimento (e, portanto, não vira vínculo).
-      if (STATUS_CLINICOS.includes(novo) && !dentroDaJanelaDeAtendimento(atual.startsAt, atual.endsAt, agora, this.janela)) {
+      // V2: as voltas que saem de status clínico ou de falta também (o "Desfazer" é do momento, não
+      // uma forma de reaproveitar um agendamento antigo).
+      if (exigeJanelaDeAtendimento(atual.status, novo) && !dentroDaJanelaDeAtendimento(atual.startsAt, atual.endsAt, agora, this.janela)) {
         throw new ConflitoError('fora_do_horario');
       }
       await tx
@@ -272,7 +289,8 @@ export class SchedulingService {
       // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
       // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
       if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
-      const autoagendado = atual.createdBy !== null && atual.createdBy === ctx.userId;
+      // Autoagendamento: criado OU remarcado pelo próprio usuário (V1 e V2-c do #61).
+      const autoagendado = atual.createdBy === ctx.userId || atual.rescheduledBy === ctx.userId;
       if (autoagendado && STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status)) {
         await this.alertarAutoagendamento(tx, ctx, atual.professionalId, agora);
       }
@@ -395,7 +413,7 @@ export class SchedulingService {
         and(
           eq(appointments.tenantId, ctx.tenantId),
           eq(appointments.professionalId, profissionalId),
-          eq(appointments.createdBy, ctx.userId),
+          or(eq(appointments.createdBy, ctx.userId), eq(appointments.rescheduledBy, ctx.userId)),
           inArray(appointments.status, [...STATUS_CLINICOS]),
           gte(appointments.startsAt, new Date(agora.getTime() - DIA_MS)),
         ),
