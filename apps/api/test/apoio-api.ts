@@ -6,14 +6,15 @@
 import 'reflect-metadata';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { TenantId } from '@plataforma/shared';
+import type { TenantId, UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import request from 'supertest';
 import { AppModule, type AppAdapters } from '../src/app.module';
 import { loadConfig } from '../src/config';
-import { clinicMembers, tenants, type ClinicMemberRole } from '../src/db/schema';
-import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
+import type { ClinicMemberRole } from '../src/db/schema';
+import { createDatabase, type DatabaseHandle } from '../src/db/tenant-transaction';
+import { MembrosService } from '../src/modules/auth/membros';
 import { DevSessionProvider } from '../src/modules/auth/dev-session.provider';
 import type { Perfil } from '../src/modules/auth/perfis';
 import { LocalKeyProvider } from '../src/modules/crypto/local-key-provider';
@@ -28,10 +29,12 @@ export interface ApiDeTeste {
   /** Sessão fictícia: devolve o cabeçalho Authorization. */
   sessao(tenantId: TenantId, ...perfis: Perfil[]): { Authorization: string; userId: string };
   /**
-   * Registra perfis do usuário NO BANCO (clinic_members, 0020/R13), concedidos por um admin fundador
-   * fictício da clínica, pelo mesmo caminho do runtime (triggers conferem). Devolve o usuário.
+   * Registra perfis do usuário NO BANCO (clinic_members, 0020/R13), concedidos pelo admin fundador
+   * fictício da clínica, pelo serviço do runtime (trilha e triggers conferem). Devolve o usuário.
    */
   membro<S extends { userId: string }>(tenantId: TenantId, s: S, ...perfis: ClinicMemberRole[]): Promise<S>;
+  /** Usuário fundador (admin no banco) da clínica criada por novaClinica. */
+  fundador(tenantId: TenantId): string;
   fechar(): Promise<void>;
 }
 
@@ -58,11 +61,11 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
     db,
     http: () => request(app.getHttpServer() as Server),
     async novaClinica() {
-      const id = randomUUID() as TenantId;
-      await withTenant(db.db, id, async (tx) => {
-        await tx.insert(tenants).values({ id, displayName: `Clinica Ficticia ${id.slice(0, 8)}` });
-      });
-      return id;
+      // Fluxo de criação da clínica (0022, R15): fundador fictício registrado como admin na mesma transação.
+      const fundadorUserId = randomUUID();
+      const { clinicaId } = await app.get(MembrosService).criarClinica({ nome: `Clinica Ficticia ${fundadorUserId.slice(0, 8)}`, fundadorUserId });
+      fundadores.set(clinicaId, fundadorUserId);
+      return clinicaId;
     },
     sessao(tenantId, ...perfis) {
       const userId = randomUUID();
@@ -70,22 +73,16 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
       return { Authorization: `Bearer ${token}`, userId };
     },
     async membro(tenantId, s, ...perfis) {
-      let fundador = fundadores.get(tenantId);
-      if (!fundador) {
-        const id = randomUUID();
-        await withTenant(db.db, tenantId, async (tx) => {
-          await tx.insert(clinicMembers).values({ tenantId, userId: id, role: 'admin', grantedBy: id });
-        }, id);
-        fundadores.set(tenantId, id);
-        fundador = id;
-      }
-      const por = fundador;
-      for (const role of perfis) {
-        await withTenant(db.db, tenantId, async (tx) => {
-          await tx.insert(clinicMembers).values({ tenantId, userId: s.userId, role, grantedBy: por });
-        }, por);
-      }
+      const fundador = fundadores.get(tenantId);
+      if (!fundador) throw new Error('membro(): clínica sem fundador (crie com novaClinica)');
+      const ctx = { tenantId, userId: fundador as UserId, roles: ['admin'] };
+      for (const role of perfis) await app.get(MembrosService).conceder(ctx, s.userId, role);
       return s;
+    },
+    fundador(tenantId) {
+      const f = fundadores.get(tenantId);
+      if (!f) throw new Error('clínica sem fundador');
+      return f;
     },
     async fechar() {
       await app.close();

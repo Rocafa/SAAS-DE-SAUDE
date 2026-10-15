@@ -4,10 +4,11 @@
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, clinicMembers, legalHolds, noteCustodies, patients, privateNotes } from '../src/db/schema';
+import { appointments, auditLog, clinicMembers, legalHolds, noteCustodies, patients, privateNotes, tenants } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -392,15 +393,19 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     expect(ops).toEqual(expect.arrayContaining(['member_grant', 'member_revoke']));
   });
 
-  it('fundação: só numa clínica sem membros, uma vez; o último admin não é revogado', async () => {
+  it('fundação (R15): o fundador vem da criação da clínica, auditado; ninguém mais funda; o último admin não é revogado', async () => {
     const nova = await api.novaClinica();
-    const dono = api.sessao(nova, 'admin');
+    const fundadorId = api.fundador(nova);
+    const dono = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: nova, userId: fundadorId, perfis: ['admin'] })}`, userId: fundadorId };
     const outro = api.sessao(nova, 'admin');
-    const f = await api.http().post('/clinica/membros/fundador').set(cab(dono)).send({});
-    expect(f.status).toBe(201);
-    expect(f.body).toMatchObject({ usuarioId: dono.userId, perfil: 'admin' });
-    expect((await api.http().post('/clinica/membros/fundador').set(cab(outro)).send({})).status).toBe(409);
-    // Mesmo pulando a API, o banco recusa a segunda fundação.
+    // Fundador registrado em tenants e como admin; tenant_create e member_found na trilha.
+    const membros = await api.http().get('/clinica/membros').set(cab(dono)).expect(200);
+    expect(membros.body).toEqual([expect.objectContaining({ usuarioId: fundadorId, perfil: 'admin', concedidoPor: fundadorId })]);
+    const trilha = await withTenant(api.db.db, nova, (tx) => tx.select().from(auditLog));
+    expect(trilha.map((l) => (l.metadata as Record<string, unknown>).op)).toEqual(expect.arrayContaining(['tenant_create', 'member_found']));
+    // A rota de "fundador" não existe mais.
+    expect((await api.http().post('/clinica/membros/fundador').set(cab(outro)).send({})).status).toBe(404);
+    // Pulando a API, o banco recusa outra fundação.
     const direto = withTenant(api.db.db, nova, (tx) =>
       tx.insert(clinicMembers).values({ tenantId: nova, userId: outro.userId, role: 'admin', grantedBy: outro.userId }), outro.userId);
     expect(await sqlstates(direto)).toContain('42501');
@@ -410,5 +415,93 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     const banco = withTenant(api.db.db, nova, (tx) =>
       tx.update(clinicMembers).set({ revokedAt: new Date(), revokedBy: dono.userId }).where(eq(clinicMembers.userId, dono.userId)), dono.userId);
     expect(await sqlstates(banco)).toContain('55000');
+  });
+
+  it('R15: clínica sem fundador não aceita "qualquer usuário" como 1º admin; fundador é imutável', async () => {
+    // Clínica antiga (criada sem fundador, como antes da 0022): nenhum membro.
+    const antiga = randomUUID() as TenantId;
+    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Antiga' }));
+    const recepcao = randomUUID();
+    const semFundador = withTenant(api.db.db, antiga, (tx) =>
+      tx.insert(clinicMembers).values({ tenantId: antiga, userId: recepcao, role: 'admin', grantedBy: recepcao }), recepcao);
+    expect(await sqlstates(semFundador)).toContain('42501');
+    // O runtime não se declara fundador depois.
+    const virarFundador = withTenant(api.db.db, antiga, (tx) => tx.update(tenants).set({ founderUserId: recepcao }).where(eq(tenants.id, antiga)), recepcao);
+    expect(await sqlstates(virarFundador)).toContain('42501');
+    // Nem nasce com fundador de outra pessoa.
+    const outra = randomUUID() as TenantId;
+    const forjada = withTenant(api.db.db, outra, (tx) => tx.insert(tenants).values({ id: outra, displayName: 'Clinica Ficticia Forjada', founderUserId: randomUUID() }), recepcao);
+    expect(await sqlstates(forjada)).toContain('42501');
+    // Clínica com fundador mas sem a fundação na mesma transação: recusada no COMMIT.
+    const semMembro = randomUUID() as TenantId;
+    const incompleta = withTenant(api.db.db, semMembro, (tx) => tx.insert(tenants).values({ id: semMembro, displayName: 'Clinica Ficticia Incompleta', founderUserId: recepcao }), recepcao);
+    expect(await sqlstates(incompleta)).toContain('23000');
+    // O fundador de uma clínica criada não muda (nem para outro, nem para nulo).
+    const nova = await api.novaClinica();
+    const trocar = withTenant(api.db.db, nova, (tx) => tx.update(tenants).set({ founderUserId: recepcao }).where(eq(tenants.id, nova)), api.fundador(nova));
+    expect(await sqlstates(trocar)).toContain('42501');
+  });
+
+  it('R15: runbook registra o fundador de clínica antiga (só papel de operação, uma vez, auditado)', async () => {
+    const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+    if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
+    const antiga = randomUUID() as TenantId;
+    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Runbook' }));
+    const fundadorId = randomUUID();
+    // O runtime não executa o runbook.
+    const peloRuntime = withTenant(api.db.db, antiga, (tx) => tx.execute(sql`select app_runbook_registrar_fundador(${antiga}::uuid, ${fundadorId}::uuid, 'OPS-1')`), fundadorId);
+    expect(await sqlstates(peloRuntime)).toContain('42501');
+    const op = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
+    try {
+      await op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${fundadorId}::uuid, 'OPS-1')`);
+      // Segunda vez: a clínica já tem fundador.
+      const deNovo = op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${randomUUID()}::uuid, 'OPS-2')`);
+      expect(await sqlstates(deNovo)).toContain('55000');
+    } finally {
+      await op.end({ timeout: 5 });
+    }
+    const [t] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
+    expect(t?.founderUserId).toBe(fundadorId);
+    const trilha = await withTenant(api.db.db, antiga, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinic_members')));
+    expect(trilha.map((l) => l.metadata)).toEqual([expect.objectContaining({ op: 'member_found', user_id: fundadorId, via: 'runbook', chamado: 'OPS-1' })]);
+  });
+
+  it('R15: perfil concedido ou revogado direto no banco, sem o evento na trilha, é recusado no COMMIT', async () => {
+    const alvo = randomUUID();
+    const semTrilha = withTenant(api.db.db, clinica, (tx) =>
+      tx.insert(clinicMembers).values({ tenantId: clinica, userId: alvo, role: 'recepcao', grantedBy: admin.userId }), admin.userId);
+    expect(await sqlstates(semTrilha)).toContain('42501');
+    await api.membro(clinica, { userId: alvo }, 'recepcao');
+    const revogarSemTrilha = withTenant(api.db.db, clinica, (tx) =>
+      tx.update(clinicMembers).set({ revokedAt: new Date(), revokedBy: admin.userId }).where(eq(clinicMembers.userId, alvo)), admin.userId);
+    expect(await sqlstates(revogarSemTrilha)).toContain('42501');
+  });
+
+  it('R13: os demais admins são avisados quando perfis mudam e quando a retirada da retenção é pedida/aprovada', async () => {
+    const avisosDe = async (s: Sessao) => (await api.http().get('/avisos').set(cab(s)).expect(200)).body as Array<Record<string, unknown>>;
+    const alvo = api.sessao(clinica, 'recepcao');
+    await api.http().post('/clinica/membros').set(cab(admin)).send({ usuarioId: alvo.userId, perfil: 'financeiro' }).expect(201);
+    await api.http().delete(`/clinica/membros/${alvo.userId}/financeiro`).set(cab(admin)).expect(204);
+    const doAdmin2 = await avisosDe(admin2);
+    expect(doAdmin2).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tipo: 'perfil_alterado', usuarioId: alvo.userId, perfil: 'financeiro', mudanca: 'concedido', criadoPor: admin.userId }),
+        expect.objectContaining({ tipo: 'perfil_alterado', usuarioId: alvo.userId, perfil: 'financeiro', mudanca: 'revogado', criadoPor: admin.userId }),
+      ]),
+    );
+    // Quem fez a mudança não é avisado de si mesmo.
+    expect((await avisosDe(admin)).filter((a) => a.tipo === 'perfil_alterado' && a.usuarioId === alvo.userId)).toEqual([]);
+    // Retirada de retenção: o pedido avisa os outros admins; a aprovação avisa quem pediu.
+    const p = await paciente();
+    await reter(p).expect(200);
+    await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada`).set(cab(admin)).send({ motivo: 'Processo ficticio encerrado' }).expect(200);
+    const pedido = (await avisosDe(admin2)).find((a) => a.tipo === 'retencao_retirada_pedida' && a.criadoPor === admin.userId);
+    expect(pedido?.retencaoId).toEqual(expect.any(String));
+    await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada/aprovacao`).set(cab(admin2)).send({}).expect(200);
+    const aprovado = (await avisosDe(admin)).find((a) => a.tipo === 'retencao_retirada_aprovada' && a.retencaoId === pedido?.retencaoId);
+    expect(aprovado).toMatchObject({ criadoPor: admin2.userId });
+    expect(Object.keys(aprovado ?? {}).sort()).toEqual(['criadoEm', 'criadoPor', 'id', 'lidoEm', 'retencaoId', 'tipo']);
+    // Nada de paciente no aviso.
+    expect(JSON.stringify(await avisosDe(admin))).not.toContain(p);
   });
 });
