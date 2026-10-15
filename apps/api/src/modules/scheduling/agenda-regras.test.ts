@@ -8,6 +8,8 @@ import {
   JANELA_ATENDIMENTO_PADRAO,
   loadJanelaDeAtendimento,
   exigeAtendimento,
+  exigeJanelaDeAtendimento,
+  motivoParaNaoRemarcar,
   janelaDeDias,
   noFusoDaClinica,
   paraInstante,
@@ -113,6 +115,37 @@ describe('janela de atendimento (V1 do parecer #61)', () => {
       { ATTENDANCE_WINDOW_AFTER_MIN: 'abc' },
     ]) {
       expect(() => loadJanelaDeAtendimento(env)).toThrow();
+    }
+  });
+});
+
+describe('remarcação e voltas de status (V2 do parecer #61)', () => {
+  const agora = new Date('2030-03-04T12:00:00Z');
+  const j = JANELA_ATENDIMENTO_PADRAO;
+  const min = 60_000;
+
+  it('voltas que saem de status clínico ou de falta exigem a janela; as demais não', () => {
+    expect(exigeJanelaDeAtendimento('in_progress', 'checked_in')).toBe(true);
+    expect(exigeJanelaDeAtendimento('completed', 'in_progress')).toBe(true);
+    expect(exigeJanelaDeAtendimento('no_show', 'scheduled')).toBe(true);
+    expect(exigeJanelaDeAtendimento('no_show', 'confirmed')).toBe(true);
+    expect(exigeJanelaDeAtendimento('checked_in', 'in_progress')).toBe(true);
+    expect(exigeJanelaDeAtendimento('checked_in', 'scheduled')).toBe(false);
+    expect(exigeJanelaDeAtendimento('scheduled', 'cancelled')).toBe(false);
+    expect(exigeJanelaDeAtendimento('scheduled', 'no_show')).toBe(false);
+  });
+
+  it('não remarca o que já passou, o que está travado, nem para o passado', () => {
+    const futuro = new Date(agora.getTime() + 60 * min);
+    const base = { status: 'scheduled' as const, rescheduleLocked: false };
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro }, futuro, agora, j)).toBeNull();
+    // Até antesMin (30 min) antes de agora ainda vale (encaixe de quem chegou há pouco).
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: new Date(agora.getTime() - 29 * min) }, futuro, agora, j)).toBeNull();
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: new Date(agora.getTime() - 31 * min) }, futuro, agora, j)).toBe('status_nao_permite');
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro }, new Date(agora.getTime() - 31 * min), agora, j)).toBe('horario_no_passado');
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro, rescheduleLocked: true }, futuro, agora, j)).toBe('status_nao_permite');
+    for (const status of ['checked_in', 'in_progress', 'completed', 'no_show', 'cancelled'] as const) {
+      expect(motivoParaNaoRemarcar({ status, rescheduleLocked: false, startsAt: futuro }, futuro, agora, j), status).toBe('status_nao_permite');
     }
   });
 });

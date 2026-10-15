@@ -89,7 +89,7 @@ export function exigeAtendimento(de: AppointmentStatusDb, para: AppointmentStatu
 /** Status que ocupam vaga no horário (contam para a capacidade). */
 export const STATUS_QUE_OCUPAM: readonly AppointmentStatusDb[] = ['scheduled', 'confirmed', 'checked_in', 'in_progress', 'completed'];
 
-/** Só se remarca o que ainda não aconteceu. */
+/** Só se remarca o que ainda não aconteceu (status; o horário é conferido em motivoParaNaoRemarcar). */
 export const STATUS_REMARCAVEIS: readonly AppointmentStatusDb[] = ['scheduled', 'confirmed'];
 
 /** Capacidade do horário: a menor entre a do profissional e a do tipo (AGD-01.5). */
@@ -139,4 +139,46 @@ export function dentroDaJanelaDeAtendimento(inicio: Date, fim: Date, agora: Date
   const de = inicio.getTime() - janela.antesMin * 60_000;
   const ate = fim.getTime() + janela.depoisMin * 60_000;
   return agora.getTime() >= de && agora.getTime() <= ate;
+}
+
+/**
+ * Status que TRAVAM o agendamento (V2 da re-revisão do #61): depois de "em atendimento", "atendido"
+ * ou "falta", o horário não muda mais (o banco mantém `reschedule_locked`, migração 0014) e sair
+ * deles (voltas do "Desfazer") só vale dentro da janela do horário ORIGINAL.
+ */
+export const STATUS_QUE_TRAVAM: readonly AppointmentStatusDb[] = ['in_progress', 'completed', 'no_show'];
+
+/**
+ * A mudança de status precisa estar dentro da janela de atendimento do horário do agendamento?
+ * - destino clínico ("em atendimento"/"atendido"): V1 do #61;
+ * - origem clínica ou falta (em_atendimento -> chegou, atendido -> em_atendimento,
+ *   faltou -> agendado/confirmado): V2 do #61. Fora da janela, a correção de registro será fluxo
+ *   próprio, auditado e sem gerar vínculo; aqui, 409 `fora_do_horario`.
+ */
+export function exigeJanelaDeAtendimento(de: AppointmentStatusDb, para: AppointmentStatusDb): boolean {
+  return STATUS_CLINICOS.includes(para) || STATUS_QUE_TRAVAM.includes(de);
+}
+
+/**
+ * O horário já passou para fins de agenda: início antes de agora − `antesMin` (a mesma folga da
+ * janela de atendimento, para o encaixe de quem chegou há pouco).
+ */
+export function horarioJaPassou(inicio: Date, agora: Date, janela: JanelaDeAtendimento): boolean {
+  return inicio.getTime() < agora.getTime() - janela.antesMin * 60_000;
+}
+
+/**
+ * Remarcação (V2-a do #61): o que já passou, ou já teve atendimento ou falta, não se remarca
+ * (marca-se outro horário), e não se remarca para o passado. Devolve o código do 409, ou null.
+ */
+export function motivoParaNaoRemarcar(
+  atual: { readonly startsAt: Date; readonly status: AppointmentStatusDb; readonly rescheduleLocked: boolean },
+  novoInicio: Date,
+  agora: Date,
+  janela: JanelaDeAtendimento,
+): 'status_nao_permite' | 'horario_no_passado' | null {
+  if (!STATUS_REMARCAVEIS.includes(atual.status) || atual.rescheduleLocked) return 'status_nao_permite';
+  if (horarioJaPassou(atual.startsAt, agora, janela)) return 'status_nao_permite';
+  if (horarioJaPassou(novoInicio, agora, janela)) return 'horario_no_passado';
+  return null;
 }
