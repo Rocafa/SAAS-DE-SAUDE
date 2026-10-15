@@ -368,6 +368,26 @@ export const legalHolds = pgTable('legal_holds', {
   releasedAt: timestamp('released_at', { withTimezone: true }),
 });
 
+/**
+ * Perfis da clínica no banco (0020, R13 do #63): usuário × clínica × perfil. Só admin ativo concede e
+ * revoga (fundação: o primeiro admin de uma clínica vazia); nunca se apaga. Os triggers de retenção legal
+ * e custódia conferem o perfil aqui. `psicologo` é a qualificação clínica exigida pela custódia.
+ */
+export const CLINIC_MEMBER_ROLES = ['admin', 'profissional', 'recepcao', 'financeiro', 'psicologo'] as const;
+export type ClinicMemberRole = (typeof CLINIC_MEMBER_ROLES)[number];
+export const clinicMembers = pgTable('clinic_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  userId: uuid('user_id').notNull(),
+  role: text('role', { enum: CLINIC_MEMBER_ROLES }).notNull(),
+  grantedBy: uuid('granted_by').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  revokedBy: uuid('revoked_by'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
 /** Custódia das notas lacradas de um psicólogo desligado (0017, R2 do #63): designa o admin, aceita o substituto. */
 export const noteCustodies = pgTable('note_custodies', {
   id: uuid('id').primaryKey().defaultRandom(),

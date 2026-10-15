@@ -99,6 +99,7 @@ beforeAll(async () => {
   clinica = await api.novaClinica();
   outraClinica = await api.novaClinica();
   admin = api.sessao(clinica, 'admin');
+  await api.membro(clinica, admin, 'admin');
   const t = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Sessao', minutos: 50 });
   tipo = (t.body as { id: string }).id;
   ciclo = api.app.get(CicloNotasPrivadasService);
@@ -163,7 +164,7 @@ describe('D1: expurgo em 30 dias, idempotente, salvo retenção legal', () => {
     // Retirada a retenção, a linha elegível sai na próxima execução.
     // (R12: retirar exige motivo e OUTRO admin.)
     await api.http().post(`/prontuario/pacientes/${pRetido}/retencao-legal/retirada`).set(cab(admin)).send({ motivo: 'Processo ficticio encerrado' }).expect(200);
-    await api.http().post(`/prontuario/pacientes/${pRetido}/retencao-legal/retirada/aprovacao`).set(cab(api.sessao(clinica, 'admin'))).send({}).expect(200);
+    await api.http().post(`/prontuario/pacientes/${pRetido}/retencao-legal/retirada/aprovacao`).set(cab(await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin'))).send({}).expect(200);
     expect((await api.http().post('/prontuario/notas-privadas/ciclo').set(cab(admin)).send({})).body).toMatchObject({ expurgadas: 1 });
     expect(await linha(retida)).toBeUndefined();
     // Trilha: só contagens e a marca de retenção (sem texto).

@@ -65,7 +65,7 @@ export async function comNegacaoAuditada<T>(
         ...(alvo.patientId ? { patient_id: alvo.patientId } : {}),
         ...(alvo.targetId ? { target_id: alvo.targetId } : {}),
       };
-      await db.run(ctx.tenantId, (tx) => recordAudit(tx, ctx, { action: AuditAction.Read, scope: SCOPE_ACESSO_NEGADO, metadata }));
+      await db.run(ctx.tenantId, (tx) => recordAudit(tx, ctx, { action: AuditAction.Read, scope: SCOPE_ACESSO_NEGADO, metadata }), ctx.userId);
     }
     throw e;
   }

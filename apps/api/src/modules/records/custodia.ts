@@ -24,6 +24,7 @@ import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { exigirPerfilNoBanco, temPerfilNoBanco, tevePerfilNoBanco } from '../auth/membros';
 import { modeloPelaEspecialidade } from './modelos';
 import { descartarComLapide } from './notas-privadas.service';
 import { CAMPO_NOTA, decifrarCampoClinico } from './record-fields';
@@ -68,6 +69,10 @@ export class CustodiaService {
       // Duas pessoas: quem designa não é o substituto; o substituto não é o autor (CHECK no banco também).
       if (subst.userId === ctx.userId) throw new ConflitoError('mesma_pessoa');
       if (subst.userId === autor.userId) throw new ConflitoError('substituto_igual_autor');
+      // R13: perfis conferidos também no banco (admin ativo designa; autor foi psicólogo; substituto é psicólogo ativo).
+      await exigirPerfilNoBanco(tx, ctx, 'admin');
+      if (!(await tevePerfilNoBanco(tx, ctx, autor.userId, 'psicologo'))) throw new ConflitoError('autor_nao_psicologo');
+      if (!(await temPerfilNoBanco(tx, ctx, subst.userId, 'psicologo'))) throw new ConflitoError('substituto_nao_psicologo_ativo');
       const [existente] = await tx
         .select({ id: noteCustodies.id })
         .from(noteCustodies)
@@ -204,6 +209,8 @@ export class CustodiaService {
       .from(professionals)
       .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.userId, ctx.userId), eq(professionals.active, true)));
     if (!ps.some((p) => modeloPelaEspecialidade(p.specialty) === 'psicologia')) throw new ProibidoError();
+    // R13: o banco também precisa saber que é psicólogo ativo (o trigger da 0020 confere).
+    if (!(await temPerfilNoBanco(tx, ctx, ctx.userId, 'psicologo'))) throw new ProibidoError('perfil_nao_registrado');
   }
 
   private async dto(tx: TenantTx, ctx: RequestContext, c: typeof noteCustodies.$inferSelect): Promise<CustodiaDto> {

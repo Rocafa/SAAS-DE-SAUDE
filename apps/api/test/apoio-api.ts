@@ -12,7 +12,7 @@ import type { Server } from 'node:http';
 import request from 'supertest';
 import { AppModule, type AppAdapters } from '../src/app.module';
 import { loadConfig } from '../src/config';
-import { tenants } from '../src/db/schema';
+import { clinicMembers, tenants, type ClinicMemberRole } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { DevSessionProvider } from '../src/modules/auth/dev-session.provider';
 import type { Perfil } from '../src/modules/auth/perfis';
@@ -27,6 +27,11 @@ export interface ApiDeTeste {
   novaClinica(): Promise<TenantId>;
   /** Sessão fictícia: devolve o cabeçalho Authorization. */
   sessao(tenantId: TenantId, ...perfis: Perfil[]): { Authorization: string; userId: string };
+  /**
+   * Registra perfis do usuário NO BANCO (clinic_members, 0020/R13), concedidos por um admin fundador
+   * fictício da clínica, pelo mesmo caminho do runtime (triggers conferem). Devolve o usuário.
+   */
+  membro<S extends { userId: string }>(tenantId: TenantId, s: S, ...perfis: ClinicMemberRole[]): Promise<S>;
   fechar(): Promise<void>;
 }
 
@@ -46,6 +51,7 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
   const app = moduleRef.createNestApplication({ logger: false });
   await app.init();
   const db = createDatabase(url, { max: 2 });
+  const fundadores = new Map<TenantId, string>();
   return {
     app,
     sessoes,
@@ -62,6 +68,24 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
       const userId = randomUUID();
       const token = sessoes.criarSessao({ tenantId, userId, perfis });
       return { Authorization: `Bearer ${token}`, userId };
+    },
+    async membro(tenantId, s, ...perfis) {
+      let fundador = fundadores.get(tenantId);
+      if (!fundador) {
+        const id = randomUUID();
+        await withTenant(db.db, tenantId, async (tx) => {
+          await tx.insert(clinicMembers).values({ tenantId, userId: id, role: 'admin', grantedBy: id });
+        }, id);
+        fundadores.set(tenantId, id);
+        fundador = id;
+      }
+      const por = fundador;
+      for (const role of perfis) {
+        await withTenant(db.db, tenantId, async (tx) => {
+          await tx.insert(clinicMembers).values({ tenantId, userId: s.userId, role, grantedBy: por });
+        }, por);
+      }
+      return s;
     },
     async fechar() {
       await app.close();

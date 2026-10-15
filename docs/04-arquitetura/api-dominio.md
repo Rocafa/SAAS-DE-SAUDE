@@ -263,6 +263,13 @@ Ficam para as próximas micropartes: escore automático e catálogo de escalas c
 - **R11 — expurgo.** `app_purge_discarded_private_notes()` com `search_path = pg_catalog, public, pg_temp`; a 0017 falha se o dono for superusuário, BYPASSRLS ou o runtime. A guarda de schema confere isso e que o runtime não tem DELETE/TRUNCATE em notas, prontuário, retenções e custódias.
 - Prova: `test/retencao-custodia.rls.test.ts`, `test/prontuario.rls.test.ts` (avisos), `test/guarda-schema.rls.test.ts` (R11).
 
+### 8g. Perfis da clínica no banco (R13 do parecer #63, migração 0020)
+
+- `clinic_members` (usuário × clínica × perfil: `admin`, `profissional`, `recepcao`, `financeiro`, `psicologo`) é mantida pela API: `POST /clinica/membros/fundador` (o primeiro admin, só numa clínica sem nenhum membro), `POST /clinica/membros {usuarioId, perfil}` e `DELETE /clinica/membros/:usuarioId/:perfil` (admin; `GET` lista os ativos). Tudo auditado (`member_found`/`member_grant`/`member_revoke`, só ids e perfil).
+- Travas no banco (trigger + RLS forçado, sem DELETE/TRUNCATE): só um admin **ativo nesta tabela** concede ou revoga, sempre como o usuário travado da sessão (`granted_by`/`revoked_by` = `app_current_user()`); ninguém se promove fora da fundação; o sistema (sentinela da 0019) não concede; revogação é única e não se desfaz; o último admin ativo não sai.
+- Os triggers conferem o perfil: `legal_holds` (marcar, pedir e aprovar a retirada) exige admin ativo; `note_custodies` exige admin ativo para designar, autor que já foi `psicologo` e substituto `psicologo` ativo (na designação e no aceite); levar a lacrada para `guarda_clinica` exige `psicologo` ativo. A API confere antes (403 `perfil_nao_registrado`, 409 `autor_nao_psicologo`/`substituto_nao_psicologo_ativo`).
+- Fica fora do G2 (controle de acesso, sem dado de paciente; as concessões estão na trilha). Risco residual: dois admins em conluio continuam podendo retirar uma retenção (exige duas contas admin registradas por um admin, tudo na trilha).
+
 ### 8d. Dados, integridade e LGPD
 
 - Migração `0012_prontuario.sql`: `clinical_settings`, `encounters`, `clinical_record_versions`, `clinical_addenda`, `private_notes` — RLS FORCE com `app_current_tenant()`, FK compostas com `tenant_id` (o atendimento aponta para `(id, tenant_id, patient_id, professional_id)` do agendamento: paciente e profissional são os do agendamento), sem DELETE/TRUNCATE para o runtime. Declaradas na guarda de schema e no pacote G2 (`schemaVersion` **1.6.0**; 1.7.0 com a 0015). Não toca o CHECK de `audit_log.action`.

@@ -65,6 +65,7 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // aceitam as transições do fluxo (pedido/aprovação por duas pessoas, aceite do substituto, lido).
   legal_holds: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   note_custodies: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinic_members: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   clinical_notices: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
