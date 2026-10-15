@@ -41,6 +41,21 @@ export const PERMISSOES = {
   /** Relatório por convênio (faturamento, CNV-04.6): dono e financeiro. */
   'guias:faturar': ['admin', 'financeiro'],
   /**
+   * Financeiro (rodada 15.2, FIN-01.1 a 01.4/01.8). Nada disto é conteúdo clínico: cobrança e recibo
+   * não levam diagnóstico, especialidade nem procedimento (texto neutro configurável). O profissional
+   * não opera o financeiro da clínica (o repasse dele é FIN-03, fora desta rodada).
+   * - ler: contas a receber, caixa, recibos;
+   * - operar: lançar e cancelar cobrança SEM recebimento, receber, abrir/fechar caixa, emitir recibo;
+   * - estornar: estornar recebimento e cancelar recibo (mexe em dinheiro já registrado);
+   * - fiscal: perfil fiscal do profissional PF e insumo do Receita Saúde (CPFs em lote);
+   * - configurar: texto neutro do recibo, emitente e tipo de atendimento padrão.
+   */
+  'financeiro:ler': ['admin', 'recepcao', 'financeiro'],
+  'financeiro:operar': ['admin', 'recepcao', 'financeiro'],
+  'financeiro:estornar': ['admin', 'financeiro'],
+  'financeiro:fiscal': ['admin', 'financeiro'],
+  'financeiro:configurar': ['admin'],
+  /**
    * Conteúdo clínico (prontuário, evoluções, anexos clínicos). Não há rota nesta rodada; a regra
    * fica explícita para a API de prontuário: perfil clínico E vínculo de cuidado (ver
    * `podeLerConteudoClinico`). Recepção, financeiro e admin não clínico: nunca.
