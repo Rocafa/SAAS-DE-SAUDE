@@ -69,8 +69,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.9.0: financeiro (migração 0018): configuração, perfil fiscal do profissional PF (CPF decifrado),
  *        caixas, cobranças (CPF do pagador decifrado), recebimentos, estornos, contador e recibos (retrato
  *        decifrado) e cancelamentos de recibo, em `data.finance` e `manifest.counts.finance`.
+ * 1.10.0: `charges[].fiscalPurgedAt` e `receipts[].fiscalPurgedAt` (retenção fiscal, migração 0021, R7 do
+ *        parecer #65); recibo eliminado sai com `content: null`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.9.0';
+export const EXPORT_SCHEMA_VERSION = '1.10.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

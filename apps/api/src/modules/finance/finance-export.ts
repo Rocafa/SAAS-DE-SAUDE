@@ -72,6 +72,8 @@ export interface ExportedFinance {
     createdAt: string;
     createdBy: string;
     updatedAt: string;
+    /** R7: pagador eliminado pela retenção fiscal (0021). */
+    fiscalPurgedAt: string | null;
   }[];
   readonly payments: readonly {
     id: string;
@@ -99,6 +101,8 @@ export interface ExportedFinance {
     content: unknown;
     issuedAt: string;
     issuedBy: string;
+    /** R7: retrato eliminado pela retenção fiscal (0021); `content` sai null. */
+    fiscalPurgedAt: string | null;
   }[];
   readonly receiptCancellations: readonly {
     id: string;
@@ -218,6 +222,7 @@ export async function exportarFinanceiro(
         createdAt: c.createdAt.toISOString(),
         createdBy: c.createdBy,
         updatedAt: c.updatedAt.toISOString(),
+        fiscalPurgedAt: iso(c.fiscalPurgedAt),
       })),
     ),
     payments: recebimentos.map((p) => ({
@@ -246,6 +251,7 @@ export async function exportarFinanceiro(
         content: JSON.parse((await dec(r.id, CAMPO_RECIBO, r.contentEnc)) ?? 'null') as unknown,
         issuedAt: r.issuedAt.toISOString(),
         issuedBy: r.issuedBy,
+        fiscalPurgedAt: iso(r.fiscalPurgedAt),
       })),
     ),
     receiptCancellations: cancelamentos.map((c) => ({

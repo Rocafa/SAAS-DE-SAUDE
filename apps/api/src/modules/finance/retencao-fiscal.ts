@@ -42,7 +42,7 @@ export interface ResultadoDaRetencaoFiscal {
 
 async function lerPolitica(tx: TenantTx): Promise<PoliticaDeRetencaoFiscal> {
   const [p] = await tx.execute<{ years: number; start_rule: string; accountant_confirmed: boolean; note: string }>(
-    sql`select years, start_rule, accountant_confirmed, note from fiscal_retention_policy`,
+    sql`select years, start_rule, accountant_confirmed, note from app_fiscal_retention_policy()`,
   );
   if (!p) throw new Error('política de retenção fiscal ausente');
   return {

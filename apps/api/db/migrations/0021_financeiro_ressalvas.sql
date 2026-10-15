@@ -179,15 +179,28 @@ CREATE TABLE fiscal_retention_policy (
 );
 INSERT INTO fiscal_retention_policy (note)
   VALUES ('PROPOSTA: 5 anos contados de 1º/1 do ano seguinte ao pagamento. A CONFIRMAR COM O CONTADOR (perguntas 24/25).');
+-- Tabela INTERNA: o runtime não tem privilégio nenhum; lê só pelas funções abaixo.
 REVOKE ALL ON fiscal_retention_policy FROM PUBLIC;
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON fiscal_retention_policy FROM app_user;
-GRANT SELECT ON fiscal_retention_policy TO app_user;
+REVOKE ALL ON fiscal_retention_policy FROM app_user;
+
+CREATE FUNCTION app_fiscal_retention_policy()
+  RETURNS TABLE (years integer, start_rule text, accountant_confirmed boolean, note text)
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT f.years, f.start_rule, f.accountant_confirmed, f.note FROM public.fiscal_retention_policy f
+$$;
+REVOKE ALL ON FUNCTION app_fiscal_retention_policy() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_fiscal_retention_policy() TO app_user;
 
 -- Data (no fuso da clínica) a partir da qual o dado fiscal de um fato em p_quando pode ser eliminado.
 CREATE FUNCTION app_fiscal_deadline(p_quando timestamptz) RETURNS date
   LANGUAGE sql
   STABLE
-  SET search_path = pg_catalog, public
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
 AS $$
   SELECT make_date(extract(year FROM p_quando AT TIME ZONE 'America/Sao_Paulo')::int + 1 + f.years, 1, 1)
     FROM fiscal_retention_policy f
