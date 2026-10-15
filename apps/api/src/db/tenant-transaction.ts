@@ -163,18 +163,25 @@ export class SlotLimiter {
  * tenant no meio dela (set_config/SET LOCAL/nova chamada) não tem efeito ou é recusado.
  *
  * Isto é a segunda camada (RLS). Repositórios continuam filtrando por tenant_id explicitamente.
+ *
+ * `userId` (migração 0016): o usuário da sessão fica travado na transação do mesmo jeito
+ * (`app_set_user`), e o banco confere com ele quem cria e quem remarca agendamento. Toda transação
+ * da API de domínio passa o usuário (transacao-clinica.ts); sem ele, essas escritas são recusadas.
  */
 export async function withTenant<T>(
   db: Database,
   tenantId: TenantId,
   fn: (tx: TenantTx) => Promise<T>,
+  userId?: string,
 ): Promise<T> {
   if (!isTenantId(tenantId)) {
     // Falha fechada: nunca abre transação com contexto inválido.
     throw new Error('tenant_id inválido: esperado UUID');
   }
+  if (userId !== undefined && !UUID_RE.test(userId)) throw new Error('user_id inválido: esperado UUID');
   return db.transaction(async (tx) => {
     await tx.execute(sql`select app_set_tenant(${tenantId}::uuid)`);
+    if (userId !== undefined) await tx.execute(sql`select app_set_user(${userId}::uuid)`);
     return fn(tx);
   });
 }
