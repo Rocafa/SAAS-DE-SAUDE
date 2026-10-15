@@ -16,6 +16,8 @@ import {
   guideSessionSignatures,
   insuranceGuides,
   insurers,
+  legalHolds,
+  noteCustodies,
   packageSessions,
   patients,
   privateNotes,
@@ -31,7 +33,15 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
-import { CAMPO_ADENDO, CAMPO_NOTA, CAMPO_VERSAO, campoClinicoRef, type CampoClinico } from '../records/record-fields';
+import {
+  CAMPO_ADENDO,
+  CAMPO_NOTA,
+  CAMPO_RETENCAO_MOTIVO,
+  CAMPO_RETENCAO_REFERENCIA,
+  CAMPO_VERSAO,
+  campoClinicoRef,
+  type CampoClinico,
+} from '../records/record-fields';
 import { canExport, ExitWindowClosedError, exitWindowEndsAt, EXIT_WINDOW_DAYS } from './access-policy';
 import { toCsv } from './csv';
 import { loadTenantSubscription } from './tenant-subscription';
@@ -54,11 +64,13 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        notas privadas ficam fora, só contadas no manifesto (`privateNotesWithheld`).
  * 1.7.0: `encounters[].confidentiality` (sigilo gravado na abertura), `patients[].legalHoldSince` e
  *        `privateNotes[].custodyState`/`custodyDeadline`, da migração 0015 (B1, D1 e D2 do parecer #63).
- * 1.8.0: financeiro (migração 0018): configuração, perfil fiscal do profissional PF (CPF decifrado),
+ * 1.8.0: retenções legais (`legalHolds`, referência e motivo da retirada decifrados) e custódias das
+ *        notas lacradas (`noteCustodies`), da migração 0017 (R2 e R12 do parecer #63).
+ * 1.9.0: financeiro (migração 0018): configuração, perfil fiscal do profissional PF (CPF decifrado),
  *        caixas, cobranças (CPF do pagador decifrado), recebimentos, estornos, contador e recibos (retrato
  *        decifrado) e cancelamentos de recibo, em `data.finance` e `manifest.counts.finance`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.8.0';
+export const EXPORT_SCHEMA_VERSION = '1.9.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -89,6 +101,8 @@ export const EXPORTED_TABLES = [
   // conteúdo). A clínica é a controladora e o pacote é dela, mas a anotação pessoal do profissional
   // não é prontuário e o produto promete que ela não sai sem a decisão dele. Ver api-dominio.md §8.
   'private_notes',
+  'legal_holds',
+  'note_custodies',
   // Financeiro (0018): em data.finance.
   'finance_settings',
   'professional_fiscal_profiles',
@@ -105,6 +119,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
+  clinical_notices:
+    'caixa de avisos interna ao usuário (troca de sigilo), sem dado de paciente; o fato está em audit_log, que sai no pacote',
 };
 
 export interface ExportManifest {
@@ -139,6 +155,8 @@ export interface ExportManifest {
     /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
     readonly privateNotesWithheld: number;
     readonly appointmentReschedules: number;
+    readonly legalHolds: number;
+    readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
@@ -364,6 +382,30 @@ export interface ExportedPrivateNote {
   readonly custodyDeadline: string | null;
 }
 
+/** Retenção legal (0017): referência e motivo da retirada saem decifrados para a clínica. */
+export interface ExportedLegalHold {
+  readonly id: string;
+  readonly patientId: string;
+  readonly reference: string;
+  readonly placedBy: string;
+  readonly placedAt: string;
+  readonly releaseReason: string | null;
+  readonly releaseRequestedBy: string | null;
+  readonly releaseRequestedAt: string | null;
+  readonly releasedBy: string | null;
+  readonly releasedAt: string | null;
+}
+
+/** Custódia das notas lacradas (0017). */
+export interface ExportedNoteCustody {
+  readonly id: string;
+  readonly authorUserId: string;
+  readonly substituteUserId: string;
+  readonly designatedBy: string;
+  readonly designatedAt: string;
+  readonly acceptedAt: string | null;
+}
+
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
@@ -385,6 +427,8 @@ export interface TenantExportDocument {
     readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
     readonly privateNotes: readonly ExportedPrivateNote[];
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
+    readonly legalHolds: readonly ExportedLegalHold[];
+    readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
   };
@@ -547,6 +591,19 @@ export async function exportInTransaction(
       .from(appointmentReschedules)
       .where(eq(appointmentReschedules.tenantId, ctx.tenantId))
       .orderBy(asc(appointmentReschedules.createdAt), asc(appointmentReschedules.id)),
+    ctx.tenantId,
+  );
+
+  const holdRows = soDaClinica(
+    await tx.select().from(legalHolds).where(eq(legalHolds.tenantId, ctx.tenantId)).orderBy(asc(legalHolds.placedAt), asc(legalHolds.id)),
+    ctx.tenantId,
+  );
+  const custodyRows = soDaClinica(
+    await tx
+      .select()
+      .from(noteCustodies)
+      .where(eq(noteCustodies.tenantId, ctx.tenantId))
+      .orderBy(asc(noteCustodies.designatedAt), asc(noteCustodies.id)),
     ctx.tenantId,
   );
 
@@ -811,6 +868,30 @@ export async function exportInTransaction(
     });
   }
 
+  const exportedHolds: ExportedLegalHold[] = [];
+  for (const h of holdRows) {
+    exportedHolds.push({
+      id: h.id,
+      patientId: h.patientId,
+      reference: await decryptClinical(h.id, CAMPO_RETENCAO_REFERENCIA, h.referenceEnc),
+      placedBy: h.placedBy,
+      placedAt: h.placedAt.toISOString(),
+      releaseReason: h.releaseReasonEnc ? await decryptClinical(h.id, CAMPO_RETENCAO_MOTIVO, h.releaseReasonEnc) : null,
+      releaseRequestedBy: h.releaseRequestedBy,
+      releaseRequestedAt: iso(h.releaseRequestedAt),
+      releasedBy: h.releasedBy,
+      releasedAt: iso(h.releasedAt),
+    });
+  }
+  const exportedCustodies: ExportedNoteCustody[] = custodyRows.map((c) => ({
+    id: c.id,
+    authorUserId: c.authorUserId,
+    substituteUserId: c.substituteUserId,
+    designatedBy: c.designatedBy,
+    designatedAt: c.designatedAt.toISOString(),
+    acceptedAt: iso(c.acceptedAt),
+  }));
+
   const manifest: ExportManifest = {
     format: EXPORT_FORMAT,
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -843,6 +924,8 @@ export async function exportInTransaction(
       privateNotes: exportedNotes.length,
       privateNotesWithheld: noteRows.length - exportedNotes.length,
       appointmentReschedules: exportedReschedules.length,
+      legalHolds: exportedHolds.length,
+      noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
       auditEvents: auditEvents.length,
     },
@@ -920,6 +1003,8 @@ export async function exportInTransaction(
         clinicalAddenda: exportedAddenda,
         privateNotes: exportedNotes,
         appointmentReschedules: exportedReschedules,
+        legalHolds: exportedHolds,
+        noteCustodies: exportedCustodies,
         finance: financeiro.data,
       },
     },

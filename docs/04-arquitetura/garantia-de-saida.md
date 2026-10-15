@@ -18,7 +18,7 @@ RBAC/MFA continuam valendo à parte.**
 
 - **G1** — inadimplência (`past_due`, `read_only`) só bloqueia escrita clínica/operacional.
 - **G2** — exportação total em formato aberto, sem custo: `export.json` (contrato versionado,
-  `schemaVersion` = `1.7.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
+  `schemaVersion` = `1.8.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
   contagens por entidade) + `pacientes.csv` (RFC 4180, UTF-8 com BOM, fórmulas neutralizadas).
   Somente dados do próprio tenant (filtro explícito + `withTenant`/RLS FORCE).
   Desde a 1.1.0 (migração 0007): cadastro do paciente com CPF/telefone/nascimento **decifrados**
@@ -46,6 +46,8 @@ RBAC/MFA continuam valendo à parte.**
   Desde a 1.7.0 (migração 0015, B1/D1/D2 do parecer PR #63): `encounters[].confidentiality` (sigilo
   gravado na abertura), `patients[].legalHoldSince` (retenção legal) e `privateNotes[].custodyState`/
   `custodyDeadline` (notas sob guarda da clínica saem; descartadas nunca saem).
+  Desde a 1.8.0 (migração 0017, R2/R12 do parecer PR #63): `legalHolds` (referência e motivo da
+  retirada decifrados) e `noteCustodies`; `clinical_notices` fica fora (aviso interno, sem dado de paciente).
 - **G3** — toda exportação grava 1 linha em `audit_log` **na mesma transação** (sem auditoria,
   sem export): ator, data, escopo `tenant.full_export`, contagens e versão. Nunca conteúdo
   clínico/PII. `audit_log` é append-only: `app_user` só tem `SELECT`/`INSERT`, e um trigger

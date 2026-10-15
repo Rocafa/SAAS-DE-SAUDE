@@ -149,6 +149,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
           scope: 'patients',
           metadata: { rule: regra, window_s: Math.round(janelaMs / 1000), threshold: limiar, count: contagem },
         }),
+        ctx.userId,
       );
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;

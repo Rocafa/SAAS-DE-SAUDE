@@ -109,9 +109,11 @@ describe('RLS nas tabelas novas (0007)', () => {
   });
 
   it('agendamento na clínica A apontando para paciente/profissional de B viola a FK composta', async () => {
+    const usuario = randomUUID();
     const codigos = await sqlstate(
       withTenant(api.db.db, clinicaA, (tx) =>
         tx.insert(appointments).values({
+          createdBy: usuario,
           tenantId: clinicaA,
           patientId: pacienteB,
           professionalId: profissionalA,
@@ -119,7 +121,7 @@ describe('RLS nas tabelas novas (0007)', () => {
           startsAt: new Date('2030-01-07T12:00:00Z'),
           endsAt: new Date('2030-01-07T13:00:00Z'),
         }),
-      ),
+      usuario),
     );
     expect(codigos).toContain('23503');
   });

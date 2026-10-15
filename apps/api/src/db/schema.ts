@@ -348,6 +348,56 @@ export const privateNotes = pgTable('private_notes', {
   custodyDeadline: timestamp('custody_deadline', { withTimezone: true }),
 });
 
+/**
+ * Retenção legal do paciente (0017, R12 do #63): referência do processo/ofício cifrada; retirar exige
+ * pedido com motivo cifrado e aprovação de OUTRA pessoa (trigger). Espelhada em patients.legal_hold_since.
+ */
+export const legalHolds = pgTable('legal_holds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  referenceEnc: text('reference_enc').notNull(),
+  placedBy: uuid('placed_by').notNull(),
+  placedAt: timestamp('placed_at', { withTimezone: true }).notNull().defaultNow(),
+  releaseReasonEnc: text('release_reason_enc'),
+  releaseRequestedBy: uuid('release_requested_by'),
+  releaseRequestedAt: timestamp('release_requested_at', { withTimezone: true }),
+  releasedBy: uuid('released_by'),
+  releasedAt: timestamp('released_at', { withTimezone: true }),
+});
+
+/** Custódia das notas lacradas de um psicólogo desligado (0017, R2 do #63): designa o admin, aceita o substituto. */
+export const noteCustodies = pgTable('note_custodies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  authorUserId: uuid('author_user_id').notNull(),
+  substituteUserId: uuid('substitute_user_id').notNull(),
+  designatedBy: uuid('designated_by').notNull(),
+  designatedAt: timestamp('designated_at', { withTimezone: true }).notNull().defaultNow(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+});
+
+/** Caixa de avisos interna (0017, R9 do #63): sem dado de paciente; só o destinatário lê e marca lido. */
+export const CLINICAL_NOTICE_KINDS = ['sigilo_psicologia_alterado'] as const;
+export const clinicalNotices = pgTable('clinical_notices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  recipientUserId: uuid('recipient_user_id').notNull(),
+  kind: text('kind', { enum: CLINICAL_NOTICE_KINDS }).notNull(),
+  fromMode: text('from_mode', { enum: PSYCH_COMPARTMENT_MODES }).notNull(),
+  toMode: text('to_mode', { enum: PSYCH_COMPARTMENT_MODES }).notNull(),
+  restrictedExisting: integer('restricted_existing').notNull().default(0),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+});
+
 // ---------------------------------------------------------------- financeiro (migração 0018)
 
 /** pf: profissional pessoa física (Receita Saúde); pj: clínica/CNPJ (NFS-e). */
@@ -591,6 +641,9 @@ export const schema = {
   clinicalAddenda,
   privateNotes,
   appointmentReschedules,
+  legalHolds,
+  noteCustodies,
+  clinicalNotices,
   financeSettings,
   professionalFiscalProfiles,
   cashSessions,

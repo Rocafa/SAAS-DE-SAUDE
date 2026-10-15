@@ -12,6 +12,9 @@
  *   (custódia, R2 do #63, antes do piloto com psicologia); demais (fisio/TO) → eliminação (lápide e
  *   expurgo da D1). Lacrada sem decisão da custódia em 90 dias → eliminação.
  *
+ * - R10 (0017): paciente sob retenção legal → nenhuma nota dele é eliminada nem muda de estado; os
+ *   prazos vencidos ficam suspensos até a retenção ser retirada (retencao-legal.ts).
+ *
  * As funções rodam na transação da clínica do contexto (RLS) e auditam só contagens. O agendador
  * (job diário) chama `executarCicloDasNotas` para cada clínica; a rota do admin faz o mesmo sob demanda.
  */
@@ -40,6 +43,8 @@ export interface ResultadoDoCiclo {
   readonly guardaClinica: number;
   readonly lacradas: number;
   readonly eliminadas: number;
+  /** R10: vencidas mas suspensas porque o paciente está sob retenção legal. */
+  readonly suspensasPorRetencao: number;
   readonly expurgadas: number;
 }
 
@@ -84,8 +89,10 @@ export async function aplicarPrazosDeCustodia(
       estado: privateNotes.custodyState,
       exportar: privateNotes.exportConsent,
       especialidade: professionals.specialty,
+      retida: sql<number>`(${patients.legalHoldSince} IS NOT NULL)::int`,
     })
     .from(privateNotes)
+    .innerJoin(patients, and(eq(patients.tenantId, privateNotes.tenantId), eq(patients.id, privateNotes.patientId)))
     .leftJoin(
       professionals,
       and(eq(professionals.tenantId, privateNotes.tenantId), eq(professionals.userId, privateNotes.authorUserId)),
@@ -102,7 +109,13 @@ export async function aplicarPrazosDeCustodia(
   let guardaClinica = 0;
   let lacradas = 0;
   let eliminadas = 0;
+  let retidas = 0;
   for (const n of vencidas) {
+    // R10: paciente sob retenção legal: nada é eliminado nem muda de estado; o prazo fica suspenso.
+    if (Number(n.retida) === 1) {
+      retidas++;
+      continue;
+    }
     const onde = and(eq(privateNotes.tenantId, ctx.tenantId), eq(privateNotes.id, n.id));
     if (n.estado === 'aguardando_decisao' && n.exportar) {
       await tx.update(privateNotes).set({ custodyState: 'guarda_clinica', custodyDeadline: null, updatedAt: agora }).where(onde);
@@ -123,10 +136,10 @@ export async function aplicarPrazosDeCustodia(
     await recordAudit(tx, ctx, {
       action: AuditAction.Update,
       scope: SCOPE_NOTAS,
-      metadata: { op: 'custody_deadline', guarda_clinica: guardaClinica, sealed: lacradas, discarded: eliminadas },
+      metadata: { op: 'custody_deadline', guarda_clinica: guardaClinica, sealed: lacradas, discarded: eliminadas, legal_hold: retidas },
     });
   }
-  return { guardaClinica, lacradas, eliminadas };
+  return { guardaClinica, lacradas, eliminadas, suspensasPorRetencao: retidas };
 }
 
 /** D1.2: expurgo idempotente das linhas descartadas há mais de 30 dias (salvo retenção legal). */
@@ -165,32 +178,6 @@ export class CicloNotasPrivadasService {
       if (!p) throw new NaoEncontradoError();
       if (!p.userId) return { notas: 0, prazo: new Date(agora.getTime() + DIAS_PARA_DECIDIR * DIA_MS).toISOString() };
       return iniciarDesligamentoDoAutor(tx, ctx, p.userId, agora);
-    });
-  }
-
-  /**
-   * D1.4: marca (ou retira) a retenção legal do paciente — requisição judicial, da ANPD ou processo
-   * ético em curso. Enquanto marcada, nada do paciente é expurgado. Auditado, sem motivo em texto.
-   */
-  definirRetencaoLegal(ctx: RequestContext, pacienteId: string, ativa: boolean): Promise<{ retencaoLegalDesde: string | null }> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
-      const [p] = await tx
-        .select({ desde: patients.legalHoldSince })
-        .from(patients)
-        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, pacienteId)))
-        .for('update');
-      if (!p) throw new NaoEncontradoError();
-      const desde = ativa ? (p.desde ?? new Date()) : null;
-      await tx
-        .update(patients)
-        .set({ legalHoldSince: desde })
-        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, pacienteId)));
-      await recordAudit(tx, ctx, {
-        action: AuditAction.Update,
-        scope: 'patients',
-        metadata: { patient_id: pacienteId, op: 'legal_hold', active: ativa },
-      });
-      return { retencaoLegalDesde: desde?.toISOString() ?? null };
     });
   }
 }

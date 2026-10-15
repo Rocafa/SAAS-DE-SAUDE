@@ -22,7 +22,8 @@
 -- Todas com RLS FORÇADO pela policy do contexto travado (app_current_tenant, 0003), FK compostas com
 -- tenant_id e sem DELETE/TRUNCATE para o runtime. Não toca o CHECK de audit_log.action.
 --
--- Empilhamento: vem depois da 0015 (e das 0016/0017 da revisão de #61/#62/#63). Não depende delas.
+-- Empilhamento: vem depois da 0016/0017 (#61/#63) e DEPENDE da 0016 (app_current_user: o banco confere
+-- que quem lança é o usuário da sessão).
 
 -- Alvos das FK compostas já existem: patients/professionals (0007), appointments e session_packages (0011).
 
@@ -319,6 +320,48 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER charges_guard BEFORE UPDATE ON charges FOR EACH ROW EXECUTE FUNCTION charges_guard();
+
+-- Quem lança é o USUÁRIO DA SESSÃO travado na transação (app_current_user, migração 0016): o banco
+-- recusa created_by/received_by/reversed_by/issued_by/cancelled_by/opened_by/closed_by/updated_by de
+-- outra pessoa (ou sem usuário na transação: falha fechada). No UPDATE só confere a coluna que mudou.
+-- Nome com prefixo `zz_`: os gatilhos BEFORE disparam em ordem alfabética, então as regras de negócio
+-- (sequência do recibo, caixa aberto) respondem primeiro.
+CREATE FUNCTION finance_ator_da_sessao() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+  coluna text;
+  novo   text;
+BEGIN
+  FOREACH coluna IN ARRAY TG_ARGV LOOP
+    novo := to_jsonb(NEW) ->> coluna;
+    CONTINUE WHEN novo IS NULL;
+    CONTINUE WHEN TG_OP = 'UPDATE' AND novo IS NOT DISTINCT FROM (to_jsonb(OLD) ->> coluna);
+    IF v_user IS NULL OR novo::uuid <> v_user THEN
+      RAISE EXCEPTION '%.% tem de ser o usuário da sessão', TG_TABLE_NAME, coluna USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER zz_finance_settings_ator BEFORE INSERT OR UPDATE ON finance_settings
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('updated_by');
+CREATE TRIGGER zz_professional_fiscal_profiles_ator BEFORE INSERT OR UPDATE ON professional_fiscal_profiles
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('updated_by');
+CREATE TRIGGER zz_cash_sessions_ator BEFORE INSERT OR UPDATE ON cash_sessions
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('opened_by', 'closed_by');
+CREATE TRIGGER zz_charges_ator BEFORE INSERT OR UPDATE ON charges
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('created_by', 'cancelled_by');
+CREATE TRIGGER zz_payments_ator BEFORE INSERT ON payments
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('received_by');
+CREATE TRIGGER zz_payment_reversals_ator BEFORE INSERT ON payment_reversals
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('reversed_by');
+CREATE TRIGGER zz_receipts_ator BEFORE INSERT ON receipts
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('issued_by');
+CREATE TRIGGER zz_receipt_cancellations_ator BEFORE INSERT ON receipt_cancellations
+  FOR EACH ROW EXECUTE FUNCTION finance_ator_da_sessao('cancelled_by');
 
 -- ---------------------------------------------------------------- RLS
 

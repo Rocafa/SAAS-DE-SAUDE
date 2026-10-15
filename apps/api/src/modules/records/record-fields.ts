@@ -12,11 +12,15 @@ import type { FieldRef } from '../crypto/field-format';
 export type CampoClinico =
   | { readonly table: 'clinical_record_versions'; readonly column: 'content' }
   | { readonly table: 'clinical_addenda'; readonly column: 'text' }
-  | { readonly table: 'private_notes'; readonly column: 'content' };
+  | { readonly table: 'private_notes'; readonly column: 'content' }
+  | { readonly table: 'legal_holds'; readonly column: 'reference' | 'release_reason' };
 
 export const CAMPO_VERSAO: CampoClinico = { table: 'clinical_record_versions', column: 'content' };
 export const CAMPO_ADENDO: CampoClinico = { table: 'clinical_addenda', column: 'text' };
 export const CAMPO_NOTA: CampoClinico = { table: 'private_notes', column: 'content' };
+/** R12 do #63: referência do processo/ofício e motivo da retirada da retenção legal. */
+export const CAMPO_RETENCAO_REFERENCIA: CampoClinico = { table: 'legal_holds', column: 'reference' };
+export const CAMPO_RETENCAO_MOTIVO: CampoClinico = { table: 'legal_holds', column: 'release_reason' };
 
 export function campoClinicoRef(tenantId: TenantId, rowId: string, campo: CampoClinico): FieldRef {
   return { tenantId, table: campo.table, column: campo.column, rowId };

@@ -4,7 +4,10 @@ import type { PsychCompartmentMode } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
+import { AvisosService, type AvisoDto } from './avisos';
 import { CicloNotasPrivadasService, type ResultadoDoCiclo } from './ciclo-notas-privadas';
+import { CustodiaService, type CustodiaDto, type DecisaoDaCustodia, type NotaLacradaDto } from './custodia';
+import { RetencaoLegalService, type EstadoDaRetencao } from './retencao-legal';
 import { NotasPrivadasService, type NotaPrivadaDto } from './notas-privadas.service';
 import { ProntuarioService, type AtendimentoDto, type PaginaDeHistorico, type RespostaConfiguracao, type VersaoDto } from './prontuario.service';
 import {
@@ -13,7 +16,10 @@ import {
   validarAlteracaoNota,
   validarConfiguracao,
   validarCorpoVazioClinico,
+  validarDecisaoDeCustodia,
+  validarDesignacaoDeCustodia,
   validarNovaNota,
+  validarPedidoDeRetirada,
   validarPaginacao,
   validarQueryVaziaClinica,
   validarRetencaoLegal,
@@ -197,11 +203,111 @@ export class CicloNotasPrivadasController {
     return this.ciclo.iniciarDesligamento(paraRequestContext(auth), alvo);
   }
 
-  /** Retenção legal do paciente (requisição judicial, da ANPD ou processo ético): suspende o expurgo. */
-  @Put('pacientes/:id/retencao-legal')
+}
+
+/**
+ * Retenção legal do paciente (D1.4, R10 e R12 do parecer #63): suspende toda eliminação. Marcar exige a
+ * referência do processo/ofício; retirar é em duas etapas, por dois admins distintos, com motivo.
+ */
+@Controller('prontuario/pacientes')
+@UseGuards(SessaoGuard)
+export class RetencaoLegalController {
+  constructor(@Inject(RetencaoLegalService) private readonly retencao: RetencaoLegalService) {}
+
+  @Put(':id/retencao-legal')
   @Permissao('prontuario:configurar')
-  retencao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ retencaoLegalDesde: string | null }> {
+  marcar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
     const alvo = exigirUuid(id);
-    return this.ciclo.definirRetencaoLegal(paraRequestContext(auth), alvo, validarRetencaoLegal(corpo));
+    return this.retencao.marcar(paraRequestContext(auth), alvo, validarRetencaoLegal(corpo).referencia);
+  }
+
+  /** 1ª etapa: pedido de retirada, com motivo. */
+  @Post(':id/retencao-legal/retirada')
+  @HttpCode(200)
+  @Permissao('prontuario:configurar')
+  pedirRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
+    const alvo = exigirUuid(id);
+    return this.retencao.pedirRetirada(paraRequestContext(auth), alvo, validarPedidoDeRetirada(corpo).motivo);
+  }
+
+  /** 2ª etapa: aprovação por OUTRO admin. */
+  @Post(':id/retencao-legal/retirada/aprovacao')
+  @HttpCode(200)
+  @Permissao('prontuario:configurar')
+  aprovarRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazioClinico(corpo);
+    return this.retencao.aprovarRetirada(paraRequestContext(auth), alvo);
+  }
+}
+
+/**
+ * Custódia das notas lacradas de psicologia (R2 do #63). O admin designa (`/prontuario/custodias`); o
+ * substituto aceita, lê e decide (`/custodias/:id/...`). Ninguém mais lê as lacradas.
+ */
+@Controller()
+@UseGuards(SessaoGuard)
+export class CustodiaController {
+  constructor(@Inject(CustodiaService) private readonly custodia: CustodiaService) {}
+
+  @Post('prontuario/custodias')
+  @Permissao('prontuario:configurar')
+  designar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<CustodiaDto> {
+    const d = validarDesignacaoDeCustodia(corpo);
+    return this.custodia.designar(paraRequestContext(auth), d.autorProfissionalId, d.substitutoProfissionalId);
+  }
+
+  @Post('custodias/:id/aceite')
+  @HttpCode(200)
+  @Permissao('prontuario:acessar')
+  aceitar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<CustodiaDto> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazioClinico(corpo);
+    return this.custodia.aceitar(paraRequestContext(auth), alvo);
+  }
+
+  @Get('custodias/:id/notas')
+  @Permissao('prontuario:acessar')
+  notas(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<NotaLacradaDto[]> {
+    const alvo = exigirUuid(id);
+    validarQueryVaziaClinica(query);
+    return this.custodia.notas(paraRequestContext(auth), alvo);
+  }
+
+  @Post('custodias/:id/notas/:notaId/decisao')
+  @HttpCode(200)
+  @Permissao('prontuario:acessar')
+  decidir(
+    @Sessao() auth: AuthContext,
+    @Param('id') id: string,
+    @Param('notaId') notaId: string,
+    @Body() corpo: unknown,
+  ): Promise<{ id: string; decisao: DecisaoDaCustodia }> {
+    const alvo = exigirUuid(id);
+    const nota = exigirUuid(notaId, 'notaId');
+    return this.custodia.decidir(paraRequestContext(auth), alvo, nota, validarDecisaoDeCustodia(corpo));
+  }
+}
+
+/** Caixa de avisos interna do usuário da sessão (R9 do #63). Sem dado de paciente. */
+@Controller('avisos')
+@UseGuards(SessaoGuard)
+export class AvisosController {
+  constructor(@Inject(AvisosService) private readonly avisos: AvisosService) {}
+
+  @Get()
+  @Permissao('prontuario:acessar')
+  listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<AvisoDto[]> {
+    validarQueryVaziaClinica(query);
+    return this.avisos.listar(paraRequestContext(auth));
+  }
+
+  @Post(':id/lido')
+  @HttpCode(200)
+  @Permissao('prontuario:acessar')
+  lido(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ id: string; lidoEm: string }> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazioClinico(corpo);
+    return this.avisos.marcarLido(paraRequestContext(auth), alvo);
   }
 }

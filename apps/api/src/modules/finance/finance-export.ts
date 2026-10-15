@@ -16,7 +16,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_RECIBO, campoFinanceiroRef, type CampoFinanceiro } from './finance-fields';
 
 /**
- * Financeiro no pacote G2 (migração 0018, schemaVersion 1.8.0): todas as tabelas, com CPFs e o retrato
+ * Financeiro no pacote G2 (migração 0018, schemaVersion 1.9.0): todas as tabelas, com CPFs e o retrato
  * do recibo DECIFRADOS (o pacote é da própria clínica, controladora). Fica num arquivo próprio para o
  * tenant-export.ts só agregar.
  */

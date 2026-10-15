@@ -434,6 +434,33 @@ describe('isolamento entre clínicas', () => {
   });
 });
 
+describe('quem lança é o usuário da sessão (0016)', () => {
+  it('o banco recusa recebimento/cobrança em nome de outra pessoa e sem usuário na transação', async () => {
+    const c = await cobranca(recepA, { agendamentoId: await agendamento(), valorCentavos: 900 });
+    const outro = randomUUID();
+    const comSessao = (fn: Parameters<typeof withTenant>[2]) => withTenant(api.db.db, clinicaA, fn, recepA.userId);
+    expect(
+      await sqlstate(
+        comSessao((tx) => tx.insert(payments).values({ tenantId: clinicaA, chargeId: c.id, cashSessionId: caixaA, method: 'pix_manual', amountCents: 1, receivedBy: outro })),
+      ),
+    ).toContain('42501');
+    expect(await sqlstate(comSessao((tx) => tx.update(charges).set({ status: 'cancelled', cancelledAt: new Date(), cancelledBy: outro, cancelReason: 'cortesia' }).where(eq(charges.id, c.id))))).toContain('42501');
+    // Sem app_set_user: falha fechada.
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.insert(payments).values({ tenantId: clinicaA, chargeId: c.id, cashSessionId: caixaA, method: 'pix_manual', amountCents: 1, receivedBy: recepA.userId }),
+        ),
+      ),
+    ).toContain('42501');
+    // Com o próprio usuário da sessão, passa (e a cobrança fica coerente pela API depois).
+    await comSessao(async (tx) => {
+      await tx.insert(payments).values({ tenantId: clinicaA, chargeId: c.id, cashSessionId: caixaA, method: 'pix_manual', amountCents: 1, receivedBy: recepA.userId });
+      await tx.update(charges).set({ paidCents: 1 }).where(eq(charges.id, c.id));
+    });
+  });
+});
+
 describe('auditoria sem dado pessoal nem valores', () => {
   it('a trilha do financeiro tem só ids, códigos e contagens', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.tenantId, clinicaA)));

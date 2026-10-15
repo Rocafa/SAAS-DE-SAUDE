@@ -13,6 +13,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { comNegacaoAuditada, NotaDeOutroAutorError } from './acesso-clinico';
 import type { AlteracaoNota, NovaNota } from './prontuario.validation';
+import { exigirSemRetencao } from './retencao-legal';
 import { CAMPO_NOTA, cifrarCampoClinico, decifrarCampoClinico } from './record-fields';
 
 export interface NotaPrivadaDto {
@@ -145,6 +146,8 @@ export class NotasPrivadasService {
       escreverNaClinica(this.db, ctx, async (tx) => {
         const n = await this.doAutor(tx, ctx, id, true);
         const vinculo = await this.porteiro(tx, ctx, n);
+        // R10: sob retenção legal o conteúdo não muda (a nota não é versionada: trocar = eliminar o anterior).
+        if (dados.texto !== undefined) await exigirSemRetencao(tx, ctx, n.patientId);
         const contentEnc = dados.texto !== undefined ? await cifrarCampoClinico(this.cipher, tx, ctx, id, CAMPO_NOTA, dados.texto) : undefined;
         const [atual] = await tx
           .update(privateNotes)
@@ -182,6 +185,8 @@ export class NotasPrivadasService {
       escreverNaClinica(this.db, ctx, async (tx) => {
         const n = await this.doAutor(tx, ctx, id, true);
         const vinculo = await this.porteiro(tx, ctx, n);
+        // R10: retenção legal suspende a eliminação (o banco também recusa).
+        await exigirSemRetencao(tx, ctx, n.patientId);
         const agora = new Date();
         await descartarComLapide(this.cipher, tx, ctx, id, agora);
         await recordAudit(tx, ctx, {
