@@ -32,6 +32,9 @@
 | Rodada 16.1: ✅ ressalvas #61 (0019), #63 (0020), #65 (0021) — aprovados com ressalvas — aguarda CI | Maestro @Rocafa | 15/10/2026 | PRs #61, #63, #65 |
 | Rodada 16.2: ✅ pgaudit + alarme de DDL no #58 | Maestro @Rocafa | 15/10/2026 | PR #58 |
 | Rodada 16.3: ✅ financeiro no ROPA; relatório geral e CONTEXTO | Maestro @Rocafa | 15/10/2026 | concluído |
+| Rodada 17.1: ressalvas da pilha — #63 R15 (fundador da clínica), R16 (clinic_members no G2), aviso aos admins (**0022**); #65 R13 (profissional fixado na venda do pacote), R3, R4, R8 (**0023**) | Maestro @Rocafa (agente engenharia) | 15/10/2026 | pilha #63→#65 |
+| Rodada 17.2: #61 R12 — alarme para CREATE OR REPLACE de função e DDL de policy fora da janela de migração | Maestro @Rocafa (agente devops-ci) | 15/10/2026 | PR #58 |
+| Rodada 17.3: importador de dados (planilha de pacientes e agenda) com dry-run, divergências, rollback e termo de migração — MIG-01.1, 01.2, 02.1, 02.2, 02.4 (**0024**), empilhado sobre #65 | Maestro @Rocafa (agente engenharia) | 15/10/2026 | branch `eng/importador` |
 
 ## Livre (pegue colocando seu nome)
 
