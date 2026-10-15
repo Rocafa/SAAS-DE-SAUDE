@@ -18,7 +18,7 @@ RBAC/MFA continuam valendo à parte.**
 
 - **G1** — inadimplência (`past_due`, `read_only`) só bloqueia escrita clínica/operacional.
 - **G2** — exportação total em formato aberto, sem custo: `export.json` (contrato versionado,
-  `schemaVersion` = `1.3.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
+  `schemaVersion` = `1.4.0`, com `manifest`: formato, gerado em, tenant, status, fim da janela,
   contagens por entidade) + `pacientes.csv` (RFC 4180, UTF-8 com BOM, fórmulas neutralizadas).
   Somente dados do próprio tenant (filtro explícito + `withTenant`/RLS FORCE).
   Desde a 1.1.0 (migração 0007): cadastro do paciente com CPF/telefone/nascimento **decifrados**
@@ -28,6 +28,8 @@ RBAC/MFA continuam valendo à parte.**
   nem em `EXPORT_EXCLUDED_TABLES` com motivo (hoje: chaves e contexto do RLS).
   Desde a 1.3.0 (migração 0013, V1/R1 do parecer PR #61): `tenant.careLinkDays` e
   `appointments[].createdBy`.
+  Desde a 1.4.0 (migração 0014, V2 do parecer PR #61): `appointments[].rescheduledBy`,
+  `appointments[].rescheduleLocked` e o histórico de remarcações (`appointmentReschedules`, com contagem).
   Desde a 1.2.0 (Decisão 1 do Guardião, parecer PR #57; migração 0008): a trilha de auditoria da
   clínica vai no pacote como `auditoria.jsonl` (um evento por linha, em ordem de `seq`), com os
   campos da cadeia (`seq`, `prevHash`, `hash`), o JSON canônico que o hash cobre e o tipo de ator;
