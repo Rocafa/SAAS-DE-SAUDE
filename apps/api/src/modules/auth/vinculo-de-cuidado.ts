@@ -14,8 +14,8 @@
  *   0013). Só o profissional do agendamento marca esses status (R1 do #57) e só dentro da janela do
  *   horário (agenda-regras.ts, 409 `fora_do_horario`): consulta futura ou retroativa não vira vínculo;
  * - `autoagendamento`: o mesmo, mas o agendamento foi criado pelo próprio usuário-profissional
- *   (`created_by` = usuário da sessão; encaixe incluído) OU remarcado por ele por último
- *   (`rescheduled_by`, migração 0014; V2 do #61). Vale, mas fica marcado na base para a
+ *   (`created_by` = usuário da sessão; encaixe incluído) OU remarcado por ele em
+ *   qualquer momento (histórico `appointment_reschedules`, 0014; V2 e R8 do #61). Vale, mas fica marcado na base para a
  *   auditoria do acesso clínico, e a agenda grava `anomaly_alert` (regra `vinculo_autoagendado`);
  * - `agenda_do_dia`: status `scheduled`, `confirmed` ou `checked_in` com início entre
  *   agora − VINCULO_AGENDA_HORAS e agora + VINCULO_AGENDA_HORAS (preparo da consulta do dia), e
@@ -28,7 +28,7 @@
  */
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { appointments, professionals, tenants, type AppointmentStatusDb } from '../../db/schema';
@@ -54,6 +54,25 @@ function vinculo(base: BaseDoVinculo | null): VinculoDeCuidado {
   return { temVinculo: base !== null, base } as VinculoDeCuidado;
 }
 
+/**
+ * Condição SQL (sobre a linha de `appointments` da consulta) de AUTOAGENDAMENTO pelo usuário:
+ * - criado por ele (`created_by`; linhas anteriores à 0013 têm NULL e seguem as regras comuns);
+ * - remarcado por ele em QUALQUER momento (R8 da re-revisão 2 do #61): vale o histórico inteiro de
+ *   `appointment_reschedules`, não só o último remarcador. Uma remarcação posterior da recepção
+ *   não "lava" a marca. `rescheduled_by` (último) entra também, por redundância.
+ * O banco garante que `created_by`/`rescheduled_by` são o usuário da sessão (0016).
+ */
+export function autoagendadoPor(userId: string): SQL<boolean> {
+  // Nomes QUALIFICADOS à mão: numa consulta de tabela única o drizzle escreve as colunas sem o nome
+  // da tabela, e dentro do EXISTS "id"/"tenant_id" passariam a ser os do histórico.
+  return sql<boolean>`("appointments"."created_by" IS NOT DISTINCT FROM ${userId}::uuid
+    OR "appointments"."rescheduled_by" IS NOT DISTINCT FROM ${userId}::uuid
+    OR EXISTS (SELECT 1 FROM "appointment_reschedules" ar
+      WHERE ar."tenant_id" = "appointments"."tenant_id"
+        AND ar."appointment_id" = "appointments"."id"
+        AND ar."rescheduled_by" = ${userId}::uuid))`;
+}
+
 /** Dias de continuidade da clínica da sessão, sempre limitados ao teto (defesa além do CHECK). */
 export async function diasDeContinuidade(tx: TenantTx, ctx: RequestContext): Promise<number> {
   const [t] = await tx.select({ dias: tenants.careLinkDays }).from(tenants).where(eq(tenants.id, ctx.tenantId));
@@ -75,10 +94,7 @@ export async function calcularVinculoDeCuidado(
   const desdeAtendimento = new Date(agora.getTime() - dias * DIA_MS);
   const agendaDe = new Date(agora.getTime() - VINCULO_AGENDA_HORAS * HORA_MS);
   const agendaAte = new Date(agora.getTime() + VINCULO_AGENDA_HORAS * HORA_MS);
-  // Autoagendamento: criado pelo próprio usuário da sessão (que aqui é sempre o profissional). Linhas
-  // anteriores à 0013 têm created_by NULL e seguem as regras comuns.
-  // V2-c do #61: remarcado pelo próprio usuário (rescheduled_by, 0014) também é autoagendamento.
-  const autoagendado = sql<boolean>`(${appointments.createdBy} IS NOT DISTINCT FROM ${ctx.userId}::uuid OR ${appointments.rescheduledBy} IS NOT DISTINCT FROM ${ctx.userId}::uuid)`;
+  const autoagendado = autoagendadoPor(ctx.userId);
   const atendido = and(
     inArray(appointments.status, [...STATUS_ATENDIDO]),
     gte(appointments.startsAt, desdeAtendimento),

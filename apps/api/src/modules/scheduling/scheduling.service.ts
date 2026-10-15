@@ -1,12 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, count, eq, gt, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { appointments, appointmentTypes, patients, professionals, type AppointmentStatusDb } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { temPermissao, type Perfil } from '../auth/perfis';
+import { autoagendadoPor } from '../auth/vinculo-de-cuidado';
 import { estornarConsumosDoAgendamento } from '../insurance/consumos';
 import { statusConsome } from '../insurance/guias-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -289,9 +290,8 @@ export class SchedulingService {
       // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
       // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
       if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
-      // Autoagendamento: criado OU remarcado pelo próprio usuário (V1 e V2-c do #61).
-      const autoagendado = atual.createdBy === ctx.userId || atual.rescheduledBy === ctx.userId;
-      if (autoagendado && STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status)) {
+      // Autoagendamento: criado OU remarcado (em qualquer momento) pelo próprio usuário (V1, V2-c e R8 do #61).
+      if (STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status) && (await this.autoagendado(tx, ctx, id))) {
         await this.alertarAutoagendamento(tx, ctx, atual.professionalId, agora);
       }
       return { statusAnterior: statusParaFront(atual.status) };
@@ -413,7 +413,7 @@ export class SchedulingService {
         and(
           eq(appointments.tenantId, ctx.tenantId),
           eq(appointments.professionalId, profissionalId),
-          or(eq(appointments.createdBy, ctx.userId), eq(appointments.rescheduledBy, ctx.userId)),
+          autoagendadoPor(ctx.userId),
           inArray(appointments.status, [...STATUS_CLINICOS]),
           gte(appointments.startsAt, new Date(agora.getTime() - DIA_MS)),
         ),
@@ -427,6 +427,14 @@ export class SchedulingService {
       scope: SCOPE,
       metadata: { rule: 'vinculo_autoagendado', window_s: DIA_MS / 1000, threshold: limiar, count: contagem },
     });
+  }
+
+  private async autoagendado(tx: TenantTx, ctx: RequestContext, id: string): Promise<boolean> {
+    const [r] = await tx
+      .select({ sim: sql<number>`(${autoagendadoPor(ctx.userId)})::int` })
+      .from(appointments)
+      .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+    return Number(r?.sim) === 1;
   }
 
   private leitura<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
