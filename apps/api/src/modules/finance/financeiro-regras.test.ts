@@ -47,23 +47,24 @@ describe('texto neutro do recibo', () => {
       'Sessao F/32',
       'Sessao F_32',
       'Sessao f-32',
-      'Sessao F​32', // espaço de largura zero
-      'Sessao F‍3‌2', // ZWJ e ZWNJ
-      'Sessao F­32', // hífen suave
-      'Sessao F﻿32', // BOM
-      'Sessao Ｆ３２', // Ｆ３２ (largura total)
-      'Sessao F 32', // espaço sem quebra
+      'Sessao F\u{200B}32', // espaço de largura zero
+      'Sessao F\u{200D}3\u{200C}2', // ZWJ e ZWNJ
+      'Sessao F\u{AD}32', // hífen suave
+      'Sessao F\u{FEFF}32', // BOM
+      'Sessao \u{FF26}\u{FF13}\u{FF12}', // F32 em largura total
+      'Sessao F\u{A0}32', // espaço sem quebra
+      'Sessao F\u{3164}32', // preenchedor Hangul
       'Sessao F - 3 2',
       'Sessao f84.0',
       'Sessao F 84 . 0',
-      'De​pressão',
-      'Transt­orno',
-      'Depressão', // til combinante
+      'De\u{200B}press\u{E3}o',
+      'Transt\u{AD}orno',
+      'Depressa\u{303}o', // til combinante
     ];
     for (const ruim of ruins) expect(descricaoEhNeutraOuAceita(ruim), JSON.stringify(ruim)).toBe(false);
     for (const ok of ['Pacote de 10 sessoes', 'Pacote 2 x 10 sessoes', 'Sessao 1 de 10', 'Atendimento 2026', 'Consulta - retorno'])
       expect(descricaoEhNeutraOuAceita(ok), ok).toBe(true);
-    expect(normalizarTextoParaChecagem('F​ 32 ')).toBe('F 32');
+    expect(normalizarTextoParaChecagem('F\u{200B} 32\u{A0}')).toBe('F 32');
   });
 
   it('configuração: texto ruim volta só o nome do campo; CNPJ normalizado', () => {

@@ -53,12 +53,12 @@ export const AVISO_DESCRICAO_RECIBO =
  * - sem caracteres de formatação e de largura zero (\p{Cf}: ZWSP, ZWJ, hífen suave, BOM...) nem
  *   preenchedores invisíveis (CGJ, Hangul filler);
  * - qualquer espaço Unicode colapsado num espaço comum.
- * Assim "F​32", "Ｆ３２" e "f 32" caem na mesma regra de "F32".
+ * Assim "F<U+200B>32", "F32" em largura total e "f 32" caem na mesma regra de "F32".
  */
 export function normalizarTextoParaChecagem(texto: string): string {
   return texto
     .normalize('NFKC')
-    .replace(/[\p{Cf}͏ᅟᅠㅤﾠ]/gu, '')
+    .replace(/[\p{Cf}\u{34F}\u{115F}\u{1160}\u{3164}\u{FFA0}]/gu, '')
     .replace(/[\p{Z}\s]+/gu, ' ')
     .trim();
 }
