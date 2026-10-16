@@ -8,6 +8,7 @@ import { CAMPOS, OBRIGATORIOS, TERMO_MIGRACAO_VERSAO } from './importacao-regras
 import { ImportacaoService, type LoteDto, type RecebidoDto, type RelatorioDto } from './importacao.service';
 import {
   lerArquivoCsv,
+  lerCorpoLimitado,
   traduzirPlanilhaAsync,
   validarAplicacao,
   validarCorpoVazio,
@@ -38,7 +39,15 @@ export class ImportacaoController {
   @Post()
   @Permissao('importacao:gerir')
   async enviar(@Sessao() auth: AuthContext, @Query() query: unknown, @Req() req: IncomingMessage): Promise<RecebidoDto> {
-    const { tipo, termo } = validarEnvio(query);
+    let envio: { tipo: 'pacientes' | 'agenda'; termo: string };
+    try {
+      envio = validarEnvio(query);
+    } catch (e) {
+      // Recusa sem ler: drena o corpo sem guardar, para o cliente receber a resposta.
+      await lerCorpoLimitado(req, 0).catch(() => undefined);
+      throw e;
+    }
+    const { tipo, termo } = envio;
     const bytes = await lerArquivoCsv(req);
     return traduzirPlanilhaAsync(this.importacao.receber(paraRequestContext(auth), tipo, termo, bytes));
   }

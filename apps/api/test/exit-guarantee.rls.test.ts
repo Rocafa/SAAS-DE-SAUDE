@@ -133,6 +133,7 @@ describe('G2 — exportação total do tenant', () => {
         receipts: 0,
         receiptCancellations: 0,
       },
+      imports: { batches: 0, batchRecords: 0 },
       auditEvents: pkg.auditEvents.length,
     });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();

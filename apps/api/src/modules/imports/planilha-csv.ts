@@ -113,8 +113,13 @@ export function lerCsv(texto: string): Planilha {
       continue;
     }
     if (c === '"') {
-      // Aspas só abrem no início da célula (RFC 4180); no meio é texto malformado.
-      if (celula.trim().length > 0 || fechouAspas) throw new PlanilhaInvalidaError('arquivo_malformado');
+      // Aspas só abrem no início da célula (RFC 4180); no meio de célula sem aspas são texto (tolerância
+      // com exportações reais); logo depois de fechar aspas, arquivo malformado.
+      if (fechouAspas) throw new PlanilhaInvalidaError('arquivo_malformado');
+      if (celula.trim().length > 0) {
+        celula += c;
+        continue;
+      }
       celula = '';
       emAspas = true;
     } else if (c === separador) {

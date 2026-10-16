@@ -55,12 +55,30 @@ export function validarEnvio(query: unknown): { tipo: ImportKind; termo: string 
   return { tipo: tipo as ImportKind, termo };
 }
 
-const TIPOS_PLANILHA_BINARIA = [
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/zip',
-];
+/** Teto do que se DRENA (sem guardar) de um corpo recusado, para responder 413/415 em vez de derrubar. */
+const MAX_DRENAGEM = 4 * IMPORT_MAX_BYTES;
+
+/**
+ * Lê o corpo guardando no máximo `guardar` bytes; o excesso é só drenado (até MAX_DRENAGEM; acima disso
+ * a conexão é encerrada). `guardar = 0` só drena (corpo recusado: o Node derrubaria a conexão se a
+ * resposta saísse com o corpo ainda chegando).
+ */
+export function lerCorpoLimitado(req: IncomingMessage, guardar: number): Promise<{ bytes: Buffer; excedeu: boolean }> {
+  return new Promise((resolve, reject) => {
+    const partes: Buffer[] = [];
+    let total = 0;
+    req.on('data', (parte: Buffer) => {
+      total += parte.length;
+      if (total <= guardar) partes.push(parte);
+      else if (total > MAX_DRENAGEM) req.destroy();
+    });
+    req.on('end', () => resolve({ bytes: Buffer.concat(partes), excedeu: total > guardar }));
+    req.on('error', reject);
+    req.on('close', () => {
+      if (!req.complete) reject(new PayloadTooLargeException({ statusCode: 413, message: 'Arquivo grande demais' }));
+    });
+  });
+}
 
 /**
  * Lê o corpo cru com teto (413 ao passar de 5 MiB, sem bufferizar o excesso). Só `text/csv` com charset
@@ -69,22 +87,12 @@ const TIPOS_PLANILHA_BINARIA = [
 export async function lerArquivoCsv(req: IncomingMessage): Promise<Uint8Array> {
   const tipo = (req.headers['content-type'] ?? '').toLowerCase();
   const [mime, ...params] = tipo.split(';').map((s) => s.trim());
-  if (TIPOS_PLANILHA_BINARIA.includes(mime ?? '')) throw new FormatoNaoSuportadoError();
   const charset = params.find((p) => p.startsWith('charset='))?.slice(8).replace(/"/g, '');
-  if (mime !== 'text/csv' || (charset !== undefined && charset !== 'utf-8' && charset !== 'utf8')) throw new FormatoNaoSuportadoError();
+  const csv = mime === 'text/csv' && (charset === undefined || charset === 'utf-8' || charset === 'utf8');
   const declarado = Number(req.headers['content-length'] ?? NaN);
-  if (Number.isFinite(declarado) && declarado > IMPORT_MAX_BYTES) throw new PayloadTooLargeException({ statusCode: 413, message: 'Arquivo grande demais' });
-  const partes: Buffer[] = [];
-  let total = 0;
-  for await (const parte of req as AsyncIterable<Buffer>) {
-    total += parte.length;
-    if (total > IMPORT_MAX_BYTES) {
-      req.destroy();
-      throw new PayloadTooLargeException({ statusCode: 413, message: 'Arquivo grande demais' });
-    }
-    partes.push(parte);
-  }
-  const bytes = Buffer.concat(partes);
+  const { bytes, excedeu } = await lerCorpoLimitado(req, csv && !(declarado > IMPORT_MAX_BYTES) ? IMPORT_MAX_BYTES : 0);
+  if (!csv) throw new FormatoNaoSuportadoError();
+  if (excedeu) throw new PayloadTooLargeException({ statusCode: 413, message: 'Arquivo grande demais' });
   if (bytes.length === 0) throw new ArquivoInvalidoError('arquivo_vazio');
   if (pareceZip(bytes)) throw new FormatoNaoSuportadoError();
   return bytes;
