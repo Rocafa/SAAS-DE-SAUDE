@@ -212,7 +212,7 @@ describe('guias (CNV-04.2): registro, cifragem e duplicidade', () => {
     const dup = await post(finA, '/guias', { pacienteId: pacienteA2, convenioId: convenioA, numero: 'fic 2026 0001', sessoesAutorizadas: 3, validade: '2030-01-01' });
     expect(dup.status).toBe(409);
     expect(dup.body).toMatchObject({ codigo: 'guia_duplicada' });
-    expect(JSON.stringify(dup.body)).not.toContain('2026');
+    expect(JSON.stringify(dup.body)).not.toMatch(/fic\W*2026\W*0001/i); // só "2026" casaria com UUID aleatório
     const outro = id(await post(adminA, '/convenios', { nome: 'Operadora Ficticia Y' }));
     expect((await post(finA, '/guias', { pacienteId: pacienteA2, convenioId: outro, numero: NUMERO_GUIA, sessoesAutorizadas: 3, validade: '2030-01-01' })).status).toBe(201);
   });

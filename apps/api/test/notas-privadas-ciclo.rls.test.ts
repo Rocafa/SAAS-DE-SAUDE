@@ -18,7 +18,7 @@ import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 const DIA = 86_400_000;
-const TEXTO = 'Nota privada ficticia do ciclo 7701';
+const TEXTO = 'Nota privada ficticia do ciclo QZX7701';
 
 let api: ApiDeTeste;
 let clinica: TenantId;
@@ -128,7 +128,7 @@ describe('D1: descarte vira lápide na hora', () => {
     expect(depois?.contentEnc).not.toBe(antes?.contentEnc);
     expect(await texto(id, depois!.contentEnc)).toBe('');
     const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'private_notes')));
-    expect(JSON.stringify(trilha)).not.toContain('7701');
+    expect(JSON.stringify(trilha)).not.toContain(TEXTO);
     expect(trilha.map((l) => l.metadata)).toContainEqual(expect.objectContaining({ note_id: id, op: 'discard' }));
   });
 });
@@ -205,7 +205,7 @@ describe('D2: profissional que sai da clínica', () => {
     expect(des.status).toBe(200);
     expect(Object.keys(des.body as object).sort()).toEqual(['notas', 'prazo']);
     expect((des.body as { notas: number }).notas).toBe(3);
-    expect(JSON.stringify(des.body)).not.toContain('7701');
+    expect(JSON.stringify(des.body)).not.toContain(TEXTO);
     await api.http().post(`/prontuario/profissionais/${psiId}/desligamento`).set(cab(admin)).send({}).expect(200);
     expect((await linha(fisioSemDecisao))?.custodyState).toBe('aguardando_decisao');
 
