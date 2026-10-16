@@ -39,7 +39,10 @@ import {
   receiptCounters,
   receipts,
   receiptCancellations,
+  importBatches,
+  importBatchRecords,
 } from '../src/db/schema';
+import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
@@ -90,6 +93,8 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipt_counters: 'finance.receiptCounters',
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
+  import_batches: 'imports.batches',
+  import_batch_records: 'imports.batchRecords',
   audit_log: 'auditEvents',
 };
 
@@ -293,7 +298,26 @@ beforeAll(async () => {
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
 
-  const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
+  // Importador (0024): um lote de pacientes aplicado (1 paciente criado), com o aceite do termo.
+  const lote = await api
+    .http()
+    .post(`/importacoes?tipo=pacientes&termo=${TERMO_MIGRACAO_VERSAO}`)
+    .set(cab(admin))
+    .set('Content-Type', 'text/csv; charset=utf-8')
+    .send('nome;telefone\nPaciente Ficticio Importado;11900000077\n');
+  expect(lote.status, JSON.stringify(lote.body)).toBe(201);
+  const loteId = (lote.body as { id: string }).id;
+  await api.http().put(`/importacoes/${loteId}/mapeamento`).set(cab(admin)).send({ mapeamento: { nome: 0, telefone: 1 } }).expect(200);
+  await api.http().post(`/importacoes/${loteId}/validar`).set(cab(admin)).send({}).expect(200);
+  const sim = await api.http().post(`/importacoes/${loteId}/simular`).set(cab(admin)).send({}).expect(200);
+  await api
+    .http()
+    .post(`/importacoes/${loteId}/aplicar`)
+    .set(cab(admin))
+    .send({ resumoHash: (sim.body as { resumoHash: string }).resumoHash })
+    .expect(200);
+
+  const ctx ={ tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
 
@@ -411,6 +435,10 @@ describe('G2 — conteúdo do pacote', () => {
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
         },
+        imports: {
+          batches: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatches))[0]?.n ?? -1,
+          batchRecords: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatchRecords))[0]?.n ?? -1,
+        },
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -418,7 +446,8 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.json.manifest.counts).toEqual(noBanco);
     expect(noBanco).toMatchObject({
       tenants: 1,
-      patients: 2,
+      patients: 3,
+      imports: { batches: 1, batchRecords: 1 },
       professionals: 3,
       appointmentTypes: 1,
       appointments: 3,
@@ -526,7 +555,7 @@ describe('G2 — conteúdo do pacote', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);

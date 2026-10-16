@@ -574,6 +574,99 @@ export const receiptCancellations = pgTable('receipt_cancellations', {
   cancelledBy: uuid('cancelled_by').notNull(),
 });
 
+// ---------------------------------------------------------------- importador (migração 0024)
+
+export const IMPORT_KINDS = ['pacientes', 'agenda'] as const;
+export type ImportKind = (typeof IMPORT_KINDS)[number];
+export const IMPORT_STATUSES = ['recebido', 'validado', 'simulado', 'aplicado', 'desfeito', 'expirado'] as const;
+export type ImportStatus = (typeof IMPORT_STATUSES)[number];
+export const IMPORT_ISSUE_SEVERITIES = ['erro', 'aviso'] as const;
+export const IMPORT_ENTITIES = ['patient', 'appointment'] as const;
+
+/** Lote de importação com o aceite do termo de migração (0024). Sem DELETE para o runtime. */
+export const importBatches = pgTable('import_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  kind: text('kind', { enum: IMPORT_KINDS }).notNull(),
+  status: text('status', { enum: IMPORT_STATUSES }).notNull().default('recebido'),
+  termVersion: text('term_version').notNull(),
+  termAcceptedBy: uuid('term_accepted_by').notNull(),
+  termAcceptedAt: timestamp('term_accepted_at', { withTimezone: true }).notNull().defaultNow(),
+  fileFormat: text('file_format', { enum: ['csv'] }).notNull().default('csv'),
+  byteSize: integer('byte_size').notNull(),
+  rowCount: integer('row_count').notNull(),
+  columnCount: smallint('column_count').notNull(),
+  /** {campo: índice da coluna}; nunca o texto do cabeçalho. */
+  columnMapping: jsonb('column_mapping').$type<Record<string, number>>(),
+  currentRun: smallint('current_run').notNull().default(0),
+  validRows: integer('valid_rows'),
+  errorRows: integer('error_rows'),
+  warningCount: integer('warning_count'),
+  plannedCreates: integer('planned_creates'),
+  plannedSkips: integer('planned_skips'),
+  simulationHash: text('simulation_hash'),
+  createdRecords: integer('created_records'),
+  rawExpiresAt: timestamp('raw_expires_at', { withTimezone: true }).notNull(),
+  rawDiscardedAt: timestamp('raw_discarded_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  validatedAt: timestamp('validated_at', { withTimezone: true }),
+  simulatedAt: timestamp('simulated_at', { withTimezone: true }),
+  appliedAt: timestamp('applied_at', { withTimezone: true }),
+  appliedBy: uuid('applied_by'),
+  undoneAt: timestamp('undone_at', { withTimezone: true }),
+  undoneBy: uuid('undone_by'),
+  expiredAt: timestamp('expired_at', { withTimezone: true }),
+});
+
+/** Arquivo bruto SÓ cifrado, expira em ≤ 7 dias; runtime só SELECT/INSERT; descarte pela função (0024). */
+export const importRawFiles = pgTable('import_raw_files', {
+  batchId: uuid('batch_id').primaryKey(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  contentEnc: text('content_enc').notNull(),
+  sha256: text('sha256').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Divergências por linha: só códigos, nunca o valor (0024). */
+export const importIssues = pgTable(
+  'import_issues',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    batchId: uuid('batch_id').notNull(),
+    run: smallint('run').notNull(),
+    lineNumber: integer('line_number').notNull(),
+    field: text('field').notNull(),
+    code: text('code').notNull(),
+    severity: text('severity', { enum: IMPORT_ISSUE_SEVERITIES }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.batchId, t.run, t.lineNumber, t.field, t.code] })],
+);
+
+/** Livro do lote: o que cada importação criou (desfazer e proveniência), append-only (0024). */
+export const importBatchRecords = pgTable(
+  'import_batch_records',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    batchId: uuid('batch_id').notNull(),
+    entity: text('entity', { enum: IMPORT_ENTITIES }).notNull(),
+    recordId: uuid('record_id').notNull(),
+    lineNumber: integer('line_number').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.entity, t.recordId] })],
+);
+
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
@@ -677,4 +770,8 @@ export const schema = {
   receiptCounters,
   receipts,
   receiptCancellations,
+  importBatches,
+  importRawFiles,
+  importIssues,
+  importBatchRecords,
 };

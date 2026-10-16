@@ -31,6 +31,7 @@ import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../au
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
+import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -71,8 +72,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        decifrado) e cancelamentos de recibo, em `data.finance` e `manifest.counts.finance`.
  * 1.10.0: `charges[].fiscalPurgedAt` e `receipts[].fiscalPurgedAt` (retenção fiscal, migração 0021, R7 do
  *        parecer #65); recibo eliminado sai com `content: null`.
+ * 1.11.0: importador (migração 0024): lotes de importação (aceite do termo de migração, mapeamento,
+ *        contagens, hash da simulação, evidência do descarte do arquivo bruto) e o livro do lote, em
+ *        `data.imports` e `manifest.counts.imports`. Arquivo bruto e divergências ficam fora (motivo abaixo).
  */
-export const EXPORT_SCHEMA_VERSION = '1.10.0';
+export const EXPORT_SCHEMA_VERSION = '1.11.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -115,6 +119,9 @@ export const EXPORTED_TABLES = [
   'receipt_counters',
   'receipts',
   'receipt_cancellations',
+  // Importador (0024): em data.imports. Arquivo bruto e divergências ficam fora (EXPORT_EXCLUDED_TABLES).
+  'import_batches',
+  'import_batch_records',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -125,6 +132,10 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'caixa de avisos interna ao usuário (troca de sigilo), sem dado de paciente; o fato está em audit_log, que sai no pacote',
   clinic_members:
     'perfis de acesso dos usuários (R13 do #63): controle de segurança da plataforma, sem dado de paciente nem cadastral; cada concessão e revogação está em audit_log, que sai no pacote',
+  import_raw_files:
+    'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
+  import_issues:
+    'divergências da validação/simulação (0024): diagnóstico refeito a cada rodada, só linha, campo e código (sem valor); os totais estão em import_batches, que sai no pacote',
 };
 
 export interface ExportManifest {
@@ -163,6 +174,8 @@ export interface ExportManifest {
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
+    /** Importador (0024): lotes e livro do lote. */
+    readonly imports: ImportCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -435,6 +448,8 @@ export interface TenantExportDocument {
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
+    /** Importador (0024). */
+    readonly imports: ExportedImports;
   };
 }
 
@@ -655,8 +670,9 @@ export async function exportInTransaction(
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
+  const importacoes = await exportarImportacoes(tx, ctx.tenantId);
 
-  const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
+  const decrypt =async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, rowId, column), value);
@@ -931,6 +947,7 @@ export async function exportInTransaction(
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
+      imports: importacoes.counts,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -1010,6 +1027,7 @@ export async function exportInTransaction(
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
+        imports: importacoes.data,
       },
     },
     patientsCsv,

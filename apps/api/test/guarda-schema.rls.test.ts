@@ -79,6 +79,13 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
+  // Importador (migração 0024): sem DELETE/TRUNCATE. O lote muda só pelas transições guardadas por
+  // trigger; arquivo bruto (cifrado), divergências e livro do lote o runtime só lê e insere. O descarte
+  // do arquivo bruto e o desfazer passam SÓ pelas funções SECURITY DEFINER (ver bloco no fim).
+  import_batches: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
+  import_issues: { privilegios: ['SELECT', 'INSERT'] },
+  import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
@@ -313,6 +320,32 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
 
   it('o runtime não tem DELETE nem TRUNCATE nas tabelas de notas e de prontuário', async () => {
     for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
+      const tem = await privilegiosDoRuntime(tabela);
+      expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
+  });
+});
+
+/**
+ * Importador (0024): o expurgo do arquivo bruto e o desfazer são SECURITY DEFINER com search_path fixo e
+ * dono sem superpoder; o runtime não apaga nada das tabelas do importador nem de pacientes/agendamentos.
+ */
+describe('guarda de schema: funções do importador (0024)', () => {
+  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)']) {
+    it(`${assinatura}: SECURITY DEFINER, search_path fixo, dono sem superpoder`, async () => {
+      const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+        SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+        FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+        WHERE p.oid = ${assinatura}::regprocedure`;
+      expect(f?.secdef).toBe(true);
+      expect(f?.config ?? []).toContain('search_path=pg_catalog, public, pg_temp');
+      expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+      expect(f?.dono).not.toBe(RUNTIME_ROLE);
+    });
+  }
+
+  it('o runtime não tem DELETE nem TRUNCATE no importador, em pacientes e em agendamentos', async () => {
+    for (const tabela of ['import_batches', 'import_raw_files', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
       const tem = await privilegiosDoRuntime(tabela);
       expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
     }
