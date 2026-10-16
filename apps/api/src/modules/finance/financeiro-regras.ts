@@ -28,7 +28,9 @@ const PADROES_PROIBIDOS: readonly RegExp[] = [
   /c[aâ]ncer|oncol/i,
   /depend[eê]ncia qu[ií]mica|alcoolismo/i,
   // R4 do #65: lista mínima ampliada (contornos comuns). Continua barreira mínima, não análise semântica.
-  /\b[A-TV-Z][\s.-][0-9]{2}(\.[0-9]{1,2})?\b/, // CID com separador (ex.: "F 32", "F-32"); só maiúscula
+  // R16 do #65: CID com separador, em qualquer caixa ("F 32", "f 32", "F/32", "F_32", "F - 3 2", "F32.0").
+  // Não casa "2 x 10" (letra precedida de número).
+  /(?<![\p{L}\p{N}])(?<!\p{N}\s*)[A-TV-Z][\s.\-/_]*[0-9][\s.\-/_]*[0-9](?:[\s.\-/_]*[0-9]){0,2}(?![\p{L}\p{N}])/iu,
   /\btdah?\b|d[eé]ficit de aten[cç][aã]o|hiperatividade/i,
   /bipolar|esquizofren|psicose|psic[oó]tic|borderline|\btoc\b|obsessivo|compulsiv|\btept\b|p[aâ]nico|fobia/i,
   /anorexia|bulimia|transtorno alimentar|compuls[aã]o alimentar/i,
@@ -45,8 +47,25 @@ export const AVISO_DESCRICAO_RECIBO =
   'Este texto sai no recibo que o paciente entrega ao empregador, ao plano de saúde e à Receita Federal. Não descreva diagnóstico, condição, especialidade sensível nem procedimento. Recomendado: "' +
   'Atendimento" (padrão).';
 
+/**
+ * R16 do #65: o texto é normalizado ANTES de testar a lista (o texto gravado não muda):
+ * - NFKC (letra e dígito de largura total, ligaduras, sobrescritos);
+ * - sem caracteres de formatação e de largura zero (\p{Cf}: ZWSP, ZWJ, hífen suave, BOM...) nem
+ *   preenchedores invisíveis (CGJ, Hangul filler);
+ * - qualquer espaço Unicode colapsado num espaço comum.
+ * Assim "F<U+200B>32", "F32" em largura total e "f 32" caem na mesma regra de "F32".
+ */
+export function normalizarTextoParaChecagem(texto: string): string {
+  return texto
+    .normalize('NFKC')
+    .replace(/[\p{Cf}\u{34F}\u{115F}\u{1160}\u{3164}\u{FFA0}]/gu, '')
+    .replace(/[\p{Z}\s]+/gu, ' ')
+    .trim();
+}
+
 export function descricaoEhNeutraOuAceita(texto: string): boolean {
-  return !PADROES_PROIBIDOS.some((re) => re.test(texto));
+  const normal = normalizarTextoParaChecagem(texto);
+  return !PADROES_PROIBIDOS.some((re) => re.test(normal));
 }
 
 export type SituacaoCobranca = 'aberta' | 'parcial' | 'paga' | 'cancelada';

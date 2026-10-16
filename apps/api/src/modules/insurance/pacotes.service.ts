@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
+  appointments,
   appointmentTypes,
   charges,
   packageProfessionalChanges,
@@ -198,6 +199,21 @@ export class PacotesService {
       }
       // R13 do #65: com profissional fixado na venda, só sessões dele consomem o pacote (o banco confere).
       if (pacote.professionalId && agendamento.professionalId !== pacote.professionalId) throw new ConflitoError('profissional_diferente');
+      // R14 do #65: com cobrança PF viva do pacote em nome de P, só agendamento de P consome (o banco confere).
+      const [pfDeOutro] = await tx
+        .select({ id: charges.id })
+        .from(charges)
+        .where(
+          and(
+            eq(charges.tenantId, ctx.tenantId),
+            eq(charges.packageId, pacote.id),
+            eq(charges.attendanceKind, 'pf'),
+            ne(charges.status, 'cancelled'),
+            ne(charges.professionalId, agendamento.professionalId),
+          ),
+        )
+        .limit(1);
+      if (pfDeOutro) throw new ConflitoError('profissional_diferente');
       if (!statusConsome(agendamento.status)) throw new ConflitoError('agendamento_sem_sessao');
       const ativo = await consumoAtivoDoAgendamento(tx, ctx, agendamento.id);
       if (ativo.guia || ativo.pacote) throw new ConflitoError('sessao_ja_consumida');
@@ -251,6 +267,23 @@ export class PacotesService {
         )
         .limit(1);
       if (pf) throw new ConflitoError('pacote_com_cobranca_pf');
+      // R14 do #65: fixar um pacote antigo em X com sessão viva de Y declararia algo falso (estorne antes).
+      if (atual.professionalId === null) {
+        const [deOutro] = await tx
+          .select({ id: packageSessions.id })
+          .from(packageSessions)
+          .innerJoin(appointments, and(eq(appointments.tenantId, packageSessions.tenantId), eq(appointments.id, packageSessions.appointmentId)))
+          .where(
+            and(
+              eq(packageSessions.tenantId, ctx.tenantId),
+              eq(packageSessions.packageId, pacoteId),
+              isNull(packageSessions.reversedAt),
+              ne(appointments.professionalId, profissionalId),
+            ),
+          )
+          .limit(1);
+        if (deOutro) throw new ConflitoError('pacote_com_sessoes_de_outro_profissional');
+      }
       const [troca] = await tx
         .insert(packageProfessionalChanges)
         .values({

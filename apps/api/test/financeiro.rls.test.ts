@@ -11,6 +11,7 @@ import { eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  appointments,
   auditLog,
   cashSessions,
   charges,
@@ -503,7 +504,7 @@ describe('R1 do #65: cobrança PF não sai em nome de profissional arbitrário',
     expect((await post(recepA, `/agendamentos/${agOutro}/check-in`)).status).toBe(200);
     expect((await post(recepA, `/pacotes/${deOutro}/consumos`, { agendamentoId: agOutro })).status).toBe(201);
     expect((await post(recepA, '/financeiro/cobrancas', { pacoteId: deOutro, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA })).body).toMatchObject({
-      codigo: 'profissional_nao_e_do_pacote',
+      codigo: 'pacote_com_sessoes_de_outro_profissional', // R14 do #65
     });
     // Pacote com as sessões do profissional: passa.
     const dele = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R1c', total: 4 }));
@@ -610,6 +611,92 @@ describe('R13 do #65: profissional fixado na venda do pacote', () => {
     expect(trilha.map((l) => l.metadata)).toEqual(
       expect.arrayContaining([expect.objectContaining({ op: 'professional_change', package_id: pacoteId, from_professional_id: profissionalPfA, to_professional_id: profissionalA })]),
     );
+  });
+});
+
+describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente; agendamento imutável', () => {
+  const consumir = async (pacoteId: string, ag: string) => {
+    expect((await post(recepA, `/agendamentos/${ag}/check-in`)).status).toBe(200);
+    const r = await post(recepA, `/pacotes/${pacoteId}/consumos`, { agendamentoId: ag });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  };
+  const pfDireta = (pacoteId: string, profissional: string) =>
+    withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(charges).values({ tenantId: clinicaA, patientId: pacienteA, packageId: pacoteId, professionalId: profissional, attendanceKind: 'pf', amountCents: 100, dueDate: '2031-01-01', createdBy: profA.userId }), profA.userId);
+
+  beforeAll(async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302) }).expect(200);
+    await api.http().put(`/financeiro/profissionais/${profissionalA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(304) }).expect(200);
+  });
+
+  it('(a) fixar pacote antigo com sessões de X e Y é recusado, e a PF de X também (API e banco)', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R14a', total: 4 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalPfA }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    expect((await post(recepA, `/pacotes/${pacoteId}/profissional`, { profissionalId: profissionalPfA, motivo: 'fixar_pacote_antigo' })).body).toMatchObject({
+      codigo: 'pacote_com_sessoes_de_outro_profissional',
+    });
+    const fixarDireto = withTenant(api.db.db, clinicaA, async (tx) => {
+      await tx.insert(packageProfessionalChanges).values({ tenantId: clinicaA, packageId: pacoteId, fromProfessionalId: null, toProfessionalId: profissionalPfA, reason: 'fixar_pacote_antigo', changedBy: recepA.userId });
+      await tx.update(sessionPackages).set({ professionalId: profissionalPfA }).where(eq(sessionPackages.id, pacoteId));
+    }, recepA.userId);
+    expect(await sqlstate(fixarDireto)).toContain('55000');
+    expect((await post(recepA, '/financeiro/cobrancas', { pacoteId, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA })).body).toMatchObject({
+      codigo: 'pacote_com_sessoes_de_outro_profissional',
+    });
+    // Nem o próprio profissional (usuário da sessão = profA, vinculado a profissionalA) lança PF no banco.
+    expect(await sqlstate(pfDireta(pacoteId, profissionalA))).toContain('42501');
+    expect(await sqlstate(pfDireta(pacoteId, profissionalPfA))).toContain('42501');
+    // PJ continua possível.
+    await cobranca(recepA, { pacoteId, valorCentavos: 100, atendimentoPor: 'pj' });
+  });
+
+  it('(b) X atendeu, cancela a PF, troca para Y: a PF de Y é recusada (API e banco); estornada a sessão de X, passa', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R14b', total: 4, profissionalId: profissionalPfA }));
+    const c = await cobranca(recepA, { pacoteId, valorCentavos: 40000, atendimentoPor: 'pf' });
+    await consumir(pacoteId, await agendamento({ prof: profissionalPfA }));
+    expect((await post(finA, `/financeiro/cobrancas/${c.id}/cancelar`, { motivo: 'lancamento_errado' })).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${pacoteId}/profissional`, { profissionalId: profissionalA, motivo: 'profissional_desligado' })).status).toBe(200);
+    expect((await post(recepA, '/financeiro/cobrancas', { pacoteId, valorCentavos: 100, atendimentoPor: 'pf' })).body).toMatchObject({
+      codigo: 'pacote_com_sessoes_de_outro_profissional',
+    });
+    expect(await sqlstate(pfDireta(pacoteId, profissionalA))).toContain('42501');
+    const [sessao] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const estorno = await post(finA, `/pacotes/${pacoteId}/consumos/${sessao!.id}/estornar`, { motivo: 'lancamento_errado' });
+    expect(estorno.status, JSON.stringify(estorno.body)).toBeLessThan(300);
+    await cobranca(recepA, { pacoteId, valorCentavos: 100, atendimentoPor: 'pf' });
+  });
+
+  it('(3) pacote NÃO fixado com PF viva de X: consumo por agendamento de Y é recusado (API e banco)', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R14c', total: 4 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalPfA }));
+    await cobranca(recepA, { pacoteId, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalPfA });
+    const agY = await agendamento({ prof: profissionalA });
+    expect((await post(recepA, `/agendamentos/${agY}/check-in`)).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${pacoteId}/consumos`, { agendamentoId: agY })).body).toMatchObject({ codigo: 'profissional_diferente' });
+    const direto = withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(packageSessions).values({ tenantId: clinicaA, packageId: pacoteId, appointmentId: agY, consumedBy: recepA.userId }), recepA.userId);
+    expect(await sqlstate(direto)).toContain('42501');
+  });
+
+  it('R15: profissional e paciente do agendamento não mudam para nenhum papel (antes ou depois do consumo/cobrança)', async () => {
+    const outroPaciente = id(await post(recepA, '/pacientes', { nome: 'Paciente Ficticio R15', telefone: '11900000315' }));
+    const livre = await agendamento({ prof: profissionalPfA });
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R15', total: 2, profissionalId: profissionalPfA }));
+    const consumido = await agendamento({ prof: profissionalPfA });
+    await consumir(pacoteId, consumido);
+    const cobrado = await agendamento({ prof: profissionalPfA });
+    await cobranca(recepA, { agendamentoId: cobrado, valorCentavos: 100, atendimentoPor: 'pf' });
+    for (const ag of [livre, consumido, cobrado]) {
+      for (const s of [recepA, adminA, finA, profA]) {
+        const prof = withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ professionalId: profissionalA }).where(eq(appointments.id, ag)), s.userId);
+        expect(await sqlstate(prof)).toContain('42501');
+        const pac = withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ patientId: outroPaciente }).where(eq(appointments.id, ag)), s.userId);
+        expect(await sqlstate(pac)).toContain('42501');
+      }
+    }
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, consumido)));
+    expect(linha).toMatchObject({ professionalId: profissionalPfA, patientId: pacienteA });
   });
 });
 
