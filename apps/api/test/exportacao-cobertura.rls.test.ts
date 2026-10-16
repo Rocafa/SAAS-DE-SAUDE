@@ -23,6 +23,7 @@ import {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  packageProfessionalChanges,
   clinicalSettings,
   encounters,
   clinicalRecordVersions,
@@ -39,6 +40,7 @@ import {
   receiptCounters,
   receipts,
   receiptCancellations,
+  clinicMembers,
   importBatches,
   importBatchRecords,
 } from '../src/db/schema';
@@ -76,6 +78,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guide_session_signatures: 'guideSessionSignatures',
   session_packages: 'sessionPackages',
   package_sessions: 'packageSessions',
+  package_professional_changes: 'packageProfessionalChanges',
   clinical_settings: 'clinicalSettings',
   encounters: 'encounters',
   clinical_record_versions: 'clinicalRecordVersions',
@@ -93,6 +96,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipt_counters: 'finance.receiptCounters',
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
+  clinic_members: 'clinicMembers',
   import_batches: 'imports.batches',
   import_batch_records: 'imports.batchRecords',
   audit_log: 'auditEvents',
@@ -190,6 +194,13 @@ beforeAll(async () => {
   const pacote = await api.http().post('/pacotes').set(cab(admin)).send({ pacienteId, nome: 'Pacote Ficticio Export', total: 4 });
   const pacoteId = (pacote.body as { id: string }).id;
   await api.http().post(`/pacotes/${pacoteId}/consumos`).set(cab(admin)).send({ agendamentoId: ag2Id }).expect(201);
+  // 0023 (R13 do #65): pacote antigo ganha o profissional por troca registrada.
+  await api
+    .http()
+    .post(`/pacotes/${pacoteId}/profissional`)
+    .set(cab(admin))
+    .send({ profissionalId: (prof.body as { id: string }).id, motivo: 'fixar_pacote_antigo' })
+    .expect(200);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -384,6 +395,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof guideSessionSignatures
           | typeof sessionPackages
           | typeof packageSessions
+          | typeof packageProfessionalChanges
           | typeof clinicalSettings
           | typeof encounters
           | typeof clinicalRecordVersions
@@ -398,7 +410,8 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof paymentReversals
           | typeof receiptCounters
           | typeof receipts
-          | typeof receiptCancellations,
+          | typeof receiptCancellations
+          | typeof clinicMembers,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -413,6 +426,7 @@ describe('G2 — conteúdo do pacote', () => {
         guideSessionSignatures: await n(guideSessionSignatures),
         sessionPackages: await n(sessionPackages),
         packageSessions: await n(packageSessions),
+        packageProfessionalChanges: await n(packageProfessionalChanges),
         clinicalSettings: await n(clinicalSettings),
         encounters: await n(encounters),
         clinicalRecordVersions: await n(clinicalRecordVersions),
@@ -435,6 +449,7 @@ describe('G2 — conteúdo do pacote', () => {
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
         },
+        clinicMembers: await n(clinicMembers),
         imports: {
           batches: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatches))[0]?.n ?? -1,
           batchRecords: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatchRecords))[0]?.n ?? -1,
@@ -458,6 +473,7 @@ describe('G2 — conteúdo do pacote', () => {
       guideSessionSignatures: 1,
       sessionPackages: 1,
       packageSessions: 1,
+      packageProfessionalChanges: 1,
       clinicalSettings: 1,
       encounters: 1,
       clinicalRecordVersions: 2,
@@ -478,6 +494,13 @@ describe('G2 — conteúdo do pacote', () => {
         receiptCancellations: 1,
       },
     });
+    // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
+    expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
+    const fundador = api.fundador(clinicaA);
+    expect(pkg.json.data.tenant.founderUserId).toBe(fundador);
+    expect(pkg.json.data.clinicMembers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: fundador, role: 'admin', grantedBy: fundador, revokedAt: null })]),
+    );
     // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
     // Texto inteiro (não só os 4 dígitos): hash e uuid aleatórios da trilha podem conter '7735'/'7736'.

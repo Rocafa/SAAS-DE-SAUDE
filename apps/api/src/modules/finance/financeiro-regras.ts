@@ -27,7 +27,23 @@ const PADROES_PROIBIDOS: readonly RegExp[] = [
   /\bhiv\b|\baids\b/i,
   /c[aâ]ncer|oncol/i,
   /depend[eê]ncia qu[ií]mica|alcoolismo/i,
+  // R4 do #65: lista mínima ampliada (contornos comuns). Continua barreira mínima, não análise semântica.
+  /\b[A-TV-Z][\s.-][0-9]{2}(\.[0-9]{1,2})?\b/, // CID com separador (ex.: "F 32", "F-32"); só maiúscula
+  /\btdah?\b|d[eé]ficit de aten[cç][aã]o|hiperatividade/i,
+  /bipolar|esquizofren|psicose|psic[oó]tic|borderline|\btoc\b|obsessivo|compulsiv|\btept\b|p[aâ]nico|fobia/i,
+  /anorexia|bulimia|transtorno alimentar|compuls[aã]o alimentar/i,
+  /gestante|gravidez|gr[aá]vida|pr[eé]-natal|aborto|\bist\b|\bdst\b|sorolog/i,
+  /alzheimer|dem[eê]ncia|parkinson|epilep|\bavc\b|paralisia cerebral|s[ií]ndrome de down/i,
+  /suic[ií]d|automutila|depend[eê]ncia|drogadi|[aá]lcool/i,
 ];
+
+/**
+ * R4 do #65: aviso para a TELA de configuração do texto do recibo (devolvido junto da configuração). A
+ * lista acima é só uma barreira mínima; quem escreve o texto é a clínica (controladora).
+ */
+export const AVISO_DESCRICAO_RECIBO =
+  'Este texto sai no recibo que o paciente entrega ao empregador, ao plano de saúde e à Receita Federal. Não descreva diagnóstico, condição, especialidade sensível nem procedimento. Recomendado: "' +
+  'Atendimento" (padrão).';
 
 export function descricaoEhNeutraOuAceita(texto: string): boolean {
   return !PADROES_PROIBIDOS.some((re) => re.test(texto));
@@ -49,6 +65,16 @@ export const FORMA_DO_FRONT: Readonly<Record<'dinheiro' | 'cartao' | 'pix', Paym
 };
 
 /** Recebimento pago pela operadora não é pago pelo paciente: sem recibo ao paciente e fora do Receita Saúde. */
+/**
+ * R8 do #65: Pix manual e transferência carregam uma mensagem livre que fica no extrato do banco, FORA do
+ * sistema. A tela de recebimento mostra este aviso (devolvido no recebimento) e o onboarding o repete.
+ */
+export const AVISO_PIX_MANUAL = 'Não descreva o atendimento na mensagem do Pix ou da transferência (nada de especialidade, procedimento ou condição). Se precisar, use só o número do recibo.';
+
+export function avisoDoRecebimento(forma: PaymentMethod): string | null {
+  return forma === 'pix_manual' || forma === 'transferencia' ? AVISO_PIX_MANUAL : null;
+}
+
 export function formaGeraRecibo(forma: PaymentMethod): boolean {
   return forma !== 'convenio';
 }
@@ -99,8 +125,26 @@ export interface ConteudoDoRecibo {
   readonly pendencias: readonly string[];
 }
 
-export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>): string[] {
+/** Maioridade civil (CC art. 5º). Abaixo dela, o paciente não é presumido pagador (R3 do #65). */
+export const IDADE_MAIORIDADE = 18;
+
+/** O beneficiário era menor de idade na data do pagamento? Sem data de nascimento: não se sabe (false). */
+export function menorDeIdadeEm(nascimento: string | null, data: string): boolean {
+  if (!nascimento || !/^\d{4}-\d{2}-\d{2}$/.test(nascimento)) return false;
+  const [an, mn, dn] = nascimento.split('-').map(Number) as [number, number, number];
+  const [ad, md, dd] = data.split('-').map(Number) as [number, number, number];
+  const idade = ad - an - (md < mn || (md === mn && dd < dn) ? 1 : 0);
+  return idade < IDADE_MAIORIDADE;
+}
+
+/**
+ * Pendências do recibo. `pagadorResponsavel`: o paciente é menor e nenhum pagador foi informado — o
+ * recibo sai com o paciente como pagador PRESUMIDO e a pendência `pagador_responsavel` (R3 do #65): o
+ * IR do responsável exige o nome e o CPF de quem pagou (Lei 9.250/1995, art. 8º, §2º, III).
+ */
+export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>, pagadorResponsavel = false): string[] {
   const p: string[] = [];
+  if (pagadorResponsavel) p.push('pagador_responsavel');
   if (!c.emitente.documento) p.push(c.emitente.tipo === 'pf' ? 'cpf_do_profissional' : 'cnpj_da_clinica');
   if (!c.pagador.cpf) p.push('cpf_do_pagador');
   if (!c.beneficiario.cpf) p.push('cpf_do_beneficiario');
@@ -133,8 +177,9 @@ export interface ItemReceitaSaude {
   readonly pendencias: readonly string[];
 }
 
-export function pendenciasDoItem(i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>): string[] {
+export function pendenciasDoItem(i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>, pagadorResponsavel = false): string[] {
   const p: string[] = [];
+  if (pagadorResponsavel) p.push('pagador_responsavel');
   if (!i.pagador.cpf) p.push('cpf_do_pagador');
   if (!i.beneficiario.cpf) p.push('cpf_do_beneficiario');
   return p;

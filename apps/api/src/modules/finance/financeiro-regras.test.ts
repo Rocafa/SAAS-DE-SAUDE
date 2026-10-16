@@ -3,6 +3,7 @@ import { EntradaInvalidaError } from '../../common/validacao';
 import {
   descricaoEhNeutraOuAceita,
   dinheiroEsperado,
+  menorDeIdadeEm,
   pendenciasDoRecibo,
   situacaoDaCobranca,
   totaisZerados,
@@ -30,6 +31,13 @@ describe('texto neutro do recibo', () => {
     for (const ok of ['Atendimento', 'Atendimento em saude', 'Consulta', 'Sessao de fisioterapia']) expect(descricaoEhNeutraOuAceita(ok)).toBe(true);
     for (const ruim of ['Sessao F32', 'cid 10', 'Diagnóstico', 'Transtorno de ansiedade', 'Tratamento de depressão', 'Terapia TEA', 'Sindrome X'])
       expect(descricaoEhNeutraOuAceita(ruim)).toBe(false);
+  });
+
+  it('R4 do #65: contornos comuns também são recusados; textos neutros seguem aceitos', () => {
+    for (const ruim of ['Sessao F 32', 'Sessao F-32', 'TDAH', 'Transt. bipolar', 'Esquizofrenia', 'Terapia TOC', 'Gestante', 'Pre-natal', 'Alcool'])
+      expect(descricaoEhNeutraOuAceita(ruim), ruim).toBe(false);
+    for (const ok of ['Atendimento', 'Pacote de 10 sessoes', 'Sessao de fonoaudiologia', 'Consulta de retorno', 'Avaliacao inicial'])
+      expect(descricaoEhNeutraOuAceita(ok), ok).toBe(true);
   });
 
   it('configuração: texto ruim volta só o nome do campo; CNPJ normalizado', () => {
@@ -90,5 +98,14 @@ describe('caixa e recibo', () => {
       descricao: 'Atendimento',
     };
     expect(pendenciasDoRecibo(base)).toEqual(['cpf_do_profissional', 'cpf_do_pagador']);
+  });
+});
+
+describe('R3 do #65: paciente menor', () => {
+  it('idade na data do pagamento, com aniversário; sem data não presume', () => {
+    expect(menorDeIdadeEm('2010-06-15', '2028-06-14')).toBe(true);
+    expect(menorDeIdadeEm('2010-06-15', '2028-06-15')).toBe(false);
+    expect(menorDeIdadeEm(null, '2028-06-15')).toBe(false);
+    expect(menorDeIdadeEm('lixo', '2028-06-15')).toBe(false);
   });
 });

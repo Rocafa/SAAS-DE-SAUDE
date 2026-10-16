@@ -31,6 +31,7 @@ import {
   validarNovoConvenio,
   validarNovoPacote,
   validarQueryVazia,
+  validarTrocaProfissionalPacote,
 } from './guias.validation';
 import { PacotesService, type ConsumoPacoteDto, type PacoteDto, type ResultadoConsumoPacoteDto } from './pacotes.service';
 
@@ -250,6 +251,16 @@ export class PacotesController {
     const alvo = exigirUuid(id);
     validarCorpoVazio(corpo);
     return this.service.cancelar(paraRequestContext(auth), alvo);
+  }
+
+  /** R13 do #65: troca do profissional fixado na venda — só com motivo, registrada e auditada. */
+  @Post(':id/profissional')
+  @HttpCode(200)
+  @Permissao('guias:gerir')
+  trocarProfissional(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<PacoteDto> {
+    const alvo = exigirUuid(id);
+    const { profissionalId, motivo } = validarTrocaProfissionalPacote(corpo);
+    return this.service.trocarProfissional(paraRequestContext(auth), alvo, profissionalId, motivo);
   }
 
   @Post(':id/consumos')

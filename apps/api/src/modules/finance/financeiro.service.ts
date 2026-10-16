@@ -45,7 +45,7 @@ import {
   type ConfigFinanceira,
   type LinhaCobranca,
 } from './financeiro-comum';
-import { situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
+import { AVISO_DESCRICAO_RECIBO, avisoDoRecebimento, situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
 import {
   MAXIMO_LINHAS_FINANCEIRO,
   type ConfiguracaoFinanceiro,
@@ -61,6 +61,8 @@ export interface ConfiguracaoDto {
   readonly emitenteNome: string | null;
   readonly emitenteCnpj: string | null;
   readonly mostrarRegistroConselho: boolean;
+  /** R4 do #65: aviso fixo para a tela (o texto vai para empregador, plano e Receita). */
+  readonly avisoDescricao: string;
 }
 
 /**
@@ -97,6 +99,8 @@ export interface RecebimentoDto {
   /** Dia do pagamento no fuso da clínica (contrato `Recibo.data` do front). */
   readonly data: string;
   readonly estornado: boolean;
+  /** R8 do #65: aviso para a tela (Pix manual/transferência: não descrever o atendimento na mensagem). */
+  readonly aviso: string | null;
   readonly cobranca: { readonly situacao: SituacaoCobranca; readonly saldoCentavos: number };
 }
 
@@ -127,6 +131,7 @@ function configDto(c: ConfigFinanceira): ConfiguracaoDto {
     emitenteNome: c.emitenteNome,
     emitenteCnpj: c.emitenteCnpj,
     mostrarRegistroConselho: c.mostrarRegistroConselho,
+    avisoDescricao: AVISO_DESCRICAO_RECIBO,
   };
 }
 
@@ -276,6 +281,11 @@ export class FinanceiroService {
         if (!p) throw new NaoEncontradoError();
         if (p.status === 'cancelled') throw new ConflitoError('pacote_cancelado');
         pacienteId = p.patientId;
+        // R13 do #65: com profissional fixado na venda, a cobrança é dele (padrão quando o corpo não diz).
+        if (p.professionalId) {
+          if (profissionalId && profissionalId !== p.professionalId) throw new ConflitoError('profissional_nao_e_do_pacote');
+          profissionalId = p.professionalId;
+        }
         if (profissionalId) await this.exigirProfissional(tx, ctx, profissionalId);
       }
       const tipo = dados.atendimentoPor ?? config.atendimentoPadrao;
@@ -516,6 +526,7 @@ export class FinanceiroService {
       recebidoEm: p.receivedAt.toISOString(),
       data: noFusoDaClinica(p.receivedAt).data,
       estornado,
+      aviso: avisoDoRecebimento(p.method),
       cobranca: { situacao: situacaoDaCobranca(c), saldoCentavos: c.status === 'cancelled' ? 0 : c.amountCents - c.paidCents },
     };
   }
@@ -558,6 +569,15 @@ export class FinanceiroService {
       .where(and(eq(professionalFiscalProfiles.tenantId, ctx.tenantId), eq(professionalFiscalProfiles.professionalId, profissionalId)));
     if (!perfil?.cpf) throw new ConflitoError('profissional_sem_perfil_fiscal');
     if (!pacoteId) return;
+    // R13 do #65: profissional fixado na venda (já conferido acima): a PF sai na venda, sem esperar sessão.
+    const [pacote] = await tx
+      .select({ fixado: sessionPackages.professionalId })
+      .from(sessionPackages)
+      .where(and(eq(sessionPackages.tenantId, ctx.tenantId), eq(sessionPackages.id, pacoteId)));
+    if (pacote?.fixado) {
+      if (pacote.fixado !== profissionalId) throw new ConflitoError('profissional_nao_e_do_pacote');
+      return;
+    }
     const [prof] = await tx
       .select({ userId: professionals.userId })
       .from(professionals)

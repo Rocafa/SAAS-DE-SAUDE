@@ -17,6 +17,8 @@ export const tenants = pgTable('tenants', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0013: janela de continuidade do vínculo de cuidado, em dias (1..180, padrão 90). */
   careLinkDays: smallint('care_link_days').notNull().default(90),
+  /** Migração 0022 (R15 do #63): quem fundou a clínica (registrado na criação; imutável para o runtime). */
+  founderUserId: uuid('founder_user_id'),
 });
 
 export const patients = pgTable('patients', {
@@ -225,6 +227,26 @@ export const sessionPackages = pgTable('session_packages', {
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** 0023 (R13 do #65): profissional fixado na venda; consumo e cobrança seguem ele. Troca só registrada. */
+  professionalId: uuid('professional_id'),
+});
+
+/** Motivos da troca do profissional do pacote (0023). */
+export const PACKAGE_PROFESSIONAL_CHANGE_REASONS = ['profissional_desligado', 'pedido_do_paciente', 'lancamento_errado', 'fixar_pacote_antigo'] as const;
+export type PackageProfessionalChangeReason = (typeof PACKAGE_PROFESSIONAL_CHANGE_REASONS)[number];
+
+/** Registro explícito (append-only) de cada troca do profissional do pacote (0023, R13 do #65). */
+export const packageProfessionalChanges = pgTable('package_professional_changes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  packageId: uuid('package_id').notNull(),
+  fromProfessionalId: uuid('from_professional_id'),
+  toProfessionalId: uuid('to_professional_id').notNull(),
+  reason: text('reason', { enum: PACKAGE_PROFESSIONAL_CHANGE_REASONS }).notNull(),
+  changedBy: uuid('changed_by').notNull(),
+  changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Consumo de 1 sessão do pacote por agendamento (0011): o histórico do pacote. */
@@ -402,7 +424,9 @@ export const noteCustodies = pgTable('note_custodies', {
 });
 
 /** Caixa de avisos interna (0017, R9 do #63): sem dado de paciente; só o destinatário lê e marca lido. */
-export const CLINICAL_NOTICE_KINDS = ['sigilo_psicologia_alterado'] as const;
+/** 0022 (R13/R15 do #63): avisos aos demais admins (perfil alterado, retirada de retenção pedida/aprovada). */
+export const CLINICAL_NOTICE_KINDS = ['sigilo_psicologia_alterado', 'perfil_alterado', 'retencao_retirada_pedida', 'retencao_retirada_aprovada'] as const;
+export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
 export const clinicalNotices = pgTable('clinical_notices', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id')
@@ -410,8 +434,12 @@ export const clinicalNotices = pgTable('clinical_notices', {
     .references(() => tenants.id),
   recipientUserId: uuid('recipient_user_id').notNull(),
   kind: text('kind', { enum: CLINICAL_NOTICE_KINDS }).notNull(),
-  fromMode: text('from_mode', { enum: PSYCH_COMPARTMENT_MODES }).notNull(),
-  toMode: text('to_mode', { enum: PSYCH_COMPARTMENT_MODES }).notNull(),
+  fromMode: text('from_mode', { enum: PSYCH_COMPARTMENT_MODES }),
+  toMode: text('to_mode', { enum: PSYCH_COMPARTMENT_MODES }),
+  subjectUserId: uuid('subject_user_id'),
+  subjectRole: text('subject_role', { enum: CLINIC_MEMBER_ROLES }),
+  change: text('change', { enum: ['concedido', 'revogado'] as const }),
+  legalHoldId: uuid('legal_hold_id'),
   restrictedExisting: integer('restricted_existing').notNull().default(0),
   createdBy: uuid('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

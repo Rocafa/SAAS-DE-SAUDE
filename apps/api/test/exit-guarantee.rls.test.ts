@@ -113,6 +113,7 @@ describe('G2 — exportação total do tenant', () => {
       guideSessionSignatures: 0,
       sessionPackages: 0,
       packageSessions: 0,
+      packageProfessionalChanges: 0,
       clinicalSettings: 0,
       encounters: 0,
       clinicalRecordVersions: 0,
@@ -133,6 +134,7 @@ describe('G2 — exportação total do tenant', () => {
         receipts: 0,
         receiptCancellations: 0,
       },
+      clinicMembers: 0,
       imports: { batches: 0, batchRecords: 0 },
       auditEvents: pkg.auditEvents.length,
     });

@@ -4,7 +4,7 @@ import { importBatches, importBatchRecords } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 
 /**
- * Importador no pacote G2 (migração 0024, schemaVersion 1.11.0), em `data.imports`.
+ * Importador no pacote G2 (migração 0024, schemaVersion 1.13.0), em `data.imports`.
  *
  * ENTRA: os lotes (`import_batches`: tipo, situação, ACEITE DO TERMO DE MIGRAÇÃO — versão, quem, quando —,
  * mapeamento por índice de coluna, contagens, hash da simulação aprovada, datas de cada etapa e a evidência
