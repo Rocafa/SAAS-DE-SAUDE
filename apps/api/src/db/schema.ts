@@ -227,6 +227,26 @@ export const sessionPackages = pgTable('session_packages', {
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** 0023 (R13 do #65): profissional fixado na venda; consumo e cobrança seguem ele. Troca só registrada. */
+  professionalId: uuid('professional_id'),
+});
+
+/** Motivos da troca do profissional do pacote (0023). */
+export const PACKAGE_PROFESSIONAL_CHANGE_REASONS = ['profissional_desligado', 'pedido_do_paciente', 'lancamento_errado', 'fixar_pacote_antigo'] as const;
+export type PackageProfessionalChangeReason = (typeof PACKAGE_PROFESSIONAL_CHANGE_REASONS)[number];
+
+/** Registro explícito (append-only) de cada troca do profissional do pacote (0023, R13 do #65). */
+export const packageProfessionalChanges = pgTable('package_professional_changes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  packageId: uuid('package_id').notNull(),
+  fromProfessionalId: uuid('from_professional_id'),
+  toProfessionalId: uuid('to_professional_id').notNull(),
+  reason: text('reason', { enum: PACKAGE_PROFESSIONAL_CHANGE_REASONS }).notNull(),
+  changedBy: uuid('changed_by').notNull(),
+  changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Consumo de 1 sessão do pacote por agendamento (0011): o histórico do pacote. */

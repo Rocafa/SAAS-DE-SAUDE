@@ -15,12 +15,15 @@ import {
   cashSessions,
   charges,
   financeSettings,
+  packageProfessionalChanges,
+  packageSessions,
   paymentReversals,
   payments,
   professionalFiscalProfiles,
   receiptCancellations,
   receiptCounters,
   receipts,
+  sessionPackages,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { RetencaoFiscalService } from '../src/modules/finance/retencao-fiscal';
@@ -552,6 +555,61 @@ describe('R3 do #65: paciente menor sem pagador informado', () => {
     const itens = (lote.body as { itens: { pendencias: string[]; beneficiario: { nome: string } }[] }).itens;
     expect(itens.filter((i) => i.pendencias.includes('pagador_responsavel')).every((i) => i.beneficiario.nome === 'Paciente Ficticio Menor')).toBe(true);
     expect(itens.some((i) => i.pendencias.includes('pagador_responsavel'))).toBe(true);
+  });
+});
+
+describe('R13 do #65: profissional fixado na venda do pacote', () => {
+  it('PF já na venda; consumo só do profissional; troca só registrada, com motivo e sem cobrança PF viva', async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302) }).expect(200);
+    const pacote = await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R13', total: 4, profissionalId: profissionalPfA });
+    expect(pacote.status, JSON.stringify(pacote.body)).toBe(201);
+    expect(pacote.body).toMatchObject({ profissionalId: profissionalPfA });
+    const pacoteId = id(pacote);
+    // A recepção cobra PF na venda, sem sessão consumida; o emitente é o da venda (padrão).
+    const c = await cobranca(recepA, { pacoteId, valorCentavos: 40000, atendimentoPor: 'pf' });
+    const [linhaCobranca] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(charges).where(eq(charges.id, c.id)));
+    expect(linhaCobranca?.professionalId).toBe(profissionalPfA);
+    // Outro emitente: 409 (API) e 42501 (banco).
+    await api.http().put(`/financeiro/profissionais/${profissionalA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(304) }).expect(200);
+    expect((await post(recepA, '/financeiro/cobrancas', { pacoteId, valorCentavos: 100, atendimentoPor: 'pf', profissionalId: profissionalA })).body).toMatchObject({
+      codigo: 'profissional_nao_e_do_pacote',
+    });
+    const direta = withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(charges).values({ tenantId: clinicaA, patientId: pacienteA, packageId: pacoteId, professionalId: profissionalA, attendanceKind: 'pf', amountCents: 100, dueDate: '2031-01-01', createdBy: profA.userId }), profA.userId);
+    expect(await sqlstate(direta)).toContain('42501');
+    // Consumo por sessão de outro profissional: 409 (API) e 42501 (banco).
+    const agOutro = await agendamento();
+    expect((await post(recepA, `/agendamentos/${agOutro}/check-in`)).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${pacoteId}/consumos`, { agendamentoId: agOutro })).body).toMatchObject({ codigo: 'profissional_diferente' });
+    const consumoDireto = withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(packageSessions).values({ tenantId: clinicaA, packageId: pacoteId, appointmentId: agOutro, consumedBy: recepA.userId }), recepA.userId);
+    expect(await sqlstate(consumoDireto)).toContain('42501');
+    const agDele = await agendamento({ prof: profissionalPfA });
+    expect((await post(recepA, `/agendamentos/${agDele}/check-in`)).status).toBe(200);
+    expect((await post(recepA, `/pacotes/${pacoteId}/consumos`, { agendamentoId: agDele })).status).toBe(201);
+
+    // Troca: UPDATE direto sem o registro é recusado pelo banco.
+    const semRegistro = withTenant(api.db.db, clinicaA, (tx) => tx.update(sessionPackages).set({ professionalId: profissionalA }).where(eq(sessionPackages.id, pacoteId)), recepA.userId);
+    expect(await sqlstate(semRegistro)).toContain('42501');
+    // Com cobrança PF viva do profissional da venda: 409; motivo fora do enum: 400.
+    expect((await post(recepA, `/pacotes/${pacoteId}/profissional`, { profissionalId: profissionalA, motivo: 'pedido_do_paciente' })).body).toMatchObject({
+      codigo: 'pacote_com_cobranca_pf',
+    });
+    expect((await post(recepA, `/pacotes/${pacoteId}/profissional`, { profissionalId: profissionalA, motivo: 'porque sim' })).status).toBe(400);
+    expect((await post(finA, `/financeiro/cobrancas/${c.id}/cancelar`, { motivo: 'lancamento_errado' })).status).toBe(200);
+    const troca = await post(recepA, `/pacotes/${pacoteId}/profissional`, { profissionalId: profissionalA, motivo: 'pedido_do_paciente' });
+    expect(troca.status, JSON.stringify(troca.body)).toBe(200);
+    expect(troca.body).toMatchObject({ profissionalId: profissionalA });
+    const registros = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageProfessionalChanges).where(eq(packageProfessionalChanges.packageId, pacoteId)));
+    expect(registros).toEqual([expect.objectContaining({ fromProfessionalId: profissionalPfA, toProfessionalId: profissionalA, reason: 'pedido_do_paciente', changedBy: recepA.userId })]);
+    // O registro é append-only.
+    const apagar = withTenant(api.db.db, clinicaA, (tx) => tx.delete(packageProfessionalChanges).where(eq(packageProfessionalChanges.packageId, pacoteId)), recepA.userId);
+    expect(await sqlstate(apagar)).toContain('42501');
+    // Trilha: só ids e o motivo.
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'session_packages')));
+    expect(trilha.map((l) => l.metadata)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ op: 'professional_change', package_id: pacoteId, from_professional_id: profissionalPfA, to_professional_id: profissionalA })]),
+    );
   });
 });
 

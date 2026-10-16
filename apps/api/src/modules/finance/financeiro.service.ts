@@ -281,6 +281,11 @@ export class FinanceiroService {
         if (!p) throw new NaoEncontradoError();
         if (p.status === 'cancelled') throw new ConflitoError('pacote_cancelado');
         pacienteId = p.patientId;
+        // R13 do #65: com profissional fixado na venda, a cobrança é dele (padrão quando o corpo não diz).
+        if (p.professionalId) {
+          if (profissionalId && profissionalId !== p.professionalId) throw new ConflitoError('profissional_nao_e_do_pacote');
+          profissionalId = p.professionalId;
+        }
         if (profissionalId) await this.exigirProfissional(tx, ctx, profissionalId);
       }
       const tipo = dados.atendimentoPor ?? config.atendimentoPadrao;
@@ -564,6 +569,15 @@ export class FinanceiroService {
       .where(and(eq(professionalFiscalProfiles.tenantId, ctx.tenantId), eq(professionalFiscalProfiles.professionalId, profissionalId)));
     if (!perfil?.cpf) throw new ConflitoError('profissional_sem_perfil_fiscal');
     if (!pacoteId) return;
+    // R13 do #65: profissional fixado na venda (já conferido acima): a PF sai na venda, sem esperar sessão.
+    const [pacote] = await tx
+      .select({ fixado: sessionPackages.professionalId })
+      .from(sessionPackages)
+      .where(and(eq(sessionPackages.tenantId, ctx.tenantId), eq(sessionPackages.id, pacoteId)));
+    if (pacote?.fixado) {
+      if (pacote.fixado !== profissionalId) throw new ConflitoError('profissional_nao_e_do_pacote');
+      return;
+    }
     const [prof] = await tx
       .select({ userId: professionals.userId })
       .from(professionals)

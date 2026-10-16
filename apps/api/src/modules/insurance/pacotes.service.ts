@@ -1,9 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { appointmentTypes, packageSessions, patients, sessionPackages, type PackageReversalReason } from '../../db/schema';
+import {
+  appointmentTypes,
+  charges,
+  packageProfessionalChanges,
+  packageSessions,
+  patients,
+  professionals,
+  sessionPackages,
+  type PackageProfessionalChangeReason,
+  type PackageReversalReason,
+} from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -31,6 +41,8 @@ export interface PacoteDto {
   readonly saldo: number;
   readonly tipoId: string | null;
   readonly validade: string | null;
+  /** R13 do #65: profissional fixado na venda (null: pacote antigo, regra da 0021). */
+  readonly profissionalId: string | null;
   readonly situacao: Situacao;
   readonly alertas: readonly Alerta[];
 }
@@ -71,6 +83,7 @@ function paraDto(p: LinhaPacote, hoje: string): PacoteDto {
     saldo: saldoDe(b),
     tipoId: p.appointmentTypeId,
     validade: p.validUntil,
+    profissionalId: p.professionalId,
     situacao: situacaoDe(b, hoje),
     alertas: alertasDe(b, hoje, LIMIARES_PACOTE),
   };
@@ -134,6 +147,7 @@ export class PacotesService {
           .where(and(eq(appointmentTypes.tenantId, ctx.tenantId), eq(appointmentTypes.id, dados.tipoId)));
         if (!tipo) throw new NaoEncontradoError();
       }
+      if (dados.profissionalId) await this.exigirProfissionalAtivo(tx, ctx, dados.profissionalId);
       const [p] = await tx
         .insert(sessionPackages)
         .values({
@@ -143,13 +157,14 @@ export class PacotesService {
           name: dados.nome,
           totalSessions: dados.total,
           validUntil: dados.validade ?? null,
+          professionalId: dados.profissionalId ?? null,
         })
         .returning();
       if (!p) throw new Error('falha ao criar pacote');
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: SCOPE,
-        metadata: { package_id: p.id, patient_id: p.patientId, sessions: p.totalSessions },
+        metadata: { package_id: p.id, patient_id: p.patientId, sessions: p.totalSessions, professional_id: p.professionalId },
       });
       return paraDto(p, hojeNaClinica());
     });
@@ -181,6 +196,8 @@ export class PacotesService {
       if (pacote.appointmentTypeId && agendamento.appointmentTypeId !== pacote.appointmentTypeId) {
         throw new ConflitoError('tipo_diferente');
       }
+      // R13 do #65: com profissional fixado na venda, só sessões dele consomem o pacote (o banco confere).
+      if (pacote.professionalId && agendamento.professionalId !== pacote.professionalId) throw new ConflitoError('profissional_diferente');
       if (!statusConsome(agendamento.status)) throw new ConflitoError('agendamento_sem_sessao');
       const ativo = await consumoAtivoDoAgendamento(tx, ctx, agendamento.id);
       if (ativo.guia || ativo.pacote) throw new ConflitoError('sessao_ja_consumida');
@@ -205,6 +222,75 @@ export class PacotesService {
       });
       return this.resultado(consumo.id, p);
     });
+  }
+
+  /**
+   * R13 do #65: troca do profissional fixado na venda. Só com motivo (enum), registrada em
+   * package_professional_changes na mesma transação (o banco recusa a troca sem o registro) e auditada.
+   * Recusada (409 `pacote_com_cobranca_pf`) se houver cobrança PF viva do pacote em nome de outro
+   * profissional: o recibo e o Receita Saúde seguem o profissional da venda; cancele a cobrança antes.
+   */
+  trocarProfissional(ctx: RequestContext, pacoteId: string, profissionalId: string, motivo: PackageProfessionalChangeReason): Promise<PacoteDto> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const atual = await this.travarPacote(tx, ctx, pacoteId);
+      if (atual.status === 'cancelled') throw new ConflitoError('pacote_cancelado');
+      if (atual.professionalId === profissionalId) return paraDto(atual, hojeNaClinica());
+      if ((atual.professionalId === null) !== (motivo === 'fixar_pacote_antigo')) throw new ConflitoError('motivo_invalido', ['motivo']);
+      await this.exigirProfissionalAtivo(tx, ctx, profissionalId);
+      const [pf] = await tx
+        .select({ id: charges.id })
+        .from(charges)
+        .where(
+          and(
+            eq(charges.tenantId, ctx.tenantId),
+            eq(charges.packageId, pacoteId),
+            eq(charges.attendanceKind, 'pf'),
+            ne(charges.status, 'cancelled'),
+            ne(charges.professionalId, profissionalId),
+          ),
+        )
+        .limit(1);
+      if (pf) throw new ConflitoError('pacote_com_cobranca_pf');
+      const [troca] = await tx
+        .insert(packageProfessionalChanges)
+        .values({
+          tenantId: ctx.tenantId,
+          packageId: pacoteId,
+          fromProfessionalId: atual.professionalId,
+          toProfessionalId: profissionalId,
+          reason: motivo,
+          changedBy: ctx.userId,
+        })
+        .returning({ id: packageProfessionalChanges.id });
+      const [p] = await tx
+        .update(sessionPackages)
+        .set({ professionalId: profissionalId, updatedAt: new Date() })
+        .where(and(eq(sessionPackages.tenantId, ctx.tenantId), eq(sessionPackages.id, pacoteId)))
+        .returning();
+      if (!troca || !p) throw new Error('falha ao trocar o profissional do pacote');
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE,
+        metadata: {
+          op: 'professional_change',
+          package_id: pacoteId,
+          change_id: troca.id,
+          from_professional_id: atual.professionalId,
+          to_professional_id: profissionalId,
+          reason: motivo,
+        },
+      });
+      return paraDto(p, hojeNaClinica());
+    });
+  }
+
+  private async exigirProfissionalAtivo(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
+    const [prof] = await tx
+      .select({ ativo: professionals.active })
+      .from(professionals)
+      .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, profissionalId)));
+    if (!prof) throw new NaoEncontradoError();
+    if (!prof.ativo) throw new ConflitoError('profissional_inativo');
   }
 
   estornar(ctx: RequestContext, pacoteId: string, consumoId: string, motivo: PackageReversalReason): Promise<ResultadoConsumoPacoteDto> {

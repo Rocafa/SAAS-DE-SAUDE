@@ -23,6 +23,7 @@ import {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  packageProfessionalChanges,
   clinicalSettings,
   encounters,
   clinicalRecordVersions,
@@ -74,6 +75,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guide_session_signatures: 'guideSessionSignatures',
   session_packages: 'sessionPackages',
   package_sessions: 'packageSessions',
+  package_professional_changes: 'packageProfessionalChanges',
   clinical_settings: 'clinicalSettings',
   encounters: 'encounters',
   clinical_record_versions: 'clinicalRecordVersions',
@@ -187,6 +189,13 @@ beforeAll(async () => {
   const pacote = await api.http().post('/pacotes').set(cab(admin)).send({ pacienteId, nome: 'Pacote Ficticio Export', total: 4 });
   const pacoteId = (pacote.body as { id: string }).id;
   await api.http().post(`/pacotes/${pacoteId}/consumos`).set(cab(admin)).send({ agendamentoId: ag2Id }).expect(201);
+  // 0023 (R13 do #65): pacote antigo ganha o profissional por troca registrada.
+  await api
+    .http()
+    .post(`/pacotes/${pacoteId}/profissional`)
+    .set(cab(admin))
+    .send({ profissionalId: (prof.body as { id: string }).id, motivo: 'fixar_pacote_antigo' })
+    .expect(200);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -362,6 +371,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof guideSessionSignatures
           | typeof sessionPackages
           | typeof packageSessions
+          | typeof packageProfessionalChanges
           | typeof clinicalSettings
           | typeof encounters
           | typeof clinicalRecordVersions
@@ -392,6 +402,7 @@ describe('G2 — conteúdo do pacote', () => {
         guideSessionSignatures: await n(guideSessionSignatures),
         sessionPackages: await n(sessionPackages),
         packageSessions: await n(packageSessions),
+        packageProfessionalChanges: await n(packageProfessionalChanges),
         clinicalSettings: await n(clinicalSettings),
         encounters: await n(encounters),
         clinicalRecordVersions: await n(clinicalRecordVersions),
@@ -433,6 +444,7 @@ describe('G2 — conteúdo do pacote', () => {
       guideSessionSignatures: 1,
       sessionPackages: 1,
       packageSessions: 1,
+      packageProfessionalChanges: 1,
       clinicalSettings: 1,
       encounters: 1,
       clinicalRecordVersions: 2,

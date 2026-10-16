@@ -51,6 +51,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
   session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Troca do profissional do pacote (0023): append-only (trigger recusa UPDATE/DELETE/TRUNCATE).
+  package_professional_changes: { privilegios: ['SELECT', 'INSERT'] },
   // Prontuário (migração 0012): sem DELETE/TRUNCATE. Versões e adendos são append-only (sem UPDATE;
   // um trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel). Finalizar = UPDATE do atendimento
   // aberto (depois disso o trigger torna a linha terminal); nota privada é descartada, nunca apagada.
