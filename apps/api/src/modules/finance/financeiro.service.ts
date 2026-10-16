@@ -569,6 +569,15 @@ export class FinanceiroService {
       .where(and(eq(professionalFiscalProfiles.tenantId, ctx.tenantId), eq(professionalFiscalProfiles.professionalId, profissionalId)));
     if (!perfil?.cpf) throw new ConflitoError('profissional_sem_perfil_fiscal');
     if (!pacoteId) return;
+    // R14 do #65: a cobrança PF do pacote tem UM emitente e só cobre sessões dele. Sessão viva de outro
+    // profissional (fixado ou não) é 409 `pacote_com_sessoes_de_outro_profissional`: estorne as sessões
+    // do outro profissional ou cobre o pacote como PJ. O banco confere o mesmo (0025).
+    const sessoes = await tx
+      .select({ profissional: appointments.professionalId })
+      .from(packageSessions)
+      .innerJoin(appointments, and(eq(appointments.tenantId, packageSessions.tenantId), eq(appointments.id, packageSessions.appointmentId)))
+      .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.packageId, pacoteId), isNull(packageSessions.reversedAt)));
+    if (sessoes.some((s) => s.profissional !== profissionalId)) throw new ConflitoError('pacote_com_sessoes_de_outro_profissional');
     // R13 do #65: profissional fixado na venda (já conferido acima): a PF sai na venda, sem esperar sessão.
     const [pacote] = await tx
       .select({ fixado: sessionPackages.professionalId })
@@ -583,12 +592,7 @@ export class FinanceiroService {
       .from(professionals)
       .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, profissionalId)));
     if (prof?.userId === ctx.userId) return;
-    const sessoes = await tx
-      .select({ profissional: appointments.professionalId })
-      .from(packageSessions)
-      .innerJoin(appointments, and(eq(appointments.tenantId, packageSessions.tenantId), eq(appointments.id, packageSessions.appointmentId)))
-      .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.packageId, pacoteId), isNull(packageSessions.reversedAt)));
-    if (sessoes.length === 0 || sessoes.some((s) => s.profissional !== profissionalId)) throw new ConflitoError('profissional_nao_e_do_pacote');
+    if (sessoes.length === 0) throw new ConflitoError('profissional_nao_e_do_pacote');
   }
 
   private async exigirProfissional(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
