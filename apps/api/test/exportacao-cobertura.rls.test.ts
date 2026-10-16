@@ -100,12 +100,12 @@ const GUIA_NUMERO = 'FIC-EXP-0001';
 const GUIA_SENHA = 'SENHAEXP9';
 const GUIA_CARTEIRINHA = 'CART-EXP-42';
 /** Textos clínicos fictícios: no pacote decifrados; nunca na trilha. */
-const TEXTO_CLINICO = 'Evolucao ficticia exportavel 7731';
-const TEXTO_ADENDO = 'Adendo ficticio exportavel 7732';
-const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor 7733';
-const NOTA_RETIDA = 'Nota privada ficticia sem decisao 7734';
-const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao 7735';
-const MOTIVO_RETIRADA = 'Processo ficticio encerrado 7736';
+const TEXTO_CLINICO = 'Evolucao ficticia exportavel QZX7731';
+const TEXTO_ADENDO = 'Adendo ficticio exportavel QZX7732';
+const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
+const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
+const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
+const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -378,8 +378,8 @@ describe('G2 — conteúdo do pacote', () => {
     );
     // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
-    expect(pkg.auditJsonl).not.toContain('7735');
-    expect(pkg.auditJsonl).not.toContain('7736');
+    expect(pkg.auditJsonl).not.toContain(REFERENCIA_RETENCAO);
+    expect(pkg.auditJsonl).not.toContain(MOTIVO_RETIRADA);
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');

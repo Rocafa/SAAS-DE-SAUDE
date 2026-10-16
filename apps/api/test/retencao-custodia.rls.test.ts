@@ -18,8 +18,8 @@ import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 const DIA = 86_400_000;
-const TEXTO = 'Nota privada ficticia da custodia 8801';
-const REFERENCIA = 'Oficio ficticio da retencao 8802';
+const TEXTO = 'Nota privada ficticia da custodia QZX8801';
+const REFERENCIA = 'Oficio ficticio da retencao QZX8802';
 
 let api: ApiDeTeste;
 let clinica: TenantId;
@@ -192,7 +192,7 @@ describe('R12: retirar a retenção exige motivo e duas pessoas', () => {
     await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada`).set(cab(admin)).send({}).expect(400);
     const prof = api.sessao(clinica, 'profissional');
     await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada`).set(cab(prof)).send({ motivo: 'Motivo ficticio qualquer' }).expect(403);
-    const pedido = await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada`).set(cab(admin)).send({ motivo: 'Processo ficticio encerrado 8803' });
+    const pedido = await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada`).set(cab(admin)).send({ motivo: 'Processo ficticio encerrado QZX8803' });
     expect(pedido.body).toMatchObject({ retiradaPendente: true });
     // A mesma pessoa não aprova.
     const mesma = await api.http().post(`/prontuario/pacientes/${p}/retencao-legal/retirada/aprovacao`).set(cab(admin)).send({});
@@ -200,8 +200,8 @@ describe('R12: retirar a retenção exige motivo e duas pessoas', () => {
     expect(mesma.body).toMatchObject({ codigo: 'mesma_pessoa' });
     // Nem direto no banco: aprovação pelo próprio pedinte, ou forjando outro aprovador.
     const [h] = await withTenant(api.db.db, clinica, (tx) => tx.select().from(legalHolds).where(eq(legalHolds.patientId, p)));
-    expect(h?.referenceEnc).not.toContain('8802');
-    expect(h?.releaseReasonEnc).not.toContain('8803');
+    expect(h?.referenceEnc).not.toContain(REFERENCIA);
+    expect(h?.releaseReasonEnc).not.toContain('Processo ficticio encerrado QZX8803');
     const aprovar = (quem: string, sessao: string) =>
       withTenant(api.db.db, clinica, (tx) => tx.update(legalHolds).set({ releasedBy: quem, releasedAt: new Date() }).where(eq(legalHolds.id, h!.id)), sessao);
     expect(await sqlstates(aprovar(admin.userId, admin.userId))).toContain('42501');
@@ -255,7 +255,7 @@ describe('R2: custódia das notas lacradas pelo psicólogo substituto', () => {
     const des = await api.http().post('/prontuario/custodias').set(cab(admin)).send(corpo);
     expect(des.status).toBe(201);
     expect(des.body).toMatchObject({ aceita: false, notasLacradas: 2 });
-    expect(JSON.stringify(des.body)).not.toContain('8801');
+    expect(JSON.stringify(des.body)).not.toContain(TEXTO);
     const cid = (des.body as { id: string }).id;
     await api.http().post('/prontuario/custodias').set(cab(admin)).send(corpo).expect(409);
 
@@ -292,7 +292,7 @@ describe('R2: custódia das notas lacradas pelo psicólogo substituto', () => {
     expect((await api.http().get(`/custodias/${cid}/notas`).set(cab(subst))).body).toEqual([]);
     // Trilha sem conteúdo.
     const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'private_notes')));
-    expect(JSON.stringify(trilha)).not.toContain('8801');
+    expect(JSON.stringify(trilha)).not.toContain(TEXTO);
     const ops = trilha.map((l) => (l.metadata as Record<string, unknown>).op);
     for (const op of ['custody_designate', 'custody_accept', 'custody_read', 'custody_decide']) expect(ops).toContain(op);
     // Outra clínica não vê a custódia.
