@@ -11,6 +11,7 @@ import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module'
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
+import { ImportsModule } from './modules/imports/imports.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
@@ -70,6 +71,8 @@ export class AppModule {
         RecordsModule.forRoot(pacientes),
         // Financeiro: listas e recibos contam na mesma vigilância (R5).
         FinanceModule.forRoot(pacientes),
+        // Importador: grava pacientes com a mesma cifra/regras do cadastro (mesma instância).
+        ImportsModule.forRoot(pacientes),
       ],
     };
   }

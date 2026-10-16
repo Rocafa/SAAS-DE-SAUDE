@@ -69,6 +69,12 @@ export const PERMISSOES = {
    * clínico recebem 403 `sem_vinculo_de_cuidado` sem que nenhum registro seja consultado.
    */
   'prontuario:acessar': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  /**
+   * Importador (MIG-01/02, rodada 17.3): enviar planilha, mapear, validar, simular, aplicar e desfazer.
+   * Só o dono da clínica (controlador): o aceite do termo de migração é instrução dele. O banco confere
+   * de novo (clinic_members, 0020): sem perfil admin registrado, o lote não nasce, não aplica e não desfaz.
+   */
+  'importacao:gerir': ['admin'],
   /** Sigilo do compartimento de psicologia (pergunta 1.11 em aberto): decisão do dono da clínica. */
   'prontuario:configurar': ['admin'],
 } as const satisfies Record<string, readonly Perfil[]>;

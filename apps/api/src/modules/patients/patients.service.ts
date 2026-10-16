@@ -110,16 +110,7 @@ export class PatientsService {
     return this.escrita(ctx, async (tx) => {
       const id = randomUUID();
       const nomeSocial = dados.nomeSocial ?? null;
-      await tx.insert(patients).values({
-        id,
-        tenantId: ctx.tenantId,
-        displayName: dados.nome,
-        socialName: nomeSocial,
-        searchName: normalizarBusca(`${dados.nome} ${nomeSocial ?? ''}`),
-        cpfEnc: await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf),
-        phoneEnc: await this.cifrar(tx, ctx, id, 'phone', dados.telefone),
-        birthDateEnc: await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento),
-      });
+      await tx.insert(patients).values(await this.prepararInsercao(tx, ctx, id, dados));
       await recordAudit(tx, ctx, { action: AuditAction.Create, scope: SCOPE, metadata: { patient_id: id } });
       return {
         id,
@@ -193,6 +184,25 @@ export class PatientsService {
       }
       return { id, ativo: false as const };
     });
+  }
+
+  /**
+   * Linha de `patients` pronta para INSERT, com as MESMAS regras do cadastro: nome de busca normalizado e
+   * CPF/telefone/nascimento cifrados com a chave da clínica (provisionada na primeira escrita). Usada pelo
+   * cadastro e pelo importador (inserção em lote na transação do chamador, que audita). `dados` já validado.
+   */
+  async prepararInsercao(tx: TenantTx, ctx: RequestContext, id: string, dados: NovoPaciente): Promise<typeof patients.$inferInsert> {
+    const nomeSocial = dados.nomeSocial ?? null;
+    return {
+      id,
+      tenantId: ctx.tenantId,
+      displayName: dados.nome,
+      socialName: nomeSocial,
+      searchName: normalizarBusca(`${dados.nome} ${nomeSocial ?? ''}`),
+      cpfEnc: await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf),
+      phoneEnc: await this.cifrar(tx, ctx, id, 'phone', dados.telefone),
+      birthDateEnc: await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento),
+    };
   }
 
   private async travar(tx: TenantTx, ctx: RequestContext, id: string): Promise<typeof patients.$inferSelect> {
