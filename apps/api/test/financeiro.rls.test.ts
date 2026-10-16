@@ -215,6 +215,8 @@ describe('estorno e recibo', () => {
       pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
     });
     const p = await receber(recepA, c.id, { forma: 'pix_manual' });
+    // R8 do #65: o recebimento Pix devolve o aviso para a tela; dinheiro não.
+    expect((p as unknown as { aviso: string | null }).aviso).toContain('mensagem do Pix');
     const r = await post(recepA, `/financeiro/recebimentos/${p.id}/recibo`);
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({

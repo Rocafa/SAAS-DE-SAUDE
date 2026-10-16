@@ -65,6 +65,16 @@ export const FORMA_DO_FRONT: Readonly<Record<'dinheiro' | 'cartao' | 'pix', Paym
 };
 
 /** Recebimento pago pela operadora não é pago pelo paciente: sem recibo ao paciente e fora do Receita Saúde. */
+/**
+ * R8 do #65: Pix manual e transferência carregam uma mensagem livre que fica no extrato do banco, FORA do
+ * sistema. A tela de recebimento mostra este aviso (devolvido no recebimento) e o onboarding o repete.
+ */
+export const AVISO_PIX_MANUAL = 'Não descreva o atendimento na mensagem do Pix ou da transferência (nada de especialidade, procedimento ou condição). Se precisar, use só o número do recibo.';
+
+export function avisoDoRecebimento(forma: PaymentMethod): string | null {
+  return forma === 'pix_manual' || forma === 'transferencia' ? AVISO_PIX_MANUAL : null;
+}
+
 export function formaGeraRecibo(forma: PaymentMethod): boolean {
   return forma !== 'convenio';
 }

@@ -45,7 +45,7 @@ import {
   type ConfigFinanceira,
   type LinhaCobranca,
 } from './financeiro-comum';
-import { AVISO_DESCRICAO_RECIBO, situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
+import { AVISO_DESCRICAO_RECIBO, avisoDoRecebimento, situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
 import {
   MAXIMO_LINHAS_FINANCEIRO,
   type ConfiguracaoFinanceiro,
@@ -99,6 +99,8 @@ export interface RecebimentoDto {
   /** Dia do pagamento no fuso da clínica (contrato `Recibo.data` do front). */
   readonly data: string;
   readonly estornado: boolean;
+  /** R8 do #65: aviso para a tela (Pix manual/transferência: não descrever o atendimento na mensagem). */
+  readonly aviso: string | null;
   readonly cobranca: { readonly situacao: SituacaoCobranca; readonly saldoCentavos: number };
 }
 
@@ -519,6 +521,7 @@ export class FinanceiroService {
       recebidoEm: p.receivedAt.toISOString(),
       data: noFusoDaClinica(p.receivedAt).data,
       estornado,
+      aviso: avisoDoRecebimento(p.method),
       cobranca: { situacao: situacaoDaCobranca(c), saldoCentavos: c.status === 'cancelled' ? 0 : c.amountCents - c.paidCents },
     };
   }
