@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
 import {
   descricaoEhNeutraOuAceita,
+  normalizarTextoParaChecagem,
   dinheiroEsperado,
   menorDeIdadeEm,
   pendenciasDoRecibo,
@@ -38,6 +39,31 @@ describe('texto neutro do recibo', () => {
       expect(descricaoEhNeutraOuAceita(ruim), ruim).toBe(false);
     for (const ok of ['Atendimento', 'Pacote de 10 sessoes', 'Sessao de fonoaudiologia', 'Consulta de retorno', 'Avaliacao inicial'])
       expect(descricaoEhNeutraOuAceita(ok), ok).toBe(true);
+  });
+
+  it('R16 do #65: normaliza (NFKC, invisíveis, caixa, separadores) antes de checar o CID', () => {
+    const ruins = [
+      'Sessao f 32',
+      'Sessao F/32',
+      'Sessao F_32',
+      'Sessao f-32',
+      'Sessao F​32', // espaço de largura zero
+      'Sessao F‍3‌2', // ZWJ e ZWNJ
+      'Sessao F­32', // hífen suave
+      'Sessao F﻿32', // BOM
+      'Sessao Ｆ３２', // Ｆ３２ (largura total)
+      'Sessao F 32', // espaço sem quebra
+      'Sessao F - 3 2',
+      'Sessao f84.0',
+      'Sessao F 84 . 0',
+      'De​pressão',
+      'Transt­orno',
+      'Depressão', // til combinante
+    ];
+    for (const ruim of ruins) expect(descricaoEhNeutraOuAceita(ruim), JSON.stringify(ruim)).toBe(false);
+    for (const ok of ['Pacote de 10 sessoes', 'Pacote 2 x 10 sessoes', 'Sessao 1 de 10', 'Atendimento 2026', 'Consulta - retorno'])
+      expect(descricaoEhNeutraOuAceita(ok), ok).toBe(true);
+    expect(normalizarTextoParaChecagem('F​ 32 ')).toBe('F 32');
   });
 
   it('configuração: texto ruim volta só o nome do campo; CNPJ normalizado', () => {
