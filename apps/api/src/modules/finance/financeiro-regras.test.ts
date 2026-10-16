@@ -3,6 +3,7 @@ import { EntradaInvalidaError } from '../../common/validacao';
 import {
   descricaoEhNeutraOuAceita,
   dinheiroEsperado,
+  menorDeIdadeEm,
   pendenciasDoRecibo,
   situacaoDaCobranca,
   totaisZerados,
@@ -90,5 +91,14 @@ describe('caixa e recibo', () => {
       descricao: 'Atendimento',
     };
     expect(pendenciasDoRecibo(base)).toEqual(['cpf_do_profissional', 'cpf_do_pagador']);
+  });
+});
+
+describe('R3 do #65: paciente menor', () => {
+  it('idade na data do pagamento, com aniversário; sem data não presume', () => {
+    expect(menorDeIdadeEm('2010-06-15', '2028-06-14')).toBe(true);
+    expect(menorDeIdadeEm('2010-06-15', '2028-06-15')).toBe(false);
+    expect(menorDeIdadeEm(null, '2028-06-15')).toBe(false);
+    expect(menorDeIdadeEm('lixo', '2028-06-15')).toBe(false);
   });
 });

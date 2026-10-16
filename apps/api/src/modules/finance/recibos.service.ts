@@ -39,6 +39,7 @@ import {
 import {
   formaGeraRecibo,
   INSUMO_RECEITA_SAUDE,
+  menorDeIdadeEm,
   pendenciasDoItem,
   pendenciasDoRecibo,
   type ConteudoDoRecibo,
@@ -280,13 +281,15 @@ export class RecibosService {
         const pagador: PessoaDoRecibo = l.c.payerName
           ? { nome: l.c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, l.c.id, CAMPO_CPF_PAGADOR, l.c.payerCpfEnc) }
           : beneficiario;
+        const dataPagamento = noFusoDaClinica(l.p.receivedAt).data;
+        const responsavel = !l.c.payerName && (await this.pacienteMenor(tx, ctx, l.paciente, dataPagamento));
         itens.push({
           reciboNumero: numeros.get(l.p.id) ?? null,
-          dataPagamento: noFusoDaClinica(l.p.receivedAt).data,
+          dataPagamento,
           valorCentavos: l.p.amountCents,
           pagador,
           beneficiario,
-          pendencias: pendenciasDoItem({ pagador, beneficiario }),
+          pendencias: pendenciasDoItem({ pagador, beneficiario }, responsavel),
         });
       }
       const cpfProf = await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, prof.id, CAMPO_CPF_PROFISSIONAL, perfil?.cpfEnc ?? null);
@@ -377,7 +380,15 @@ export class RecibosService {
       dataPagamento: noFusoDaClinica(p.receivedAt).data,
       descricao: config.descricao,
     };
-    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base) };
+    const responsavel = !c.payerName && (await this.pacienteMenor(tx, ctx, pac, base.dataPagamento));
+    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel) };
+  }
+
+  /** R3: paciente menor na data do pagamento (data de nascimento cifrada; ausente = não se sabe). */
+  private async pacienteMenor(tx: TenantTx, ctx: RequestContext, pac: typeof patients.$inferSelect, data: string): Promise<boolean> {
+    if (!pac.birthDateEnc) return false;
+    const nascimento = await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, pac.id, 'birth_date'), pac.birthDateEnc);
+    return menorDeIdadeEm(nascimento, data);
   }
 
   private async lerRecibo(tx: TenantTx, ctx: RequestContext, id: string): Promise<ReciboDto> {

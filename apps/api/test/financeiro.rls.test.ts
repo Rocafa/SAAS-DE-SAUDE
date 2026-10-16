@@ -525,6 +525,33 @@ describe('R1 do #65: cobrança PF não sai em nome de profissional arbitrário',
   });
 });
 
+describe('R3 do #65: paciente menor sem pagador informado', () => {
+  it('o recibo e o insumo do Receita Saúde saem com a pendência pagador_responsavel; com pagador, não', async () => {
+    const menor = id(await post(recepA, '/pacientes', { nome: 'Paciente Ficticio Menor', telefone: '11900000311', cpf: cpfFicticio(311), nascimento: '2020-05-10' }));
+    const semPagador = await cobranca(recepA, { agendamentoId: await agendamento({ prof: profissionalPfA, paciente: menor }), valorCentavos: 10000, atendimentoPor: 'pf' });
+    const p1 = await receber(recepA, semPagador.id, { forma: 'dinheiro' });
+    const r1 = await post(recepA, `/financeiro/recebimentos/${p1.id}/recibo`);
+    expect(r1.status).toBe(200);
+    expect((r1.body as { pendencias: string[] }).pendencias).toContain('pagador_responsavel');
+    const comPagador = await cobranca(recepA, {
+      agendamentoId: await agendamento({ prof: profissionalPfA, paciente: menor }),
+      valorCentavos: 10000,
+      atendimentoPor: 'pf',
+      pagador: { nome: PAGADOR, cpf: cpfFicticio(312) },
+    });
+    const p2 = await receber(recepA, comPagador.id, { forma: 'dinheiro' });
+    const r2 = await post(recepA, `/financeiro/recebimentos/${p2.id}/recibo`);
+    expect((r2.body as { pendencias: string[] }).pendencias).not.toContain('pagador_responsavel');
+    // Adulto sem pagador (pacienteA, sem data de nascimento) não ganha a pendência.
+    const hoje = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje, ate: hoje });
+    expect(lote.status, JSON.stringify(lote.body)).toBe(200);
+    const itens = (lote.body as { itens: { pendencias: string[]; beneficiario: { nome: string } }[] }).itens;
+    expect(itens.filter((i) => i.pendencias.includes('pagador_responsavel')).every((i) => i.beneficiario.nome === 'Paciente Ficticio Menor')).toBe(true);
+    expect(itens.some((i) => i.pendencias.includes('pagador_responsavel'))).toBe(true);
+  });
+});
+
 describe('R2 do #65: registro no conselho escolhido por recibo', () => {
   it('padrão oculto; só aparece no recibo que pedir; a clínica só habilita a opção', async () => {
     await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302), registroConselho: CONSELHO }).expect(200);

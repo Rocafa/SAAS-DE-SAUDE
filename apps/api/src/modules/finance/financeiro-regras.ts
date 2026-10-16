@@ -99,8 +99,26 @@ export interface ConteudoDoRecibo {
   readonly pendencias: readonly string[];
 }
 
-export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>): string[] {
+/** Maioridade civil (CC art. 5º). Abaixo dela, o paciente não é presumido pagador (R3 do #65). */
+export const IDADE_MAIORIDADE = 18;
+
+/** O beneficiário era menor de idade na data do pagamento? Sem data de nascimento: não se sabe (false). */
+export function menorDeIdadeEm(nascimento: string | null, data: string): boolean {
+  if (!nascimento || !/^\d{4}-\d{2}-\d{2}$/.test(nascimento)) return false;
+  const [an, mn, dn] = nascimento.split('-').map(Number) as [number, number, number];
+  const [ad, md, dd] = data.split('-').map(Number) as [number, number, number];
+  const idade = ad - an - (md < mn || (md === mn && dd < dn) ? 1 : 0);
+  return idade < IDADE_MAIORIDADE;
+}
+
+/**
+ * Pendências do recibo. `pagadorResponsavel`: o paciente é menor e nenhum pagador foi informado — o
+ * recibo sai com o paciente como pagador PRESUMIDO e a pendência `pagador_responsavel` (R3 do #65): o
+ * IR do responsável exige o nome e o CPF de quem pagou (Lei 9.250/1995, art. 8º, §2º, III).
+ */
+export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>, pagadorResponsavel = false): string[] {
   const p: string[] = [];
+  if (pagadorResponsavel) p.push('pagador_responsavel');
   if (!c.emitente.documento) p.push(c.emitente.tipo === 'pf' ? 'cpf_do_profissional' : 'cnpj_da_clinica');
   if (!c.pagador.cpf) p.push('cpf_do_pagador');
   if (!c.beneficiario.cpf) p.push('cpf_do_beneficiario');
@@ -133,8 +151,9 @@ export interface ItemReceitaSaude {
   readonly pendencias: readonly string[];
 }
 
-export function pendenciasDoItem(i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>): string[] {
+export function pendenciasDoItem(i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>, pagadorResponsavel = false): string[] {
   const p: string[] = [];
+  if (pagadorResponsavel) p.push('pagador_responsavel');
   if (!i.pagador.cpf) p.push('cpf_do_pagador');
   if (!i.beneficiario.cpf) p.push('cpf_do_beneficiario');
   return p;
