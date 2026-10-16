@@ -27,7 +27,23 @@ const PADROES_PROIBIDOS: readonly RegExp[] = [
   /\bhiv\b|\baids\b/i,
   /c[aâ]ncer|oncol/i,
   /depend[eê]ncia qu[ií]mica|alcoolismo/i,
+  // R4 do #65: lista mínima ampliada (contornos comuns). Continua barreira mínima, não análise semântica.
+  /\b[A-TV-Z][\s.-][0-9]{2}(\.[0-9]{1,2})?\b/, // CID com separador (ex.: "F 32", "F-32"); só maiúscula
+  /\btdah?\b|d[eé]ficit de aten[cç][aã]o|hiperatividade/i,
+  /bipolar|esquizofren|psicose|psic[oó]tic|borderline|\btoc\b|obsessivo|compulsiv|\btept\b|p[aâ]nico|fobia/i,
+  /anorexia|bulimia|transtorno alimentar|compuls[aã]o alimentar/i,
+  /gestante|gravidez|gr[aá]vida|pr[eé]-natal|aborto|\bist\b|\bdst\b|sorolog/i,
+  /alzheimer|dem[eê]ncia|parkinson|epilep|\bavc\b|paralisia cerebral|s[ií]ndrome de down/i,
+  /suic[ií]d|automutila|depend[eê]ncia|drogadi|[aá]lcool/i,
 ];
+
+/**
+ * R4 do #65: aviso para a TELA de configuração do texto do recibo (devolvido junto da configuração). A
+ * lista acima é só uma barreira mínima; quem escreve o texto é a clínica (controladora).
+ */
+export const AVISO_DESCRICAO_RECIBO =
+  'Este texto sai no recibo que o paciente entrega ao empregador, ao plano de saúde e à Receita Federal. Não descreva diagnóstico, condição, especialidade sensível nem procedimento. Recomendado: "' +
+  'Atendimento" (padrão).';
 
 export function descricaoEhNeutraOuAceita(texto: string): boolean {
   return !PADROES_PROIBIDOS.some((re) => re.test(texto));

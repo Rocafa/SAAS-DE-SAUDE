@@ -176,6 +176,7 @@ describe('cobrança, recebimento e texto neutro', () => {
     const ok = await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ descricaoRecibo: 'Atendimento em saude' });
     expect(ok.status).toBe(200);
     expect((await get(recepA, '/financeiro/configuracao')).body).toMatchObject({ descricaoRecibo: 'Atendimento em saude', mostrarRegistroConselho: false });
+    expect((await get(recepA, '/financeiro/configuracao')).text).toContain('Receita Federal');
     await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ descricaoRecibo: 'Atendimento' }).expect(200);
   });
 });

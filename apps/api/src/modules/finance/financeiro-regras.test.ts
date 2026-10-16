@@ -33,6 +33,13 @@ describe('texto neutro do recibo', () => {
       expect(descricaoEhNeutraOuAceita(ruim)).toBe(false);
   });
 
+  it('R4 do #65: contornos comuns também são recusados; textos neutros seguem aceitos', () => {
+    for (const ruim of ['Sessao F 32', 'Sessao F-32', 'TDAH', 'Transt. bipolar', 'Esquizofrenia', 'Terapia TOC', 'Gestante', 'Pre-natal', 'Alcool'])
+      expect(descricaoEhNeutraOuAceita(ruim), ruim).toBe(false);
+    for (const ok of ['Atendimento', 'Pacote de 10 sessoes', 'Sessao de fonoaudiologia', 'Consulta de retorno', 'Avaliacao inicial'])
+      expect(descricaoEhNeutraOuAceita(ok), ok).toBe(true);
+  });
+
   it('configuração: texto ruim volta só o nome do campo; CNPJ normalizado', () => {
     expect(campos(() => validarConfiguracao({ descricaoRecibo: 'Sessao F84.0' }))).toEqual(['descricaoRecibo']);
     expect(validarConfiguracao({ emitenteCnpj: '00.000.000/0001-91' })).toEqual({ emitenteCnpj: '00000000000191' });

@@ -45,7 +45,7 @@ import {
   type ConfigFinanceira,
   type LinhaCobranca,
 } from './financeiro-comum';
-import { situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
+import { AVISO_DESCRICAO_RECIBO, situacaoDaCobranca, type SituacaoCobranca } from './financeiro-regras';
 import {
   MAXIMO_LINHAS_FINANCEIRO,
   type ConfiguracaoFinanceiro,
@@ -61,6 +61,8 @@ export interface ConfiguracaoDto {
   readonly emitenteNome: string | null;
   readonly emitenteCnpj: string | null;
   readonly mostrarRegistroConselho: boolean;
+  /** R4 do #65: aviso fixo para a tela (o texto vai para empregador, plano e Receita). */
+  readonly avisoDescricao: string;
 }
 
 /**
@@ -127,6 +129,7 @@ function configDto(c: ConfigFinanceira): ConfiguracaoDto {
     emitenteNome: c.emitenteNome,
     emitenteCnpj: c.emitenteCnpj,
     mostrarRegistroConselho: c.mostrarRegistroConselho,
+    avisoDescricao: AVISO_DESCRICAO_RECIBO,
   };
 }
 
