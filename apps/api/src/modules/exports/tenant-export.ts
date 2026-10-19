@@ -84,8 +84,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        contagens, hash da simulação, evidência do descarte do arquivo bruto) e o livro do lote, em
  *        `data.imports` e `manifest.counts.imports`. Arquivo bruto e divergências ficam fora (motivo abaixo).
  *        (No ramo do importador saiu como 1.11.0; renumerada no merge com o financeiro.)
+ * 1.14.0: `patients[].importBatchId` e `appointments[].importBatchId` (marca imutável do lote que criou o
+ *        registro, migração 0026, V1 do parecer do importador) e, nos lotes, o hash do texto do termo e a
+ *        confirmação da clínica de origem (R4 e R6).
  */
-export const EXPORT_SCHEMA_VERSION = '1.13.0';
+export const EXPORT_SCHEMA_VERSION = '1.14.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -214,6 +217,8 @@ export interface ExportedPatient {
   readonly updatedAt: string;
   /** Retenção legal desde (0015); null se não houver. */
   readonly legalHoldSince: string | null;
+  /** Lote de importação que criou o paciente (0026); null se cadastrado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 export interface ExportedProfessional {
@@ -255,6 +260,8 @@ export interface ExportedAppointment {
   readonly rescheduledBy: string | null;
   /** Horário travado depois de atendimento ou falta (0014). */
   readonly rescheduleLocked: boolean;
+  /** Lote de importação que criou o agendamento (0026); null se marcado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 /** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
@@ -744,6 +751,7 @@ export async function exportInTransaction(
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       legalHoldSince: iso(r.legalHoldSince),
+      importBatchId: r.importBatchId,
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({
@@ -779,6 +787,7 @@ export async function exportInTransaction(
     createdBy: a.createdBy,
     rescheduledBy: a.rescheduledBy,
     rescheduleLocked: a.rescheduleLocked,
+    importBatchId: a.importBatchId,
   }));
   const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
     id: r.id,

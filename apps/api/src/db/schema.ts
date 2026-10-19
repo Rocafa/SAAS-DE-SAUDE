@@ -40,6 +40,8 @@ export const patients = pgTable('patients', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0015 (D1.4 do #63): retenção legal; enquanto marcada, nada do paciente é expurgado. */
   legalHoldSince: timestamp('legal_hold_since', { withTimezone: true }),
+  /** Migração 0026 (V1 do importador): lote que criou o paciente; gravado só no INSERT, imutável. */
+  importBatchId: uuid('import_batch_id'),
 });
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
@@ -105,6 +107,8 @@ export const appointments = pgTable('appointments', {
   rescheduledBy: uuid('rescheduled_by'),
   /** Migração 0014: trava permanente do horário depois de atendimento ou falta (o banco mantém). */
   rescheduleLocked: boolean('reschedule_locked').notNull().default(false),
+  /** Migração 0026 (V1 do importador): lote que criou o agendamento; gravado só no INSERT, imutável. */
+  importBatchId: uuid('import_batch_id'),
 });
 
 /**

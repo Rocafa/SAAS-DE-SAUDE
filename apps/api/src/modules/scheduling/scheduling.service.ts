@@ -185,6 +185,8 @@ export class SchedulingService {
         // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
         // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
         createdBy: ctx.userId,
+        // 0026 (V1 do importador): marca imutável do lote; o desfazer só apaga o que a tem.
+        ...(importBatchId ? { importBatchId } : {}),
       })
       .returning();
     if (!linha) throw new Error('falha ao criar agendamento');

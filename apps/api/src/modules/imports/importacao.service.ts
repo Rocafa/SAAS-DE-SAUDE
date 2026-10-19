@@ -675,7 +675,8 @@ export class ImportacaoService {
           ...(p.cpf ? { cpf: p.cpf } : {}),
           ...(p.nascimento ? { nascimento: p.nascimento } : {}),
         };
-        linhas.push(await this.pacientes.prepararInsercao(tx, ctx, id, dados));
+        // 0026 (V1): a marca imutável do lote é o que o desfazer usa (nunca o livro).
+        linhas.push({ ...(await this.pacientes.prepararInsercao(tx, ctx, id, dados)), importBatchId: loteId });
         livro.push({ tenantId: ctx.tenantId, batchId: loteId, entity: 'patient', recordId: id, lineNumber: acao.linha });
       }
       await tx.insert(patients).values(linhas);

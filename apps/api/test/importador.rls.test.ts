@@ -11,7 +11,7 @@ import type { TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients } from '../src/db/schema';
+import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -252,6 +252,44 @@ describe('pacientes: validar, dry-run, aplicar, duplicados e fórmulas', () => {
     expect(lote?.status).toBe('aplicado');
     // Nem a função do banco desfaz (defesa em profundidade).
     await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_undo_import_batch(${id}::uuid)`), adminA.userId)).rejects.toThrow();
+  });
+});
+
+describe('V1 do #66: o desfazer só apaga o que nasceu com a marca do lote (SQL injetado no livro não apaga paciente antigo)', () => {
+  it('livro forjado e marca forjada são recusados; aplicar + desfazer mantém o paciente antigo e a agenda dele', async () => {
+    const antigo = ((await api.http().post('/pacientes').set(cab(recepA)).send({ nome: 'Paciente Antigo Ficticio', telefone: '11900000070' }).expect(201)).body as { id: string }).id;
+    const agAntigo = ((await api.http().post('/agendamentos').set(cab(recepA)).send({ pacienteId: antigo, profissionalId: profissionalA, tipoId: tipoA, data: '2031-04-04', hora: '10:00' }).expect(201)).body as { id: string }).id;
+    const { id, sim } = await ateSimular(adminA, 'pacientes', 'nome;telefone\nImportada V1 Ficticia;11900000071\n', { nome: 0, telefone: 1 });
+
+    // 1. SQL injetado (até como admin) põe o paciente antigo e o agendamento dele no livro do lote em aplicação: recusado.
+    for (const s of [adminA, recepA]) {
+      for (const [entity, recordId] of [['patient', antigo], ['appointment', agAntigo]] as const) {
+        await expect(
+          withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchRecords).values({ tenantId: clinicaA, batchId: id, entity, recordId, lineNumber: 2 }), s.userId),
+        ).rejects.toThrow();
+      }
+      // 2. Nem marcar o paciente/agendamento antigo com o lote (a marca é imutável e só nasce no INSERT).
+      await expect(withTenant(api.db.db, clinicaA, (tx) => tx.update(patients).set({ importBatchId: id }).where(eq(patients.id, antigo)), s.userId)).rejects.toThrow();
+      await expect(withTenant(api.db.db, clinicaA, (tx) => tx.update(appointments).set({ importBatchId: id }).where(eq(appointments.id, agAntigo)), s.userId)).rejects.toThrow();
+    }
+    // 3. Paciente NOVO com a marca, criado fora do aplicar por quem não é admin: recusado.
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.insert(patients).values({ tenantId: clinicaA, displayName: 'Intruso', importBatchId: id }), recepA.userId),
+    ).rejects.toThrow();
+
+    await aplicar(adminA, id, sim.resumoHash).expect(200);
+    const marcados = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: patients.id }).from(patients).where(eq(patients.importBatchId, id)));
+    expect(marcados).toHaveLength(1);
+    // Depois de aplicado, a marca não se tira nem se troca.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.update(patients).set({ importBatchId: null }).where(eq(patients.id, marcados[0]!.id)), adminA.userId)).rejects.toThrow();
+
+    const d = await api.http().post(`/importacoes/${id}/desfazer`).set(cab(adminA)).send({});
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const ainda = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: patients.id }).from(patients).where(eq(patients.id, antigo)));
+    expect(ainda).toHaveLength(1);
+    const agAinda = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: appointments.id }).from(appointments).where(eq(appointments.id, agAntigo)));
+    expect(agAinda).toHaveLength(1);
+    expect(await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patients).where(eq(patients.id, marcados[0]!.id)))).toHaveLength(0);
   });
 });
 
