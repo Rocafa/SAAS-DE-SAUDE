@@ -131,9 +131,22 @@ describe('regras do lote de agenda e hash do plano', () => {
   });
 
   it('o hash muda com qualquer ação e não leva valor de campo', () => {
-    const a = hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }]);
+    const mapa = { nome: 0, nomeSocial: 1, telefone: 2 };
+    const sha = 'a'.repeat(64);
+    const a = hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }], mapa, sha);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
-    expect(hashDoPlano('pacientes', [{ linha: 2, acao: 'ignorar' }])).not.toBe(a);
-    expect(hashDoPlano('agenda', [{ linha: 2, acao: 'criar' }])).not.toBe(a);
+    expect(hashDoPlano('pacientes', [{ linha: 2, acao: 'ignorar' }], mapa, sha)).not.toBe(a);
+    expect(hashDoPlano('agenda', [{ linha: 2, acao: 'criar' }], mapa, sha)).not.toBe(a);
+  });
+
+  it('R1: o hash amarra o mapeamento (canônico) e a versão do arquivo', () => {
+    const sha = 'a'.repeat(64);
+    const a = hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }], { nome: 0, nomeSocial: 1, telefone: 2 }, sha);
+    // Mesma coisa em outra ordem de chaves: mesmo hash.
+    expect(hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }], { telefone: 2, nomeSocial: 1, nome: 0 }, sha)).toBe(a);
+    // nome <-> nomeSocial trocados: outro hash, mesmo com as mesmas ações.
+    expect(hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }], { nome: 1, nomeSocial: 0, telefone: 2 }, sha)).not.toBe(a);
+    // Outro arquivo: outro hash.
+    expect(hashDoPlano('pacientes', [{ linha: 2, acao: 'criar' }], { nome: 0, nomeSocial: 1, telefone: 2 }, 'b'.repeat(64))).not.toBe(a);
   });
 });

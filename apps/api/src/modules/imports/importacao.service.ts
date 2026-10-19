@@ -306,9 +306,9 @@ export class ImportacaoService {
       const lote = await this.carregarEditavel(tx, ctx, id);
       if (lote.status === 'recebido') throw new ConflitoError('validar_antes');
       const mapa = this.exigirMapeamento(lote);
-      const planilha = await this.abrirArquivo(tx, ctx, lote);
+      const { planilha, sha256 } = await this.abrirArquivoComVersao(tx, ctx, lote);
       const plano = await this.planejar(tx, ctx, lote.kind, planilha, mapa);
-      const hash = hashDoPlano(lote.kind, plano.acoes);
+      const hash = hashDoPlano(lote.kind, plano.acoes, mapa, sha256);
       const run = lote.currentRun + 1;
       const criar = plano.acoes.filter((a) => a.acao === 'criar').length;
       const [novo] = await tx
@@ -370,10 +370,10 @@ export class ImportacaoService {
         if (lote.status !== 'simulado') throw new ConflitoError(lote.status === 'expirado' ? 'lote_expirado' : 'simular_antes');
         if (lote.simulationHash !== resumoHash) throw new ConflitoError('simulacao_nao_aprovada');
         const mapa = this.exigirMapeamento(lote);
-        const planilha = await this.abrirArquivo(tx, ctx, lote);
+        const { planilha, sha256 } = await this.abrirArquivoComVersao(tx, ctx, lote);
         if (lote.kind === 'agenda') await this.travarProfissionais(tx, ctx);
         const plano = await this.planejar(tx, ctx, lote.kind, planilha, mapa);
-        if (hashDoPlano(lote.kind, plano.acoes) !== resumoHash) throw new ConflitoError('simulacao_desatualizada');
+        if (hashDoPlano(lote.kind, plano.acoes, mapa, sha256) !== resumoHash) throw new ConflitoError('simulacao_desatualizada');
         const criar = plano.acoes.filter((a) => a.acao === 'criar');
         const criados = lote.kind === 'pacientes' ? await this.criarPacientes(tx, ctx, id, criar, plano) : await this.criarAgendamentos(tx, ctx, id, criar, plano);
         const [novo] = await tx
@@ -466,13 +466,20 @@ export class ImportacaoService {
   }
 
   private async abrirArquivo(tx: TenantTx, ctx: RequestContext, lote: Lote): Promise<Planilha> {
+    return (await this.abrirArquivoComVersao(tx, ctx, lote)).planilha;
+  }
+
+  /** Planilha e a VERSÃO do arquivo (SHA-256 do bruto, conferido contra o conteúdo decifrado), R1. */
+  private async abrirArquivoComVersao(tx: TenantTx, ctx: RequestContext, lote: Lote): Promise<{ planilha: Planilha; sha256: string }> {
     const [bruto] = await tx
       .select()
       .from(importRawFiles)
       .where(and(eq(importRawFiles.tenantId, ctx.tenantId), eq(importRawFiles.batchId, lote.id)));
     if (!bruto || bruto.expiresAt.getTime() <= Date.now()) throw new ConflitoError('arquivo_descartado');
     const bytes = await this.cipher.decrypt(tx, refDoArquivo(ctx, lote.id), bruto.contentEnc);
-    return lerCsv(decodificarUtf8(bytes));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (sha256 !== bruto.sha256) throw new ConflitoError('arquivo_divergente');
+    return { planilha: lerCsv(decodificarUtf8(bytes)), sha256 };
   }
 
   private async cifrar(tx: TenantTx, ctx: RequestContext, ref: FieldRef, valor: Uint8Array): Promise<string> {

@@ -293,6 +293,29 @@ describe('V1 do #66: o desfazer só apaga o que nasceu com a marca do lote (SQL 
   });
 });
 
+describe('R1 do #66: o plano aprovado fica amarrado ao mapeamento e ao arquivo', () => {
+  it('UPDATE direto do mapeamento mantendo a simulação é recusado; não admin não altera o lote; remapear zera a simulação', async () => {
+    const { id, sim } = await ateSimular(adminA, 'pacientes', 'nome;nome social;telefone\nNome R1 Ficticio;Social R1 Ficticio;11900000080\n', { nome: 0, nomeSocial: 1, telefone: 2 });
+    const trocado = { nome: 1, nomeSocial: 0, telefone: 2 };
+    // Admin (SQL injetado) troca nome <-> nome social e deixa o lote simulado com o mesmo hash: 42501.
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatches).set({ columnMapping: trocado }).where(eq(importBatches.id, id)), adminA.userId),
+    ).rejects.toThrow();
+    // Quem não é admin não altera nada no lote (nem o hash, nem a situação).
+    for (const s of [recepA, profA, finA]) {
+      await expect(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatches).set({ simulationHash: 'b'.repeat(64) }).where(eq(importBatches.id, id)), s.userId),
+      ).rejects.toThrow();
+    }
+    // Remapear pela API volta a "recebido" e zera a simulação; simular de novo dá outro hash e o antigo não aplica.
+    await api.http().put(`/importacoes/${id}/mapeamento`).set(cab(adminA)).send({ mapeamento: trocado }).expect(200);
+    await api.http().post(`/importacoes/${id}/validar`).set(cab(adminA)).send({}).expect(200);
+    const nova = await api.http().post(`/importacoes/${id}/simular`).set(cab(adminA)).send({}).expect(200);
+    expect((nova.body as { resumoHash: string }).resumoHash).not.toBe(sim.resumoHash);
+    expect((await aplicar(adminA, id, sim.resumoHash)).body).toMatchObject({ codigo: 'simulacao_nao_aprovada' });
+  });
+});
+
 describe('agenda futura', () => {
   it('resolve paciente (CPF ou nome), profissional e tipo; passado, desconhecido e lotado viram divergência; aplica e bloqueia o desfazer após check-in', async () => {
     const pac = ((await api.http().post('/pacientes').set(cab(adminA)).send({ nome: 'Paciente Agenda Ficticia', telefone: '11900000040', cpf: CPF(40) }).expect(201)).body as { id: string }).id;

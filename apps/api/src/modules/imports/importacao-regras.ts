@@ -257,8 +257,16 @@ export interface AcaoPlanejada {
  * Hash do plano: tipo + versão do termo + ação de cada linha (+ ids resolvidos). Não leva valor de campo.
  * Aplicar recalcula o plano e exige o MESMO hash da simulação que o admin viu (G8: nada sem aprovar).
  */
-export function hashDoPlano(kind: ImportKind, acoes: readonly AcaoPlanejada[]): string {
-  const canonico = JSON.stringify([kind, TERMO_MIGRACAO_VERSAO, acoes.map((a) => [a.linha, a.acao, a.ref ?? null])]);
+/**
+ * R1 do parecer do importador: o hash amarra o plano ao MAPEAMENTO (canônico: campos em ordem) e à
+ * VERSÃO DO ARQUIVO (SHA-256 do bruto). Trocar a coluna de `nome` com a de `nomeSocial` depois do
+ * dry-run muda o hash, e o aplicar recusa.
+ */
+export function hashDoPlano(kind: ImportKind, acoes: readonly AcaoPlanejada[], mapa: Mapeamento, sha256Arquivo: string): string {
+  const mapaCanonico = Object.keys(mapa)
+    .sort()
+    .map((campo) => [campo, mapa[campo]]);
+  const canonico = JSON.stringify([kind, TERMO_MIGRACAO_VERSAO, mapaCanonico, sha256Arquivo, acoes.map((a) => [a.linha, a.acao, a.ref ?? null])]);
   return createHash('sha256').update(canonico, 'utf8').digest('hex');
 }
 

@@ -159,3 +159,103 @@ EXCEPTION
     RAISE EXCEPTION 'importacao_em_uso' USING ERRCODE = 'object_in_use';
 END;
 $$;
+
+-- ---------------------------------------------------------------- R1: o banco amarra o plano aprovado
+-- O hash do plano (API) passa a incluir o mapeamento canônico e o SHA-256 do arquivo bruto. Aqui:
+-- - mudar column_mapping exige voltar a 'recebido' e zerar simulation_hash (simular de novo);
+-- - qualquer UPDATE do lote exige admin da sessão, salvo o formato exato do expurgo (status 'expirado'
+--   com o arquivo vencido; raw_discarded_at de NULL para preenchido com o arquivo vencido ou lote encerrado).
+CREATE OR REPLACE FUNCTION import_batches_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+  v_admin boolean := v_user IS NOT NULL AND app_user_has_role(v_user, 'admin');
+  permitido boolean;
+  so_descarte import_batches;
+  so_expurgo import_batches;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.created_at > now() THEN
+      RAISE EXCEPTION 'lote não nasce no futuro' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.status <> 'recebido' OR NEW.current_run <> 0 OR NEW.applied_at IS NOT NULL OR NEW.raw_discarded_at IS NOT NULL THEN
+      RAISE EXCEPTION 'lote nasce recebido' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NOT v_admin OR NEW.created_by <> v_user THEN
+      RAISE EXCEPTION 'só admin da clínica, como usuário da sessão, cria lote de importação' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id OR NEW.kind <> OLD.kind OR NEW.term_version <> OLD.term_version
+     OR NEW.term_accepted_by <> OLD.term_accepted_by OR NEW.term_accepted_at <> OLD.term_accepted_at
+     OR NEW.created_at <> OLD.created_at OR NEW.created_by <> OLD.created_by OR NEW.byte_size <> OLD.byte_size
+     OR NEW.row_count <> OLD.row_count OR NEW.column_count <> OLD.column_count OR NEW.file_format <> OLD.file_format
+     OR NEW.raw_expires_at <> OLD.raw_expires_at THEN
+    RAISE EXCEPTION 'identidade e termo do lote são imutáveis' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NOT v_admin THEN
+    so_expurgo := NEW;
+    so_expurgo.status := OLD.status;
+    so_expurgo.expired_at := OLD.expired_at;
+    so_expurgo.raw_discarded_at := OLD.raw_discarded_at;
+    so_expurgo.updated_at := OLD.updated_at;
+    IF so_expurgo IS DISTINCT FROM OLD
+       OR (NEW.status IS DISTINCT FROM OLD.status AND NOT (NEW.status = 'expirado' AND OLD.raw_expires_at <= now()))
+       OR (NEW.raw_discarded_at IS DISTINCT FROM OLD.raw_discarded_at
+           AND NOT (OLD.raw_discarded_at IS NULL
+                    AND (OLD.raw_expires_at <= now() OR OLD.status IN ('aplicado', 'desfeito', 'expirado') OR NEW.status = 'expirado'))) THEN
+      RAISE EXCEPTION 'só admin da clínica altera o lote de importação' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END IF;
+  IF NEW.column_mapping IS DISTINCT FROM OLD.column_mapping AND (NEW.status <> 'recebido' OR NEW.simulation_hash IS NOT NULL) THEN
+    RAISE EXCEPTION 'mudar o mapeamento volta o lote a recebido e descarta a simulação' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.status IN ('desfeito', 'expirado') THEN
+    so_descarte := NEW;
+    so_descarte.raw_discarded_at := OLD.raw_discarded_at;
+    so_descarte.updated_at := OLD.updated_at;
+    IF so_descarte IS NOT DISTINCT FROM OLD AND OLD.raw_discarded_at IS NULL AND NEW.raw_discarded_at IS NOT NULL THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'lote % não muda', OLD.status USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF OLD.raw_discarded_at IS NOT NULL AND NEW.raw_discarded_at IS NULL THEN
+    RAISE EXCEPTION 'descarte do arquivo bruto não se desfaz' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  permitido := CASE OLD.status
+    WHEN 'recebido' THEN NEW.status IN ('recebido', 'validado', 'expirado')
+    WHEN 'validado' THEN NEW.status IN ('recebido', 'validado', 'simulado', 'expirado')
+    WHEN 'simulado' THEN NEW.status IN ('recebido', 'validado', 'simulado', 'aplicado', 'expirado')
+    WHEN 'aplicado' THEN NEW.status IN ('aplicado', 'desfeito')
+    ELSE false
+  END;
+  IF NOT permitido THEN
+    RAISE EXCEPTION 'transição de lote % -> % não permitida', OLD.status, NEW.status USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF OLD.status <> 'aplicado' AND NEW.status IN ('validado', 'simulado', 'aplicado') AND OLD.raw_discarded_at IS NOT NULL THEN
+    RAISE EXCEPTION 'arquivo bruto já descartado' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF NEW.status = 'aplicado' AND OLD.status <> 'aplicado' THEN
+    IF NOT v_admin OR NEW.applied_by <> v_user THEN
+      RAISE EXCEPTION 'só admin da clínica aplica a importação' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.simulation_hash IS DISTINCT FROM OLD.simulation_hash THEN
+      RAISE EXCEPTION 'aplicar não muda a simulação aprovada' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END IF;
+  IF OLD.status = 'aplicado' AND (NEW.applied_at <> OLD.applied_at OR NEW.applied_by <> OLD.applied_by
+     OR NEW.simulation_hash IS DISTINCT FROM OLD.simulation_hash OR NEW.created_records IS DISTINCT FROM OLD.created_records
+     OR NEW.column_mapping IS DISTINCT FROM OLD.column_mapping) THEN
+    RAISE EXCEPTION 'lote aplicado: aplicação é imutável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NEW.status = 'desfeito' AND (NOT v_admin OR NEW.undone_by <> v_user) THEN
+    RAISE EXCEPTION 'só admin da clínica desfaz a importação' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NEW.current_run < OLD.current_run THEN
+    RAISE EXCEPTION 'rodada de validação só avança' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
