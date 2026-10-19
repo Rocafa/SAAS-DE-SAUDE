@@ -1,5 +1,5 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import { AuditAction, type RequestContext } from '@plataforma/shared';
+import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, desc, eq, isNotNull, ne, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
@@ -19,7 +19,7 @@ import {
   type ImportStatus,
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
@@ -49,15 +49,24 @@ import { decodificarUtf8, lerCsv, type Planilha } from './planilha-csv';
 export interface ImportacaoConfig {
   /** Vida máxima do arquivo bruto, em horas (1..168; padrão 168 = 7 dias, teto do plano do piloto). */
   readonly horasDoArquivoBruto: number;
+  /**
+   * R2 do parecer do importador: em PRODUÇÃO o importador nasce DESLIGADO (novos lotes: 409
+   * `importador_desligado`) até a rotina diária de descarte estar agendada e com alarme; liga com
+   * `IMPORTADOR_HABILITADO=true`. Fora de produção, ligado salvo `IMPORTADOR_HABILITADO=false`.
+   */
+  readonly habilitado: boolean;
 }
 export const IMPORTACAO_CONFIG = Symbol('IMPORTACAO_CONFIG');
 
 export function loadImportacaoConfig(env: NodeJS.ProcessEnv = process.env): ImportacaoConfig {
+  const flag = env.IMPORTADOR_HABILITADO?.trim();
+  if (flag !== undefined && flag !== '' && flag !== 'true' && flag !== 'false') throw new Error('IMPORTADOR_HABILITADO inválida (true ou false)');
+  const habilitado = flag === 'true' || (env.NODE_ENV !== 'production' && flag !== 'false');
   const bruto = env.IMPORT_RAW_TTL_HOURS?.trim();
-  if (!bruto) return { horasDoArquivoBruto: 168 };
+  if (!bruto) return { horasDoArquivoBruto: 168, habilitado };
   const n = Number(bruto);
   if (!/^\d{1,3}$/.test(bruto) || n < 1 || n > 168) throw new Error('IMPORT_RAW_TTL_HOURS inválida (1 a 168 horas)');
-  return { horasDoArquivoBruto: n };
+  return { horasDoArquivoBruto: n, habilitado };
 }
 
 export interface LoteDto {
@@ -97,6 +106,15 @@ export interface RelatorioDto {
   readonly lote: LoteDto;
   readonly divergencias: readonly DivergenciaDto[];
   readonly truncado: boolean;
+}
+
+/** Resultado da rotina diária de descarte (R2): só contagens; `clinicasComAtraso` = posições na lista recebida. */
+export interface ResultadoExpurgoDiario {
+  readonly clinicas: number;
+  readonly arquivosDescartados: number;
+  readonly atrasados: number;
+  readonly alarme: boolean;
+  readonly clinicasComAtraso: readonly number[];
 }
 
 /** 409 do desfazer bloqueado, com os motivos SÓ em contagens (nenhum id nem dado de paciente). */
@@ -168,6 +186,7 @@ export class ImportacaoService {
 
   /** Recebe o arquivo (já lido e limitado no controller), com o aceite do termo de migração. */
   async receber(ctx: RequestContext, tipo: ImportKind, termo: string, bytes: Uint8Array): Promise<RecebidoDto> {
+    if (!this.config.habilitado) throw new ConflitoError('importador_desligado');
     if (termo !== TERMO_MIGRACAO_VERSAO) throw new ConflitoError('termo_desatualizado');
     // Lê ANTES de abrir a transação: arquivo inválido não grava nada (nem o bruto).
     const planilha = lerCsv(decodificarUtf8(bytes));
@@ -433,6 +452,33 @@ export class ImportacaoService {
    */
   expurgar(ctx: RequestContext): Promise<number> {
     return this.db.run(ctx.tenantId, (tx) => this.expurgarNaTransacao(tx, ctx));
+  }
+
+  /**
+   * R2 do parecer do importador: ROTINA DIÁRIA de descarte, como job do sistema (sem usuário: slot
+   * travado com o sentinela da 0019). Uma transação por clínica (RLS), idempotente: rodar de novo no
+   * mesmo dia apaga 0. Devolve, além do que apagou, quantos arquivos brutos estão VENCIDOS HÁ MAIS DE 24 h
+   * depois do expurgo (`atrasados`); `alarme` = atrasados > 0, para o agendador disparar o alerta.
+   * Trilha da clínica só com contagens (ator `sistema`). Como agendar: api-dominio.md §10c (R2).
+   */
+  async expurgoDiario(clinicas: readonly TenantId[]): Promise<ResultadoExpurgoDiario> {
+    let arquivosDescartados = 0;
+    let atrasados = 0;
+    const clinicasComAtraso: number[] = [];
+    for (const [i, tenantId] of clinicas.entries()) {
+      const r = await this.db.run(tenantId, async (tx) => {
+        const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
+        const n = await this.expurgarNaTransacao(tx, ctx);
+        const [a] = await tx.execute<{ n: number }>(
+          sql`select count(*)::int as n from import_raw_files where tenant_id = ${tenantId}::uuid and expires_at < now() - interval '24 hours'`,
+        );
+        return { n, atrasados: Number(a?.n ?? 0) };
+      });
+      arquivosDescartados += r.n;
+      atrasados += r.atrasados;
+      if (r.atrasados > 0) clinicasComAtraso.push(i);
+    }
+    return { clinicas: clinicas.length, arquivosDescartados, atrasados, alarme: atrasados > 0, clinicasComAtraso };
   }
 
   // ---------------------------------------------------------------- internos

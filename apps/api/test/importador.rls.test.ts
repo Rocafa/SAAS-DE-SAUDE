@@ -479,6 +479,61 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
   });
 });
 
+describe('R2 do #66: rotina diária de descarte (job do sistema, todas as clínicas da lista)', () => {
+  it('apaga o vencido de cada clínica, sem usuário, é idempotente, audita como sistema e não deixa atraso', async () => {
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const vencidoHaDias = async (t: TenantId, admin: Sessao) => {
+      const id = randomUUID();
+      await withTenant(
+        api.db.db,
+        t,
+        async (tx) => {
+          await cipher.provisionTenant(tx, t, admin.userId).catch(() => undefined);
+          await tx.insert(importBatches).values({
+            id, tenantId: t, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termAcceptedBy: admin.userId,
+            termAcceptedAt: sql`now() - interval '9 days'`, byteSize: 30, rowCount: 1, columnCount: 2, createdBy: admin.userId,
+            createdAt: sql`now() - interval '9 days'`, rawExpiresAt: sql`now() - interval '2 days'`,
+          });
+          await tx.insert(importRawFiles).values({
+            batchId: id, tenantId: t,
+            contentEnc: await cipher.encrypt(tx, { tenantId: t, table: 'import_raw_files', column: 'content', rowId: id }, Buffer.from('nome;telefone\nX;11900000090\n')),
+            sha256: 'c'.repeat(64), createdAt: sql`now() - interval '9 days'`, expiresAt: sql`now() - interval '2 days'`,
+          });
+        },
+        admin.userId,
+      );
+      return id;
+    };
+    const emA = await vencidoHaDias(clinicaA, adminA);
+    const emB = await vencidoHaDias(clinicaB, adminB);
+    const servico = api.app.get(ImportacaoService);
+    const r1 = await servico.expurgoDiario([clinicaA, clinicaB]);
+    expect(r1.clinicas).toBe(2);
+    expect(r1.arquivosDescartados).toBeGreaterThanOrEqual(2);
+    expect(r1).toMatchObject({ atrasados: 0, alarme: false, clinicasComAtraso: [] });
+    expect(await servico.expurgoDiario([clinicaA, clinicaB])).toMatchObject({ arquivosDescartados: 0, atrasados: 0, alarme: false });
+    for (const [t, id] of [[clinicaA, emA], [clinicaB, emB]] as const) {
+      const [lote] = await withTenant(api.db.db, t, (tx) => tx.select().from(importBatches).where(eq(importBatches.id, id)));
+      expect(lote).toMatchObject({ status: 'expirado' });
+      expect(lote?.rawDiscardedAt).not.toBeNull();
+      expect(await withTenant(api.db.db, t, (tx) => tx.select().from(importRawFiles).where(eq(importRawFiles.batchId, id)))).toHaveLength(0);
+    }
+    const trilha = await withTenant(api.db.db, clinicaB, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'import_batches'), eq(auditLog.actorKind, 'sistema'))),
+    );
+    expect(trilha.map((l) => (l.metadata as { op?: string }).op)).toContain('raw_discarded');
+  });
+
+  it('em produção o importador nasce desligado (flag); fora dela, ligado', async () => {
+    const { loadImportacaoConfig } = await import('../src/modules/imports/importacao.service');
+    expect(loadImportacaoConfig({ NODE_ENV: 'production' }).habilitado).toBe(false);
+    expect(loadImportacaoConfig({ NODE_ENV: 'production', IMPORTADOR_HABILITADO: 'true' }).habilitado).toBe(true);
+    expect(loadImportacaoConfig({ NODE_ENV: 'test' }).habilitado).toBe(true);
+    expect(loadImportacaoConfig({ NODE_ENV: 'test', IMPORTADOR_HABILITADO: 'false' }).habilitado).toBe(false);
+    expect(() => loadImportacaoConfig({ IMPORTADOR_HABILITADO: 'sim' })).toThrow();
+  });
+});
+
 describe('auditoria sem conteúdo', () => {
   it('a trilha da clínica registra cada etapa do importador sem nome, CPF, telefone nem fórmula', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'import_batches')));
