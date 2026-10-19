@@ -118,12 +118,14 @@ export function validarMapeamento(corpo: unknown): Mapeamento {
   return out;
 }
 
-export function validarAplicacao(corpo: unknown): { resumoHash: string } {
-  const v = new Validador(exigirObjeto(corpo, ['resumoHash']));
+/** R6: aplicar exige `clinicaConfirmada` (nome ou CNPJ da clínica, digitado pelo admin). */
+export function validarAplicacao(corpo: unknown): { resumoHash: string; clinicaConfirmada: string } {
+  const v = new Validador(exigirObjeto(corpo, ['resumoHash', 'clinicaConfirmada']));
   const h = v.texto('resumoHash', { min: 64, max: 64, obrigatorio: true });
+  const clinicaConfirmada = v.texto('clinicaConfirmada', { min: 1, max: 200, obrigatorio: true });
   v.concluir();
   if (!/^[0-9a-f]{64}$/.test(h)) throw new EntradaInvalidaError(['resumoHash']);
-  return { resumoHash: h };
+  return { resumoHash: h, clinicaConfirmada };
 }
 
 export function validarCorpoVazio(corpo: unknown): void {

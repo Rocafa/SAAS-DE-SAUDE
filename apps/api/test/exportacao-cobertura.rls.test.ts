@@ -43,6 +43,7 @@ import {
   clinicMembers,
   importBatches,
   importBatchRecords,
+  tenants,
 } from '../src/db/schema';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { withTenant } from '../src/db/tenant-transaction';
@@ -325,7 +326,11 @@ beforeAll(async () => {
     .http()
     .post(`/importacoes/${loteId}/aplicar`)
     .set(cab(admin))
-    .send({ resumoHash: (sim.body as { resumoHash: string }).resumoHash })
+    .send({
+      resumoHash: (sim.body as { resumoHash: string }).resumoHash,
+      // R6: confirmação da clínica de origem (nome da clínica).
+      clinicaConfirmada: (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ nome: tenants.displayName }).from(tenants)))[0]?.nome,
+    })
     .expect(200);
 
   const ctx ={ tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };

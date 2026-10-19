@@ -282,3 +282,148 @@ END;
 $$;
 CREATE TRIGGER import_batches_term_text_guard BEFORE INSERT OR UPDATE ON import_batches
   FOR EACH ROW EXECUTE FUNCTION import_batches_term_text_guard();
+
+-- ---------------------------------------------------------------- R6: arquivo de outra clínica
+-- (a) Confirmação da clínica de origem: aplicar exige que o admin digite o nome (ou o CNPJ) da clínica de
+--     destino, que é a origem declarada dos dados (termo, item 2). O lote guarda quem confirmou e quando;
+--     o banco recusa aplicar sem a confirmação e a confirmação não muda depois.
+ALTER TABLE import_batches
+  ADD COLUMN origin_confirmed_at timestamptz,
+  ADD COLUMN origin_confirmed_by uuid,
+  ADD CONSTRAINT import_batches_origin_check CHECK ((origin_confirmed_at IS NULL) = (origin_confirmed_by IS NULL));
+
+CREATE FUNCTION import_batches_origin_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.origin_confirmed_at IS NOT NULL THEN
+      RAISE EXCEPTION 'a confirmação da clínica de origem é feita ao aplicar' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF OLD.origin_confirmed_at IS NOT NULL AND (NEW.origin_confirmed_at IS DISTINCT FROM OLD.origin_confirmed_at
+                                              OR NEW.origin_confirmed_by IS DISTINCT FROM OLD.origin_confirmed_by) THEN
+    RAISE EXCEPTION 'confirmação da clínica de origem é imutável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.origin_confirmed_at IS NULL AND NEW.origin_confirmed_at IS NOT NULL
+     AND (NEW.status <> 'aplicado' OR OLD.status <> 'simulado' OR NEW.origin_confirmed_by IS DISTINCT FROM app_current_user()
+          OR NEW.origin_confirmed_at <> now()) THEN
+    RAISE EXCEPTION 'confirmação da clínica de origem só no aplicar, pelo usuário da sessão' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NEW.status = 'aplicado' AND OLD.status <> 'aplicado' AND NEW.origin_confirmed_at IS NULL THEN
+    RAISE EXCEPTION 'aplicar exige a confirmação da clínica de origem' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER import_batches_origin_guard BEFORE INSERT OR UPDATE ON import_batches
+  FOR EACH ROW EXECUTE FUNCTION import_batches_origin_guard();
+
+-- (b) Alerta de CPFs que já existem em OUTRA clínica, SÓ em contagem e sem dizer quais nem onde.
+--     Impressão do CPF = HMAC-SHA256 com chave da plataforma (IMPORT_CPF_FP_KEY, fora do git), gravada SÓ
+--     para pacientes criados por importação (o cenário do arquivo de outra clínica é ela ter importado o
+--     mesmo arquivo). Tabela INTERNA: o runtime não tem privilégio nenhum; só as funções SECURITY DEFINER
+--     (dono = app_migrator) leem e gravam (policy só para o dono, como tenant_context da 0003). Apagar o
+--     paciente apaga a impressão (FK em cascata).
+CREATE TABLE import_cpf_fingerprints (
+  tenant_id   uuid NOT NULL REFERENCES tenants (id),
+  patient_id  uuid NOT NULL,
+  fp          text NOT NULL CONSTRAINT import_cpf_fingerprints_fp_check CHECK (fp ~ '^[0-9a-f]{64}$'),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, patient_id),
+  CONSTRAINT import_cpf_fingerprints_patient_fk FOREIGN KEY (patient_id, tenant_id) REFERENCES patients (id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX import_cpf_fingerprints_fp_idx ON import_cpf_fingerprints (fp);
+REVOKE ALL ON import_cpf_fingerprints FROM PUBLIC;
+REVOKE ALL ON import_cpf_fingerprints FROM app_user;
+ALTER TABLE import_cpf_fingerprints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE import_cpf_fingerprints FORCE ROW LEVEL SECURITY;
+CREATE POLICY import_cpf_fingerprints_definer_only ON import_cpf_fingerprints TO CURRENT_USER USING (true) WITH CHECK (true);
+
+-- Registra as impressões dos pacientes que ESTE lote criou (marca imutável da V1), no aplicar.
+CREATE FUNCTION app_import_register_cpf_fingerprints(p_batch uuid, p_patients uuid[], p_fps text[]) RETURNS integer
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  t uuid := app_current_tenant();
+  v_user uuid := app_current_user();
+  n integer;
+BEGIN
+  IF t IS NULL OR v_user IS NULL OR NOT app_user_has_role(v_user, 'admin') THEN
+    RAISE EXCEPTION 'impressões do CPF exigem admin da clínica na sessão' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF cardinality(p_patients) IS DISTINCT FROM cardinality(p_fps) OR cardinality(p_patients) > 10000 THEN
+    RAISE EXCEPTION 'listas inválidas' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM import_batches b WHERE b.id = p_batch AND b.tenant_id = t AND b.status = 'simulado' AND b.kind = 'pacientes') THEN
+    RAISE EXCEPTION 'impressões só no aplicar de lote de pacientes' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  INSERT INTO import_cpf_fingerprints (tenant_id, patient_id, fp)
+  SELECT t, x.pid, x.fp
+    FROM unnest(p_patients, p_fps) AS x(pid, fp)
+    JOIN patients p ON p.tenant_id = t AND p.id = x.pid AND p.import_batch_id = p_batch
+  ON CONFLICT DO NOTHING;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END;
+$$;
+REVOKE ALL ON FUNCTION app_import_register_cpf_fingerprints(uuid, uuid[], text[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_import_register_cpf_fingerprints(uuid, uuid[], text[]) TO app_user;
+
+-- Quantas impressões do arquivo existem em OUTRA clínica. Limiar no banco (vale também para chamada
+-- direta): abaixo de 5 coincidências, ou de 20% das impressões enviadas, devolve 0 (uma planilha de
+-- poucas linhas não vira consulta "este CPF é paciente em outro lugar?"). Nunca diz quais nem onde.
+CREATE FUNCTION app_import_cpfs_em_outras_clinicas(p_fps text[]) RETURNS integer
+  LANGUAGE plpgsql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  t uuid := app_current_tenant();
+  v_user uuid := app_current_user();
+  enviados integer;
+  n integer;
+BEGIN
+  IF t IS NULL OR v_user IS NULL OR NOT app_user_has_role(v_user, 'admin') THEN
+    RAISE EXCEPTION 'alerta de outra clínica exige admin da clínica na sessão' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT count(DISTINCT x) INTO enviados FROM unnest(p_fps) AS x WHERE x ~ '^[0-9a-f]{64}$';
+  IF enviados > 10000 THEN
+    RAISE EXCEPTION 'lista grande demais' USING ERRCODE = 'check_violation';
+  END IF;
+  SELECT count(DISTINCT f.fp) INTO n FROM import_cpf_fingerprints f WHERE f.fp = ANY (p_fps) AND f.tenant_id <> t;
+  IF n < 5 OR n * 5 < enviados THEN
+    RETURN 0;
+  END IF;
+  RETURN n;
+END;
+$$;
+REVOKE ALL ON FUNCTION app_import_cpfs_em_outras_clinicas(text[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_import_cpfs_em_outras_clinicas(text[]) TO app_user;
+
+-- Dono das funções SECURITY DEFINER desta migração: nunca superusuário, BYPASSRLS nem o runtime.
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT p.oid::regprocedure AS fn, p.prosecdef, o.rolname, o.rolsuper, o.rolbypassrls
+      FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+     WHERE p.oid IN ('app_import_register_cpf_fingerprints(uuid, uuid[], text[])'::regprocedure,
+                     'app_import_cpfs_em_outras_clinicas(text[])'::regprocedure,
+                     'app_undo_import_batch(uuid)'::regprocedure)
+  LOOP
+    IF NOT r.prosecdef THEN
+      RAISE EXCEPTION '% deveria ser SECURITY DEFINER', r.fn;
+    END IF;
+    IF r.rolsuper OR r.rolbypassrls OR r.rolname = 'app_user' THEN
+      RAISE EXCEPTION 'dono de % (%) não pode ser superusuário, BYPASSRLS nem o runtime', r.fn, r.rolname;
+    END IF;
+  END LOOP;
+END;
+$$;

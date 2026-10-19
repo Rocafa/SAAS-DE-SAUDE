@@ -148,6 +148,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
   import_issues:
     'divergências da validação/simulação (0024): diagnóstico refeito a cada rodada, só linha, campo e código (sem valor); os totais estão em import_batches, que sai no pacote',
+  import_cpf_fingerprints:
+    'impressão HMAC do CPF com chave da PLATAFORMA (0026, R6 do importador): controle interno do alerta de arquivo de outra clínica, inútil fora daqui e sem dado novo (o CPF sai decifrado em patients); some com o paciente',
 };
 
 export interface ExportManifest {

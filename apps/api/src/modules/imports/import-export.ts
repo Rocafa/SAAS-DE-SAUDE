@@ -28,6 +28,9 @@ export interface ExportedImports {
     termAcceptedAt: string;
     /** SHA-256 do texto do termo aceito (0026, R4); null em lote anterior ao texto. */
     termSha256: string | null;
+    /** Confirmação da clínica de origem no aplicar (0026, R6): quando e quem. */
+    originConfirmedAt: string | null;
+    originConfirmedBy: string | null;
     fileFormat: string;
     byteSize: number;
     rowCount: number;
@@ -84,6 +87,8 @@ export async function exportarImportacoes(tx: TenantTx, tenantId: TenantId): Pro
       termAcceptedBy: b.termAcceptedBy,
       termAcceptedAt: b.termAcceptedAt.toISOString(),
       termSha256: b.termSha256,
+      originConfirmedAt: b.originConfirmedAt?.toISOString() ?? null,
+      originConfirmedBy: b.originConfirmedBy,
       fileFormat: b.fileFormat,
       byteSize: b.byteSize,
       rowCount: b.rowCount,

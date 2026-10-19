@@ -654,6 +654,9 @@ export const importBatches = pgTable('import_batches', {
   undoneAt: timestamp('undone_at', { withTimezone: true }),
   undoneBy: uuid('undone_by'),
   expiredAt: timestamp('expired_at', { withTimezone: true }),
+  /** 0026 (R6): confirmação da clínica de origem no aplicar (quem e quando); imutável. */
+  originConfirmedAt: timestamp('origin_confirmed_at', { withTimezone: true }),
+  originConfirmedBy: uuid('origin_confirmed_by'),
 });
 
 /** Arquivo bruto SÓ cifrado, expira em ≤ 7 dias; runtime só SELECT/INSERT; descarte pela função (0024). */

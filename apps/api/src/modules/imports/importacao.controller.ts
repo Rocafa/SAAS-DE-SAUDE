@@ -122,8 +122,8 @@ export class ImportacaoController {
   @Permissao('importacao:gerir')
   aplicar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<LoteDto> {
     const alvo = exigirUuid(id);
-    const { resumoHash } = validarAplicacao(corpo);
-    return traduzirPlanilhaAsync(this.importacao.aplicar(paraRequestContext(auth), alvo, resumoHash));
+    const { resumoHash, clinicaConfirmada } = validarAplicacao(corpo);
+    return traduzirPlanilhaAsync(this.importacao.aplicar(paraRequestContext(auth), alvo, resumoHash, clinicaConfirmada));
   }
 
   @Post(':id/desfazer')

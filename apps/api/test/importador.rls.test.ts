@@ -9,15 +9,15 @@
  */
 import type { TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients } from '../src/db/schema';
+import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from '../src/modules/imports/termo-migracao';
-import { ImportacaoService } from '../src/modules/imports/importacao.service';
+import { ImportacaoService, loadImportacaoConfig } from '../src/modules/imports/importacao.service';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -33,6 +33,8 @@ let finA: Sessao;
 let adminSemPerfilNoBanco: Sessao;
 let profissionalA: string;
 let tipoA: string;
+/** Nome de cada clínica (para a confirmação da clínica de origem no aplicar, R6). */
+const nomes = new Map<string, string>();
 
 /** CPFs fictícios (prefixo 000, faixa não emitida), em faixa própria desta suíte. */
 const CPF = (n: number) => cpfFicticio(730_000 + n);
@@ -55,17 +57,29 @@ async function ateSimular(s: Sessao, tipo: string, csv: string, mapeamento: Reco
   return { id, sim: sim.body as { resumoHash: string; lote: { criar: number; ignorar: number }; divergencias: { linha: number; campo: string; codigo: string; gravidade: string; valor: string | null }[] } };
 }
 
-function aplicar(s: Sessao, id: string, resumoHash: string) {
-  return api.http().post(`/importacoes/${id}/aplicar`).set(cab(s)).send({ resumoHash });
+
+/** Aplica confirmando a clínica de origem (nome da clínica do admin, R6). */
+function aplicar(s: Sessao, id: string, resumoHash: string, clinicaConfirmada?: string) {
+  const t = s === adminB ? clinicaB : clinicaA;
+  return api.http().post(`/importacoes/${id}/aplicar`).set(cab(s)).send({ resumoHash, clinicaConfirmada: clinicaConfirmada ?? nomes.get(t) });
+}
+
+async function nomeDaClinica(t: TenantId): Promise<string> {
+  const [linha] = await withTenant(api.db.db, t, (tx) => tx.select({ nome: tenants.displayName }).from(tenants));
+  return linha?.nome as string;
 }
 
 const contarPacientes = (t: TenantId) =>
   withTenant(api.db.db, t, async (tx) => (await tx.select({ n: sql<number>`count(*)::int` }).from(patients))[0]?.n ?? -1);
 
 beforeAll(async () => {
+  // R6: chave HMAC da impressão do CPF gerada a cada execução (nunca no git).
+  process.env.IMPORT_CPF_FP_KEY = randomBytes(32).toString('hex');
   api = await subirApi();
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
+  nomes.set(clinicaA, await nomeDaClinica(clinicaA));
+  nomes.set(clinicaB, await nomeDaClinica(clinicaB));
   adminA = await api.membro(clinicaA, api.sessao(clinicaA, 'admin'), 'admin');
   adminB = await api.membro(clinicaB, api.sessao(clinicaB, 'admin'), 'admin');
   recepA = api.sessao(clinicaA, 'recepcao');
@@ -332,6 +346,62 @@ describe('R1 do #66: o plano aprovado fica amarrado ao mapeamento e ao arquivo',
   });
 });
 
+describe('R6 do #66: arquivo de outra clínica', () => {
+  it('aplicar exige confirmar a clínica de origem (nome ou CNPJ); o banco recusa aplicar sem ela e a confirmação não muda', async () => {
+    const { id, sim } = await ateSimular(adminA, 'pacientes', 'nome;telefone\nOrigem R6 Ficticia;11900000085\n', { nome: 0, telefone: 1 });
+    expect((await api.http().post(`/importacoes/${id}/aplicar`).set(cab(adminA)).send({ resumoHash: sim.resumoHash })).status).toBe(400);
+    expect((await aplicar(adminA, id, sim.resumoHash, 'Outra Clinica Qualquer')).body).toMatchObject({ codigo: 'clinica_nao_confirmada' });
+    expect((await aplicar(adminA, id, sim.resumoHash, nomes.get(clinicaB))).body).toMatchObject({ codigo: 'clinica_nao_confirmada' });
+    // Direto no banco, sem a confirmação: recusado (mesmo como admin).
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) =>
+        tx.update(importBatches).set({ status: 'aplicado', appliedAt: sql`now()`, appliedBy: adminA.userId }).where(eq(importBatches.id, id)), adminA.userId),
+    ).rejects.toThrow();
+    // CNPJ da clínica (configuração do financeiro), com pontuação: aceito; nome em caixa/acentos diferentes também.
+    await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ emitenteCnpj: '00.000.000/0001-91' }).expect(200);
+    expect((await aplicar(adminA, id, sim.resumoHash, '11.111.111/0001-91')).body).toMatchObject({ codigo: 'clinica_nao_confirmada' });
+    const r = await aplicar(adminA, id, sim.resumoHash, '00000000000191');
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    // Nome em caixa e espaços diferentes também confirma (outro lote).
+    const outro = await ateSimular(adminA, 'pacientes', 'nome;telefone\nOrigem R6b Ficticia;11900000086\n', { nome: 0, telefone: 1 });
+    expect((await aplicar(adminA, outro.id, outro.sim.resumoHash, `  ${nomes.get(clinicaA)?.toUpperCase()} `)).status).toBe(200);
+    expect((r.body as { origemConfirmadaEm: string | null }).origemConfirmadaEm).not.toBeNull();
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatches).set({ originConfirmedBy: randomUUID() }).where(eq(importBatches.id, id)), adminA.userId),
+    ).rejects.toThrow();
+  });
+
+  it('CPFs já importados em OUTRA clínica: só a contagem, acima do limiar; planilha pequena não vira consulta', async () => {
+    const cpfs = [0, 1, 2, 3, 4, 5].map((i) => CPF(200 + i));
+    const csvB = ['nome;cpf;telefone', ...cpfs.map((c, i) => `Paciente B${i} Ficticio;${c};1190000020${i}`)].join('\n');
+    const b = await ateSimular(adminB, 'pacientes', csvB, { nome: 0, cpf: 1, telefone: 2 });
+    expect((b.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
+    await aplicar(adminB, b.id, b.sim.resumoHash).expect(200);
+
+    // A recebe o MESMO arquivo (mais 2 CPFs próprios): o alerta conta 6, sem dizer quais nem de onde.
+    const csvA = ['nome;cpf;telefone', ...cpfs.map((c, i) => `Paciente A${i} Ficticio;${c};1190000021${i}`), `Propria 1 Ficticia;${CPF(210)};11900000220`, `Propria 2 Ficticia;${CPF(211)};11900000221`].join('\n');
+    const a = await ateSimular(adminA, 'pacientes', csvA, { nome: 0, cpf: 1, telefone: 2 });
+    expect((a.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(6);
+    const serial = JSON.stringify(a.sim);
+    expect(serial).not.toContain(clinicaB);
+    expect(serial).not.toContain(nomes.get(clinicaB) as string);
+    expect(a.sim.divergencias.some((d) => d.codigo.includes('outra'))).toBe(false);
+
+    // Sondagem com um CPF só (ou poucos): 0, pela API e chamando a função direto.
+    const um = await ateSimular(adminA, 'pacientes', `nome;cpf;telefone\nSonda Ficticia;${cpfs[0]};11900000230\n`, { nome: 0, cpf: 1, telefone: 2 });
+    expect((um.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
+    const direta = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ n: number }>(sql`select app_import_cpfs_em_outras_clinicas(array['${sql.raw('0'.repeat(64))}']) as n`), adminA.userId);
+    expect(Number(direta[0]?.n)).toBe(0);
+    // Quem não é admin não consulta; o runtime não lê a tabela das impressões.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_import_cpfs_em_outras_clinicas(array[]::text[])`), recepA.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select count(*) from import_cpf_fingerprints`), adminA.userId)).rejects.toThrow();
+    // Desfazer em B apaga as impressões junto com os pacientes: o alerta de A cai para 0.
+    await api.http().post(`/importacoes/${b.id}/desfazer`).set(cab(adminB)).send({}).expect(200);
+    const depois = await ateSimular(adminA, 'pacientes', csvA, { nome: 0, cpf: 1, telefone: 2 });
+    expect((depois.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
+  });
+});
+
 describe('agenda futura', () => {
   it('resolve paciente (CPF ou nome), profissional e tipo; passado, desconhecido e lotado viram divergência; aplica e bloqueia o desfazer após check-in', async () => {
     const pac = ((await api.http().post('/pacientes').set(cab(adminA)).send({ nome: 'Paciente Agenda Ficticia', telefone: '11900000040', cpf: CPF(40) }).expect(201)).body as { id: string }).id;
@@ -388,7 +458,7 @@ describe('isolamento entre clínicas', () => {
     expect((await api.http().put(`/importacoes/${loteA}/mapeamento`).set(cab(adminB)).send({ mapeamento: { nome: 0, telefone: 1 } })).status).toBe(404);
     expect((await api.http().post(`/importacoes/${loteA}/validar`).set(cab(adminB)).send({})).status).toBe(404);
     expect((await api.http().post(`/importacoes/${loteA}/simular`).set(cab(adminB)).send({})).status).toBe(404);
-    expect((await api.http().post(`/importacoes/${loteA}/aplicar`).set(cab(adminB)).send({ resumoHash: 'a'.repeat(64) })).status).toBe(404);
+    expect((await api.http().post(`/importacoes/${loteA}/aplicar`).set(cab(adminB)).send({ resumoHash: 'a'.repeat(64), clinicaConfirmada: 'Qualquer' })).status).toBe(404);
     expect((await api.http().post(`/importacoes/${loteA}/desfazer`).set(cab(adminB)).send({})).status).toBe(404);
     const lista = await api.http().get('/importacoes').set(cab(adminB)).expect(200);
     expect(JSON.stringify(lista.body)).not.toContain(loteA);
@@ -542,8 +612,7 @@ describe('R2 do #66: rotina diária de descarte (job do sistema, todas as clíni
     expect(trilha.map((l) => (l.metadata as { op?: string }).op)).toContain('raw_discarded');
   });
 
-  it('em produção o importador nasce desligado (flag); fora dela, ligado', async () => {
-    const { loadImportacaoConfig } = await import('../src/modules/imports/importacao.service');
+  it('em produção o importador nasce desligado (flag); fora dela, ligado', () => {
     expect(loadImportacaoConfig({ NODE_ENV: 'production' }).habilitado).toBe(false);
     expect(loadImportacaoConfig({ NODE_ENV: 'production', IMPORTADOR_HABILITADO: 'true' }).habilitado).toBe(true);
     expect(loadImportacaoConfig({ NODE_ENV: 'test' }).habilitado).toBe(true);
