@@ -371,7 +371,7 @@ export class ResponsaveisService {
             ),
           ),
         )
-        .orderBy(asc(patientGuardianHistory.occurredAt), asc(patientGuardianHistory.id));
+        .orderBy(asc(patientGuardianHistory.seq));
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE_RESPONSAVEIS,

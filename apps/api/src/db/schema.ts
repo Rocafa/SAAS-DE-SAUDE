@@ -732,6 +732,8 @@ export const patientGuardians = pgTable('patient_guardians', {
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */
 export const patientGuardianHistory = pgTable('patient_guardian_history', {
   id: uuid('id').primaryKey().defaultRandom(),
+  /** Identidade gerada pelo banco: ordem dos eventos (mesma transação = mesmo now()). */
+  seq: bigint('seq', { mode: 'number' }).generatedAlwaysAsIdentity(),
   tenantId: uuid('tenant_id')
     .notNull()
     .references(() => tenants.id),

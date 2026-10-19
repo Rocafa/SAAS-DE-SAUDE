@@ -132,6 +132,7 @@ const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
 const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
 const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
+const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -309,6 +310,17 @@ beforeAll(async () => {
     .set(cab(admin))
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
+
+  // Responsáveis (0028): pessoa + vínculo pagador, troca do telefone (valor anterior no histórico) e encerramento.
+  const resp = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/responsaveis`)
+    .set(cab(admin))
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, recebeInformacaoClinica: true });
+  expect(resp.status, JSON.stringify(resp.body)).toBe(201);
+  const vinculoId = (resp.body as { id: string }).id;
+  await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
+  await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
 
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
@@ -548,6 +560,16 @@ describe('G2 — conteúdo do pacote', () => {
     expect(f.receiptCancellations[0]).toMatchObject({ receiptId: f.receipts[0]?.id, reason: 'recebimento_estornado' });
     expect(f.cashSessions[0]).toMatchObject({ status: 'closed', expectedCashCents: 1000, countedCashCents: 1000 });
     for (const proibido of [cpfFicticio(8), cpfFicticio(9), 'Responsavel Ficticio']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('responsáveis (0028): pessoa decifrada, vínculo com vigência e histórico com o valor anterior; nada disso na trilha', () => {
+    const g = pkg.json.data.guardians;
+    expect(g.guardians[0]).toMatchObject({ name: RESP_NOME, cpf: cpfFicticio(10), phone: '11900000011' });
+    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: true, endReason: 'maioridade' });
+    expect(g.patientGuardians[0]?.validUntil).toBe(g.patientGuardians[0]?.validFrom);
+    expect(g.patientGuardianHistory.map((h) => h.event)).toEqual(['responsavel_criado', 'vinculo_criado', 'responsavel_alterado', 'vinculo_encerrado']);
+    expect(g.patientGuardianHistory[2]).toMatchObject({ changedFields: 'phone', prevPhone: '11900000010', prevCpf: null });
+    for (const proibido of [cpfFicticio(10), 'QZX7737', '11900000010', '11900000011']) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
   it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {

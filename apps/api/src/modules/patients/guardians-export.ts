@@ -43,6 +43,7 @@ export interface ExportedGuardians {
   }[];
   readonly patientGuardianHistory: readonly {
     id: string;
+    seq: number;
     guardianId: string;
     linkId: string | null;
     event: string;
@@ -95,7 +96,7 @@ export async function exportarResponsaveis(
       .select()
       .from(patientGuardianHistory)
       .where(eq(patientGuardianHistory.tenantId, tenantId))
-      .orderBy(asc(patientGuardianHistory.occurredAt), asc(patientGuardianHistory.id)),
+      .orderBy(asc(patientGuardianHistory.seq)),
     tenantId,
   );
 
@@ -132,6 +133,7 @@ export async function exportarResponsaveis(
     patientGuardianHistory: await Promise.all(
       historico.map(async (h) => ({
         id: h.id,
+        seq: h.seq,
         guardianId: h.guardianId,
         linkId: h.linkId,
         event: h.event,

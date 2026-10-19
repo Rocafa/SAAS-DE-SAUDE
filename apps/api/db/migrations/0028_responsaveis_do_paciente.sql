@@ -70,6 +70,8 @@ CREATE INDEX patient_guardians_guardian_idx ON patient_guardians (tenant_id, gua
 
 CREATE TABLE patient_guardian_history (
   id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Ordem dos eventos (vários eventos na mesma transação têm o mesmo now()).
+  seq                     bigint GENERATED ALWAYS AS IDENTITY,
   tenant_id               uuid NOT NULL REFERENCES tenants (id),
   guardian_id             uuid NOT NULL,
   -- NULL: evento da pessoa (nome/CPF/telefone), que vale para todos os vínculos dela.
@@ -227,9 +229,9 @@ BEGIN
     VALUES (NEW.tenant_id, NEW.id, 'responsavel_criado', '', app_current_user());
     RETURN NULL;
   END IF;
-  IF NEW.name_enc IS DISTINCT FROM OLD.name_enc THEN v_campos := v_campos || 'name'; END IF;
-  IF NEW.cpf_enc IS DISTINCT FROM OLD.cpf_enc THEN v_campos := v_campos || 'cpf'; END IF;
-  IF NEW.phone_enc IS DISTINCT FROM OLD.phone_enc THEN v_campos := v_campos || 'phone'; END IF;
+  IF NEW.name_enc IS DISTINCT FROM OLD.name_enc THEN v_campos := array_append(v_campos, 'name'); END IF;
+  IF NEW.cpf_enc IS DISTINCT FROM OLD.cpf_enc THEN v_campos := array_append(v_campos, 'cpf'); END IF;
+  IF NEW.phone_enc IS DISTINCT FROM OLD.phone_enc THEN v_campos := array_append(v_campos, 'phone'); END IF;
   IF cardinality(v_campos) = 0 THEN
     RETURN NULL;
   END IF;
@@ -255,9 +257,9 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     v_evento := 'vinculo_criado';
   ELSE
-    IF NEW.is_payer IS DISTINCT FROM OLD.is_payer THEN v_campos := v_campos || 'is_payer'; END IF;
-    IF NEW.receives_clinical_info IS DISTINCT FROM OLD.receives_clinical_info THEN v_campos := v_campos || 'receives_clinical_info'; END IF;
-    IF NEW.ended_at IS DISTINCT FROM OLD.ended_at THEN v_campos := v_campos || 'valid_until'; END IF;
+    IF NEW.is_payer IS DISTINCT FROM OLD.is_payer THEN v_campos := array_append(v_campos, 'is_payer'); END IF;
+    IF NEW.receives_clinical_info IS DISTINCT FROM OLD.receives_clinical_info THEN v_campos := array_append(v_campos, 'receives_clinical_info'); END IF;
+    IF NEW.ended_at IS DISTINCT FROM OLD.ended_at THEN v_campos := array_append(v_campos, 'valid_until'); END IF;
     IF cardinality(v_campos) = 0 THEN
       RETURN NULL;
     END IF;
