@@ -135,6 +135,7 @@ describe('G2 — exportação total do tenant', () => {
         receiptCancellations: 0,
       },
       clinicMembers: 0,
+      portal: { invites: 0, links: 0, consents: 0, rightsRequests: 0 },
       auditEvents: pkg.auditEvents.length,
     });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();

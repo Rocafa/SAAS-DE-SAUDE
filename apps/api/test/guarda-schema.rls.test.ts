@@ -81,12 +81,21 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
+  // Portal do paciente (migração 0027): sem DELETE/TRUNCATE. Convite: a clínica emite e revoga (o resgate é
+  // da função SECURITY DEFINER). Vínculo: nasce só do resgate (sem INSERT para o runtime); a clínica revoga.
+  // Consentimento: append-only. Pedido do titular: o portal abre; a clínica muda a situação.
+  portal_invites: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  portal_links: { privilegios: ['SELECT', 'UPDATE'] },
+  portal_consents: { privilegios: ['SELECT', 'INSERT'] },
+  portal_rights_requests: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
 const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   schema_migrations: 'controle de migração; scripts/migrate.mjs revoga de app_user',
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
+  portal_invite_lookup: 'índice token do convite -> clínica (0027); só as funções SECURITY DEFINER do portal leem/gravam',
+  portal_link_index: 'índice vínculo do portal -> conta/clínica/paciente (0027); só as funções SECURITY DEFINER do portal leem/gravam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
 };
 
@@ -317,6 +326,45 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
     for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
       const tem = await privilegiosDoRuntime(tabela);
       expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
+  });
+});
+
+/**
+ * Portal do paciente (0027): na sessão do portal, cada tabela da clínica ou mostra só as linhas do
+ * próprio paciente (`portal_titular`), ou nenhuma (`portal_fora`), ou é liberada por decisão registrada
+ * (`portal_liberada*`: profissionais, chaves de dados e a trilha, que o gatilho da cadeia lê). Tabela nova
+ * com tenant_id sem uma dessas policies RESTRITIVAS reprova: o padrão do portal é não ver.
+ */
+describe('guarda de schema: portal do paciente (0027)', () => {
+  it('toda tabela da aplicação com tenant_id tem policy restritiva do portal', async () => {
+    const restritivas = await sql<{ tabela: string; policy: string }[]>`
+      SELECT tablename AS tabela, policyname AS policy FROM pg_policies
+       WHERE schemaname = 'public' AND permissive = 'RESTRICTIVE' AND policyname ~ '^portal_(titular|fora|liberada)'`;
+    const comPolicy = new Set(restritivas.map((r) => r.tabela));
+    const semPolicy = tabelas
+      .filter((t) => t.tem_tenant_id && t.tabela in TABELAS_DA_APLICACAO && !comPolicy.has(t.tabela))
+      .map((t) => t.tabela);
+    expect(semPolicy, 'tabela com tenant_id sem decisão do portal: crie portal_fora (padrão) ou portal_titular').toEqual([]);
+  });
+
+  it('funções do portal: SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
+    for (const assinatura of [
+      'public.app_set_portal_session(uuid,uuid)',
+      'public.app_portal_links_of_account(uuid)',
+      'public.app_portal_redeem_invite(uuid,text)',
+      'public.app_portal_patient()',
+      'public.app_portal_account()',
+      'public.app_portal_link()',
+    ]) {
+      const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+        SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+        FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+        WHERE p.oid = ${assinatura}::regprocedure`;
+      expect(f?.secdef, assinatura).toBe(true);
+      expect(f?.config ?? [], assinatura).toContain('search_path=pg_catalog, public, pg_temp');
+      expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+      expect(f?.dono).not.toBe(RUNTIME_ROLE);
     }
   });
 });

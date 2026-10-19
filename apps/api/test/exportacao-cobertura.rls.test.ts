@@ -5,7 +5,7 @@
  * aplicação real (mesma cifra da API) e confere conteúdo, contagens, CSV e auditoria.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -41,7 +41,15 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  portalConsents,
+  portalInvites,
+  portalLinks,
+  portalRightsRequests,
 } from '../src/db/schema';
+import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
+import type { FieldCipher } from '../src/modules/crypto/field-cipher';
+import type { TenantTx } from '../src/db/tenant-transaction';
+import { cifrarCampoPortal } from '../src/modules/portal/portal-fields';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
@@ -94,6 +102,10 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  portal_invites: 'portal.invites',
+  portal_links: 'portal.links',
+  portal_consents: 'portal.consents',
+  portal_rights_requests: 'portal.rightsRequests',
   audit_log: 'auditEvents',
 };
 
@@ -102,6 +114,7 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.subscription_status': 'vai no manifesto (subscription.status)',
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
+  'portal_invites.token_hash': 'hash do token de uso único do convite: credencial, não sai (0027)',
 };
 
 const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -126,6 +139,7 @@ const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
 const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
 const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
+const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7737';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -304,6 +318,57 @@ beforeAll(async () => {
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
 
+  // Portal do paciente (0027), direto pelo banco: convite da clínica, resgate pela conta, consentimento e
+  // pedido do titular (detalhe cifrado) na sessão do portal.
+  const contaPortal = randomUUID();
+  const tokenHash = createHash('sha256').update(randomBytes(32)).digest('hex');
+  await withTenant(
+    api.db.db,
+    clinicaA,
+    (tx) =>
+      tx.insert(portalInvites).values({
+        tenantId: clinicaA,
+        patientId: pacienteId,
+        tokenHash,
+        actingAs: 'titular',
+        expiresAt: sql`now() + interval '1 day'`,
+        createdBy: admin.userId,
+      }),
+    admin.userId,
+  );
+  const vinculo = await api.db.db.transaction(async (tx) => {
+    const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${contaPortal}::uuid, ${tokenHash}) as v`);
+    return r[0]?.v ?? null;
+  });
+  expect(vinculo).toMatch(/^[0-9a-f-]{36}$/);
+  const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+  await api.db.db.transaction(async (tx) => {
+    await tx.execute(sql`select app_set_portal_session(${contaPortal}::uuid, ${vinculo}::uuid)`);
+    await tx.insert(portalConsents).values({
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      purpose: 'escriba_ia',
+      response: 'nao',
+      actingAs: 'titular',
+      textVersion: 'teste-1',
+      textHash: 'a'.repeat(64),
+    });
+    const id = randomUUID();
+    await tx.insert(portalRightsRequests).values({
+      id,
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      kind: 'acesso',
+      actingAs: 'titular',
+      protocol: '20301231-ABCDEF01',
+      detailEnc: await cifrarCampoPortal(cifra, tx, clinicaA, null, id, 'detail', PEDIDO_DETALHE),
+    });
+  });
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
@@ -387,7 +452,11 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receiptCounters
           | typeof receipts
           | typeof receiptCancellations
-          | typeof clinicMembers,
+          | typeof clinicMembers
+          | typeof portalInvites
+          | typeof portalLinks
+          | typeof portalConsents
+          | typeof portalRightsRequests,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -426,6 +495,12 @@ describe('G2 — conteúdo do pacote', () => {
           receiptCancellations: await n(receiptCancellations),
         },
         clinicMembers: await n(clinicMembers),
+        portal: {
+          invites: await n(portalInvites),
+          links: await n(portalLinks),
+          consents: await n(portalConsents),
+          rightsRequests: await n(portalRightsRequests),
+        },
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -453,6 +528,7 @@ describe('G2 — conteúdo do pacote', () => {
       privateNotesWithheld: 1,
       legalHolds: 1,
       noteCustodies: 1,
+      portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
       finance: {
         financeSettings: 1,
         professionalFiscalProfiles: 1,
@@ -530,6 +606,15 @@ describe('G2 — conteúdo do pacote', () => {
     for (const proibido of [cpfFicticio(8), cpfFicticio(9), 'Responsavel Ficticio']) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
+  it('portal: convite sem o hash do token, vínculo, consentimento e pedido do titular decifrado; nada disso na trilha', () => {
+    const p = pkg.json.data.portal;
+    expect(p.invites[0]).toMatchObject({ actingAs: 'titular', redeemedAccountId: p.links[0]?.accountId, linkId: p.links[0]?.id });
+    expect(JSON.stringify(p.invites)).not.toMatch(/tokenHash|[0-9a-f]{64}/);
+    expect(p.consents[0]).toMatchObject({ purpose: 'escriba_ia', response: 'nao', channel: 'portal' });
+    expect(p.rightsRequests[0]).toMatchObject({ kind: 'acesso', status: 'aberta', detail: PEDIDO_DETALHE, answer: null });
+    expect(pkg.auditJsonl).not.toContain(PEDIDO_DETALHE);
+  });
+
   it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {
     const notas = pkg.json.data.privateNotes;
     expect(notas).toHaveLength(1);
@@ -592,7 +677,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
       expect(auditJsonl).not.toContain(proibido);
     }
-    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma']));
+    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma', 'paciente_portal']));
   });
 
   it('o atendente do suporte sai pseudonimizado por clínica, com chamado e motivo', async () => {

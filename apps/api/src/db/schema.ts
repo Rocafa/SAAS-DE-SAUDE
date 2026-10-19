@@ -1,4 +1,5 @@
 import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -605,8 +606,8 @@ export const receiptCancellations = pgTable('receipt_cancellations', {
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
-/** Tipo de ator na trilha (migração 0008). Mesmos valores do CHECK no banco. */
-export const ACTOR_KINDS = ['usuario_clinica', 'suporte_plataforma', 'sistema'] as const;
+/** Tipo de ator na trilha (migração 0008; `paciente_portal` desde a 0027). Mesmos valores do CHECK no banco. */
+export const ACTOR_KINDS = ['usuario_clinica', 'suporte_plataforma', 'sistema', 'paciente_portal'] as const;
 export type ActorKind = (typeof ACTOR_KINDS)[number];
 
 /** Append-only: o runtime só tem SELECT/INSERT; trigger rejeita UPDATE/DELETE/TRUNCATE. */
@@ -671,6 +672,96 @@ export const tenantDataKeys = pgTable(
     }),
   ],
 );
+
+/** Portal do paciente (migração 0027). `acting_as`: a conta age como o titular ou como responsável legal. */
+export const PORTAL_ACTING_AS = ['titular', 'responsavel_legal'] as const;
+export type PortalActingAs = (typeof PORTAL_ACTING_AS)[number];
+export const PORTAL_LINK_REVOKE_REASONS = ['pedido_do_paciente', 'acesso_indevido', 'fim_do_vinculo', 'erro_de_cadastro'] as const;
+export type PortalLinkRevokeReason = (typeof PORTAL_LINK_REVOKE_REASONS)[number];
+export const PORTAL_CONSENT_PURPOSES = ['lembretes_whatsapp', 'escriba_ia', 'pesquisa'] as const;
+export type PortalConsentPurpose = (typeof PORTAL_CONSENT_PURPOSES)[number];
+export const PORTAL_CONSENT_RESPONSES = ['sim', 'nao', 'desfeito'] as const;
+export type PortalConsentResponse = (typeof PORTAL_CONSENT_RESPONSES)[number];
+/** LGPD art. 18: II acesso, III correção, V portabilidade, VI eliminação, VII compartilhamento. */
+export const RIGHTS_REQUEST_KINDS = ['acesso', 'correcao', 'portabilidade', 'eliminacao', 'compartilhamento'] as const;
+export type RightsRequestKind = (typeof RIGHTS_REQUEST_KINDS)[number];
+export const RIGHTS_REQUEST_STATUSES = ['aberta', 'em_andamento', 'atendida', 'recusada'] as const;
+export type RightsRequestStatus = (typeof RIGHTS_REQUEST_STATUSES)[number];
+
+/** Convite da clínica para o portal (0027): só o SHA-256 do token de uso único; validade ≤ 7 dias. */
+export const portalInvites = pgTable('portal_invites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  tokenHash: text('token_hash').notNull(),
+  actingAs: text('acting_as', { enum: PORTAL_ACTING_AS }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
+  redeemedAccountId: uuid('redeemed_account_id'),
+  linkId: uuid('link_id'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
+});
+
+/** Vínculo conta do portal ↔ paciente ↔ clínica (0027): nasce só do resgate; a clínica revoga. */
+export const portalLinks = pgTable('portal_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  accountId: uuid('account_id').notNull(),
+  patientId: uuid('patient_id').notNull(),
+  inviteId: uuid('invite_id').notNull(),
+  actingAs: text('acting_as', { enum: PORTAL_ACTING_AS }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
+  revokeReason: text('revoke_reason', { enum: PORTAL_LINK_REVOKE_REASONS }),
+});
+
+/** Consentimento como histórico (0027, R15 do front-r8): append-only; o estado é o último evento. */
+export const portalConsents = pgTable('portal_consents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  linkId: uuid('link_id').notNull(),
+  accountId: uuid('account_id').notNull(),
+  purpose: text('purpose', { enum: PORTAL_CONSENT_PURPOSES }).notNull(),
+  response: text('response', { enum: PORTAL_CONSENT_RESPONSES }).notNull(),
+  actingAs: text('acting_as', { enum: PORTAL_ACTING_AS }).notNull(),
+  textVersion: text('text_version').notNull(),
+  textHash: text('text_hash').notNull(),
+  channel: text('channel', { enum: ['portal'] }).notNull().default('portal'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Pedido do titular (0027, LGPD art. 18): registrado para a clínica atender; detalhe e resposta cifrados. */
+export const portalRightsRequests = pgTable('portal_rights_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  linkId: uuid('link_id').notNull(),
+  accountId: uuid('account_id').notNull(),
+  kind: text('kind', { enum: RIGHTS_REQUEST_KINDS }).notNull(),
+  actingAs: text('acting_as', { enum: PORTAL_ACTING_AS }).notNull(),
+  protocol: text('protocol').notNull(),
+  detailEnc: text('detail_enc'),
+  status: text('status', { enum: RIGHTS_REQUEST_STATUSES }).notNull().default('aberta'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Prazo de resposta: criação + 15 dias, posto pelo banco. */
+  dueAt: timestamp('due_at', { withTimezone: true }).notNull().default(sql`now() + interval '15 days'`),
+  handledBy: uuid('handled_by'),
+  handledAt: timestamp('handled_at', { withTimezone: true }),
+  answerEnc: text('answer_enc'),
+});
 
 export const schema = {
   tenants,

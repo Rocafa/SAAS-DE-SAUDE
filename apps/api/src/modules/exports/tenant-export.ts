@@ -33,6 +33,7 @@ import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../au
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
+import { exportarPortal, type ExportedPortal, type PortalCounts } from '../portal/portal-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -79,8 +80,12 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        controle de acesso (LGPD arts. 37 e 46).
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
+ * 1.14.0: portal do paciente (migração 0027): convites (sem o hash do token), vínculos conta↔paciente,
+ *        histórico de consentimentos e pedidos do titular (detalhe e resposta decifrados), em `data.portal`
+ *        e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`. (1.13.0 fica para a 0026,
+ *        do importador, que corre em paralelo.)
  */
-export const EXPORT_SCHEMA_VERSION = '1.12.0';
+export const EXPORT_SCHEMA_VERSION = '1.14.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -125,12 +130,19 @@ export const EXPORTED_TABLES = [
   'receipts',
   'receipt_cancellations',
   'clinic_members',
+  // Portal do paciente (0027): em data.portal. portal_invites sai sem token_hash (credencial).
+  'portal_invites',
+  'portal_links',
+  'portal_consents',
+  'portal_rights_requests',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
+  portal_invite_lookup: 'índice interno token -> clínica do convite (0027); o convite sai em portal_invites',
+  portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
 };
@@ -173,6 +185,8 @@ export interface ExportManifest {
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
     readonly clinicMembers: number;
+    /** Portal do paciente (0027), por tabela. */
+    readonly portal: PortalCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -470,6 +484,8 @@ export interface TenantExportDocument {
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
     readonly clinicMembers: readonly ExportedClinicMember[];
+    /** Portal do paciente (0027). */
+    readonly portal: ExportedPortal;
   };
 }
 
@@ -703,6 +719,11 @@ export async function exportInTransaction(
   }));
   const auditHead = await auditChainHead(tx, ctx.tenantId);
   const financeiro = await exportarFinanceiro(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+
+  const portal = await exportarPortal(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
@@ -1004,6 +1025,7 @@ export async function exportInTransaction(
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
       clinicMembers: exportedMembers.length,
+      portal: portal.counts,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -1086,6 +1108,7 @@ export async function exportInTransaction(
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
         clinicMembers: exportedMembers,
+        portal: portal.data,
       },
     },
     patientsCsv,
