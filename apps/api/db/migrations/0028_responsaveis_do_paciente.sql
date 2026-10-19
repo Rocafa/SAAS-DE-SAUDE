@@ -175,9 +175,11 @@ BEGIN
     IF NEW.valid_until > current_date THEN
       RAISE EXCEPTION 'patient_guardians: encerramento não pode ser futuro' USING ERRCODE = 'check_violation';
     END IF;
-    -- Encerrado deixa de ser pagador e de receber informação clínica (o histórico guarda o que era).
-    NEW.is_payer := false;
-    NEW.receives_clinical_info := false;
+    -- As marcas (pagador, informação clínica) ficam como estavam: valem só DENTRO da vigência, e o
+    -- pagador de um pagamento antigo continua sendo quem era o pagador vigente naquela data.
+    IF NEW.is_payer IS DISTINCT FROM OLD.is_payer OR NEW.receives_clinical_info IS DISTINCT FROM OLD.receives_clinical_info THEN
+      RAISE EXCEPTION 'patient_guardians: encerrar não muda as marcas do vínculo' USING ERRCODE = 'check_violation';
+    END IF;
     NEW.ended_at := now();
   END IF;
   NEW.updated_at := now();

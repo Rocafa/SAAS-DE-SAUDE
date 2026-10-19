@@ -1,0 +1,124 @@
+import { ehDataValida, EntradaInvalidaError, exigirObjeto, Validador } from '../../common/validacao';
+import { GUARDIAN_END_REASONS, GUARDIAN_KINDS, type GuardianEndReason, type GuardianKind } from '../../db/schema';
+import { normalizarCpf, normalizarTelefone } from './patients.validation';
+
+/** Dados da PESSOA responsável. Nome obrigatório; CPF e telefone opcionais (CPF é exigido no recibo, não aqui). */
+export interface PessoaResponsavel {
+  readonly nome: string;
+  readonly cpf?: string;
+  readonly telefone?: string;
+}
+
+export interface NovoVinculo {
+  /** Pessoa já cadastrada (irmãos): ou isto, ou os dados de `pessoa`. */
+  readonly responsavelId?: string;
+  readonly pessoa?: PessoaResponsavel;
+  readonly tipo: GuardianKind;
+  readonly pagador: boolean;
+  readonly recebeInformacaoClinica: boolean;
+  /** Início da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
+  readonly desde?: string;
+}
+
+export interface AlteracaoVinculo {
+  readonly nome?: string;
+  readonly cpf?: string | null;
+  readonly telefone?: string | null;
+  readonly recebeInformacaoClinica?: boolean;
+}
+
+export interface Encerramento {
+  readonly motivo: GuardianEndReason;
+  /** Fim EXCLUSIVO da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
+  readonly ate?: string;
+}
+
+const CAMPOS_NOVO = ['responsavelId', 'nome', 'cpf', 'telefone', 'tipo', 'pagador', 'recebeInformacaoClinica', 'desde'] as const;
+const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica'] as const;
+
+function cpfOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
+  if (bruto === undefined || bruto === null) return bruto;
+  const n = normalizarCpf(bruto);
+  if (n === undefined) v.falhar('cpf');
+  return n;
+}
+
+function telefoneOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
+  if (bruto === undefined || bruto === null) return bruto;
+  const n = normalizarTelefone(bruto);
+  if (n === undefined) v.falhar('telefone');
+  return n;
+}
+
+function dataNaoFutura(v: Validador, campo: string, hoje: string): string | undefined {
+  const d = v.texto(campo, { max: 10 });
+  if (d === undefined) return undefined;
+  if (!ehDataValida(d) || d > hoje || d < '1900-01-01') {
+    v.falhar(campo);
+    return undefined;
+  }
+  return d;
+}
+
+export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
+  const v = new Validador(exigirObjeto(corpo, CAMPOS_NOVO));
+  const responsavelId = v.uuid('responsavelId', false);
+  const nome = v.texto('nome', { min: 2, max: 200 });
+  const cpf = cpfOuFalha(v, v.texto('cpf', { max: 20 }));
+  const telefone = telefoneOuFalha(v, v.texto('telefone', { max: 25 }));
+  const tipo = v.umDe('tipo', GUARDIAN_KINDS, true);
+  const pagador = v.booleano('pagador') ?? false;
+  const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica') ?? false;
+  const desde = dataNaoFutura(v, 'desde', hoje);
+  // Ou a pessoa existente, ou os dados de uma nova (nunca os dois, nunca nenhum).
+  const temPessoa = v.tem('nome') || v.tem('cpf') || v.tem('telefone');
+  if (v.tem('responsavelId') === temPessoa) v.falhar(v.tem('responsavelId') ? 'responsavelId' : 'nome');
+  v.concluir();
+  return {
+    ...(responsavelId ? { responsavelId } : {}),
+    ...(nome ? { pessoa: { nome, ...(cpf ? { cpf } : {}), ...(telefone ? { telefone } : {}) } } : {}),
+    tipo: tipo as GuardianKind,
+    pagador,
+    recebeInformacaoClinica,
+    ...(desde ? { desde } : {}),
+  };
+}
+
+export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
+  const v = new Validador(exigirObjeto(corpo, CAMPOS_ALTERACAO));
+  const nome = v.texto('nome', { min: 2, max: 200 });
+  const cpf = cpfOuFalha(v, v.textoOuNulo('cpf', { max: 20 }));
+  const telefone = telefoneOuFalha(v, v.textoOuNulo('telefone', { max: 25 }));
+  const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica');
+  v.concluir();
+  if (!CAMPOS_ALTERACAO.some((c) => v.tem(c))) throw new EntradaInvalidaError(['corpo']);
+  const out: { -readonly [K in keyof AlteracaoVinculo]: AlteracaoVinculo[K] } = {};
+  if (nome !== undefined) out.nome = nome;
+  if (cpf !== undefined) out.cpf = cpf;
+  if (telefone !== undefined) out.telefone = telefone;
+  if (recebeInformacaoClinica !== undefined) out.recebeInformacaoClinica = recebeInformacaoClinica;
+  return out;
+}
+
+export function validarPagador(corpo: unknown): { readonly pagador: boolean } {
+  const v = new Validador(exigirObjeto(corpo, ['pagador']));
+  const pagador = v.booleano('pagador');
+  if (pagador === undefined) v.falhar('pagador');
+  v.concluir();
+  return { pagador: pagador as boolean };
+}
+
+export function validarEncerramento(corpo: unknown, hoje: string): Encerramento {
+  const v = new Validador(exigirObjeto(corpo, ['motivo', 'ate']));
+  const motivo = v.umDe('motivo', GUARDIAN_END_REASONS, true);
+  const ate = dataNaoFutura(v, 'ate', hoje);
+  v.concluir();
+  return { motivo: motivo as GuardianEndReason, ...(ate ? { ate } : {}) };
+}
+
+export function validarFiltroResponsaveis(query: unknown): { readonly situacao: 'vigentes' | 'todos' } {
+  const v = new Validador(exigirObjeto(query ?? {}, ['situacao']));
+  const situacao = v.umDe('situacao', ['vigentes', 'todos'] as const, false) ?? 'vigentes';
+  v.concluir();
+  return { situacao };
+}

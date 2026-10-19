@@ -24,6 +24,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { diasEntre } from '../insurance/guias-regras';
 import { patientFieldRef } from '../patients/patient-fields';
+import { responsavelPagadorEm } from '../patients/responsaveis.service';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_RECIBO, cifrarCampoFinanceiro, decifrarCampoFinanceiro } from './finance-fields';
@@ -278,11 +279,13 @@ export class RecibosService {
           nome: l.paciente.displayName,
           cpf: l.paciente.cpfEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, l.paciente.id, 'cpf'), l.paciente.cpfEnc) : null,
         };
+        const dataPagamento = noFusoDaClinica(l.p.receivedAt).data;
+        // 0028: sem pagador na cobrança, vale o responsável pagador vigente na data do pagamento.
+        const doResponsavel = l.c.payerName ? null : await responsavelPagadorEm(tx, this.cipher, ctx.tenantId, l.paciente.id, dataPagamento);
         const pagador: PessoaDoRecibo = l.c.payerName
           ? { nome: l.c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, l.c.id, CAMPO_CPF_PAGADOR, l.c.payerCpfEnc) }
-          : beneficiario;
-        const dataPagamento = noFusoDaClinica(l.p.receivedAt).data;
-        const responsavel = !l.c.payerName && (await this.pacienteMenor(tx, ctx, l.paciente, dataPagamento));
+          : (doResponsavel ?? beneficiario);
+        const responsavel = !l.c.payerName && !doResponsavel && (await this.pacienteMenor(tx, ctx, l.paciente, dataPagamento));
         itens.push({
           reciboNumero: numeros.get(l.p.id) ?? null,
           dataPagamento,
@@ -368,19 +371,23 @@ export class RecibosService {
       nome: pac.displayName,
       cpf: pac.cpfEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, pac.id, 'cpf'), pac.cpfEnc) : null,
     };
+    const dataPagamento = noFusoDaClinica(p.receivedAt).data;
+    // 0028: sem pagador na cobrança, vale o responsável pagador vigente na data do pagamento.
+    const doResponsavel = c.payerName ? null : await responsavelPagadorEm(tx, this.cipher, ctx.tenantId, pac.id, dataPagamento);
     const pagador: PessoaDoRecibo = c.payerName
       ? { nome: c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, c.id, CAMPO_CPF_PAGADOR, c.payerCpfEnc) }
-      : beneficiario;
+      : (doResponsavel ?? beneficiario);
     const base = {
       emitente,
       pagador,
       beneficiario,
       valorCentavos: p.amountCents,
       forma: p.method,
-      dataPagamento: noFusoDaClinica(p.receivedAt).data,
+      dataPagamento,
       descricao: config.descricao,
     };
-    const responsavel = !c.payerName && (await this.pacienteMenor(tx, ctx, pac, base.dataPagamento));
+    // R3 do #65: a pendência só fica quando nem a cobrança nem o cadastro dizem quem pagou.
+    const responsavel = !c.payerName && !doResponsavel && (await this.pacienteMenor(tx, ctx, pac, dataPagamento));
     return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel) };
   }
 
