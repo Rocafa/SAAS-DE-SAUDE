@@ -17,6 +17,7 @@ import {
   validarQuery,
 } from './importacao.validation';
 import { IMPORT_MAX_BYTES, IMPORT_MAX_LINHAS } from './planilha-csv';
+import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from './termo-migracao';
 
 /**
  * Importador de planilha (rodada 17.3). SÓ admin (`importacao:gerir`; o banco confere de novo o perfil em
@@ -32,7 +33,7 @@ export class ImportacaoController {
   @Permissao('importacao:gerir')
   termo(@Query() query: unknown) {
     validarQuery(query);
-    return { versao: TERMO_MIGRACAO_VERSAO, formatos: ['csv'], maxBytes: IMPORT_MAX_BYTES, maxLinhas: IMPORT_MAX_LINHAS, campos: CAMPOS, obrigatorios: OBRIGATORIOS };
+    return { versao: TERMO_MIGRACAO_VERSAO, texto: TERMO_MIGRACAO_TEXTO, textoSha256: TERMO_MIGRACAO_SHA256, formatos: ['csv'], maxBytes: IMPORT_MAX_BYTES, maxLinhas: IMPORT_MAX_LINHAS, campos: CAMPOS, obrigatorios: OBRIGATORIOS };
   }
 
   /** `POST /importacoes?tipo=pacientes|agenda&termo=<versão aceita>` com o CSV no corpo. */

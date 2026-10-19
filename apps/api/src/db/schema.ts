@@ -626,6 +626,8 @@ export const importBatches = pgTable('import_batches', {
   termVersion: text('term_version').notNull(),
   termAcceptedBy: uuid('term_accepted_by').notNull(),
   termAcceptedAt: timestamp('term_accepted_at', { withTimezone: true }).notNull().defaultNow(),
+  /** 0026 (R4): SHA-256 do TEXTO do termo aceito (docs/03-seguranca-lgpd/termo-migracao.md); imutável. */
+  termSha256: text('term_sha256'),
   fileFormat: text('file_format', { enum: ['csv'] }).notNull().default('csv'),
   byteSize: integer('byte_size').notNull(),
   rowCount: integer('row_count').notNull(),

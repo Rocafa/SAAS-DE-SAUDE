@@ -16,6 +16,7 @@ import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
+import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from '../src/modules/imports/termo-migracao';
 import { ImportacaoService } from '../src/modules/imports/importacao.service';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
@@ -103,6 +104,21 @@ describe('termo de migração, formato e permissões', () => {
       mapeamentoSugerido: { nome: 0, telefone: 1 },
     });
     expect(new Date((r.body as { arquivoExpiraEm: string }).arquivoExpiraEm).getTime() - Date.now()).toBeLessThanOrEqual(7 * 86_400_000);
+  });
+
+  it('R4: o termo tem texto versionado; o aceite grava a versão e o hash do texto, imutável; lote sem o hash é recusado', async () => {
+    const t = await api.http().get('/importacoes/termo').set(cab(adminA)).expect(200);
+    expect(t.body).toMatchObject({ versao: TERMO_MIGRACAO_VERSAO, texto: TERMO_MIGRACAO_TEXTO, textoSha256: TERMO_MIGRACAO_SHA256 });
+    const r = await enviar(adminA, 'pacientes', 'nome;telefone\nTermo Ficticio;11900000002\n');
+    expect(r.body).toMatchObject({ termo: { versao: TERMO_MIGRACAO_VERSAO, textoSha256: TERMO_MIGRACAO_SHA256 } });
+    const id = (r.body as { id: string }).id;
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatches).set({ termSha256: 'e'.repeat(64) }).where(eq(importBatches.id, id)), adminA.userId),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) =>
+        tx.insert(importBatches).values({ tenantId: clinicaA, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termAcceptedBy: adminA.userId, byteSize: 1, rowCount: 1, columnCount: 1, createdBy: adminA.userId, rawExpiresAt: sql`now() + interval '1 day'` }), adminA.userId),
+    ).rejects.toThrow();
   });
 
   it('XLSX (pelo tipo ou pela assinatura ZIP) e texto não-CSV: 415; Latin-1: 400; acima de 5 MiB: 413', async () => {
@@ -413,6 +429,7 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
             tenantId: clinicaA,
             kind: 'pacientes',
             termVersion: TERMO_MIGRACAO_VERSAO,
+            termSha256: TERMO_MIGRACAO_SHA256,
             termAcceptedBy: adminA.userId,
             byteSize: 10,
             rowCount: 1,
@@ -439,6 +456,7 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
           tenantId: clinicaA,
           kind: 'pacientes',
           termVersion: TERMO_MIGRACAO_VERSAO,
+          termSha256: TERMO_MIGRACAO_SHA256,
           termAcceptedBy: adminA.userId,
           termAcceptedAt: sql`now() - interval '8 days'`,
           byteSize: 30,
@@ -490,7 +508,7 @@ describe('R2 do #66: rotina diária de descarte (job do sistema, todas as clíni
         async (tx) => {
           await cipher.provisionTenant(tx, t, admin.userId).catch(() => undefined);
           await tx.insert(importBatches).values({
-            id, tenantId: t, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termAcceptedBy: admin.userId,
+            id, tenantId: t, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termSha256: TERMO_MIGRACAO_SHA256, termAcceptedBy: admin.userId,
             termAcceptedAt: sql`now() - interval '9 days'`, byteSize: 30, rowCount: 1, columnCount: 2, createdBy: admin.userId,
             createdAt: sql`now() - interval '9 days'`, rawExpiresAt: sql`now() - interval '2 days'`,
           });

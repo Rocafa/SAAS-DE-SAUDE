@@ -44,6 +44,7 @@ import {
   type PacienteDaLinha,
 } from './importacao-regras';
 import { decodificarUtf8, lerCsv, type Planilha } from './planilha-csv';
+import { TERMO_MIGRACAO_SHA256 } from './termo-migracao';
 
 /** Configuração do importador (ambiente). */
 export interface ImportacaoConfig {
@@ -73,7 +74,7 @@ export interface LoteDto {
   readonly id: string;
   readonly tipo: ImportKind;
   readonly status: ImportStatus;
-  readonly termo: { readonly versao: string; readonly aceitoPor: string; readonly aceitoEm: string };
+  readonly termo: { readonly versao: string; readonly textoSha256: string | null; readonly aceitoPor: string; readonly aceitoEm: string };
   readonly linhas: number;
   readonly colunas: number;
   readonly mapeamento: Mapeamento | null;
@@ -136,7 +137,7 @@ function paraDto(b: Lote): LoteDto {
     id: b.id,
     tipo: b.kind,
     status: b.status,
-    termo: { versao: b.termVersion, aceitoPor: b.termAcceptedBy, aceitoEm: b.termAcceptedAt.toISOString() },
+    termo: { versao: b.termVersion, textoSha256: b.termSha256, aceitoPor: b.termAcceptedBy, aceitoEm: b.termAcceptedAt.toISOString() },
     linhas: b.rowCount,
     colunas: b.columnCount,
     mapeamento: b.columnMapping ?? null,
@@ -202,6 +203,7 @@ export class ImportacaoService {
             tenantId: ctx.tenantId,
             kind: tipo,
             termVersion: termo,
+            termSha256: TERMO_MIGRACAO_SHA256,
             termAcceptedBy: ctx.userId,
             byteSize: bytes.length,
             rowCount: planilha.linhas.length,

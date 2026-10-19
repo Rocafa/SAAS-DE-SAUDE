@@ -259,3 +259,26 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+-- ---------------------------------------------------------------- R4: o aceite aponta para o TEXTO do termo
+-- term_sha256 = SHA-256 do texto aceito (docs/03-seguranca-lgpd/termo-migracao.md, servido pela API).
+-- Obrigatório no lote novo e imutável. (Lotes anteriores à 0026 ficam com NULL: aceitaram versão sem texto.)
+ALTER TABLE import_batches
+  ADD COLUMN term_sha256 text CONSTRAINT import_batches_term_sha_check CHECK (term_sha256 IS NULL OR term_sha256 ~ '^[0-9a-f]{64}$');
+
+CREATE FUNCTION import_batches_term_text_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' AND NEW.term_sha256 IS NULL THEN
+    RAISE EXCEPTION 'aceite do termo exige o hash do texto aceito' USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.term_sha256 IS DISTINCT FROM OLD.term_sha256 THEN
+    RAISE EXCEPTION 'texto aceito do termo é imutável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER import_batches_term_text_guard BEFORE INSERT OR UPDATE ON import_batches
+  FOR EACH ROW EXECUTE FUNCTION import_batches_term_text_guard();

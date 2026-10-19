@@ -26,6 +26,8 @@ export interface ExportedImports {
     termVersion: string;
     termAcceptedBy: string;
     termAcceptedAt: string;
+    /** SHA-256 do texto do termo aceito (0026, R4); null em lote anterior ao texto. */
+    termSha256: string | null;
     fileFormat: string;
     byteSize: number;
     rowCount: number;
@@ -81,6 +83,7 @@ export async function exportarImportacoes(tx: TenantTx, tenantId: TenantId): Pro
       termVersion: b.termVersion,
       termAcceptedBy: b.termAcceptedBy,
       termAcceptedAt: b.termAcceptedAt.toISOString(),
+      termSha256: b.termSha256,
       fileFormat: b.fileFormat,
       byteSize: b.byteSize,
       rowCount: b.rowCount,
