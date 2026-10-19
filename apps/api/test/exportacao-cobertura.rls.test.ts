@@ -41,6 +41,9 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
@@ -94,6 +97,9 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  guardians: 'guardians.guardians',
+  patient_guardians: 'guardians.patientGuardians',
+  patient_guardian_history: 'guardians.patientGuardianHistory',
   audit_log: 'auditEvents',
 };
 
@@ -387,7 +393,10 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receiptCounters
           | typeof receipts
           | typeof receiptCancellations
-          | typeof clinicMembers,
+          | typeof clinicMembers
+          | typeof guardians
+          | typeof patientGuardians
+          | typeof patientGuardianHistory,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -424,6 +433,11 @@ describe('G2 — conteúdo do pacote', () => {
           receiptCounters: await n(receiptCounters),
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
+        },
+        guardians: {
+          guardians: await n(guardians),
+          patientGuardians: await n(patientGuardians),
+          patientGuardianHistory: await n(patientGuardianHistory),
         },
         clinicMembers: await n(clinicMembers),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
@@ -463,6 +477,12 @@ describe('G2 — conteúdo do pacote', () => {
         receiptCounters: 1,
         receipts: 2,
         receiptCancellations: 1,
+      },
+      // 0028: 1 pessoa, 1 vínculo; histórico = criação da pessoa, do vínculo, troca do telefone e encerramento.
+      guardians: {
+        guardians: 1,
+        patientGuardians: 1,
+        patientGuardianHistory: 4,
       },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.

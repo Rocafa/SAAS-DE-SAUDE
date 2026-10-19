@@ -672,6 +672,86 @@ export const tenantDataKeys = pgTable(
   ],
 );
 
+/** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */
+export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante'] as const;
+export type GuardianKind = (typeof GUARDIAN_KINDS)[number];
+export const GUARDIAN_END_REASONS = [
+  'maioridade',
+  'fim_da_representacao',
+  'decisao_judicial',
+  'substituido',
+  'cadastro_errado',
+  'pedido_do_titular',
+] as const;
+export type GuardianEndReason = (typeof GUARDIAN_END_REASONS)[number];
+export const GUARDIAN_HISTORY_EVENTS = [
+  'responsavel_criado',
+  'responsavel_alterado',
+  'vinculo_criado',
+  'vinculo_alterado',
+  'vinculo_encerrado',
+] as const;
+
+/** A pessoa responsável (0028): nome, CPF e telefone SÓ cifrados (chave da clínica). */
+export const guardians = pgTable('guardians', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  nameEnc: text('name_enc').notNull(),
+  cpfEnc: text('cpf_enc'),
+  phoneEnc: text('phone_enc'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+});
+
+/** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */
+export const patientGuardians = pgTable('patient_guardians', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  guardianId: uuid('guardian_id').notNull(),
+  kind: text('kind', { enum: GUARDIAN_KINDS }).notNull(),
+  isPayer: boolean('is_payer').notNull().default(false),
+  receivesClinicalInfo: boolean('receives_clinical_info').notNull().default(false),
+  validFrom: date('valid_from').notNull(),
+  validUntil: date('valid_until'),
+  endReason: text('end_reason', { enum: GUARDIAN_END_REASONS }),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  endedBy: uuid('ended_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+});
+
+/** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */
+export const patientGuardianHistory = pgTable('patient_guardian_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  guardianId: uuid('guardian_id').notNull(),
+  linkId: uuid('link_id'),
+  event: text('event', { enum: GUARDIAN_HISTORY_EVENTS }).notNull(),
+  changedFields: text('changed_fields').notNull().default(''),
+  prevNameEnc: text('prev_name_enc'),
+  prevCpfEnc: text('prev_cpf_enc'),
+  prevPhoneEnc: text('prev_phone_enc'),
+  kind: text('kind', { enum: GUARDIAN_KINDS }),
+  isPayer: boolean('is_payer'),
+  receivesClinicalInfo: boolean('receives_clinical_info'),
+  validFrom: date('valid_from'),
+  validUntil: date('valid_until'),
+  endReason: text('end_reason', { enum: GUARDIAN_END_REASONS }),
+  actorId: uuid('actor_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const schema = {
   tenants,
   patients,
@@ -705,4 +785,7 @@ export const schema = {
   receiptCounters,
   receipts,
   receiptCancellations,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
 };

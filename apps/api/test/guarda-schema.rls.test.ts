@@ -81,6 +81,11 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
+  // Responsáveis do paciente (migração 0028): sem DELETE/TRUNCATE (encerrar a vigência, nunca apagar);
+  // o histórico é append-only e só os triggers do cadastro gravam nele.
+  guardians: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  patient_guardians: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  patient_guardian_history: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

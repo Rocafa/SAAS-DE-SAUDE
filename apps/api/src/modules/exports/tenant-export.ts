@@ -33,6 +33,7 @@ import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../au
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
+import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -79,8 +80,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        controle de acesso (LGPD arts. 37 e 46).
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
+ * 1.13.0: responsáveis do paciente (migração 0028): pessoas (nome, CPF e telefone decifrados), vínculos
+ *        com vigência, pagador e informação clínica, e o histórico (valores anteriores decifrados), em
+ *        `data.guardians` e `manifest.counts.guardians`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.12.0';
+export const EXPORT_SCHEMA_VERSION = '1.13.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -125,6 +129,10 @@ export const EXPORTED_TABLES = [
   'receipts',
   'receipt_cancellations',
   'clinic_members',
+  // Responsáveis do paciente (0028): em data.guardians.
+  'guardians',
+  'patient_guardians',
+  'patient_guardian_history',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -172,6 +180,8 @@ export interface ExportManifest {
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
+    /** Responsáveis do paciente (0028), por tabela. */
+    readonly guardians: GuardiansCounts;
     readonly clinicMembers: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
@@ -469,6 +479,8 @@ export interface TenantExportDocument {
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
+    /** Responsáveis do paciente (0028). */
+    readonly guardians: ExportedGuardians;
     readonly clinicMembers: readonly ExportedClinicMember[];
   };
 }
@@ -703,6 +715,10 @@ export async function exportInTransaction(
   }));
   const auditHead = await auditChainHead(tx, ctx.tenantId);
   const financeiro = await exportarFinanceiro(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+  const responsaveis = await exportarResponsaveis(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
@@ -1003,6 +1019,7 @@ export async function exportInTransaction(
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
+      guardians: responsaveis.counts,
       clinicMembers: exportedMembers.length,
       auditEvents: auditEvents.length,
     },
@@ -1085,6 +1102,7 @@ export async function exportInTransaction(
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
+        guardians: responsaveis.data,
         clinicMembers: exportedMembers,
       },
     },
