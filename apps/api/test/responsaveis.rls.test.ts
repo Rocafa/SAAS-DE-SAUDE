@@ -145,6 +145,8 @@ beforeAll(async () => {
   tipoA = id(await post(adminA, '/tipos-atendimento', { nome: 'Sessao', minutos: 40 }));
   await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(880) }).expect(200);
   await api.membro(clinicaA, profA, 'profissional');
+  // R1 do 2º parecer do #67: anular pagador com recebimentos confere no banco o perfil que opera o financeiro.
+  await api.membro(clinicaA, recepA, 'recepcao');
   profissionalDoProfA = id(await post(adminA, '/profissionais', { nome: 'Profissional Ficticia Cuidado', especialidade: 'Psicologia', usuarioId: profA.userId }));
   const caixa = await post(recepA, '/financeiro/caixas', { turno: 'unico' });
   expect(caixa.status, JSON.stringify(caixa.body)).toBe(201);
@@ -355,6 +357,60 @@ describe('V1 do #67: pagador congelado no recebimento (sem retroatividade)', () 
         withTenant(api.db.db, clinicaA, (tx) => tx.update(payments).set({ guardianPayerLinkId: naoPagador.id }).where(eq(payments.id, pagou)), recepA.userId),
       ),
     ).toContain('42501');
+  });
+});
+
+describe('R1 do 2º parecer do #67: anular pagador que já tem recebimentos', () => {
+  it('exige financeiro:operar (API e banco); recibo tardio e lote ganham pagador_anulado; recibo emitido não muda', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Pagador Anulado', cpf: cpfFicticio(870), nascimento: nascidoHa(9) });
+    const CPF_ERR = cpfFicticio(871);
+    const errado = await responsavel(recepA, pac, { nome: 'Resp Ficticio Pagador Anulado QZR1', cpf: CPF_ERR, tipo: 'pai_mae', pagador: true });
+    const emitido = await receberSemRecibo(pac);
+    const reciboAntes = (await post(finA, `/financeiro/recebimentos/${emitido}/recibo`)).body as { id: string; pendencias: string[]; pagador: unknown };
+    expect(reciboAntes.pagador).toEqual({ nome: 'Resp Ficticio Pagador Anulado QZR1', cpf: CPF_ERR });
+    expect(reciboAntes.pendencias).not.toContain('pagador_anulado');
+    const tardio = await receberSemRecibo(pac);
+    const MOTIVO = 'Cadastro ficticio feito no paciente errado';
+
+    // Profissional escreve responsáveis mas não opera o financeiro: 403 na API e 42501 no banco.
+    const negado = await post(profA, `/pacientes/${pac}/responsaveis/${errado.id}/anular`, { motivo: MOTIVO });
+    expect(negado.status).toBe(403);
+    expect(negado.body).toMatchObject({ codigo: 'anular_pagador_com_recebimentos' });
+    const [selo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, errado.responsavelId)), recepA.userId);
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx
+            .update(patientGuardians)
+            .set({ validUntil: errado.vigencia.desde, endReason: 'cadastro_errado', annulReasonEnc: selo!.nameEnc, discardAfter: '2099-01-01', endedAt: new Date(), endedBy: profA.userId, updatedBy: profA.userId })
+            .where(eq(patientGuardians.id, errado.id)), profA.userId),
+      ),
+    ).toContain('42501');
+
+    // Recepção opera o financeiro: anula.
+    const an = await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/anular`, { motivo: MOTIVO });
+    expect(an.status, JSON.stringify(an.body)).toBe(200);
+    // Recibo já emitido: igual (retrato imutável).
+    const mesmo = (await get(finA, `/financeiro/recibos/${reciboAntes.id}`)).body as { pendencias: string[]; pagador: unknown };
+    expect(mesmo).toMatchObject({ pendencias: reciboAntes.pendencias, pagador: reciboAntes.pagador });
+    // Recibo tardio: o congelado continua, com a pendência pagador_anulado.
+    const rt = await post(finA, `/financeiro/recebimentos/${tardio}/recibo`);
+    expect(rt.status, JSON.stringify(rt.body)).toBe(200);
+    expect(rt.body).toMatchObject({ pagador: { nome: 'Resp Ficticio Pagador Anulado QZR1', cpf: CPF_ERR } });
+    expect((rt.body as { pendencias: string[] }).pendencias).toContain('pagador_anulado');
+    // Lote do Receita Saúde: os dois recebimentos do paciente com a pendência.
+    const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje(), ate: hoje() });
+    expect(lote.status, JSON.stringify(lote.body)).toBe(200);
+    const doPac = (lote.body as { itens: { pendencias: string[]; beneficiario: { nome: string } }[] }).itens.filter(
+      (i) => i.beneficiario.nome === 'Paciente Ficticio Pagador Anulado',
+    );
+    expect(doPac).toHaveLength(2);
+    for (const i of doPac) expect(i.pendencias).toContain('pagador_anulado');
+    // Trilha: a anulação registra quantos recebimentos estavam atribuídos (só a contagem).
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select({ m: auditLog.metadata }).from(auditLog).where(and(eq(auditLog.scope, 'patient_guardians'), sql`${auditLog.metadata}->>'link_id' = ${errado.id}`, sql`${auditLog.metadata}->>'reason' = 'cadastro_errado'`)));
+    expect(trilha.map((t) => (t.m as { payments_attributed?: number }).payments_attributed)).toEqual([2]);
+    expect(JSON.stringify(trilha)).not.toContain('QZR1');
   });
 });
 

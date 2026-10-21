@@ -6,6 +6,7 @@ import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   charges,
+  patientGuardians,
   patients,
   paymentReversals,
   payments,
@@ -279,6 +280,7 @@ export class RecibosService {
           .where(and(eq(receipts.tenantId, ctx.tenantId), inArray(receipts.paymentId, usadas.map((l) => l.p.id)), isNull(receiptCancellations.id)));
         for (const r of recs) numeros.set(r.paymentId, r.numero);
       }
+      const anulados = await this.vinculosAnulados(tx, ctx, usadas.map((l) => l.p.guardianPayerLinkId));
       const itens: ItemReceitaSaude[] = [];
       for (const l of usadas) {
         const beneficiario: PessoaDoRecibo = {
@@ -298,7 +300,11 @@ export class RecibosService {
           valorCentavos: l.p.amountCents,
           pagador,
           beneficiario,
-          pendencias: pendenciasDoItem({ pagador, beneficiario }, responsavel),
+          pendencias: pendenciasDoItem(
+            { pagador, beneficiario },
+            responsavel,
+            doResponsavel !== null && l.p.guardianPayerLinkId !== null && anulados.has(l.p.guardianPayerLinkId),
+          ),
         });
       }
       const cpfProf = await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, prof.id, CAMPO_CPF_PROFISSIONAL, perfil?.cpfEnc ?? null);
@@ -395,7 +401,22 @@ export class RecibosService {
     };
     // R3 do #65: a pendência só fica quando nem a cobrança nem o cadastro dizem quem pagou.
     const responsavel = !c.payerName && !doResponsavel && (await this.pacienteMenor(tx, ctx, pac, dataPagamento));
-    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel) };
+    const anulado = doResponsavel !== null && (await this.vinculosAnulados(tx, ctx, [p.guardianPayerLinkId])).size > 0;
+    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel, anulado) };
+  }
+
+  /**
+   * R1 do 2º parecer do #67: dos vínculos informados (pagador congelado de recebimentos), os anulados como
+   * cadastro errado depois do recebimento. O congelado continua valendo, com a pendência `pagador_anulado`.
+   */
+  private async vinculosAnulados(tx: TenantTx, ctx: RequestContext, ids: readonly (string | null)[]): Promise<Set<string>> {
+    const validos = [...new Set(ids.filter((i): i is string => i !== null))];
+    if (!validos.length) return new Set();
+    const linhas = await tx
+      .select({ id: patientGuardians.id })
+      .from(patientGuardians)
+      .where(and(eq(patientGuardians.tenantId, ctx.tenantId), inArray(patientGuardians.id, validos), eq(patientGuardians.endReason, 'cadastro_errado')));
+    return new Set(linhas.map((l) => l.id));
   }
 
   /** V1 do #67: o responsável pagador gravado no recebimento (null se não houve ou se já eliminado pela retenção). */

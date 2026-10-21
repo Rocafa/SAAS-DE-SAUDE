@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
@@ -442,12 +442,25 @@ export class ResponsaveisService {
    * Anula um vínculo cadastrado por ENGANO (A4 do #67): vigência vazia (nunca vigente), motivo cifrado e
    * prazo de descarte. Vencido o prazo, `descartarAnulados` elimina a pessoa se todos os vínculos dela forem
    * anulados. Recibos emitidos e o pagador congelado nos recebimentos NÃO mudam (são retratos próprios).
+   *
+   * R1 do 2º parecer do #67: se o vínculo já é o pagador congelado de algum recebimento, anular é ato de
+   * quem opera o financeiro (`financeiro:operar`; 403 `anular_pagador_com_recebimentos` para o profissional;
+   * o banco confere o perfil ativo). Esses recebimentos passam a sair com a pendência `pagador_anulado` no
+   * recibo tardio e no insumo do Receita Saúde; a correção fiscal é estorno e novo recebimento (§10a).
    */
   anular(ctx: RequestContext, pacienteId: string, vinculoId: string, motivo: string): Promise<ResponsavelDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       const pac = await this.paciente(tx, ctx, pacienteId);
       const { v, g } = await this.travarVinculo(tx, ctx, pacienteId, vinculoId);
       if (v.endedAt) throw new ConflitoError('vinculo_encerrado');
+      const [atribuidos] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(payments)
+        .where(and(eq(payments.tenantId, ctx.tenantId), eq(payments.guardianPayerLinkId, v.id)));
+      const recebimentos = Number(atribuidos?.n ?? 0);
+      if (recebimentos > 0 && !temPermissao(ctx.roles.filter(ehPerfil), 'financeiro:operar')) {
+        throw new ProibidoError('anular_pagador_com_recebimentos');
+      }
       const hoje = hojeNaClinica();
       const descarte = somarDias(hoje, PRAZO_DESCARTE_ANULADO_DIAS);
       const [nv] = await tx
@@ -466,7 +479,14 @@ export class ResponsaveisService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE_RESPONSAVEIS,
-        metadata: { patient_id: pacienteId, link_id: v.id, changed: 'valid_until,annul_reason', reason: 'cadastro_errado', discard_after_days: PRAZO_DESCARTE_ANULADO_DIAS },
+        metadata: {
+          patient_id: pacienteId,
+          link_id: v.id,
+          changed: 'valid_until,annul_reason',
+          reason: 'cadastro_errado',
+          discard_after_days: PRAZO_DESCARTE_ANULADO_DIAS,
+          payments_attributed: recebimentos,
+        },
       });
       return this.paraDto(tx, ctx, nv as LinhaVinculo, g, await this.quadro(tx, ctx.tenantId, pac), hoje);
     });
