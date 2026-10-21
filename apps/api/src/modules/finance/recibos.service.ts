@@ -24,7 +24,9 @@ import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { diasEntre } from '../insurance/guias-regras';
+import { ehPerfil, temPermissao } from '../auth/perfis';
 import { patientFieldRef } from '../patients/patient-fields';
+import { mascararCpf } from '../patients/responsaveis.service';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
@@ -65,6 +67,19 @@ export interface ReciboDto extends ConteudoDoRecibo {
   readonly emitidoEm: string;
   readonly situacao: 'emitido' | 'cancelado';
   readonly cancelamento: { readonly motivo: ReceiptCancelReason; readonly em: string } | null;
+  /** CPFs mascarados para quem não tem `recibos:ver_cpf_completo` (recepção). */
+  readonly cpfMascarado: boolean;
+}
+
+/** CPFs do recibo mascarados (pagador, beneficiário e o documento do emitente PF, que é CPF; CNPJ fica). */
+export function mascararCpfsDoRecibo(c: ConteudoDoRecibo): ConteudoDoRecibo {
+  const pessoa = (p: PessoaDoRecibo): PessoaDoRecibo => ({ ...p, cpf: p.cpf === null ? null : mascararCpf(p.cpf) });
+  return {
+    ...c,
+    pagador: pessoa(c.pagador),
+    beneficiario: pessoa(c.beneficiario),
+    emitente: c.emitente.tipo === 'pf' && c.emitente.documento !== null ? { ...c.emitente, documento: mascararCpf(c.emitente.documento) } : c.emitente,
+  };
 }
 
 /** Item de lista: sem CPF e sem nome (a lista é para conferência; o detalhe abre o recibo). */
@@ -158,6 +173,7 @@ export class RecibosService {
           kind: conteudo.emitente.tipo,
           council_shown: conteudo.emitente.registroConselho !== null,
           pending: conteudo.pendencias.length,
+          full_cpf: temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo'),
         },
       });
       return this.lerRecibo(tx, ctx, id);
@@ -167,7 +183,11 @@ export class RecibosService {
   obter(ctx: RequestContext, id: string): Promise<ReciboDto> {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const r = await this.lerRecibo(tx, ctx, id);
-      await recordAudit(tx, ctx, { action: AuditAction.Read, scope: SCOPE_RECIBOS, metadata: { receipt_id: id, receipt_number: r.numero } });
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Read,
+        scope: SCOPE_RECIBOS,
+        metadata: { receipt_id: id, receipt_number: r.numero, full_cpf: !r.cpfMascarado },
+      });
       return r;
     });
   }
@@ -444,9 +464,14 @@ export class RecibosService {
     if (!l) throw new NaoEncontradoError();
     // R7: retrato eliminado pela retenção fiscal (ficam número, valor e datas, sem dado pessoal).
     if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
-    const conteudo = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
+    const gravado = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
+    // 2º parecer do #67: CPF completo no recibo só para admin e financeiro; a recepção (que emite e entrega)
+    // vê pagador, beneficiário e emitente PF mascarados. O retrato gravado continua completo.
+    const completo = temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo');
+    const conteudo: ConteudoDoRecibo = completo ? gravado : mascararCpfsDoRecibo(gravado);
     return {
       ...conteudo,
+      cpfMascarado: !completo,
       id: l.r.id,
       numero: l.r.number,
       recebimentoId: l.r.paymentId,

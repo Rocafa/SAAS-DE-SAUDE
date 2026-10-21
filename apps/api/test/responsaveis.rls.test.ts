@@ -129,7 +129,7 @@ async function reciboSemPagador(pacienteId: string) {
   expect(p.status, JSON.stringify(p.body)).toBe(201);
   const r = await post(recepA, `/financeiro/recebimentos/${id(p)}/recibo`);
   expect(r.status, JSON.stringify(r.body)).toBe(200);
-  return r.body as { pendencias: string[]; pagador: { nome: string; cpf: string | null }; beneficiario: { nome: string } };
+  return r.body as { id: string; pendencias: string[]; pagador: { nome: string; cpf: string | null }; beneficiario: { nome: string } };
 }
 
 beforeAll(async () => {
@@ -242,8 +242,12 @@ describe('financeiro: pendência pagador_responsavel (R3 do #65)', () => {
     const r3 = await reciboSemPagador(menor);
     expect(r3.pendencias).not.toContain('pagador_responsavel');
     expect(r3.pendencias).not.toContain('cpf_do_pagador');
-    expect(r3.pagador).toEqual({ nome: NOME_RESP, cpf: CPF_RESP });
+    // Recibo emitido pela recepção: CPF mascarado; financeiro e admin leem o mesmo recibo com o CPF completo.
+    expect(r3.pagador).toEqual({ nome: NOME_RESP, cpf: mascararCpf(CPF_RESP) });
     expect(r3.beneficiario.nome).toBe('Paciente Ficticio Menor Recibo');
+    for (const s of [finA, adminA]) {
+      expect(((await get(s, `/financeiro/recibos/${r3.id}`)).body as { pagador: unknown }).pagador).toEqual({ nome: NOME_RESP, cpf: CPF_RESP });
+    }
     // Receita Saúde do dia: só o item recebido com o responsável já pagador sai com o CPF dele.
     const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje(), ate: hoje() });
     expect(lote.status, JSON.stringify(lote.body)).toBe(200);
@@ -306,7 +310,7 @@ describe('V1 do #67: pagador congelado no recebimento (sem retroatividade)', () 
     const tutor = await responsavel(recepA, pac, { nome: 'Tutor Ficticio Retro', cpf: CPF_NOVO, tipo: 'tutor', pagador: true, desde: '2025-01-01' });
 
     // Recibo tardio do pagamento anterior: continua a MÃE com o CPF daquele momento.
-    const tardio = await post(recepA, `/financeiro/recebimentos/${antes}/recibo`);
+    const tardio = await post(finA, `/financeiro/recebimentos/${antes}/recibo`);
     expect(tardio.status, JSON.stringify(tardio.body)).toBe(200);
     expect((tardio.body as { pagador: unknown }).pagador).toEqual({ nome: 'Mae Ficticia Retro', cpf: CPF_MAE });
     // Lote do Receita Saúde que cobre o pagamento anterior: idem (o lote é recalculado a cada geração).
@@ -318,7 +322,7 @@ describe('V1 do #67: pagador congelado no recebimento (sem retroatividade)', () 
     expect(doPac.map((i) => i.pagador)).toEqual([{ nome: 'Mae Ficticia Retro', cpf: CPF_MAE }]);
     // Pagamento NOVO: vale o pagador vivo de agora (o tutor).
     const depois = await receberSemRecibo(pac);
-    expect(((await post(recepA, `/financeiro/recebimentos/${depois}/recibo`)).body as { pagador: unknown }).pagador).toEqual({
+    expect(((await post(finA, `/financeiro/recebimentos/${depois}/recibo`)).body as { pagador: unknown }).pagador).toEqual({
       nome: 'Tutor Ficticio Retro',
       cpf: CPF_NOVO,
     });
@@ -468,7 +472,7 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
     // Corrige o CPF (o anterior vai cifrado ao histórico) e recebe um pagamento com ele pagador.
     await patch(recepA, `/pacientes/${pac}/responsaveis/${errado.id}`, { cpf: CPF_ERRADO }).expect(200);
     const pago = await receberSemRecibo(pac);
-    const reciboAntes = (await post(recepA, `/financeiro/recebimentos/${pago}/recibo`)).body as { pagador: unknown; id: string };
+    const reciboAntes = (await post(finA, `/financeiro/recebimentos/${pago}/recibo`)).body as { pagador: unknown; id: string };
     expect(reciboAntes.pagador).toEqual({ nome: 'Resp Ficticio Errado QZA0001', cpf: CPF_ERRADO });
     expect((await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/encerrar`, { motivo: 'cadastro_errado' })).status).toBe(400);
     expect((await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/anular`, { motivo: 'curto' })).status).toBe(400);
