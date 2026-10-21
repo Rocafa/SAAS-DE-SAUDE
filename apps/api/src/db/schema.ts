@@ -426,7 +426,14 @@ export const noteCustodies = pgTable('note_custodies', {
 
 /** Caixa de avisos interna (0017, R9 do #63): sem dado de paciente; só o destinatário lê e marca lido. */
 /** 0022 (R13/R15 do #63): avisos aos demais admins (perfil alterado, retirada de retenção pedida/aprovada). */
-export const CLINICAL_NOTICE_KINDS = ['sigilo_psicologia_alterado', 'perfil_alterado', 'retencao_retirada_pedida', 'retencao_retirada_aprovada'] as const;
+export const CLINICAL_NOTICE_KINDS = [
+  'sigilo_psicologia_alterado',
+  'perfil_alterado',
+  'retencao_retirada_pedida',
+  'retencao_retirada_aprovada',
+  // 0033 (A3b do #68): pedido do titular aberto no portal; leva só o id do pedido.
+  'pedido_titular_aberto',
+] as const;
 export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
 export const clinicalNotices = pgTable('clinical_notices', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -441,6 +448,7 @@ export const clinicalNotices = pgTable('clinical_notices', {
   subjectRole: text('subject_role', { enum: CLINIC_MEMBER_ROLES }),
   change: text('change', { enum: ['concedido', 'revogado'] as const }),
   legalHoldId: uuid('legal_hold_id'),
+  rightsRequestId: uuid('rights_request_id'),
   restrictedExisting: integer('restricted_existing').notNull().default(0),
   createdBy: uuid('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   patients,
@@ -22,7 +23,15 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
-import { CONSENTIMENTOS, consentimentoIa, estadoDoConsentimento, novoTokenDeConvite, type RespostaConsentimento } from './portal-regras';
+import {
+  CONSENTIMENTOS,
+  consentimentoIa,
+  estadoDoConsentimento,
+  exigeResposta,
+  MODELO_RESPOSTA_ELIMINACAO,
+  novoTokenDeConvite,
+  type RespostaConsentimento,
+} from './portal-regras';
 
 export interface PedidoDoTitularDto {
   readonly id: string;
@@ -40,6 +49,8 @@ export interface PedidoDoTitularDto {
 export interface PedidoDoTitularDetalheDto extends PedidoDoTitularDto {
   readonly detalhe: string | null;
   readonly resposta: string | null;
+  /** Texto-modelo para a clínica adaptar (só em `eliminacao`: retenção legal do prontuário; A3d do #68). */
+  readonly modeloDeResposta: string | null;
 }
 
 /**
@@ -172,6 +183,7 @@ export class PortalClinicaService {
         ...this.dto(r),
         detalhe: await decifrarCampoPortal(this.cipher, tx, ctx.tenantId, id, 'detail', r.detailEnc),
         resposta: await decifrarCampoPortal(this.cipher, tx, ctx.tenantId, id, 'answer', r.answerEnc),
+        modeloDeResposta: r.kind === 'eliminacao' ? MODELO_RESPOSTA_ELIMINACAO : null,
       };
     });
   }
@@ -186,6 +198,8 @@ export class PortalClinicaService {
       const r = await this.carregar(tx, ctx, id, true);
       if (r.status === 'atendida' || r.status === 'recusada') throw new ConflitoError('pedido_encerrado');
       if (r.status === dados.situacao) throw new ConflitoError('transicao_invalida');
+      // A3a do #68: recusa e atendimento comunicam as razões ou o resultado ao titular (o banco confere).
+      if (exigeResposta(dados.situacao) && !dados.resposta?.trim() && r.answerEnc === null) throw new EntradaInvalidaError(['resposta']);
       const answerEnc = dados.resposta ? await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, ctx.userId, id, 'answer', dados.resposta) : r.answerEnc;
       const [novo] = await tx
         .update(portalRightsRequests)

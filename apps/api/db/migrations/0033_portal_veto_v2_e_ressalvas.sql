@@ -163,3 +163,134 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- ================================================================ A3. pedidos do titular
+--
+-- (a) LGPD art. 18 §4º e art. 19: recusa e atendimento comunicam as razões ou o resultado. Resposta
+--     (cifrada) obrigatória nos dois estados finais, no banco e no serviço.
+-- (b) Aviso aos admins ativos da clínica a cada pedido novo (clinical_notices `pedido_titular_aberto`, só o
+--     id do pedido; nada do paciente nem do texto). Gravado pela API numa transação de SISTEMA da clínica
+--     logo depois do pedido (a sessão do portal não vê a equipe): o gatilho dos avisos aceita o sentinela de
+--     sistema só para este tipo. O atraso aparece na lista da clínica (`atrasado`).
+-- (c) Teto diário: no máximo 5 pedidos por vínculo (conta + paciente) em 24 h. A API responde 429 e grava
+--     UM anomaly_alert; o gatilho é a segunda barreira (SQL direto na sessão do portal).
+ALTER TABLE portal_rights_requests
+  ADD CONSTRAINT portal_rights_requests_answer_required_check
+  CHECK (status NOT IN ('atendida', 'recusada') OR answer_enc IS NOT NULL);
+
+CREATE OR REPLACE FUNCTION portal_rights_requests_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF app_portal_patient() IS NULL OR NEW.patient_id IS DISTINCT FROM app_portal_patient()
+       OR NEW.link_id IS DISTINCT FROM app_portal_link() OR NEW.account_id IS DISTINCT FROM app_portal_account() THEN
+      RAISE EXCEPTION 'pedido do titular é aberto pela sessão do portal' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.created_at IS DISTINCT FROM now() OR NEW.status <> 'aberta' OR NEW.handled_by IS NOT NULL OR NEW.answer_enc IS NOT NULL
+       OR NEW.acting_as IS DISTINCT FROM
+          (SELECT l.acting_as FROM portal_links l WHERE l.tenant_id = NEW.tenant_id AND l.id = NEW.link_id AND l.revoked_at IS NULL) THEN
+      RAISE EXCEPTION 'pedido do titular nasce aberto, no vínculo ativo' USING ERRCODE = 'check_violation';
+    END IF;
+    -- Teto diário por vínculo (A3c do #68). Trava o vínculo para a contagem não correr.
+    PERFORM pg_advisory_xact_lock(hashtextextended('portal_rights:' || NEW.link_id::text, 0));
+    IF (SELECT count(*) FROM portal_rights_requests r
+         WHERE r.tenant_id = NEW.tenant_id AND r.link_id = NEW.link_id AND r.created_at > now() - interval '1 day') >= 5 THEN
+      RAISE EXCEPTION 'teto diário de pedidos do titular atingido' USING ERRCODE = 'program_limit_exceeded';
+    END IF;
+    NEW.due_at := NEW.created_at + interval '15 days';
+    RETURN NEW;
+  END IF;
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.patient_id IS DISTINCT FROM OLD.patient_id
+     OR NEW.link_id IS DISTINCT FROM OLD.link_id OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.kind IS DISTINCT FROM OLD.kind
+     OR NEW.acting_as IS DISTINCT FROM OLD.acting_as OR NEW.protocol IS DISTINCT FROM OLD.protocol
+     OR NEW.detail_enc IS DISTINCT FROM OLD.detail_enc OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.due_at IS DISTINCT FROM OLD.due_at THEN
+    RAISE EXCEPTION 'pedido do titular: identidade e detalhe são imutáveis' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF v_user IS NULL OR app_portal_patient() IS NOT NULL OR NEW.handled_by IS DISTINCT FROM v_user OR NEW.handled_at IS DISTINCT FROM now() THEN
+    RAISE EXCEPTION 'só o usuário da sessão da clínica atende o pedido' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.status IN ('atendida', 'recusada') THEN
+    RAISE EXCEPTION 'pedido encerrado não muda' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF NOT ((OLD.status = 'aberta' AND NEW.status IN ('em_andamento', 'atendida', 'recusada'))
+          OR (OLD.status = 'em_andamento' AND NEW.status IN ('atendida', 'recusada'))) THEN
+    RAISE EXCEPTION 'transição de pedido do titular inválida' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW.status IN ('atendida', 'recusada') AND NEW.answer_enc IS NULL THEN
+    RAISE EXCEPTION 'pedido atendido ou recusado exige resposta ao titular' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- (b) aviso aos admins: novo tipo, com o id do pedido (FK composta, mesma clínica).
+ALTER TABLE portal_rights_requests ADD CONSTRAINT portal_rights_requests_id_tenant_key UNIQUE (id, tenant_id);
+ALTER TABLE clinical_notices DROP CONSTRAINT clinical_notices_kind_check;
+ALTER TABLE clinical_notices DROP CONSTRAINT clinical_notices_shape_check;
+ALTER TABLE clinical_notices
+  ADD COLUMN rights_request_id uuid,
+  ADD CONSTRAINT clinical_notices_rights_request_fk FOREIGN KEY (rights_request_id, tenant_id)
+    REFERENCES portal_rights_requests (id, tenant_id),
+  ADD CONSTRAINT clinical_notices_kind_check CHECK (kind IN (
+    'sigilo_psicologia_alterado', 'perfil_alterado', 'retencao_retirada_pedida', 'retencao_retirada_aprovada',
+    'pedido_titular_aberto')),
+  ADD CONSTRAINT clinical_notices_shape_check CHECK (
+    CASE kind
+      WHEN 'sigilo_psicologia_alterado' THEN
+        from_mode IS NOT NULL AND to_mode IS NOT NULL
+        AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+        AND rights_request_id IS NULL
+      WHEN 'perfil_alterado' THEN
+        from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+        AND subject_user_id IS NOT NULL AND subject_role IS NOT NULL AND change IS NOT NULL AND legal_hold_id IS NULL
+        AND rights_request_id IS NULL
+      WHEN 'pedido_titular_aberto' THEN
+        from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+        AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+        AND rights_request_id IS NOT NULL
+      ELSE
+        from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+        AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NOT NULL
+        AND rights_request_id IS NULL
+    END);
+
+-- Mesmo gatilho da 0017, com uma exceção: a transação de SISTEMA da clínica (sentinela, fora do portal)
+-- cria o aviso `pedido_titular_aberto` (created_by = sentinela). Nenhum outro tipo aceita o sistema.
+CREATE OR REPLACE FUNCTION clinical_notices_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+  semLeitura clinical_notices;
+BEGIN
+  IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'clinical_notices não se apaga' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.kind = 'pedido_titular_aberto' THEN
+      IF NOT app_is_system_session() OR app_portal_patient() IS NOT NULL
+         OR NEW.created_by IS DISTINCT FROM '00000000-0000-0000-0000-000000000000'::uuid OR NEW.read_at IS NOT NULL THEN
+        RAISE EXCEPTION 'aviso de pedido do titular é criado pelo sistema e nasce não lido' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+      RETURN NEW;
+    END IF;
+    IF v_user IS NULL OR NEW.created_by <> v_user OR NEW.read_at IS NOT NULL THEN
+      RAISE EXCEPTION 'aviso é criado por quem está na sessão e nasce não lido' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  semLeitura := NEW;
+  semLeitura.read_at := OLD.read_at;
+  IF semLeitura IS DISTINCT FROM OLD OR OLD.read_at IS NOT NULL OR NEW.read_at IS NULL
+     OR v_user IS NULL OR OLD.recipient_user_id <> v_user THEN
+    RAISE EXCEPTION 'só o destinatário marca o aviso como lido' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;

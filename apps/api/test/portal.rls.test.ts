@@ -342,7 +342,7 @@ describe('A4 do #68: paciente inativado perde o portal', () => {
     expect((await api.http().get('/portal/vinculos').set(cab(p)).expect(200)).body).toEqual([]);
     await expect(
       api.db.db.transaction((tx) => tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`)),
-    ).rejects.toMatchObject({ cause: expect.objectContaining({ code: '42501' }) });
+    ).rejects.toHaveProperty('cause.code', '42501');
   });
 });
 
@@ -409,6 +409,62 @@ describe('pedidos do titular (LGPD art. 18): registrados e visíveis só para a 
         await tx.execute(sql`update portal_rights_requests set status = 'atendida', handled_at = now(), handled_by = ${p.contaId} where id = ${aberto.id}`);
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('A3 do #68: resposta obrigatória, aviso à clínica e teto diário', () => {
+  it('recusa/atendimento sem resposta = 400 (API) e recusado no banco; eliminação traz o texto-modelo da retenção', async () => {
+    const p = await contaDe(adminA, pacA1);
+    const { id } = (await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'apagar' }).expect(201)).body as { id: string };
+    const sem = await api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send({ situacao: 'recusada' }).expect(400);
+    expect(sem.body).toMatchObject({ campos: ['resposta'] });
+    await api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send({ situacao: 'atendida' }).expect(400);
+    const det = await api.http().get(`/clinica/portal/solicitacoes/${id}`).set(cab(adminA)).expect(200);
+    expect((det.body as { modeloDeResposta: string }).modeloDeResposta).toMatch(/20 anos/);
+    // Direto no banco (sem a API): estado final sem resposta é recusado.
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(portalRightsRequests).set({ status: 'recusada', handledBy: adminA.userId, handledAt: sql`now()` }).where(eq(portalRightsRequests.id, id)), adminA.userId),
+    ).rejects.toThrow();
+    await api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send({ situacao: 'recusada', resposta: 'Resposta ficticia da recusa' }).expect(200);
+  });
+
+  it('pedido novo avisa os admins ativos da clínica (só o id do pedido); ninguém mais cria esse aviso', async () => {
+    const p = await contaDe(adminA, pacA1);
+    const { id } = (await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'acesso' }).expect(201)).body as { id: string };
+    const fundador = api.fundador(clinicaA);
+    const avisos = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ recipient_user_id: string; kind: string; created_by: string }>(
+      sql`select recipient_user_id, kind, created_by from clinical_notices where rights_request_id = ${id}::uuid`), fundador);
+    expect(avisos).toEqual([{ recipient_user_id: fundador, kind: 'pedido_titular_aberto', created_by: '00000000-0000-0000-0000-000000000000' }]);
+    const tok = api.sessoes.criarSessao({ tenantId: clinicaA, userId: fundador, perfis: ['admin'] });
+    const caixa = await api.http().get('/avisos').set({ Authorization: `Bearer ${tok}` }).expect(200);
+    expect(caixa.body).toEqual(expect.arrayContaining([expect.objectContaining({ tipo: 'pedido_titular_aberto', pedidoId: id })]));
+    // Usuário da clínica e sessão do portal não fabricam o aviso.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(
+      sql`insert into clinical_notices (tenant_id, recipient_user_id, kind, rights_request_id, created_by) values (${clinicaA}, ${fundador}, 'pedido_titular_aberto', ${id}, ${adminA.userId})`), adminA.userId)).rejects.toThrow();
+    await expect(api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+      await tx.execute(sql`insert into clinical_notices (tenant_id, recipient_user_id, kind, rights_request_id, created_by) values (${clinicaA}, ${fundador}, 'pedido_titular_aberto', ${id}, '00000000-0000-0000-0000-000000000000')`);
+    })).rejects.toThrow();
+  });
+
+  it('teto diário: 5 pedidos por vínculo em 24 h; o 6º = 429 e UM anomaly_alert; o banco confere o mesmo teto', async () => {
+    const pac = await criarPaciente(adminA, 'Edu Ficticio Pedidos', { nascimento: '1979-07-07' });
+    const p = await contaDe(adminA, pac);
+    for (let i = 0; i < 5; i++) await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'acesso' }).expect(201);
+    for (let i = 0; i < 2; i++) {
+      const r = await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'acesso' });
+      expect(r.status).toBe(429);
+      expect(r.body).toMatchObject({ codigo: 'limite_diario_de_pedidos' });
+    }
+    const alertas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.actorId, p.contaId), eq(auditLog.action, 'anomaly_alert'))), adminA.userId);
+    expect(alertas.map((a) => a.metadata)).toEqual([{ rule: 'portal_teto_diario_pedidos', window_s: 86_400, threshold: 5, count: 6 }]);
+    await expect(api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+      await tx.insert(portalRightsRequests).values({
+        tenantId: clinicaA, patientId: pac, linkId: p.vinculoId, accountId: p.contaId, kind: 'acesso', actingAs: 'titular', protocol: '20310101-ABCDEF09',
+      });
+    })).rejects.toHaveProperty('cause.code', '54000');
   });
 });
 

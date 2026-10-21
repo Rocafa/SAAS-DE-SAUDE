@@ -82,6 +82,28 @@ export function situacaoParaOTitular(s: RightsRequestStatus): 'aberto' | 'respon
   return s === 'atendida' || s === 'recusada' ? 'respondido' : 'aberto';
 }
 
+/**
+ * Teto diário de pedidos do titular por vínculo (A3c do #68): no máximo 5 em 24 h. O banco confere o
+ * mesmo número no gatilho de portal_rights_requests (migração 0033).
+ */
+export const TETO_DIARIO_PEDIDOS = 5;
+
+/** Estados finais do pedido exigem resposta ao titular (LGPD art. 18 §4º e art. 19; A3a do #68). */
+export function exigeResposta(s: RightsRequestStatus): boolean {
+  return s === 'atendida' || s === 'recusada';
+}
+
+/**
+ * Texto-modelo para a CLÍNICA responder pedido de eliminação (A3d do #68): o prontuário tem guarda mínima
+ * de 20 anos (Lei 13.787/2018, art. 6º) e a LGPD permite a conservação para cumprir obrigação legal
+ * (art. 16, I). A clínica adapta antes de enviar; nada é enviado automaticamente.
+ */
+export const MODELO_RESPOSTA_ELIMINACAO =
+  'Recebemos seu pedido de eliminação. Os dados de cadastro e de contato que não são exigidos por lei serão eliminados. ' +
+  'O prontuário e os registros de atendimento precisam ser guardados por no mínimo 20 anos desde o último registro ' +
+  '(Lei 13.787/2018) e por isso ficam conservados, com acesso restrito, para cumprir essa obrigação legal (LGPD, art. 16, I). ' +
+  'Documentos fiscais seguem o prazo da legislação tributária.';
+
 /** Protocolo AAAAMMDD-XXXXXXXX (8 hex aleatórios, maiúsculos): não sequencial, não enumerável. */
 export function novoProtocolo(agora: Date = new Date()): string {
   const d = agora.toISOString().slice(0, 10).replace(/-/g, '');

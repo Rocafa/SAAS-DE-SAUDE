@@ -33,6 +33,7 @@ import { CAMPO_RECIBO, decifrarCampoFinanceiro } from '../finance/finance-fields
 import type { ConteudoDoRecibo } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { patientFieldRef } from '../patients/patient-fields';
+import { avisarAdminsDoPedidoDoTitular } from '../records/avisos';
 import { noFusoDaClinica, statusParaFront, type StatusFront } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { PORTAL_AUTH_PROVIDER, type PortalAuthProvider, type SessaoDoPortal } from './portal-auth';
@@ -50,6 +51,7 @@ import {
   novoProtocolo,
   primeiroNome,
   situacaoParaOTitular,
+  TETO_DIARIO_PEDIDOS,
   TOKEN_CONVITE_RE,
   transicaoDoPortal,
   VERSAO_TEXTOS_CONSENTIMENTO,
@@ -117,6 +119,14 @@ export interface ConsentimentoPortalDto {
 }
 
 const PG_INSUFFICIENT_PRIVILEGE = '42501';
+const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
+
+/** Teto diário de pedidos atingido no vínculo (a transação do portal desfaz; o alerta vem depois). */
+class TetoDePedidosError extends Error {
+  constructor(readonly vinculoId: string) {
+    super('teto diário de pedidos do titular');
+  }
+}
 
 function codigoPg(e: unknown): string | undefined {
   for (let x: unknown = e; x instanceof Error; x = x.cause) {
@@ -366,9 +376,50 @@ export class PortalService {
     });
   }
 
-  /** Registra o pedido para a clínica atender (nada é executado automaticamente). */
-  abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<PedidoPortalDto> {
+  /**
+   * Registra o pedido para a clínica atender (nada é executado automaticamente). Teto diário por vínculo
+   * (429 + um anomaly_alert; o banco confere o mesmo teto) e aviso aos admins da clínica (A3 do #68).
+   */
+  async abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<PedidoPortalDto> {
+    let teto: { vinculoId: string } | null = null;
+    let aberto: { dto: PedidoPortalDto; tenantId: TenantId } | null = null;
+    try {
+      aberto = await this.registrarPedido(sessao, req, tipo, detalhe);
+    } catch (e) {
+      if (e instanceof TetoDePedidosError) teto = { vinculoId: e.vinculoId };
+      else throw e;
+    }
+    if (teto) return this.vigilancia.tetoDePedidos(sessao.contaId, teto.vinculoId, TETO_DIARIO_PEDIDOS);
+    const { dto, tenantId } = aberto as { dto: PedidoPortalDto; tenantId: TenantId };
+    // Aviso aos admins numa transação de SISTEMA da clínica (o portal não vê a equipe). O pedido já está
+    // gravado: se o aviso falhar, fica o log e a lista de pedidos abertos da clínica.
+    try {
+      await this.db.run(tenantId, async (tx) => {
+        const n = await avisarAdminsDoPedidoDoTitular(tx, tenantId, dto.id);
+        await insertAudit(
+          tx,
+          { tenantId, actorId: USUARIO_SISTEMA, actorKind: 'sistema' },
+          { action: AuditAction.Create, scope: 'clinical_notices', metadata: { op: 'notice_rights_request', request_id: dto.id, count: n } },
+        );
+      });
+    } catch (err) {
+      this.logger.error(`AVISO_PEDIDO_TITULAR_NAO_GRAVADO (${err instanceof Error ? err.name : typeof err})`);
+    }
+    return dto;
+  }
+
+  private registrarPedido(
+    sessao: SessaoDoPortal,
+    req: RequisicaoParaSessao,
+    tipo: RightsRequestKind,
+    detalhe: string | undefined,
+  ): Promise<{ dto: PedidoPortalDto; tenantId: TenantId }> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
+      const [hoje] = await tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from portal_rights_requests
+             where tenant_id = ${ctx.tenantId} and link_id = ${ctx.vinculoId} and created_at > now() - interval '1 day'`,
+      );
+      if ((hoje?.n ?? 0) >= TETO_DIARIO_PEDIDOS) throw new TetoDePedidosError(ctx.vinculoId);
       const id = randomUUID();
       const detailEnc = detalhe ? await this.cifrarDetalhe(tx, ctx, id, detalhe) : null;
       const [row] = await tx
@@ -391,7 +442,7 @@ export class PortalService {
         scope: 'portal_rights_requests',
         metadata: { request_id: id, kind: tipo, has_detail: detailEnc !== null, acting_as: ctx.agindoComo },
       });
-      return this.pedidoDto(row, null);
+      return { dto: this.pedidoDto(row, null), tenantId: ctx.tenantId };
     });
   }
 

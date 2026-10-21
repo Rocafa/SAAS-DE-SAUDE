@@ -51,8 +51,11 @@ export function loadPortalLimites(env: NodeJS.ProcessEnv = process.env): PortalL
 }
 
 export class LimiteDoPortalError extends HttpException {
-  constructor(readonly retryAfterSeconds: number) {
-    super({ statusCode: 429, message: 'Too Many Requests', codigo: 'limite_por_usuario' }, HttpStatus.TOO_MANY_REQUESTS);
+  constructor(
+    readonly retryAfterSeconds: number,
+    codigo: 'limite_por_usuario' | 'limite_diario_de_pedidos' = 'limite_por_usuario',
+  ) {
+    super({ statusCode: 429, message: 'Too Many Requests', codigo }, HttpStatus.TOO_MANY_REQUESTS);
   }
 }
 
@@ -73,9 +76,29 @@ export class PortalVigilanciaService {
     if (!c || c.count <= this.limites.contaMax) return;
     if (c.count === this.limites.contaMax + 1) {
       this.logger.warn('ALERTA_ANOMALIA regra=portal_limite_por_conta');
-      if (vinculoId) await this.alertar(contaId, vinculoId, c.count);
+      if (vinculoId) {
+        await this.alertar(contaId, vinculoId, {
+          rule: 'portal_limite_por_conta',
+          window_s: Math.round(this.limites.contaJanelaMs / 1000),
+          threshold: this.limites.contaMax,
+          count: c.count,
+        });
+      }
     }
     throw new LimiteDoPortalError(Math.max(1, Math.ceil(c.resetMs / 1000)));
+  }
+
+  /**
+   * Teto diário de pedidos do titular atingido (A3c do #68; quem conta é o banco). Grava UM anomaly_alert
+   * por vínculo a cada 24 h (o contador do store só decide se já alertou) e lança 429.
+   */
+  async tetoDePedidos(contaId: string, vinculoId: string, teto: number): Promise<never> {
+    const c = await this.contar(this.chave('pedidos-alerta', `${contaId}\u001f${vinculoId}`), 86_400_000);
+    if (!c || c.count === 1) {
+      this.logger.warn('ALERTA_ANOMALIA regra=portal_teto_diario_pedidos');
+      await this.alertar(contaId, vinculoId, { rule: 'portal_teto_diario_pedidos', window_s: 86_400, threshold: teto, count: teto + 1 });
+    }
+    throw new LimiteDoPortalError(3600, 'limite_diario_de_pedidos');
   }
 
   /** Tentativa de resgate de convite (antes de qualquer consulta ao banco). */
@@ -101,7 +124,7 @@ export class PortalVigilanciaService {
   }
 
   /** Em transação própria (fica gravado mesmo com a resposta 429). Só regra e números. */
-  private async alertar(contaId: string, vinculoId: string, contagem: number): Promise<void> {
+  private async alertar(contaId: string, vinculoId: string, metadata: { rule: string; window_s: number; threshold: number; count: number }): Promise<void> {
     try {
       await this.db.runPortal(contaId, vinculoId, async (tx) => {
         const [c] = await tx.execute<{ tenant_id: string }>(sql`select app_current_tenant() as tenant_id`);
@@ -112,18 +135,13 @@ export class PortalVigilanciaService {
           {
             action: AuditAction.AnomalyAlert,
             scope: 'portal',
-            metadata: {
-              rule: 'portal_limite_por_conta',
-              window_s: Math.round(this.limites.contaJanelaMs / 1000),
-              threshold: this.limites.contaMax,
-              count: contagem,
-            },
+            metadata,
           },
         );
       });
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
-      this.logger.error(`ALERTA_ANOMALIA_NAO_GRAVADO regra=portal_limite_por_conta (${name})`);
+      this.logger.error(`ALERTA_ANOMALIA_NAO_GRAVADO regra=${metadata.rule} (${name})`);
     }
   }
 }

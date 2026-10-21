@@ -47,6 +47,11 @@ export type AvisoDto =
       /** Id da retenção legal (sem dado do paciente). */
       readonly retencaoId: string;
       readonly criadoPor: string;
+    })
+  | (AvisoBase & {
+      /** 0033 (A3b do #68): pedido do titular aberto no portal. Só o id do pedido; criado pelo sistema. */
+      readonly tipo: 'pedido_titular_aberto';
+      readonly pedidoId: string;
     });
 
 function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
@@ -65,7 +70,34 @@ function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
       criadoPor: n.createdBy,
     };
   }
+  if (tipo === 'pedido_titular_aberto') return { ...base, tipo, pedidoId: n.rightsRequestId as string };
   return { ...base, tipo, retencaoId: n.legalHoldId as string, criadoPor: n.createdBy };
+}
+
+const USUARIO_SISTEMA_AVISO = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Avisa os admins ativos da clínica de um pedido do titular aberto no portal (A3b do #68). Roda numa
+ * transação de SISTEMA da clínica (sem usuário; o banco só aceita o sentinela para este tipo). Devolve
+ * quantos foram avisados.
+ */
+export async function avisarAdminsDoPedidoDoTitular(tx: TenantTx, tenantId: string, pedidoId: string): Promise<number> {
+  const admins = await tx
+    .select({ userId: clinicMembers.userId })
+    .from(clinicMembers)
+    .where(and(eq(clinicMembers.tenantId, tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt)));
+  const destinatarios = [...new Set(admins.map((a) => a.userId))];
+  if (destinatarios.length === 0) return 0;
+  await tx.insert(clinicalNotices).values(
+    destinatarios.map((u) => ({
+      tenantId,
+      recipientUserId: u,
+      kind: 'pedido_titular_aberto' as const,
+      rightsRequestId: pedidoId,
+      createdBy: USUARIO_SISTEMA_AVISO,
+    })),
+  );
+  return destinatarios.length;
 }
 
 /** Avisa cada psicólogo ativo (com usuário) da clínica da sessão. Devolve quantos foram avisados. */
