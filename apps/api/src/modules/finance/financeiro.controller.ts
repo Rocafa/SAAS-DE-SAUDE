@@ -21,6 +21,7 @@ import {
   validarPerfilFiscal,
   validarQueryVazia,
   validarRecebimento,
+  validarSaneamentoPagador,
 } from './financeiro.validation';
 import { RecibosService, type LoteReceitaSaudeDto, type ReciboDto, type ReciboResumoDto } from './recibos.service';
 
@@ -158,6 +159,19 @@ export class FinanceiroController {
   emitirRecibo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ReciboDto> {
     const alvo = exigirUuid(id);
     return this.recibos.emitir(paraRequestContext(auth), alvo, validarEmissaoRecibo(corpo));
+  }
+
+  /**
+   * Saneamento de `pagador_responsavel` (R2 do 2º parecer do #67): grava, uma vez, o responsável pagador
+   * de um recebimento sem congelado (corpo `{vinculoId}`). `pagador_anulado` não se resolve aqui
+   * (estorno e novo recebimento).
+   */
+  @Post('recebimentos/:id/pagador-responsavel')
+  @HttpCode(200)
+  @Permissao('financeiro:sanear_pagador')
+  sanearPagador(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
+    const alvo = exigirUuid(id);
+    return this.recibos.resolverPagadorResponsavel(paraRequestContext(auth), alvo, validarSaneamentoPagador(corpo).vinculoId);
   }
 
   @Get('recibos')

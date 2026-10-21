@@ -6,6 +6,7 @@ import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   charges,
+  guardians,
   patientGuardians,
   patients,
   paymentReversals,
@@ -26,6 +27,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { diasEntre } from '../insurance/guias-regras';
 import { ehPerfil, temPermissao } from '../auth/perfis';
 import { patientFieldRef } from '../patients/patient-fields';
+import { decifrarCampoResponsavel } from '../patients/guardian-fields';
 import { mascararCpf } from '../patients/responsaveis.service';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -41,6 +43,7 @@ import {
   carregarConfig,
   reciboVivoDoRecebimento,
   SCOPE_CANCELAMENTO_RECIBO,
+  SCOPE_RECEBIMENTOS,
   SCOPE_RECEITA_SAUDE,
   SCOPE_RECIBOS,
   travarCobranca,
@@ -358,6 +361,66 @@ export class RecibosService {
         pendencias,
         truncado: linhas.length > MAXIMO_LINHAS_FINANCEIRO,
       };
+    });
+  }
+
+  /**
+   * Saneamento de `pagador_responsavel` (R2 do 2º parecer do #67; api-dominio §10a): recebimento SEM pagador
+   * congelado (ex.: anterior à 0031) ganha, UMA vez, o responsável que o financeiro aponta — vínculo do
+   * paciente da cobrança vigente na DATA do recebimento, não anulado, pessoa não descartada; cobrança sem
+   * pagador próprio; recebimento não estornado. O retrato (nome + CPF de agora da pessoa) é cifrado como o
+   * congelado da 0031; o banco confere tudo de novo e grava quem/quando. Recibo já emitido NÃO muda: para
+   * reemiti-lo, cancele-o (`recibos:cancelar`) e emita de novo. Trilha só com ids.
+   */
+  resolverPagadorResponsavel(
+    ctx: RequestContext,
+    recebimentoId: string,
+    vinculoId: string,
+  ): Promise<{ readonly recebimentoId: string; readonly vinculoId: string; readonly reciboVivoId: string | null }> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const [p] = await tx.select().from(payments).where(and(eq(payments.tenantId, ctx.tenantId), eq(payments.id, recebimentoId)));
+      if (!p) throw new NaoEncontradoError();
+      const c = await travarCobranca(tx, ctx, p.chargeId);
+      if (c.payerName) throw new ConflitoError('cobranca_com_pagador');
+      if (p.guardianPayerLinkId) throw new ConflitoError('pagador_ja_congelado');
+      if (!formaGeraRecibo(p.method)) throw new ConflitoError('recebimento_de_convenio');
+      const [estorno] = await tx
+        .select({ id: paymentReversals.id })
+        .from(paymentReversals)
+        .where(and(eq(paymentReversals.tenantId, ctx.tenantId), eq(paymentReversals.paymentId, p.id)));
+      if (estorno) throw new ConflitoError('recebimento_estornado');
+      const [l] = await tx
+        .select({ v: patientGuardians, g: guardians })
+        .from(patientGuardians)
+        .innerJoin(guardians, and(eq(guardians.tenantId, patientGuardians.tenantId), eq(guardians.id, patientGuardians.guardianId)))
+        .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, vinculoId), eq(patientGuardians.patientId, c.patientId)));
+      if (!l) throw new NaoEncontradoError();
+      const data = noFusoDaClinica(p.receivedAt).data;
+      const vigente = l.v.validFrom <= data && (l.v.validUntil === null || l.v.validUntil > data);
+      if (!vigente || l.v.endReason === 'cadastro_errado' || l.g.discardedAt !== null || l.g.nameEnc === null) {
+        throw new ConflitoError('vinculo_nao_vigente_no_recebimento');
+      }
+      const retrato = JSON.stringify({
+        nome: (await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.g.id, 'name', l.g.nameEnc)) ?? '',
+        cpf: await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.g.id, 'cpf', l.g.cpfEnc),
+      });
+      const enc = await cifrarCampoFinanceiro(this.cipher, tx, ctx, p.id, CAMPO_PAGADOR_DO_RECEBIMENTO, retrato);
+      const [r] = await tx.execute<{ ok: boolean }>(sql`select app_payment_resolve_guardian_payer(${p.id}::uuid, ${l.v.id}::uuid, ${enc}) as ok`);
+      if (!r?.ok) throw new ConflitoError('pagador_ja_congelado');
+      const vivo = await reciboVivoDoRecebimento(tx, ctx, p.id);
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE_RECEBIMENTOS,
+        metadata: {
+          op: 'guardian_payer_resolution',
+          payment_id: p.id,
+          charge_id: c.id,
+          patient_id: c.patientId,
+          link_id: l.v.id,
+          live_receipt: vivo !== null,
+        },
+      });
+      return { recebimentoId: p.id, vinculoId: l.v.id, reciboVivoId: vivo?.id ?? null };
     });
   }
 

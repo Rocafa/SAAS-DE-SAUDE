@@ -146,6 +146,7 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/financeiro/cobrancas/${id}/recebimentos`],
       [RequestMethod.POST, `/financeiro/recebimentos/${id}/estornar`],
       [RequestMethod.POST, `/financeiro/recebimentos/${id}/recibo`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/pagador-responsavel`],
       [RequestMethod.POST, '/financeiro/caixas'],
       [RequestMethod.GET, '/financeiro/caixas'],
       [RequestMethod.GET, `/financeiro/caixas/${id}`],

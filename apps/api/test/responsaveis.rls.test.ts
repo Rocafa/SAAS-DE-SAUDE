@@ -147,6 +147,8 @@ beforeAll(async () => {
   await api.membro(clinicaA, profA, 'profissional');
   // R1 do 2º parecer do #67: anular pagador com recebimentos confere no banco o perfil que opera o financeiro.
   await api.membro(clinicaA, recepA, 'recepcao');
+  // R2: o saneamento do pagador confere no banco admin ou financeiro ativo.
+  await api.membro(clinicaA, finA, 'financeiro');
   profissionalDoProfA = id(await post(adminA, '/profissionais', { nome: 'Profissional Ficticia Cuidado', especialidade: 'Psicologia', usuarioId: profA.userId }));
   const caixa = await post(recepA, '/financeiro/caixas', { turno: 'unico' });
   expect(caixa.status, JSON.stringify(caixa.body)).toBe(201);
@@ -415,6 +417,78 @@ describe('R1 do 2º parecer do #67: anular pagador que já tem recebimentos', ()
       tx.select({ m: auditLog.metadata }).from(auditLog).where(and(eq(auditLog.scope, 'patient_guardians'), sql`${auditLog.metadata}->>'link_id' = ${errado.id}`, sql`${auditLog.metadata}->>'reason' = 'cadastro_errado'`)));
     expect(trilha.map((t) => (t.m as { payments_attributed?: number }).payments_attributed)).toEqual([2]);
     expect(JSON.stringify(trilha)).not.toContain('QZR1');
+  });
+});
+
+describe('R2 do 2º parecer do #67: saneamento de pagador_responsavel pelo financeiro', () => {
+  it('grava o pagador congelado UMA vez, só pelo financeiro, com vínculo vigente na data; recibo emitido não muda', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Saneamento', cpf: cpfFicticio(860), nascimento: nascidoHa(10) });
+    const outroPac = await paciente(recepA, { nome: 'Paciente Ficticio Outro Saneamento', nascimento: nascidoHa(10) });
+    const CPF_MAE = cpfFicticio(861);
+    // Responsável sem a marca de pagador: os recebimentos ficam SEM congelado (como os anteriores à 0031).
+    const mae = await responsavel(recepA, pac, { nome: 'Mae Ficticia Saneamento QZS2', cpf: CPF_MAE, tipo: 'pai_mae' });
+    const alheio = await responsavel(recepA, outroPac, { nome: 'Resp Ficticio Alheio', tipo: 'pai_mae' });
+    const anulado = await responsavel(recepA, pac, { nome: 'Resp Ficticio Anulado Saneamento', tipo: 'tutor' });
+    await post(recepA, `/pacientes/${pac}/responsaveis/${anulado.id}/anular`, { motivo: 'Cadastro ficticio feito por engano' }).expect(200);
+    const comRecibo = await receberSemRecibo(pac);
+    const semRecibo = await receberSemRecibo(pac);
+    const naoMexe = await receberSemRecibo(pac);
+    const recibo = (await post(finA, `/financeiro/recebimentos/${comRecibo}/recibo`)).body as { id: string; pendencias: string[]; pagador: { nome: string } };
+    expect(recibo.pendencias).toContain('pagador_responsavel');
+
+    const rota = (p: string) => `/financeiro/recebimentos/${p}/pagador-responsavel`;
+    // Recepção e profissional não saneiam (403); corpo sem vínculo: 400; vínculo de outro paciente: 404.
+    expect((await post(recepA, rota(comRecibo), { vinculoId: mae.id })).status).toBe(403);
+    expect((await post(profA, rota(comRecibo), { vinculoId: mae.id })).status).toBe(403);
+    expect((await post(finA, rota(comRecibo), {})).status).toBe(400);
+    expect((await post(finA, rota(comRecibo), { vinculoId: alheio.id })).status).toBe(404);
+    // Vínculo anulado (cadastro errado) não é responsável vigente na data: 409.
+    expect((await post(finA, rota(comRecibo), { vinculoId: anulado.id })).body).toMatchObject({ codigo: 'vinculo_nao_vigente_no_recebimento' });
+
+    // Financeiro saneia: 200; o recibo já emitido é apontado (não muda).
+    const ok = await post(finA, rota(comRecibo), { vinculoId: mae.id });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body).toEqual({ recebimentoId: comRecibo, vinculoId: mae.id, reciboVivoId: recibo.id });
+    // Uma única vez.
+    expect((await post(adminA, rota(comRecibo), { vinculoId: mae.id })).body).toMatchObject({ codigo: 'pagador_ja_congelado' });
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, comRecibo)), recepA.userId);
+    expect(linha).toMatchObject({ guardianPayerLinkId: mae.id, guardianPayerResolvedBy: finA.userId });
+    expect(linha?.guardianPayerEnc).toMatch(/^v1:/);
+    expect(linha?.guardianPayerResolvedAt).toBeTruthy();
+    expect(JSON.stringify(linha)).not.toContain(CPF_MAE);
+    expect(((await get(finA, `/financeiro/recibos/${recibo.id}`)).body as { pendencias: string[] }).pendencias).toContain('pagador_responsavel');
+
+    // Recebimento saneado ANTES de emitir: o recibo sai com a mãe e sem a pendência; o lote idem.
+    await post(finA, rota(semRecibo), { vinculoId: mae.id }).expect(200);
+    const novo = (await post(finA, `/financeiro/recebimentos/${semRecibo}/recibo`)).body as { pendencias: string[]; pagador: unknown };
+    expect(novo.pagador).toEqual({ nome: 'Mae Ficticia Saneamento QZS2', cpf: CPF_MAE });
+    expect(novo.pendencias).not.toContain('pagador_responsavel');
+    const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje(), ate: hoje() });
+    const doPac = (lote.body as { itens: { pendencias: string[]; pagador: { cpf: string | null }; beneficiario: { nome: string } }[] }).itens.filter(
+      (i) => i.beneficiario.nome === 'Paciente Ficticio Saneamento',
+    );
+    expect(doPac.map((i) => i.pagador.cpf === CPF_MAE && !i.pendencias.includes('pagador_responsavel'))).toEqual([true, true, false]);
+
+    // Banco: o profissional (perfil ativo, sem financeiro) não saneia nem pela função (42501); vínculo de
+    // outro paciente é recusado (23514); o runtime não faz UPDATE direto em payments (42501).
+    const [selo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ enc: payments.guardianPayerEnc }).from(payments).where(eq(payments.id, comRecibo)), recepA.userId);
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_payment_resolve_guardian_payer(${naoMexe}::uuid, ${mae.id}::uuid, ${selo!.enc})`), profA.userId)),
+    ).toContain('42501');
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_payment_resolve_guardian_payer(${naoMexe}::uuid, ${alheio.id}::uuid, ${selo!.enc})`), finA.userId)),
+    ).toContain('23514');
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(payments).set({ guardianPayerLinkId: mae.id, guardianPayerEnc: selo!.enc, guardianPayerResolvedBy: finA.userId }).where(eq(payments.id, naoMexe)), finA.userId),
+      ),
+    ).toContain('42501');
+    // Trilha: só ids.
+    const trilha = JSON.stringify(
+      await withTenant(api.db.db, clinicaA, (tx) => tx.select({ m: auditLog.metadata }).from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'guardian_payer_resolution'`)),
+    );
+    expect(trilha).toContain(comRecibo);
+    for (const proibido of [CPF_MAE, 'QZS2']) expect(trilha).not.toContain(proibido);
   });
 });
 

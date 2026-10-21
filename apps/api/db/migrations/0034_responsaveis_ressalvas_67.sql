@@ -6,6 +6,13 @@
 -- R1: anular (cadastro errado) um vínculo que já é o pagador CONGELADO de algum recebimento exige perfil
 --     que opera o financeiro (admin, recepção ou financeiro — `financeiro:operar`). O congelado não muda;
 --     recibo tardio e insumo do Receita Saúde passam a sair com a pendência `pagador_anulado` (API).
+-- R2: saneamento de `pagador_responsavel` — recebimento SEM pagador congelado (ex.: anterior à 0031) ganha
+--     o pagador UMA vez, por decisão do financeiro (admin ou financeiro, perfil ativo no banco), via
+--     `app_payment_resolve_guardian_payer` (SECURITY DEFINER; o runtime segue sem UPDATE em payments).
+--     O banco confere: vínculo do paciente da cobrança, vigente na DATA do recebimento, não anulado,
+--     pessoa não descartada; cobrança sem pagador próprio; recebimento não estornado e no prazo fiscal.
+--     Quem e quando ficam gravados (`guardian_payer_resolved_by/at`). `pagador_anulado` não se resolve
+--     aqui: a correção é estorno e novo recebimento.
 
 -- ---------------------------------------------------------------- R1: anulação de pagador com recebimentos
 
@@ -108,5 +115,173 @@ BEGIN
     NEW.clinical_info_decided_at := now();
   END IF;
   RETURN NEW;
+END;
+$$;
+
+-- ---------------------------------------------------------------- R2: saneamento do pagador do recebimento
+
+ALTER TABLE payments
+  ADD COLUMN guardian_payer_resolved_by uuid,
+  ADD COLUMN guardian_payer_resolved_at timestamptz,
+  ADD CONSTRAINT payments_guardian_payer_resolved_check CHECK (
+    (guardian_payer_resolved_by IS NULL) = (guardian_payer_resolved_at IS NULL)
+    AND (guardian_payer_resolved_by IS NULL OR guardian_payer_link_id IS NOT NULL));
+
+-- No INSERT o saneamento não existe (o congelado do recebimento é da 0031).
+CREATE OR REPLACE FUNCTION payments_guardian_payer_insert() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_ok boolean;
+BEGIN
+  IF NEW.guardian_payer_resolved_by IS NOT NULL OR NEW.guardian_payer_resolved_at IS NOT NULL THEN
+    RAISE EXCEPTION 'payments: saneamento do pagador não entra no recebimento' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW.guardian_payer_link_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.guardian_payer_enc IS NULL OR NEW.guardian_payer_purged_at IS NOT NULL THEN
+    RAISE EXCEPTION 'payments: o pagador do cadastro entra com o retrato cifrado' USING ERRCODE = 'check_violation';
+  END IF;
+  SELECT EXISTS (
+    SELECT 1 FROM charges c
+      JOIN patient_guardians pg ON pg.tenant_id = c.tenant_id AND pg.patient_id = c.patient_id
+     WHERE c.tenant_id = NEW.tenant_id AND c.id = NEW.charge_id AND c.payer_name IS NULL
+       AND pg.id = NEW.guardian_payer_link_id AND pg.is_payer AND pg.ended_at IS NULL
+       AND pg.valid_from <= app_fiscal_today())
+    INTO v_ok;
+  IF NOT v_ok THEN
+    RAISE EXCEPTION 'payments: o vínculo não é o pagador vigente do paciente da cobrança' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- Append-only, salvo DUAS mudanças: (a) saneamento único do pagador (R2) e (b) eliminação do retrato
+-- vencido o prazo fiscal (0031). Vale para qualquer papel.
+CREATE OR REPLACE FUNCTION payments_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  semRetrato payments;
+  v_retido   timestamptz;
+  v_user     uuid;
+  v_data     date;
+  v_ok       boolean;
+BEGIN
+  IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'payments é append-only: % não permitido', TG_OP USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  semRetrato := NEW;
+  semRetrato.guardian_payer_link_id := OLD.guardian_payer_link_id;
+  semRetrato.guardian_payer_enc := OLD.guardian_payer_enc;
+  semRetrato.guardian_payer_purged_at := OLD.guardian_payer_purged_at;
+  semRetrato.guardian_payer_resolved_by := OLD.guardian_payer_resolved_by;
+  semRetrato.guardian_payer_resolved_at := OLD.guardian_payer_resolved_at;
+  IF semRetrato IS DISTINCT FROM OLD THEN
+    RAISE EXCEPTION 'payments é append-only: só o saneamento do pagador ou a eliminação do retrato' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  -- (a) Saneamento (R2 do 2º parecer do #67): sem congelado -> vínculo + retrato, uma única vez.
+  IF OLD.guardian_payer_link_id IS NULL THEN
+    IF NEW.guardian_payer_link_id IS NULL OR NEW.guardian_payer_enc IS NULL OR NEW.guardian_payer_purged_at IS NOT NULL
+       OR OLD.guardian_payer_enc IS NOT NULL OR OLD.guardian_payer_resolved_by IS NOT NULL THEN
+      RAISE EXCEPTION 'payments: saneamento grava vínculo e retrato juntos, uma vez' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    v_user := app_current_user();
+    IF v_user IS NULL OR NEW.guardian_payer_resolved_by IS DISTINCT FROM v_user THEN
+      RAISE EXCEPTION 'payments: quem saneia o pagador é o usuário da sessão' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NOT (app_user_has_role(v_user, 'admin') OR app_user_has_role(v_user, 'financeiro')) THEN
+      RAISE EXCEPTION 'payments: saneamento do pagador é do financeiro' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF EXISTS (SELECT 1 FROM payment_reversals r WHERE r.tenant_id = OLD.tenant_id AND r.payment_id = OLD.id) THEN
+      RAISE EXCEPTION 'payments: recebimento estornado não é saneado' USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+    IF app_fiscal_deadline(OLD.received_at) <= app_fiscal_today() THEN
+      RAISE EXCEPTION 'payments: prazo fiscal do recebimento vencido' USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+    v_data := (OLD.received_at AT TIME ZONE 'America/Sao_Paulo')::date;
+    SELECT EXISTS (
+      SELECT 1 FROM charges c
+        JOIN patient_guardians pg ON pg.tenant_id = c.tenant_id AND pg.patient_id = c.patient_id
+        JOIN guardians g ON g.tenant_id = pg.tenant_id AND g.id = pg.guardian_id
+       WHERE c.tenant_id = OLD.tenant_id AND c.id = OLD.charge_id AND c.payer_name IS NULL
+         AND pg.id = NEW.guardian_payer_link_id
+         AND pg.end_reason IS DISTINCT FROM 'cadastro_errado'
+         AND pg.valid_from <= v_data AND (pg.valid_until IS NULL OR pg.valid_until > v_data)
+         AND g.discarded_at IS NULL)
+      INTO v_ok;
+    IF NOT v_ok THEN
+      RAISE EXCEPTION 'payments: o vínculo não era responsável vigente do paciente na data do recebimento' USING ERRCODE = 'check_violation';
+    END IF;
+    NEW.guardian_payer_resolved_at := now();
+    RETURN NEW;
+  END IF;
+
+  -- (b) Eliminação do retrato por retenção fiscal (0031).
+  IF NEW.guardian_payer_link_id IS DISTINCT FROM OLD.guardian_payer_link_id
+     OR NEW.guardian_payer_resolved_by IS DISTINCT FROM OLD.guardian_payer_resolved_by
+     OR NEW.guardian_payer_resolved_at IS DISTINCT FROM OLD.guardian_payer_resolved_at
+     OR OLD.guardian_payer_enc IS NULL OR OLD.guardian_payer_purged_at IS NOT NULL
+     OR NEW.guardian_payer_enc IS NOT NULL OR NEW.guardian_payer_purged_at IS NULL THEN
+    RAISE EXCEPTION 'payments é append-only: só a eliminação do retrato do pagador por retenção fiscal' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT pa.legal_hold_since INTO v_retido
+    FROM charges c JOIN patients pa ON pa.tenant_id = c.tenant_id AND pa.id = c.patient_id
+   WHERE c.tenant_id = OLD.tenant_id AND c.id = OLD.charge_id;
+  IF v_retido IS NOT NULL THEN
+    RAISE EXCEPTION 'retencao_legal: recebimento de paciente sob retenção legal não é eliminado' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF app_fiscal_deadline(OLD.received_at) > app_fiscal_today() THEN
+    RAISE EXCEPTION 'prazo de retenção fiscal do recebimento ainda não venceu' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  NEW.guardian_payer_purged_at := now();
+  RETURN NEW;
+END;
+$$;
+
+-- O runtime NÃO ganha UPDATE em payments: o saneamento passa por esta função (dona = migração, sem
+-- BYPASSRLS; RLS vale pelo contexto de tenant). O trigger acima confere todo o resto.
+CREATE FUNCTION app_payment_resolve_guardian_payer(p_payment uuid, p_link uuid, p_enc text) RETURNS boolean
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_tenant uuid := app_current_tenant();
+  v_n      integer;
+BEGIN
+  IF v_tenant IS NULL OR app_current_user() IS NULL THEN
+    RAISE EXCEPTION 'saneamento do pagador exige tenant e usuário da sessão' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  UPDATE payments
+     SET guardian_payer_link_id = p_link, guardian_payer_enc = p_enc, guardian_payer_resolved_by = app_current_user()
+   WHERE tenant_id = v_tenant AND id = p_payment AND guardian_payer_link_id IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n = 1;
+END;
+$$;
+REVOKE ALL ON FUNCTION app_payment_resolve_guardian_payer(uuid, uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_payment_resolve_guardian_payer(uuid, uuid, text) TO app_user;
+
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT p.oid::regprocedure AS f, p.prosecdef, o.rolname, o.rolsuper, o.rolbypassrls
+      FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+     WHERE p.oid = 'app_payment_resolve_guardian_payer(uuid, uuid, text)'::regprocedure
+  LOOP
+    IF NOT r.prosecdef THEN
+      RAISE EXCEPTION '% deveria ser SECURITY DEFINER', r.f;
+    END IF;
+    IF r.rolsuper OR r.rolbypassrls OR r.rolname = 'app_user' THEN
+      RAISE EXCEPTION 'dono de % (%) não pode ser superusuário, BYPASSRLS nem o runtime', r.f, r.rolname;
+    END IF;
+  END LOOP;
 END;
 $$;

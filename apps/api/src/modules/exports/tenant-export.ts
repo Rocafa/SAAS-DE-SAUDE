@@ -86,8 +86,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.14.0: correções do parecer #67 (migração 0031): `patients[].emancipation*`, `payments[].guardianPayer*`
  *        (pagador congelado no recebimento, decifrado), decisão clínica, curatela, ciência do paciente e
  *        anulação nos vínculos (decifrados) e `guardians[].discardedAt`. Contém CPF de terceiros (responsáveis).
+ * 1.15.0: ressalvas do 2º parecer do #67 (migração 0034): `payments[].guardianPayerResolvedBy/At`
+ *        (saneamento do pagador pelo financeiro).
  */
-export const EXPORT_SCHEMA_VERSION = '1.14.0';
+export const EXPORT_SCHEMA_VERSION = '1.15.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

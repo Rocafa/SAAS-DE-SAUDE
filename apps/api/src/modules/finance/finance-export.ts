@@ -87,6 +87,9 @@ export interface ExportedFinance {
     guardianPayerLinkId: string | null;
     guardianPayer: { nome: string; cpf: string | null } | null;
     guardianPayerPurgedAt: string | null;
+    /** 0034: saneamento do pagador pelo financeiro (R2 do 2º parecer do #67). */
+    guardianPayerResolvedBy: string | null;
+    guardianPayerResolvedAt: string | null;
   }[];
   readonly paymentReversals: readonly {
     id: string;
@@ -243,6 +246,8 @@ export async function exportarFinanceiro(
           guardianPayerLinkId: p.guardianPayerLinkId,
           guardianPayer: pagador === null ? null : (JSON.parse(pagador) as { nome: string; cpf: string | null }),
           guardianPayerPurgedAt: iso(p.guardianPayerPurgedAt),
+          guardianPayerResolvedBy: p.guardianPayerResolvedBy,
+          guardianPayerResolvedAt: iso(p.guardianPayerResolvedAt),
         };
       }),
     ),
