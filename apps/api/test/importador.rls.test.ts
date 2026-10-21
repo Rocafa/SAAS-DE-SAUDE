@@ -9,7 +9,7 @@
  */
 import type { TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -73,8 +73,6 @@ const contarPacientes = (t: TenantId) =>
   withTenant(api.db.db, t, async (tx) => (await tx.select({ n: sql<number>`count(*)::int` }).from(patients))[0]?.n ?? -1);
 
 beforeAll(async () => {
-  // R6: chave HMAC da impressão do CPF gerada a cada execução (nunca no git).
-  process.env.IMPORT_CPF_FP_KEY = randomBytes(32).toString('hex');
   api = await subirApi();
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
@@ -371,34 +369,69 @@ describe('R6 do #66: arquivo de outra clínica', () => {
     ).rejects.toThrow();
   });
 
-  it('CPFs já importados em OUTRA clínica: só a contagem, acima do limiar; planilha pequena não vira consulta', async () => {
+  it('V2: a simulação responde exatamente igual com e sem coincidência de CPF em outra clínica (nenhum sinal entre controladoras)', async () => {
     const cpfs = [0, 1, 2, 3, 4, 5].map((i) => CPF(200 + i));
+    const csvA = ['nome;cpf;telefone', ...cpfs.map((c, i) => `Paciente A${i} Ficticio;${c};1190000021${i}`), `Propria 1 Ficticia;${CPF(210)};11900000220`].join('\n');
+    const dryRuns = () =>
+      withTenant(api.db.db, clinicaA, async (tx) =>
+        (await tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, 'import_batches'))))
+          .map((l) => l.metadata as Record<string, unknown>)
+          .filter((m) => m.op === 'dry_run' && m.import_batch_id === a.id),
+      );
+
+    // 1) SEM coincidência: nenhum dos CPFs existe em outra clínica.
+    const a = await ateSimular(adminA, 'pacientes', csvA, { nome: 0, cpf: 1, telefone: 2 });
+    const semCoincidencia = a.sim;
+
+    // 2) B importa (e aplica) os MESMOS CPFs; A simula de novo o MESMO lote.
     const csvB = ['nome;cpf;telefone', ...cpfs.map((c, i) => `Paciente B${i} Ficticio;${c};1190000020${i}`)].join('\n');
     const b = await ateSimular(adminB, 'pacientes', csvB, { nome: 0, cpf: 1, telefone: 2 });
-    expect((b.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
     await aplicar(adminB, b.id, b.sim.resumoHash).expect(200);
+    const com = await api.http().post(`/importacoes/${a.id}/simular`).set(cab(adminA)).send({});
+    expect(com.status, JSON.stringify(com.body)).toBe(200);
 
-    // A recebe o MESMO arquivo (mais 2 CPFs próprios): o alerta conta 6, sem dizer quais nem de onde.
-    const csvA = ['nome;cpf;telefone', ...cpfs.map((c, i) => `Paciente A${i} Ficticio;${c};1190000021${i}`), `Propria 1 Ficticia;${CPF(210)};11900000220`, `Propria 2 Ficticia;${CPF(211)};11900000221`].join('\n');
-    const a = await ateSimular(adminA, 'pacientes', csvA, { nome: 0, cpf: 1, telefone: 2 });
-    expect((a.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(6);
-    const serial = JSON.stringify(a.sim);
-    expect(serial).not.toContain(clinicaB);
-    expect(serial).not.toContain(nomes.get(clinicaB) as string);
-    expect(a.sim.divergencias.some((d) => d.codigo.includes('outra'))).toBe(false);
+    // Resposta idêntica, campo a campo (inclusive o hash do plano), e sem nenhum campo sobre outra clínica.
+    expect(com.body).toStrictEqual(semCoincidencia);
+    expect(JSON.stringify(com.body)).not.toMatch(/outra|other|clinica|clinic/i);
+    // A trilha do dry-run também não muda: mesmos campos e valores nas duas rodadas.
+    const eventos = await dryRuns();
+    expect(eventos).toHaveLength(2);
+    expect(eventos[1]).toStrictEqual(eventos[0]);
+    expect(Object.keys(eventos[0] as object).sort()).toEqual(['create', 'errors', 'import_batch_id', 'op', 'skip']);
 
-    // Sondagem com um CPF só (ou poucos): 0, pela API e chamando a função direto.
-    const um = await ateSimular(adminA, 'pacientes', `nome;cpf;telefone\nSonda Ficticia;${cpfs[0]};11900000230\n`, { nome: 0, cpf: 1, telefone: 2 });
-    expect((um.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
-    const direta = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ n: number }>(sql`select app_import_cpfs_em_outras_clinicas(array['${sql.raw('0'.repeat(64))}']) as n`), adminA.userId);
-    expect(Number(direta[0]?.n)).toBe(0);
-    // Quem não é admin não consulta; o runtime não lê a tabela das impressões.
-    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_import_cpfs_em_outras_clinicas(array[]::text[])`), recepA.userId)).rejects.toThrow();
-    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select count(*) from import_cpf_fingerprints`), adminA.userId)).rejects.toThrow();
-    // Desfazer em B apaga as impressões junto com os pacientes: o alerta de A cai para 0.
-    await api.http().post(`/importacoes/${b.id}/desfazer`).set(cab(adminB)).send({}).expect(200);
-    const depois = await ateSimular(adminA, 'pacientes', csvA, { nome: 0, cpf: 1, telefone: 2 });
-    expect((depois.sim as unknown as { cpfsEmOutraClinica: number }).cpfsEmOutraClinica).toBe(0);
+    // A confirmação da clínica de origem (R6 a) continua, e o aplicar funciona com a coincidência.
+    expect((await aplicar(adminA, a.id, semCoincidencia.resumoHash, 'Outra Clinica Qualquer')).body).toMatchObject({ codigo: 'clinica_nao_confirmada' });
+    await aplicar(adminA, a.id, semCoincidencia.resumoHash).expect(200);
+    expect(await contarPacientes(clinicaA)).toBeGreaterThanOrEqual(7);
+  });
+
+  it('V2: alerta de CPFs em outra clínica removido do banco (função, tabela e impressões), via 0030', async () => {
+    const [r] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ tabela: string | null; funcoes: number }>(sql`
+        select to_regclass('public.import_cpf_fingerprints')::text as tabela,
+               (select count(*)::int from pg_proc where proname in ('app_import_cpfs_em_outras_clinicas', 'app_import_register_cpf_fingerprints')) as funcoes`),
+      adminA.userId);
+    expect(r).toMatchObject({ tabela: null, funcoes: 0 });
+  });
+
+  it('catálogo: toda FK para patients/appointments é RESTRICT/NO ACTION ou a tabela está em app_import_batch_blockers (desfazer nunca apaga em cascata o que veio depois)', async () => {
+    const fks = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ conname: string; tabela: string; alvo: string; ondelete: string }>(sql`
+        select c.conname, c.conrelid::regclass::text as tabela, c.confrelid::regclass::text as alvo, c.confdeltype::text as ondelete
+          from pg_constraint c
+         where c.contype = 'f' and c.confrelid in ('public.patients'::regclass, 'public.appointments'::regclass)
+         order by 2, 1`),
+      adminA.userId);
+    const [def] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ corpo: string }>(sql`select prosrc as corpo from pg_proc where oid = 'app_import_batch_blockers(uuid)'::regprocedure`), adminA.userId);
+    const corpo = def?.corpo ?? '';
+    expect(corpo).toContain('package_sessions');
+    // Sanidade: o catálogo traz as FK conhecidas (senão o teste passaria vazio).
+    expect(fks.map((f) => f.tabela)).toEqual(expect.arrayContaining(['encounters', 'charges', 'package_sessions', 'private_notes']));
+    const fora = fks.filter((f) => !['r', 'a'].includes(f.ondelete) && !new RegExp(`\\b${f.tabela}\\b`).test(corpo));
+    expect(fora, 'FK em CASCADE/SET NULL fora de app_import_batch_blockers').toEqual([]);
+    // Hoje nenhuma é CASCADE/SET NULL (a única, import_cpf_fingerprints, saiu com a 0030).
+    expect(fks.filter((f) => !['r', 'a'].includes(f.ondelete))).toEqual([]);
   });
 });
 

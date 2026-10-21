@@ -1,7 +1,7 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, desc, eq, isNotNull, ne, sql } from 'drizzle-orm';
-import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
@@ -58,12 +58,6 @@ export interface ImportacaoConfig {
    * `IMPORTADOR_HABILITADO=true`. Fora de produção, ligado salvo `IMPORTADOR_HABILITADO=false`.
    */
   readonly habilitado: boolean;
-  /**
-   * R6: chave da plataforma (HMAC) para a impressão do CPF no alerta "CPFs já em outra clínica"
-   * (`IMPORT_CPF_FP_KEY`, hex de 32 a 64 bytes, do cofre de segredos; nunca no git). Sem ela, o alerta fica
-   * desligado (`cpfsEmOutraClinica: null`) e nenhuma impressão é gravada.
-   */
-  readonly chaveImpressaoCpf: Buffer | null;
 }
 export const IMPORTACAO_CONFIG = Symbol('IMPORTACAO_CONFIG');
 
@@ -71,14 +65,11 @@ export function loadImportacaoConfig(env: NodeJS.ProcessEnv = process.env): Impo
   const flag = env.IMPORTADOR_HABILITADO?.trim();
   if (flag !== undefined && flag !== '' && flag !== 'true' && flag !== 'false') throw new Error('IMPORTADOR_HABILITADO inválida (true ou false)');
   const habilitado = flag === 'true' || (env.NODE_ENV !== 'production' && flag !== 'false');
-  const chave = env.IMPORT_CPF_FP_KEY?.trim();
-  if (chave && !/^[0-9a-fA-F]{64,128}$/.test(chave)) throw new Error('IMPORT_CPF_FP_KEY inválida (hex de 32 a 64 bytes)');
-  const chaveImpressaoCpf = chave ? Buffer.from(chave, 'hex') : null;
   const bruto = env.IMPORT_RAW_TTL_HOURS?.trim();
-  if (!bruto) return { horasDoArquivoBruto: 168, habilitado, chaveImpressaoCpf };
+  if (!bruto) return { horasDoArquivoBruto: 168, habilitado };
   const n = Number(bruto);
   if (!/^\d{1,3}$/.test(bruto) || n < 1 || n > 168) throw new Error('IMPORT_RAW_TTL_HOURS inválida (1 a 168 horas)');
-  return { horasDoArquivoBruto: n, habilitado, chaveImpressaoCpf };
+  return { horasDoArquivoBruto: n, habilitado };
 }
 
 export interface LoteDto {
@@ -335,7 +326,7 @@ export class ImportacaoService {
    * profissional, tipo, capacidade) e mostra o que SERIA criado ou ignorado. Não cria paciente nem
    * agendamento; grava só o estado do lote, o hash do plano e as divergências (códigos).
    */
-  simular(ctx: RequestContext, id: string): Promise<RelatorioDto & { readonly resumoHash: string; readonly cpfsEmOutraClinica: number | null }> {
+  simular(ctx: RequestContext, id: string): Promise<RelatorioDto & { readonly resumoHash: string }> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await this.expurgarNaTransacao(tx, ctx);
       const lote = await this.carregarEditavel(tx, ctx, id);
@@ -362,8 +353,6 @@ export class ImportacaoService {
         .where(and(eq(importBatches.tenantId, ctx.tenantId), eq(importBatches.id, id)))
         .returning();
       await this.gravarDivergencias(tx, ctx, id, run, plano.divergencias);
-      // R6: CPFs do arquivo que já existem em OUTRA clínica (importados lá), só contagem e com limiar no banco.
-      const cpfsEmOutraClinica = lote.kind === 'pacientes' ? await this.cpfsEmOutraClinica(tx, [...plano.pacientes.values()]) : null;
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
@@ -373,10 +362,9 @@ export class ImportacaoService {
           create: criar,
           skip: plano.acoes.length - criar,
           errors: plano.linhasComErro,
-          other_clinic_cpfs: cpfsEmOutraClinica,
         },
       });
-      return { ...this.relatorio(novo as Lote, planilha, mapa, plano.divergencias), resumoHash: hash, cpfsEmOutraClinica };
+      return { ...this.relatorio(novo as Lote, planilha, mapa, plano.divergencias), resumoHash: hash };
     });
   }
 
@@ -535,20 +523,6 @@ export class ImportacaoService {
     if (t && nome.length > 0 && nome === normalizarBusca(t.nome).replace(/\s+/g, ' ').trim()) return true;
     const digitos = digitado.replace(/\D/g, '');
     return Boolean(f?.cnpj && digitos.length === 14 && digitos === f.cnpj.replace(/\D/g, ''));
-  }
-
-  /** Impressão do CPF (HMAC-SHA256 com a chave da plataforma), para o alerta de outra clínica (R6 b). */
-  private impressao(cpf: string): string | null {
-    return this.config.chaveImpressaoCpf ? createHmac('sha256', this.config.chaveImpressaoCpf).update(cpf, 'utf8').digest('hex') : null;
-  }
-
-  /** Quantos CPFs do arquivo já existem em outra clínica (0 abaixo do limiar do banco); null sem chave. */
-  private async cpfsEmOutraClinica(tx: TenantTx, linhas: readonly PacienteDaLinha[]): Promise<number | null> {
-    if (!this.config.chaveImpressaoCpf) return null;
-    const fps = [...new Set(linhas.flatMap((p) => (p.cpf ? [this.impressao(p.cpf) as string] : [])))];
-    if (fps.length === 0) return 0;
-    const [r] = await tx.execute<{ n: number }>(sql`select app_import_cpfs_em_outras_clinicas(array(select jsonb_array_elements_text(${JSON.stringify(fps)}::jsonb))) as n`);
-    return Number(r?.n ?? 0);
   }
 
   private async carregar(tx: TenantTx, ctx: RequestContext, id: string, travar: boolean): Promise<Lote> {
@@ -793,18 +767,6 @@ export class ImportacaoService {
       }
       await tx.insert(patients).values(linhas);
       await tx.insert(importBatchRecords).values(livro);
-      // R6 (b): impressão do CPF dos pacientes criados por este lote (para o alerta em OUTRA clínica).
-      if (this.config.chaveImpressaoCpf) {
-        const pares = bloco.flatMap((acao, j) => {
-          const cpf = plano.pacientes.get(acao.linha)?.cpf;
-          return cpf ? [{ id: linhas[j]?.id as string, fp: this.impressao(cpf) as string }] : [];
-        });
-        if (pares.length > 0) {
-          await tx.execute(
-            sql`select app_import_register_cpf_fingerprints(${loteId}::uuid, array(select jsonb_array_elements_text(${JSON.stringify(pares.map((p) => p.id))}::jsonb)::uuid), array(select jsonb_array_elements_text(${JSON.stringify(pares.map((p) => p.fp))}::jsonb)))`,
-          );
-        }
-      }
       total += linhas.length;
       // Auditoria por bloco (10 mil linhas por evento seria lento): o livro do lote tem cada id.
       await recordAudit(tx, ctx, {
