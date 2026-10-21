@@ -25,7 +25,9 @@ import {
   STATUS_QUE_OCUPAM,
   statusParaDb,
   statusParaFront,
+  transicaoPeloPaciente,
   transicaoPermitida,
+  type AcaoDoPaciente,
   type JanelaDeAtendimento,
   type StatusFront,
 } from './agenda-regras';
@@ -296,6 +298,37 @@ export class SchedulingService {
       }
       return { statusAnterior: statusParaFront(atual.status) };
     });
+  }
+
+  /**
+   * Resposta do paciente pelo canal (WhatsApp "1"/"2"), na transação do CHAMADOR (a do webhook, que
+   * grava a resposta junto). Usa as regras da agenda para o paciente (`transicaoPeloPaciente`), não a
+   * transição genérica da recepção: só agendado -> confirmado e agendado/confirmado -> cancelado, antes
+   * do início. Trava o agendamento como as demais escritas da agenda e audita com `via: 'whatsapp'`.
+   */
+  async respostaDoPaciente(
+    tx: TenantTx,
+    ctx: RequestContext,
+    id: string,
+    acao: AcaoDoPaciente,
+    agora: Date,
+  ): Promise<'confirmado' | 'cancelado' | 'ja_estava' | 'status_nao_permite'> {
+    const atual = await this.travarAgendamento(tx, ctx, id);
+    const r = transicaoPeloPaciente(atual.status, acao, atual.startsAt, agora);
+    if (r.tipo !== 'mudar') return r.tipo;
+    if (!transicaoPermitida(atual.status, r.para)) return 'status_nao_permite';
+    await tx
+      .update(appointments)
+      .set({ status: r.para, updatedAt: agora, ...(r.para === 'cancelled' ? { cancelledAt: agora } : {}) })
+      .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+    await recordAudit(tx, ctx, {
+      action: AuditAction.Update,
+      scope: SCOPE,
+      metadata: { appointment_id: id, op: 'status', from: atual.status, to: r.para, via: 'whatsapp' },
+    });
+    // Agendado/confirmado não consomem guia nem pacote; a chamada fica pela simetria com alterarStatus.
+    if (statusConsome(atual.status) && !statusConsome(r.para)) await estornarConsumosDoAgendamento(tx, ctx, id);
+    return r.para === 'confirmed' ? 'confirmado' : 'cancelado';
   }
 
   listarProfissionais(ctx: RequestContext): Promise<ProfissionalDto[]> {

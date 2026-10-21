@@ -182,3 +182,28 @@ export function motivoParaNaoRemarcar(
   if (horarioJaPassou(novoInicio, agora, janela)) return 'horario_no_passado';
   return null;
 }
+
+/** Resposta do paciente pelo canal (rodada 18.3, HU-COM-011): "1" confirma, "2" cancela. */
+export type AcaoDoPaciente = 'confirmar' | 'cancelar';
+export type ResultadoDaAcaoDoPaciente =
+  | { readonly tipo: 'mudar'; readonly para: AppointmentStatusDb }
+  | { readonly tipo: 'ja_estava' }
+  | { readonly tipo: 'status_nao_permite' };
+
+/**
+ * Regra da AGENDA para o que o paciente pode fazer sozinho (não é a transição genérica da recepção):
+ * - confirmar: só "agendado" vira "confirmado"; "confirmado" já estava;
+ * - cancelar: "agendado" ou "confirmado" viram "cancelado"; "cancelado" já estava;
+ * - nada depois do início da consulta, e nada sobre chegou/em atendimento/atendido/falta (a recepção e
+ *   o profissional decidem esses).
+ * O resultado ainda passa por `transicaoPermitida` no serviço.
+ */
+export function transicaoPeloPaciente(atual: AppointmentStatusDb, acao: AcaoDoPaciente, inicio: Date, agora: Date): ResultadoDaAcaoDoPaciente {
+  if (inicio.getTime() <= agora.getTime()) return { tipo: 'status_nao_permite' };
+  if (acao === 'confirmar') {
+    if (atual === 'confirmed') return { tipo: 'ja_estava' };
+    return atual === 'scheduled' ? { tipo: 'mudar', para: 'confirmed' } : { tipo: 'status_nao_permite' };
+  }
+  if (atual === 'cancelled') return { tipo: 'ja_estava' };
+  return atual === 'scheduled' || atual === 'confirmed' ? { tipo: 'mudar', para: 'cancelled' } : { tipo: 'status_nao_permite' };
+}

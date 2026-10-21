@@ -39,7 +39,9 @@ export class TenancyModule {
         { provide: DATABASE_HANDLE, useFactory: () => createDatabase(options.databaseUrl, options.tuning) },
         TenantDatabase,
       ],
-      exports: [TenantDatabase],
+      // DATABASE_HANDLE sai só para a rota do webhook do WhatsApp (função SECURITY DEFINER sem contexto de
+      // clínica, 0032); consulta a tabela de clínica continua só por TenantDatabase.run.
+      exports: [TenantDatabase, DATABASE_HANDLE],
     };
   }
 }

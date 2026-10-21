@@ -12,6 +12,10 @@ import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
+import { criarMensageiro } from './modules/messaging/mensageiro.factory';
+import type { MensageiroWhatsApp } from './modules/messaging/mensageiro-whatsapp';
+import { MessagingModule } from './modules/messaging/messaging.module';
+import type { FonteDeResponsaveis } from './modules/messaging/responsaveis.port';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
 import { RecordsModule } from './modules/records/records.module';
@@ -32,6 +36,10 @@ export interface AppAdapters {
   readonly vigilancia?: VigilanciaConfig;
   /** Pseudônimo do suporte (N1); padrão: createPseudonymSigner (KMS fora de development/test). */
   readonly pseudonymSigner?: PseudonymSigner;
+  /** Canal WhatsApp; padrão: criarMensageiro (WHATSAPP_PROVEDOR; desligado se vazio). `null` = desligado. */
+  readonly mensageiro?: MensageiroWhatsApp | null;
+  /** Telefone do responsável do paciente; padrão: pelo catálogo (tolera a ausência da 0028). */
+  readonly responsaveis?: FonteDeResponsaveis;
 }
 
 @Module({})
@@ -46,6 +54,7 @@ export class AppModule {
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
     const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
+    const mensageiro = adapters.mensageiro !== undefined ? adapters.mensageiro : criarMensageiro(process.env);
     const pacientes = PatientsModule.forRoot({
       store,
       fecharStore: adapters.rateLimitStore === undefined,
@@ -70,6 +79,8 @@ export class AppModule {
         RecordsModule.forRoot(pacientes),
         // Financeiro: listas e recibos contam na mesma vigilância (R5).
         FinanceModule.forRoot(pacientes),
+        // WhatsApp (rodada 18.3): lembretes D-1 e confirmação; desligado por padrão.
+        MessagingModule.forRoot({ mensageiro, ...(adapters.responsaveis ? { responsaveis: adapters.responsaveis } : {}) }),
       ],
     };
   }
