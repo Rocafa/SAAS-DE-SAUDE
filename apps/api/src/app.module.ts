@@ -14,6 +14,9 @@ import { FinanceModule } from './modules/finance/finance.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
+import { createPortalAuthProvider, type PortalAuthProvider } from './modules/portal/portal-auth';
+import { PortalModule } from './modules/portal/portal.module';
+import { loadPortalLimites, type PortalLimites } from './modules/portal/portal-vigilancia';
 import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
@@ -32,6 +35,10 @@ export interface AppAdapters {
   readonly vigilancia?: VigilanciaConfig;
   /** Pseudônimo do suporte (N1); padrão: createPseudonymSigner (KMS fora de development/test). */
   readonly pseudonymSigner?: PseudonymSigner;
+  /** Sessão do PORTAL DO PACIENTE, separada da da clínica (D4); padrão: createPortalAuthProvider. */
+  readonly portalAuthProvider?: PortalAuthProvider;
+  /** Limite por conta do portal; padrão: ambiente (loadPortalLimites). */
+  readonly portalLimites?: PortalLimites;
 }
 
 @Module({})
@@ -45,6 +52,7 @@ export class AppModule {
     const authProvider = adapters.authProvider ?? createAuthProvider(process.env);
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
     const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
+    const portalAuthProvider = adapters.portalAuthProvider ?? createPortalAuthProvider(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
     const pacientes = PatientsModule.forRoot({
       store,
@@ -70,6 +78,8 @@ export class AppModule {
         RecordsModule.forRoot(pacientes),
         // Financeiro: listas e recibos contam na mesma vigilância (R5).
         FinanceModule.forRoot(pacientes),
+        // Portal do paciente: sessão própria; limite por conta no mesmo store (rodada 18.1).
+        PortalModule.forRoot({ pacientes, provider: portalAuthProvider, limites: adapters.portalLimites ?? loadPortalLimites(process.env) }),
       ],
     };
   }

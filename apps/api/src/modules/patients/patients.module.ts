@@ -26,7 +26,8 @@ export class PatientsModule {
         { provide: VIGILANCIA_STORE, useValue: store },
         { provide: VIGILANCIA_OPCOES, useValue: opcoes },
       ],
-      exports: [PatientsService, VigilanciaDeLeituraService],
+      // Store e opções também saem para o portal contar no MESMO store (limite por conta, rodada 18.1).
+      exports: [PatientsService, VigilanciaDeLeituraService, VIGILANCIA_STORE, VIGILANCIA_OPCOES],
     };
   }
 }

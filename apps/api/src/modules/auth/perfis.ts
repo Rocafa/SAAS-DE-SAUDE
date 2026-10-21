@@ -71,6 +71,16 @@ export const PERMISSOES = {
   'prontuario:acessar': ['admin', 'profissional', 'recepcao', 'financeiro'],
   /** Sigilo do compartimento de psicologia (pergunta 1.11 em aberto): decisão do dono da clínica. */
   'prontuario:configurar': ['admin'],
+  /**
+   * Portal do paciente (rodada 18.1): emitir/revogar convite e ver/revogar vínculos de acesso do
+   * paciente ao portal. Recepção faz o cadastro, então convida; o dono também.
+   */
+  'portal:convidar': ['admin', 'recepcao'],
+  /**
+   * Pedidos do titular (LGPD art. 18) abertos pelo portal: ler o detalhe e registrar o atendimento.
+   * Só o dono (que responde pela controladora até haver encarregado nomeado; perfil próprio com a D4).
+   */
+  'titular:atender': ['admin'],
 } as const satisfies Record<string, readonly Perfil[]>;
 
 export type Permissao = keyof typeof PERMISSOES;

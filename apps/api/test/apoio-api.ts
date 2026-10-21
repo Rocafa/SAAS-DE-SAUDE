@@ -18,16 +18,21 @@ import { MembrosService } from '../src/modules/auth/membros';
 import { DevSessionProvider } from '../src/modules/auth/dev-session.provider';
 import type { Perfil } from '../src/modules/auth/perfis';
 import { LocalKeyProvider } from '../src/modules/crypto/local-key-provider';
+import { DevPortalSessionProvider } from '../src/modules/portal/portal-auth';
 
 export interface ApiDeTeste {
   readonly app: INestApplication;
   readonly sessoes: DevSessionProvider;
+  /** Sessões FICTÍCIAS do portal do paciente (provedor separado do da clínica). */
+  readonly portal: DevPortalSessionProvider;
   readonly db: DatabaseHandle;
   http(): ReturnType<typeof request>;
   /** Cria uma clínica fictícia e devolve o id. */
   novaClinica(): Promise<TenantId>;
   /** Sessão fictícia: devolve o cabeçalho Authorization. */
   sessao(tenantId: TenantId, ...perfis: Perfil[]): { Authorization: string; userId: string };
+  /** Sessão fictícia do portal para uma conta (nova, se não informada). */
+  sessaoPortal(contaId?: string): { Authorization: string; contaId: string };
   /**
    * Registra perfis do usuário NO BANCO (clinic_members, 0020/R13), concedidos pelo admin fundador
    * fictício da clínica, pelo serviço do runtime (trilha e triggers conferem). Devolve o usuário.
@@ -38,14 +43,16 @@ export interface ApiDeTeste {
   fechar(): Promise<void>;
 }
 
-export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseudonymSigner'> = {}): Promise<ApiDeTeste> {
+export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseudonymSigner' | 'portalLimites'> = {}): Promise<ApiDeTeste> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória');
   const sessoes = new DevSessionProvider('test');
+  const portal = new DevPortalSessionProvider('test');
   const moduleRef = await Test.createTestingModule({
     imports: [
       AppModule.forRoot(loadConfig(process.env), {
         authProvider: sessoes,
+        portalAuthProvider: portal,
         keyProvider: new LocalKeyProvider({ nodeEnv: 'test' }),
         ...adapters,
       }),
@@ -58,6 +65,7 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
   return {
     app,
     sessoes,
+    portal,
     db,
     http: () => request(app.getHttpServer() as Server),
     async novaClinica() {
@@ -71,6 +79,9 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
       const userId = randomUUID();
       const token = sessoes.criarSessao({ tenantId, userId, perfis });
       return { Authorization: `Bearer ${token}`, userId };
+    },
+    sessaoPortal(contaId = randomUUID()) {
+      return { Authorization: `Bearer ${portal.criarSessao({ contaId })}`, contaId };
     },
     async membro(tenantId, s, ...perfis) {
       const fundador = fundadores.get(tenantId);
