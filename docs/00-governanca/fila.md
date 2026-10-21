@@ -38,6 +38,9 @@
 | Rodada 18.1: backend do **portal do paciente** com contrato próprio (ApiPortal; servidor descobre o paciente pela sessão — correção estrutural do B3 do #47) — migração **0027**, sobre #65 | Maestro @Rocafa (agente engenharia) | 19/10/2026 | branch `eng/portal-paciente` |
 | Rodada 18.2: **responsáveis do paciente** (menores, representante legal, pagador) — migração **0028**, sobre #65 | Maestro @Rocafa (agente engenharia) | 19/10/2026 | branch `eng/responsaveis` |
 | Rodada 18.3: **lembretes e confirmação por WhatsApp** (provedor plugável com adaptador falso; templates neutros; opt-in; respostas confirmam/cancelam) — migração **0032**, sobre #65 | Maestro @Rocafa (agente engenharia) | 20/10/2026 | branch `eng/whatsapp-lembretes` |
+| Rodada 19.1: correção do veto do **#67** (responsáveis; pagador retroativo alterava recibos) — migração **0031** | Maestro @Rocafa (agente engenharia) | 20/10/2026 | branch `eng/responsaveis` |
+| Rodada 19.2: correção do veto do **#68** (portal). Fase A: trilha de auditoria bloqueada na sessão do portal + ressalvas; Fase B (depois do 19.1): responsável só para menor/curatela, ligado ao `guardian_id` — migração **0033** | Maestro @Rocafa (agente engenharia) | 21/10/2026 | branch `eng/portal-paciente` |
+| Rodada 19.3: integração #66/#67/#68/WhatsApp sobre #65 (ordem das migrações, versão do G2, guarda de schema), depois dos vetos corrigidos | Maestro @Rocafa | 21/10/2026 | a fazer |
 
 ## Livre (pegue colocando seu nome)
 
