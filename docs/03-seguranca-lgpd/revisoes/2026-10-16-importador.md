@@ -137,3 +137,39 @@ Pendência fora do código: confirmar no ALB e no WAF de produção que o corpo 
 2. R8 junto.
 3. Registrar R1–R7 e R9 na fila com os prazos. R1, R2, R3, R4 e R6 são **condição da 1ª importação real** (onda 3). Até lá, o importador fica desligado em produção.
 4. Merge **depois** de #63 e #65 (numeração 0022–0024 e G2 1.13.0) e com o CI verde.
+
+## Re-revisão (19/10/2026)
+Base: `origin/eng/importador` em `eb0c326` (migração 0026). **Veredito: VETADO.** A V1 foi resolvida, mas a R6(b) abriu um vazamento novo (V2).
+
+**V1: resolvida.** `import_batch_id` só entra no INSERT, com lote `simulado` do tipo certo e admin da sessão, e depois não muda mais (trigger vale para qualquer papel). O livro só aceita registro que já carrega a marca do próprio lote. `app_undo_import_batch` apaga só `WHERE import_batch_id = lote`. Tentei de novo três caminhos, e todos falham:
+- pôr a marca num paciente antigo com UPDATE (é imutável);
+- forjar o livro (exige a marca);
+- reinserir o id de um paciente antigo (PK).
+
+A única tabela com `ON DELETE CASCADE` para `patients` é `import_cpf_fingerprints`. **Regra para a frente:** toda FK nova para `patients` ou `appointments` (por exemplo, responsáveis, portal) tem de ser `RESTRICT` ou entrar em `app_import_batch_blockers`. Se for CASCADE, o desfazer apaga junto, sem aviso, o que veio depois.
+
+**R1, R2, R4 e R6(a): atendidas.** Situação de cada uma:
+- R1: o hash cobre o mapeamento e o SHA-256 do bruto; remapear exige voltar a `recebido`; só admin altera o lote, salvo o formato exato do expurgo.
+- R2: o importador fica desligado em produção salvo `IMPORTADOR_HABILITADO=true`.
+- R4: `term_sha256` é obrigatório e imutável. O texto continua ⚖️ (pendente do advogado).
+- R6(a): o admin digita o nome ou o CNPJ da clínica, e a confirmação fica imutável.
+
+**V2 (🔴, nova): a R6(b) é um oráculo entre controladoras.** `app_import_cpfs_em_outras_clinicas` devolve a contagem exata quando há 5 ou mais coincidências e elas somam pelo menos 20% do arquivo. A burla:
+1. O atacante monta uma planilha com 4 CPFs que ele sabe estarem importados em outra clínica (a segunda clínica que ele administra, uma clínica parceira em conluio ou os CPFs de familiares) e mais 1 CPF alvo.
+2. Simula a importação.
+3. Se a resposta for 5, o alvo é paciente de outra clínica. Se for 0, não é.
+
+O oráculo responde sobre um CPF por vez e com certeza. Trocar a contagem por "há indícios: sim/não" **não resolve**: o oráculo está no cruzamento do limiar, e 1 bit por consulta basta. Ser paciente de uma clínica (às vezes de psicologia ou psiquiatria) é dado referente à saúde. Contar isso a outra controladora:
+- não tem base legal (art. 11);
+- foge das instruções da controladora dona do dado (art. 39, a plataforma é operadora);
+- é comunicação que configura incidente (art. 48).
+
+**Decisão:** o cliente não pode receber **nenhum** sinal sobre outras clínicas. Duas opções:
+- **(a) Remover a R6(b)** (recomendado). Saem a função, a tabela `import_cpf_fingerprints` e `IMPORT_CPF_FP_KEY`. Ficam a R6(a), a checagem de duplicidade **dentro** da própria clínica e o termo.
+- **(b) Alerta só interno.** Acima do limiar, um evento sem CPF e sem id de paciente vai para a fila de segurança da plataforma. O fluxo do usuário não muda em nada: nem retenção, nem atraso, nem mensagem. A revisão é humana, feita pelo encarregado, que contata as clínicas fora do produto. Exige cláusula no DPA (segurança do tratamento, arts. 46 e 47) e entrada no ROPA.
+
+Em qualquer das duas, um teste RLS tem de provar que a resposta da simulação é idêntica com e sem coincidência em outra clínica.
+
+**Para virar APROVADO COM RESSALVAS:**
+- a V2 corrigida, pela opção (a) ou (b), com o teste acima;
+- as condições anteriores mantidas (R3, R5, R7 e R9 na fila; R1–R4 e R6 antes da 1ª importação real; merge depois de #63 e #65; CI verde).
