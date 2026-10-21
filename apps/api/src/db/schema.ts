@@ -40,6 +40,11 @@ export const patients = pgTable('patients', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0015 (D1.4 do #63): retenção legal; enquanto marcada, nada do paciente é expurgado. */
   legalHoldSince: timestamp('legal_hold_since', { withTimezone: true }),
+  /** Migração 0031 (A3 do #67): emancipação (CC art. 5º, par. único) — data, documento cifrado, autor; imutável. */
+  emancipatedOn: date('emancipated_on'),
+  emancipationRefEnc: text('emancipation_ref_enc'),
+  emancipationRecordedBy: uuid('emancipation_recorded_by'),
+  emancipationRecordedAt: timestamp('emancipation_recorded_at', { withTimezone: true }),
 });
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
@@ -552,6 +557,13 @@ export const payments = pgTable('payments', {
   amountCents: integer('amount_cents').notNull(),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
   receivedBy: uuid('received_by').notNull(),
+  /**
+   * Migração 0031 (V1 do #67): pagador do cadastro CONGELADO no recebimento — o vínculo e o retrato
+   * cifrado (nome + CPF). Recibo tardio e Receita Saúde usam só isto; o retrato sai na retenção fiscal.
+   */
+  guardianPayerLinkId: uuid('guardian_payer_link_id'),
+  guardianPayerEnc: text('guardian_payer_enc'),
+  guardianPayerPurgedAt: timestamp('guardian_payer_purged_at', { withTimezone: true }),
 });
 
 /** Estorno total de um recebimento (0018): append-only, no caixa aberto do momento. */
@@ -682,11 +694,13 @@ export const GUARDIAN_END_REASONS = [
   'substituido',
   'cadastro_errado',
   'pedido_do_titular',
+  'emancipacao',
 ] as const;
 export type GuardianEndReason = (typeof GUARDIAN_END_REASONS)[number];
 export const GUARDIAN_HISTORY_EVENTS = [
   'responsavel_criado',
   'responsavel_alterado',
+  'responsavel_descartado',
   'vinculo_criado',
   'vinculo_alterado',
   'vinculo_encerrado',
@@ -698,13 +712,15 @@ export const guardians = pgTable('guardians', {
   tenantId: uuid('tenant_id')
     .notNull()
     .references(() => tenants.id),
-  nameEnc: text('name_enc').notNull(),
+  /** NULL só depois do descarte (0031: cadastro errado com o prazo vencido). */
+  nameEnc: text('name_enc'),
   cpfEnc: text('cpf_enc'),
   phoneEnc: text('phone_enc'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy: uuid('updated_by').notNull(),
+  discardedAt: timestamp('discarded_at', { withTimezone: true }),
 });
 
 /** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */
@@ -727,6 +743,19 @@ export const patientGuardians = pgTable('patient_guardians', {
   createdBy: uuid('created_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy: uuid('updated_by').notNull(),
+  // 0031 (parecer do #67): decisão do PROFISSIONAL sobre a informação clínica (autor/data pelo banco).
+  clinicalInfoDecidedBy: uuid('clinical_info_decided_by'),
+  clinicalInfoDecidedAt: timestamp('clinical_info_decided_at', { withTimezone: true }),
+  clinicalInfoBasisEnc: text('clinical_info_basis_enc'),
+  /** Curatela: referência da decisão judicial e escopo, cifrados e imutáveis. */
+  courtDecisionRefEnc: text('court_decision_ref_enc'),
+  curatorshipScopeEnc: text('curatorship_scope_enc'),
+  /** Paciente adulto ciente de que um terceiro é o pagador (autor/data pelo banco). */
+  payerPatientAwareBy: uuid('payer_patient_aware_by'),
+  payerPatientAwareAt: timestamp('payer_patient_aware_at', { withTimezone: true }),
+  /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
+  annulReasonEnc: text('annul_reason_enc'),
+  discardAfter: date('discard_after'),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */

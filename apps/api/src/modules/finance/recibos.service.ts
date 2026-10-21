@@ -24,10 +24,16 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { diasEntre } from '../insurance/guias-regras';
 import { patientFieldRef } from '../patients/patient-fields';
-import { responsavelPagadorEm } from '../patients/responsaveis.service';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_RECIBO, cifrarCampoFinanceiro, decifrarCampoFinanceiro } from './finance-fields';
+import {
+  CAMPO_CPF_PAGADOR,
+  CAMPO_CPF_PROFISSIONAL,
+  CAMPO_PAGADOR_DO_RECEBIMENTO,
+  CAMPO_RECIBO,
+  cifrarCampoFinanceiro,
+  decifrarCampoFinanceiro,
+} from './finance-fields';
 import {
   carregarConfig,
   reciboVivoDoRecebimento,
@@ -280,8 +286,8 @@ export class RecibosService {
           cpf: l.paciente.cpfEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, l.paciente.id, 'cpf'), l.paciente.cpfEnc) : null,
         };
         const dataPagamento = noFusoDaClinica(l.p.receivedAt).data;
-        // 0028: sem pagador na cobrança, vale o responsável pagador vigente na data do pagamento.
-        const doResponsavel = l.c.payerName ? null : await responsavelPagadorEm(tx, this.cipher, ctx.tenantId, l.paciente.id, dataPagamento);
+        // V1 do #67: sem pagador na cobrança, vale o responsável pagador CONGELADO no recebimento.
+        const doResponsavel = l.c.payerName ? null : await this.pagadorCongelado(tx, ctx, l.p);
         const pagador: PessoaDoRecibo = l.c.payerName
           ? { nome: l.c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, l.c.id, CAMPO_CPF_PAGADOR, l.c.payerCpfEnc) }
           : (doResponsavel ?? beneficiario);
@@ -372,8 +378,9 @@ export class RecibosService {
       cpf: pac.cpfEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, pac.id, 'cpf'), pac.cpfEnc) : null,
     };
     const dataPagamento = noFusoDaClinica(p.receivedAt).data;
-    // 0028: sem pagador na cobrança, vale o responsável pagador vigente na data do pagamento.
-    const doResponsavel = c.payerName ? null : await responsavelPagadorEm(tx, this.cipher, ctx.tenantId, pac.id, dataPagamento);
+    // V1 do #67: sem pagador na cobrança, vale o responsável pagador CONGELADO no recebimento (nunca o
+    // cadastro de hoje): recibo tardio sai com quem era o pagador quando o dinheiro entrou.
+    const doResponsavel = c.payerName ? null : await this.pagadorCongelado(tx, ctx, p);
     const pagador: PessoaDoRecibo = c.payerName
       ? { nome: c.payerName, cpf: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, c.id, CAMPO_CPF_PAGADOR, c.payerCpfEnc) }
       : (doResponsavel ?? beneficiario);
@@ -391,9 +398,18 @@ export class RecibosService {
     return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel) };
   }
 
-  /** R3: paciente menor na data do pagamento (data de nascimento cifrada; ausente = não se sabe). */
+  /** V1 do #67: o responsável pagador gravado no recebimento (null se não houve ou se já eliminado pela retenção). */
+  private async pagadorCongelado(tx: TenantTx, ctx: RequestContext, p: typeof payments.$inferSelect): Promise<PessoaDoRecibo | null> {
+    const json = await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, p.id, CAMPO_PAGADOR_DO_RECEBIMENTO, p.guardianPayerEnc);
+    if (json === null) return null;
+    const v = JSON.parse(json) as { nome?: unknown; cpf?: unknown };
+    return { nome: typeof v.nome === 'string' ? v.nome : '', cpf: typeof v.cpf === 'string' ? v.cpf : null };
+  }
+
+  /** R3: paciente menor na data do pagamento (data de nascimento cifrada; ausente = não se sabe; emancipado = maior). */
   private async pacienteMenor(tx: TenantTx, ctx: RequestContext, pac: typeof patients.$inferSelect, data: string): Promise<boolean> {
     if (!pac.birthDateEnc) return false;
+    if (pac.emancipatedOn !== null && pac.emancipatedOn <= data) return false;
     const nascimento = await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, pac.id, 'birth_date'), pac.birthDateEnc);
     return menorDeIdadeEm(nascimento, data);
   }

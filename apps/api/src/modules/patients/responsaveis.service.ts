@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
@@ -9,6 +9,7 @@ import {
   patientGuardianHistory,
   patientGuardians,
   patients,
+  payments,
   type GuardianEndReason,
   type GuardianKind,
 } from '../../db/schema';
@@ -88,21 +89,20 @@ type LinhaVinculo = typeof patientGuardians.$inferSelect;
 type LinhaPessoa = typeof guardians.$inferSelect;
 
 /**
- * Responsável pagador VIGENTE na data (AAAA-MM-DD) para o paciente, com nome e CPF decifrados; null se não
- * houver. Usado pelo recibo e pelo insumo do Receita Saúde (R3 do #65): resolve a pendência
- * `pagador_responsavel`. Roda na transação do chamador (clínica da sessão, RLS); a auditoria é a do chamador.
- * Vale a MARCA atual do vínculo com a vigência que cobre a data (inclusive vínculo já encerrado, cuja
- * vigência termina antes do fim): o recibo já emitido é um retrato e não muda.
+ * Responsável pagador VIVO do paciente AGORA (marca de pagador, vínculo não encerrado, início não futuro),
+ * com nome e CPF decifrados; null se não houver. Uso ÚNICO (V1 do parecer #67): o recebimento congela este
+ * resultado em `payments` (vínculo + retrato cifrado) na mesma transação; recibo tardio e Receita Saúde leem
+ * SÓ o congelado. Trocar, encerrar ou anular o pagador depois não muda pagamento já registrado.
+ * Roda na transação do chamador (clínica da sessão, RLS); a auditoria é a do chamador.
  */
-export async function responsavelPagadorEm(
+export async function pagadorVivoDoCadastro(
   tx: TenantTx,
   cipher: FieldCipher<TenantTx>,
   tenantId: TenantId,
   pacienteId: string,
-  data: string,
-): Promise<PagadorResponsavel | null> {
+): Promise<(PagadorResponsavel & { readonly vinculoId: string }) | null> {
   const [l] = await tx
-    .select({ g: guardians })
+    .select({ v: patientGuardians, g: guardians })
     .from(patientGuardians)
     .innerJoin(guardians, and(eq(guardians.tenantId, patientGuardians.tenantId), eq(guardians.id, patientGuardians.guardianId)))
     .where(
@@ -110,14 +110,14 @@ export async function responsavelPagadorEm(
         eq(patientGuardians.tenantId, tenantId),
         eq(patientGuardians.patientId, pacienteId),
         eq(patientGuardians.isPayer, true),
-        sql`${patientGuardians.validFrom} <= ${data}::date`,
-        or(isNull(patientGuardians.validUntil), sql`${data}::date < ${patientGuardians.validUntil}`),
+        isNull(patientGuardians.endedAt),
+        sql`${patientGuardians.validFrom} <= ${hojeNaClinica()}::date`,
       ),
     )
-    .orderBy(desc(patientGuardians.validFrom), desc(patientGuardians.createdAt))
     .limit(1);
-  if (!l) return null;
+  if (!l || l.g.nameEnc === null) return null;
   return {
+    vinculoId: l.v.id,
     nome: (await decifrarCampoResponsavel(cipher, tx, tenantId, l.g.id, 'name', l.g.nameEnc)) ?? '',
     cpf: await decifrarCampoResponsavel(cipher, tx, tenantId, l.g.id, 'cpf', l.g.cpfEnc),
   };
@@ -337,6 +337,21 @@ export class ResponsaveisService {
       const hoje = hojeNaClinica();
       const ate = dados.ate ?? hoje;
       if (ate < v.validFrom) throw new ConflitoError('fim_antes_do_inicio');
+      // V1 do #67: o fim não pode cair antes de recebimento já atribuído a este vínculo (o congelado não
+      // muda de qualquer forma; aqui só se evita um cadastro incoerente com o financeiro).
+      // Encerrar HOJE é sempre aceito (o pagamento de hoje já está congelado).
+      const [atribuido] = ate >= hoje ? [] : await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(
+          and(
+            eq(payments.tenantId, ctx.tenantId),
+            eq(payments.guardianPayerLinkId, v.id),
+            sql`(${payments.receivedAt} AT TIME ZONE 'America/Sao_Paulo')::date >= ${ate}::date`,
+          ),
+        )
+        .limit(1);
+      if (atribuido) throw new ConflitoError('encerramento_antes_de_pagamento_atribuido');
       const [nv] = await tx
         .update(patientGuardians)
         .set({ validUntil: ate, endReason: dados.motivo, endedAt: new Date(), endedBy: ctx.userId, updatedBy: ctx.userId })

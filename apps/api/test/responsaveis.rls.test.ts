@@ -11,7 +11,7 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, guardians, patientGuardianHistory, patientGuardians } from '../src/db/schema';
+import { auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
@@ -219,17 +219,119 @@ describe('financeiro: pendência pagador_responsavel (R3 do #65)', () => {
     expect(r3.pendencias).not.toContain('cpf_do_pagador');
     expect(r3.pagador).toEqual({ nome: NOME_RESP, cpf: CPF_RESP });
     expect(r3.beneficiario.nome).toBe('Paciente Ficticio Menor Recibo');
-    // Receita Saúde do dia: os itens com o responsável saem com o CPF dele e sem a pendência.
+    // Receita Saúde do dia: só o item recebido com o responsável já pagador sai com o CPF dele.
     const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje(), ate: hoje() });
     expect(lote.status, JSON.stringify(lote.body)).toBe(200);
     const itens = (lote.body as { itens: { pendencias: string[]; pagador: { cpf: string | null }; beneficiario: { nome: string } }[] }).itens.filter(
       (i) => i.beneficiario.nome === 'Paciente Ficticio Menor Recibo',
     );
     expect(itens.length).toBe(3);
-    expect(itens.every((i) => i.pagador.cpf === CPF_RESP && !i.pendencias.includes('pagador_responsavel'))).toBe(true);
+    // V1 do #67: o pagador é o CONGELADO no recebimento — os dois pagamentos de antes da marca seguem com a pendência.
+    expect(itens.map((i) => i.pagador.cpf === CPF_RESP && !i.pendencias.includes('pagador_responsavel'))).toEqual([false, false, true]);
     // Vínculo encerrado HOJE (fim exclusivo): o pagamento de hoje fica fora da vigência e a pendência volta.
     await post(recepA, `/pacientes/${menor}/responsaveis/${resp.id}/encerrar`, { motivo: 'substituido' }).expect(200);
     expect((await reciboSemPagador(menor)).pendencias).toContain('pagador_responsavel');
+  });
+});
+
+/** Cobrança PF sem pagador próprio, recebida agora; devolve o id do recebimento (sem emitir recibo). */
+async function receberSemRecibo(pacienteId: string): Promise<string> {
+  horaSeq++;
+  const ag = await post(recepA, '/agendamentos', {
+    pacienteId,
+    profissionalId: profissionalPfA,
+    tipoId: tipoA,
+    data: `2031-05-${String(1 + (horaSeq % 28)).padStart(2, '0')}`,
+    hora: `${String(6 + Math.floor(horaSeq / 28)).padStart(2, '0')}:00`,
+    encaixe: true,
+  });
+  expect(ag.status, JSON.stringify(ag.body)).toBe(201);
+  const c = await post(recepA, '/financeiro/cobrancas', { agendamentoId: id(ag), valorCentavos: 7000, atendimentoPor: 'pf' });
+  expect(c.status, JSON.stringify(c.body)).toBe(201);
+  const p = await post(recepA, `/financeiro/cobrancas/${id(c)}/recebimentos`, { forma: 'pix_manual' });
+  expect(p.status, JSON.stringify(p.body)).toBe(201);
+  return id(p);
+}
+
+describe('V1 do #67: pagador congelado no recebimento (sem retroatividade)', () => {
+  it('trocar o pagador, encerrar/anular e criar vínculo com início antigo NÃO mudam recibo tardio nem lote de pagamento anterior', async () => {
+    const CPF_MAE = cpfFicticio(891);
+    const CPF_PAI = cpfFicticio(892);
+    const CPF_NOVO = cpfFicticio(893);
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Retroativo', cpf: cpfFicticio(890), nascimento: nascidoHa(9) });
+    const mae = await responsavel(recepA, pac, { nome: 'Mae Ficticia Retro', cpf: CPF_MAE, tipo: 'pai_mae', pagador: true, desde: '2025-01-01' });
+    const pai = await responsavel(recepA, pac, { nome: 'Pai Ficticio Retro', cpf: CPF_PAI, tipo: 'pai_mae', desde: '2025-01-01' });
+    // Recebido com a mãe pagadora; o recibo NÃO é emitido agora (recibo tardio).
+    const antes = await receberSemRecibo(pac);
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, antes)), recepA.userId);
+    expect(linha?.guardianPayerLinkId).toBe(mae.id);
+    expect(linha?.guardianPayerEnc).toBeTruthy();
+    expect(JSON.stringify(linha)).not.toContain(CPF_MAE);
+
+    // Encerrar a mãe com data anterior ao pagamento atribuído: 409 (o congelado não mudaria de qualquer forma).
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis/${mae.id}/encerrar`, { motivo: 'substituido', ate: '2025-01-02' })).body).toMatchObject({
+      codigo: 'encerramento_antes_de_pagamento_atribuido',
+    });
+    // 1) Troca do pagador para o pai.
+    await post(recepA, `/pacientes/${pac}/responsaveis/${pai.id}/pagador`, { pagador: true }).expect(200);
+    // 2) Correção do CPF da mãe (a pessoa) depois do pagamento.
+    await patch(recepA, `/pacientes/${pac}/responsaveis/${mae.id}`, { cpf: CPF_NOVO }).expect(200);
+    // 3) Encerra o pai e cria um vínculo novo com início ANTIGO e pagador.
+    await post(recepA, `/pacientes/${pac}/responsaveis/${pai.id}/encerrar`, { motivo: 'substituido' }).expect(200);
+    const tutor = await responsavel(recepA, pac, { nome: 'Tutor Ficticio Retro', cpf: CPF_NOVO, tipo: 'tutor', pagador: true, desde: '2025-01-01' });
+
+    // Recibo tardio do pagamento anterior: continua a MÃE com o CPF daquele momento.
+    const tardio = await post(recepA, `/financeiro/recebimentos/${antes}/recibo`);
+    expect(tardio.status, JSON.stringify(tardio.body)).toBe(200);
+    expect((tardio.body as { pagador: unknown }).pagador).toEqual({ nome: 'Mae Ficticia Retro', cpf: CPF_MAE });
+    // Lote do Receita Saúde que cobre o pagamento anterior: idem (o lote é recalculado a cada geração).
+    const lote = await post(finA, '/financeiro/receita-saude/lotes', { profissionalId: profissionalPfA, de: hoje(), ate: hoje() });
+    expect(lote.status, JSON.stringify(lote.body)).toBe(200);
+    const doPac = (lote.body as { itens: { pagador: { nome: string; cpf: string | null }; beneficiario: { nome: string } }[] }).itens.filter(
+      (i) => i.beneficiario.nome === 'Paciente Ficticio Retroativo',
+    );
+    expect(doPac.map((i) => i.pagador)).toEqual([{ nome: 'Mae Ficticia Retro', cpf: CPF_MAE }]);
+    // Pagamento NOVO: vale o pagador vivo de agora (o tutor).
+    const depois = await receberSemRecibo(pac);
+    expect(((await post(recepA, `/financeiro/recebimentos/${depois}/recibo`)).body as { pagador: unknown }).pagador).toEqual({
+      nome: 'Tutor Ficticio Retro',
+      cpf: CPF_NOVO,
+    });
+    const [linhaDepois] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, depois)), recepA.userId);
+    expect(linhaDepois?.guardianPayerLinkId).toBe(tutor.id);
+  });
+
+  it('banco: recebimento só congela o pagador VIVO do paciente; o retrato não muda depois (append-only)', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Congela Banco', nascimento: nascidoHa(7) });
+    const naoPagador = await responsavel(recepA, pac, { nome: 'Resp Ficticio Nao Pagador', tipo: 'pai_mae' });
+    const pagou = await receberSemRecibo(pac);
+    const [p] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, pagou)), recepA.userId);
+    expect(p?.guardianPayerLinkId).toBeNull();
+    // Forjar um recebimento com vínculo que não é pagador: o trigger recusa (23514).
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).limit(1), recepA.userId);
+    const selo = g!.nameEnc;
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.insert(payments).values({
+            tenantId: clinicaA,
+            chargeId: p!.chargeId,
+            cashSessionId: p!.cashSessionId,
+            method: 'dinheiro',
+            amountCents: 1,
+            receivedBy: recepA.userId,
+            guardianPayerLinkId: naoPagador.id,
+            guardianPayerEnc: selo,
+          }),
+        recepA.userId),
+      ),
+    ).toContain('23514');
+    // Reescrever o congelado depois: recusado (42501).
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(payments).set({ guardianPayerLinkId: naoPagador.id }).where(eq(payments.id, pagou)), recepA.userId),
+      ),
+    ).toContain('42501');
   });
 });
 
