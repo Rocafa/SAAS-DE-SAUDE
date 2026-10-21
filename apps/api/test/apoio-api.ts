@@ -19,12 +19,15 @@ import { DevSessionProvider } from '../src/modules/auth/dev-session.provider';
 import type { Perfil } from '../src/modules/auth/perfis';
 import { LocalKeyProvider } from '../src/modules/crypto/local-key-provider';
 import { DevPortalSessionProvider } from '../src/modules/portal/portal-auth';
+import { DevPortalOtpSender } from '../src/modules/portal/portal-otp';
 
 export interface ApiDeTeste {
   readonly app: INestApplication;
   readonly sessoes: DevSessionProvider;
   /** Sessões FICTÍCIAS do portal do paciente (provedor separado do da clínica). */
   readonly portal: DevPortalSessionProvider;
+  /** Envio FICTÍCIO do código de resgate do convite (último código por telefone, em memória). */
+  readonly otp: DevPortalOtpSender;
   readonly db: DatabaseHandle;
   http(): ReturnType<typeof request>;
   /** Cria uma clínica fictícia e devolve o id. */
@@ -48,11 +51,13 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
   if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória');
   const sessoes = new DevSessionProvider('test');
   const portal = new DevPortalSessionProvider('test');
+  const otp = new DevPortalOtpSender('test');
   const moduleRef = await Test.createTestingModule({
     imports: [
       AppModule.forRoot(loadConfig(process.env), {
         authProvider: sessoes,
         portalAuthProvider: portal,
+        portalOtpSender: otp,
         keyProvider: new LocalKeyProvider({ nodeEnv: 'test' }),
         ...adapters,
       }),
@@ -66,6 +71,7 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
     app,
     sessoes,
     portal,
+    otp,
     db,
     http: () => request(app.getHttpServer() as Server),
     async novaClinica() {

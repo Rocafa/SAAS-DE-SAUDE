@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog, encounters, patients, portalConsents, portalInvites, portalLinks, portalRightsRequests } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyAuditChain } from '../src/modules/audit/audit-chain';
+import { consentimentoIaDoPaciente } from '../src/modules/portal/consentimento-ia';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -62,8 +63,14 @@ async function convidar(s: Sessao, pacienteId: string, extra: Record<string, unk
   return r.body as { id: string; token: string };
 }
 
-async function resgatar(p: SessaoPortal, token: string): Promise<{ status: number; vinculoId?: string; codigo?: string }> {
-  const r = await api.http().post('/portal/convites/resgate').set(cab(p)).send({ token });
+/** Telefone fictício de todo paciente criado por criarPaciente (destino do código de resgate). */
+const TELEFONE = '11900001111';
+
+/** Resgate em dois passos (A2 do #68): token -> código no telefone do cadastro -> token + código. */
+async function resgatar(p: SessaoPortal, token: string, a: ApiDeTeste = api): Promise<{ status: number; vinculoId?: string; codigo?: string }> {
+  const i = await a.http().post('/portal/convites/resgate').set(cab(p)).send({ token });
+  if (i.status !== 200) return { status: i.status, ...(i.body as { codigo?: string }) };
+  const r = await a.http().post('/portal/convites/resgate/confirmar').set(cab(p)).send({ token, codigo: a.otp.ultimoCodigo(TELEFONE) });
   return { status: r.status, ...(r.body as { vinculoId?: string; codigo?: string }) };
 }
 
@@ -181,6 +188,37 @@ describe('convite: uso único, expiração e revogação', () => {
         tx.insert(portalLinks).values({ tenantId: clinicaA, accountId: randomUUID(), patientId: pacA2, inviteId: c.id, actingAs: 'titular' }),
       adminA.userId),
     ).rejects.toThrow();
+  });
+
+  it('A2 do #68: o token sozinho não resgata; código do telefone do cadastro, da mesma conta, 5 tentativas', async () => {
+    const p = api.sessaoPortal();
+    const { token } = await convidar(adminA, pacA2);
+    const i = await api.http().post('/portal/convites/resgate').set(cab(p)).send({ token }).expect(200);
+    expect(i.body).toEqual({ canal: 'sms', destino: '(**) *****-1111' });
+    expect(JSON.stringify(i.body)).not.toContain(TELEFONE);
+    const certo = api.otp.ultimoCodigo(TELEFONE) as string;
+    expect(certo).toMatch(/^\d{6}$/);
+    const errado = certo === '000000' ? '000001' : '000000';
+    const confirmar = (s: SessaoPortal, codigo: string) =>
+      api.http().post('/portal/convites/resgate/confirmar').set(cab(s)).send({ token, codigo });
+    // Outra conta com o código certo: recusada (o código é da conta que pediu).
+    expect((await confirmar(api.sessaoPortal(), certo)).body).toMatchObject({ statusCode: 409, codigo: 'convite_invalido' });
+    // Código errado 5 vezes: o código certo deixa de valer.
+    for (let k = 0; k < 5; k++) expect((await confirmar(p, errado)).status).toBe(409);
+    expect((await confirmar(p, certo)).status).toBe(409);
+    // Novo código (novo envio) resgata.
+    expect(await resgatar(p, token)).toMatchObject({ status: 200 });
+    // Token nunca na URL: query é 400; a versão antiga (só o token) não existe mais no banco.
+    await api.http().post('/portal/convites/resgate').query({ token }).set(cab(p)).send({ token }).expect(400);
+    await api.http().get('/portal/convites/resgate').query({ token }).set(cab(p)).expect(404);
+    await expect(
+      api.db.db.transaction((tx) => tx.execute(sql`select app_portal_redeem_invite(${p.contaId}::uuid, ${'a'.repeat(64)})`)),
+    ).rejects.toThrow();
+    // Paciente sem telefone no cadastro: não há para onde mandar o código (409 igual a convite inválido).
+    const semTel = await criarPaciente(adminA, 'Fabi Ficticia Sem Telefone');
+    await withTenant(api.db.db, clinicaA, (tx) => tx.update(patients).set({ phoneEnc: null }).where(eq(patients.id, semTel)), adminA.userId);
+    const c2 = await convidar(adminA, semTel);
+    expect(await resgatar(api.sessaoPortal(), c2.token)).toMatchObject({ status: 409, codigo: 'convite_invalido' });
   });
 
   it('só quem tem portal:convidar emite convite; paciente de outra clínica = 404', async () => {
@@ -476,6 +514,8 @@ describe('central de privacidade: consentimento em histórico (IA em 3 estados)'
     await api.http().post('/portal/privacidade/consentimentos/escriba_ia').set(cab(p)).send({ resposta: 'nao' }).expect(200);
     const clin = await api.http().get(`/clinica/portal/pacientes/${pacA1}/consentimentos`).set(cab(adminA)).expect(200);
     expect(clin.body).toEqual(expect.arrayContaining([expect.objectContaining({ finalidade: 'escriba_ia', resposta: 'nao', estadoIa: 'recusou' })]));
+    // A5 do #68: a fonte única que o gateway de IA consulta enxerga o "não" dado no portal.
+    expect(await withTenant(api.db.db, clinicaA, (tx) => consentimentoIaDoPaciente(tx, clinicaA, pacA1), adminA.userId)).toBe('recusou');
     await api.http().post('/portal/privacidade/consentimentos/escriba_ia').set(cab(p)).send({ resposta: 'sim' }).expect(200);
     await api.http().post('/portal/privacidade/consentimentos/escriba_ia/desfazer').set(cab(p)).send({}).expect(200);
     const hist = await api.http().get('/portal/privacidade/consentimentos/escriba_ia/historico').set(cab(p)).expect(200);
@@ -641,10 +681,10 @@ describe('auditoria e limite por conta', () => {
   it('acima do limite por conta: 429 e um anomaly_alert na trilha da clínica do vínculo', async () => {
     const api2 = await subirApi({ portalLimites: { contaMax: 3, contaJanelaMs: 60_000, resgateMax: 2, resgateJanelaMs: 60_000 } });
     try {
-      const adm = api2.sessao(clinicaA, 'admin');
-      const c = await api2.http().post('/clinica/portal/convites').set(cab(adm)).send({ pacienteId: pacA1 }).expect(201);
-      const p = api2.sessaoPortal();
-      await api2.http().post('/portal/convites/resgate').set(cab(p)).send({ token: (c.body as { token: string }).token }).expect(200);
+      // O resgate decifra o telefone do cadastro: faz pela API principal (a chave local é por instância) e a
+      // MESMA conta abre sessão na api2, que tem o limite baixo.
+      const vinculada = await contaDe(adminA, pacA1);
+      const p = api2.sessaoPortal(vinculada.contaId);
       const codigos: number[] = [];
       for (let i = 0; i < 5; i++) codigos.push((await api2.http().get('/portal/consultas').set(cab(p))).status);
       expect(codigos).toEqual([200, 200, 200, 429, 429]);

@@ -96,6 +96,7 @@ const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
   portal_invite_lookup: 'índice token do convite -> clínica (0027); só as funções SECURITY DEFINER do portal leem/gravam',
   portal_link_index: 'índice vínculo do portal -> conta/clínica/paciente (0027); só as funções SECURITY DEFINER do portal leem/gravam',
+  portal_invite_otp: 'hash do código de resgate do convite (0033, A2 do #68); só as funções SECURITY DEFINER do portal leem/gravam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
 };
 
@@ -353,7 +354,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
     for (const assinatura of [
       'public.app_set_portal_session(uuid,uuid)',
       'public.app_portal_links_of_account(uuid)',
-      'public.app_portal_redeem_invite(uuid,text)',
+      'public.app_portal_redeem_invite(uuid,text,text)',
+      'public.app_portal_invite_challenge(uuid,text,text)',
       'public.app_portal_patient()',
       'public.app_portal_account()',
       'public.app_portal_link()',

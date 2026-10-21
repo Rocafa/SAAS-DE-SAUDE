@@ -50,6 +50,7 @@ import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import type { TenantTx } from '../src/db/tenant-transaction';
 import { cifrarCampoPortal } from '../src/modules/portal/portal-fields';
+import { hashDoCodigo } from '../src/modules/portal/portal-otp';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
@@ -321,7 +322,10 @@ beforeAll(async () => {
   // Portal do paciente (0027), direto pelo banco: convite da clínica, resgate pela conta, consentimento e
   // pedido do titular (detalhe cifrado) na sessão do portal.
   const contaPortal = randomUUID();
-  const tokenHash = createHash('sha256').update(randomBytes(32)).digest('hex');
+  const tokenPortal = randomBytes(32).toString('base64url');
+  const tokenHash = createHash('sha256').update(tokenPortal).digest('hex');
+  // 0033 (A2 do #68): o resgate exige o código enviado ao telefone do cadastro (aqui, um código fictício).
+  const codigoHash = hashDoCodigo(tokenPortal, '123456');
   await withTenant(
     api.db.db,
     clinicaA,
@@ -337,9 +341,13 @@ beforeAll(async () => {
     admin.userId,
   );
   const vinculo = await api.db.db.transaction(async (tx) => {
-    const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${contaPortal}::uuid, ${tokenHash}) as v`);
+    const d = await tx.execute(sql`select invite_id from app_portal_invite_challenge(${contaPortal}::uuid, ${tokenHash}, ${codigoHash})`);
+    expect(d).toHaveLength(1);
+    return null;
+  }).then(() => api.db.db.transaction(async (tx) => {
+    const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${contaPortal}::uuid, ${tokenHash}, ${codigoHash}) as v`);
     return r[0]?.v ?? null;
-  });
+  }));
   expect(vinculo).toMatch(/^[0-9a-f-]{36}$/);
   const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
   await api.db.db.transaction(async (tx) => {

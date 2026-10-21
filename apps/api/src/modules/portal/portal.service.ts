@@ -38,6 +38,7 @@ import { noFusoDaClinica, statusParaFront, type StatusFront } from '../schedulin
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { PORTAL_AUTH_PROVIDER, type PortalAuthProvider, type SessaoDoPortal } from './portal-auth';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
+import { hashDoCodigo, mascararTelefone, novoCodigoOtp, OTP_CODIGO_RE, PORTAL_OTP_SENDER, type PortalOtpSender } from './portal-otp';
 import {
   CONSENTIMENTOS,
   consentimentoIa,
@@ -150,6 +151,7 @@ export class PortalService {
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
     @Inject(PORTAL_AUTH_PROVIDER) private readonly provider: PortalAuthProvider,
+    @Inject(PORTAL_OTP_SENDER) private readonly otp: PortalOtpSender,
     @Inject(PortalVigilanciaService) private readonly vigilancia: PortalVigilanciaService,
     @Inject(ANTECEDENCIA_CANCELAMENTO) private readonly antecedenciaH: number,
   ) {}
@@ -199,12 +201,46 @@ export class PortalService {
     });
   }
 
-  /** Resgate do convite: uso único, dentro da validade. Falha sempre igual (409 convite_invalido). */
-  async resgatar(sessao: SessaoDoPortal, req: RequisicaoParaSessao, token: string): Promise<{ vinculoId: string }> {
+  /**
+   * Resgate, passo 1 (A2 do #68): o token sozinho não resgata. Confere o convite e envia um código de uso
+   * único ao telefone DO CADASTRO do paciente (destino nunca informado por quem resgata). Devolve só o canal
+   * e o destino mascarado. Falha sempre igual (409 convite_invalido), inclusive paciente sem telefone.
+   */
+  async iniciarResgate(sessao: SessaoDoPortal, token: string): Promise<{ canal: 'sms'; destino: string }> {
     await this.vigilancia.resgate(sessao.contaId);
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
+    const codigo = novoCodigoOtp();
+    const telefone = await this.db.semContextoDoPortal(async (tx) => {
+      const [d] = await tx.execute<{ tenant_id: string; patient_id: string; invite_id: string; phone_enc: string }>(
+        sql`select * from app_portal_invite_challenge(${sessao.contaId}::uuid, ${hashDoToken(token)}, ${hashDoCodigo(token, codigo)})`,
+      );
+      if (!d) return null;
+      // A função abriu o contexto da clínica do convite (sistema) nesta transação: decifra o telefone e audita.
+      const tenantId = d.tenant_id as TenantId;
+      const tel = await this.cipher.decryptString(tx, patientFieldRef(tenantId, d.patient_id, 'phone'), d.phone_enc);
+      await insertAudit(
+        tx,
+        { tenantId, actorId: sessao.contaId, actorKind: 'paciente_portal' },
+        { action: AuditAction.Create, scope: 'portal_invites', metadata: { op: 'redeem_code_sent', invite_id: d.invite_id, patient_id: d.patient_id, channel: 'sms' } },
+      );
+      return tel.replace(/\D/g, '');
+    });
+    if (!telefone) {
+      this.logger.warn('PORTAL_RESGATE_RECUSADO');
+      throw new ConflitoError('convite_invalido');
+    }
+    await this.otp.enviar({ canal: 'sms', valor: telefone }, codigo);
+    return { canal: 'sms', destino: mascararTelefone(telefone) };
+  }
+
+  /** Resgate, passo 2: token + código da MESMA conta. Uso único, dentro da validade. Falha sempre igual. */
+  async resgatar(sessao: SessaoDoPortal, req: RequisicaoParaSessao, token: string, codigo: string): Promise<{ vinculoId: string }> {
+    await this.vigilancia.resgate(sessao.contaId);
+    if (!TOKEN_CONVITE_RE.test(token) || !OTP_CODIGO_RE.test(codigo)) throw new ConflitoError('convite_invalido');
     const vinculo = await this.db.semContextoDoPortal(async (tx) => {
-      const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${sessao.contaId}::uuid, ${hashDoToken(token)}) as v`);
+      const r = await tx.execute<{ v: string | null }>(
+        sql`select app_portal_redeem_invite(${sessao.contaId}::uuid, ${hashDoToken(token)}, ${hashDoCodigo(token, codigo)}) as v`,
+      );
       return r[0]?.v ?? null;
     });
     if (!vinculo) {

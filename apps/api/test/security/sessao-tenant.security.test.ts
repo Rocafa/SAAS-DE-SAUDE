@@ -198,6 +198,7 @@ describe('toda rota do portal exige a sessão do portal', () => {
       [RequestMethod.GET, '/portal/sessao'],
       [RequestMethod.POST, '/portal/sessao/vinculo'],
       [RequestMethod.POST, '/portal/convites/resgate'],
+      [RequestMethod.POST, '/portal/convites/resgate/confirmar'],
       [RequestMethod.GET, '/portal/consultas'],
       [RequestMethod.POST, `/portal/consultas/${id}/confirmar`],
       [RequestMethod.POST, `/portal/consultas/${id}/desfazer-confirmacao`],

@@ -16,6 +16,7 @@ import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
 import { createPortalAuthProvider, type PortalAuthProvider } from './modules/portal/portal-auth';
 import { PortalModule } from './modules/portal/portal.module';
+import { createPortalOtpSender, type PortalOtpSender } from './modules/portal/portal-otp';
 import { loadPortalLimites, type PortalLimites } from './modules/portal/portal-vigilancia';
 import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
@@ -37,6 +38,8 @@ export interface AppAdapters {
   readonly pseudonymSigner?: PseudonymSigner;
   /** Sessão do PORTAL DO PACIENTE, separada da da clínica (D4); padrão: createPortalAuthProvider. */
   readonly portalAuthProvider?: PortalAuthProvider;
+  /** Envio do código de resgate do convite (A2 do #68); padrão: createPortalOtpSender (dev/test; real com a D4). */
+  readonly portalOtpSender?: PortalOtpSender;
   /** Limite por conta do portal; padrão: ambiente (loadPortalLimites). */
   readonly portalLimites?: PortalLimites;
 }
@@ -53,6 +56,7 @@ export class AppModule {
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
     const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
     const portalAuthProvider = adapters.portalAuthProvider ?? createPortalAuthProvider(process.env);
+    const portalOtpSender = adapters.portalOtpSender ?? createPortalOtpSender(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
     const pacientes = PatientsModule.forRoot({
       store,
@@ -79,7 +83,12 @@ export class AppModule {
         // Financeiro: listas e recibos contam na mesma vigilância (R5).
         FinanceModule.forRoot(pacientes),
         // Portal do paciente: sessão própria; limite por conta no mesmo store (rodada 18.1).
-        PortalModule.forRoot({ pacientes, provider: portalAuthProvider, limites: adapters.portalLimites ?? loadPortalLimites(process.env) }),
+        PortalModule.forRoot({
+          pacientes,
+          provider: portalAuthProvider,
+          otp: portalOtpSender,
+          limites: adapters.portalLimites ?? loadPortalLimites(process.env),
+        }),
       ],
     };
   }

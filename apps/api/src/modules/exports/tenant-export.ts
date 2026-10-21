@@ -143,6 +143,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
   portal_invite_lookup: 'índice interno token -> clínica do convite (0027); o convite sai em portal_invites',
   portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
+  portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
 };

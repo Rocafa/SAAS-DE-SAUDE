@@ -50,13 +50,30 @@ export class PortalController {
     return this.service.escolherVinculo(s, req, vinculoId as string);
   }
 
+  /**
+   * Resgate em dois passos (A2 do #68). O token vai SÓ no corpo (nunca na URL: query é 400). O link que
+   * chega ao paciente leva o token no `#fragmento` (não vai ao servidor nem ao Referer) ou como código
+   * digitado; nenhum log de requisição grava o corpo destas rotas.
+   */
   @Post('convites/resgate')
   @HttpCode(200)
-  resgatar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown) {
+  iniciarResgate(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown, @Body() corpo: unknown) {
+    semQuery(q);
     const v = new Validador(exigirObjeto(corpo, ['token']));
     const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
     v.concluir();
-    return this.service.resgatar(s, req, token);
+    return this.service.iniciarResgate(s, token);
+  }
+
+  @Post('convites/resgate/confirmar')
+  @HttpCode(200)
+  resgatar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown, @Body() corpo: unknown) {
+    semQuery(q);
+    const v = new Validador(exigirObjeto(corpo, ['token', 'codigo']));
+    const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
+    const codigo = v.texto('codigo', { min: 1, max: 16, obrigatorio: true });
+    v.concluir();
+    return this.service.resgatar(s, req, token, codigo);
   }
 
   @Get('consultas')
