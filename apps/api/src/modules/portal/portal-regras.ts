@@ -11,7 +11,7 @@ import type {
 } from '../../db/schema';
 
 /** Versão dos textos de consentimento apresentados no portal. Mudou o texto? Nova versão. */
-export const VERSAO_TEXTOS_CONSENTIMENTO = 'portal-2026-10-19.1';
+export const VERSAO_TEXTOS_CONSENTIMENTO = 'portal-textos-v1';
 
 /**
  * Textos apresentados ao titular (os mesmos do front, `apps/web/lib/portal.ts`). O hash do texto vai em

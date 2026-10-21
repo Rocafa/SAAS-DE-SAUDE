@@ -154,6 +154,15 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.GET, `/financeiro/recibos/${id}`],
       [RequestMethod.POST, `/financeiro/recibos/${id}/cancelar`],
       [RequestMethod.POST, '/financeiro/receita-saude/lotes'],
+      // Portal: lado da clínica (rodada 18.1).
+      [RequestMethod.POST, '/clinica/portal/convites'],
+      [RequestMethod.POST, `/clinica/portal/convites/${id}/revogar`],
+      [RequestMethod.GET, `/clinica/portal/pacientes/${id}/vinculos`],
+      [RequestMethod.POST, `/clinica/portal/vinculos/${id}/revogar`],
+      [RequestMethod.GET, `/clinica/portal/pacientes/${id}/consentimentos`],
+      [RequestMethod.GET, '/clinica/portal/solicitacoes'],
+      [RequestMethod.GET, `/clinica/portal/solicitacoes/${id}`],
+      [RequestMethod.POST, `/clinica/portal/solicitacoes/${id}/situacao`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
@@ -168,6 +177,50 @@ describe('toda rota de domínio exige sessão', () => {
               : metodo === RequestMethod.PUT
                 ? http.put(rota)
                 : http.post(rota);
+        if (auth) void req.set('Authorization', auth);
+        const res = await req.set('x-tenant-id', clinicaA).send({});
+        expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);
+        expect(res.body).toEqual({ statusCode: 401, message: 'Não autenticado' });
+      }
+    }
+  });
+});
+
+/**
+ * Portal do paciente (veto B3 do front-r8): toda rota /portal/* exige a sessão do PORTAL. Sem sessão,
+ * token inválido, sessão encerrada ou sessão da CLÍNICA (mesmo de admin): 401 genérico.
+ */
+describe('toda rota do portal exige a sessão do portal', () => {
+  it('sem sessão, token inválido, encerrado ou da clínica: 401', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const rotas: [RequestMethod, string][] = [
+      [RequestMethod.GET, '/portal/vinculos'],
+      [RequestMethod.GET, '/portal/sessao'],
+      [RequestMethod.POST, '/portal/sessao/vinculo'],
+      [RequestMethod.POST, '/portal/convites/resgate'],
+      [RequestMethod.GET, '/portal/consultas'],
+      [RequestMethod.POST, `/portal/consultas/${id}/confirmar`],
+      [RequestMethod.POST, `/portal/consultas/${id}/desfazer-confirmacao`],
+      [RequestMethod.POST, `/portal/consultas/${id}/cancelar`],
+      [RequestMethod.GET, '/portal/recibos'],
+      [RequestMethod.GET, `/portal/recibos/${id}`],
+      [RequestMethod.GET, '/portal/documentos'],
+      [RequestMethod.GET, '/portal/meus-dados'],
+      [RequestMethod.POST, '/portal/meus-dados/correcao'],
+      [RequestMethod.GET, '/portal/solicitacoes'],
+      [RequestMethod.POST, '/portal/solicitacoes'],
+      [RequestMethod.GET, '/portal/privacidade/consentimentos'],
+      [RequestMethod.POST, '/portal/privacidade/consentimentos/escriba_ia'],
+      [RequestMethod.POST, '/portal/privacidade/consentimentos/escriba_ia/desfazer'],
+      [RequestMethod.GET, '/portal/privacidade/consentimentos/escriba_ia/historico'],
+    ];
+    const efemera = api.sessaoPortal();
+    api.portal.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
+    const daClinica = api.sessao(clinicaA, 'admin');
+    for (const [metodo, rota] of rotas) {
+      for (const auth of [undefined, 'Bearer invalido', `Bearer ptl_${'a'.repeat(43)}`, efemera.Authorization, daClinica.Authorization]) {
+        const http = api.http();
+        const req = metodo === RequestMethod.GET ? http.get(rota) : http.post(rota);
         if (auth) void req.set('Authorization', auth);
         const res = await req.set('x-tenant-id', clinicaA).send({});
         expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);
