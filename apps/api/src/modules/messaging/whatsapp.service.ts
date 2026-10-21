@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { AuditAction, type RequestContext, type TenantId, type UserId } from '@plataforma/shared';
+import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notExists, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
@@ -40,7 +40,7 @@ import {
   telefoneParaWhatsapp,
   ANTECEDENCIA_MINIMA_H,
 } from './lembretes-regras';
-import type { EventoDeResposta, EventoDeStatus, EventoDoWebhook, MensageiroWhatsApp } from './mensageiro-whatsapp';
+import type { EventoDeResposta, EventoDeStatus, EventoDoWebhook, MensageiroWhatsApp, ResultadoDeEnvio } from './mensageiro-whatsapp';
 import { FONTE_DE_RESPONSAVEIS, type FonteDeResponsaveis } from './responsaveis.port';
 import {
   CAMPO_EVIDENCIA,
@@ -87,7 +87,7 @@ const RANK: Readonly<Record<WhatsappOutboxStatus, number>> = { agendado: 0, envi
 
 /** Contexto do sistema (job e webhook): sem usuário; a trilha grava `actor_kind = sistema`. */
 function ctxDoSistema(tenantId: TenantId): RequestContext {
-  return { tenantId, userId: SYSTEM_ACTOR_ID as UserId, roles: ['sistema'] };
+  return { tenantId, userId: SYSTEM_ACTOR_ID, roles: ['sistema'] };
 }
 
 /**
@@ -483,7 +483,7 @@ export class WhatsappService {
       return { prontos, cancelados, remetente: cfg.businessNumberId ?? '' };
     });
 
-    const resultados = [];
+    const resultados: { id: string; r: ResultadoDeEnvio }[] = [];
     for (const p of reservados.prontos) {
       const r = await mensageiro.enviar({
         para: p.para,
@@ -724,7 +724,7 @@ export class WhatsappService {
         sendUntilHour: 20,
         replyWindowHours: 48,
         updatedAt: new Date(0),
-        updatedBy: SYSTEM_ACTOR_ID as string,
+        updatedBy: SYSTEM_ACTOR_ID,
       }
     );
   }
