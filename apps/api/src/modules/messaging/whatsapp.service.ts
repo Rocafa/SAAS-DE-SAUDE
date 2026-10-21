@@ -587,7 +587,8 @@ export class WhatsappService {
       .from(whatsappInbound)
       .where(and(eq(whatsappInbound.tenantId, ctx.tenantId), eq(whatsappInbound.providerMessageId, ev.idProvedor)));
     if (ja) return false;
-    const envio = await this.envioDaResposta(tx, ctx.tenantId, ev, janelaHoras, agora);
+    const achado = await this.envioDaResposta(tx, ctx.tenantId, ev, janelaHoras, agora);
+    const envio = achado?.envio;
     // Mensagem que não responde a envio nosso não é guardada (minimização; o inbox é outra microparte).
     if (!envio) {
       this.logger.log('WHATSAPP_RESPOSTA_SEM_ENVIO');
@@ -623,7 +624,10 @@ export class WhatsappService {
         .select({ startsAt: appointments.startsAt })
         .from(appointments)
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, envio.appointmentId)));
-      if (!respostaNaJanela(envio.sentAt, envio.appointmentStartsAt, agora, janelaHoras)) resultado = 'fora_da_janela';
+      // Sem citar a mensagem e com MAIS de um lembrete em aberto para o número, não se adivinha a consulta:
+      // nada muda (a recepção resolve). Assim "1"/"2" nunca atinge consulta diferente da que o paciente leu.
+      if (achado?.ambigua) resultado = 'sem_acao';
+      else if (!respostaNaJanela(envio.sentAt, envio.appointmentStartsAt, agora, janelaHoras)) resultado = 'fora_da_janela';
       else if (!ag || ag.startsAt.getTime() !== envio.appointmentStartsAt.getTime()) resultado = 'consulta_alterada';
       // A consulta DESTE envio, e só ela, pelas regras da agenda (nunca pela transição genérica).
       else resultado = await this.agenda.respostaDoPaciente(tx, ctx, envio.appointmentId, interpretacao, agora);
@@ -649,7 +653,8 @@ export class WhatsappService {
 
   /**
    * Envio a que a resposta se refere: pelo id da nossa mensagem (context.id), quando o aplicativo manda;
-   * senão, o envio MAIS RECENTE ao mesmo número dentro da janela de resposta.
+   * senão, o ÚNICO envio ao mesmo número dentro da janela cuja consulta ainda não começou (havendo mais de
+   * um, `ambigua`: o mais recente é associado só para o registro, sem ação na agenda).
    */
   private async envioDaResposta(tx: TenantTx, tenantId: TenantId, ev: EventoDeResposta, janelaHoras: number, agora: Date) {
     const ESTADOS: WhatsappOutboxStatus[] = ['enviado', 'entregue', 'lido'];
@@ -661,7 +666,7 @@ export class WhatsappService {
       if (!e?.recipientPhoneEnc) return null;
       // O id citado tem de ser de mensagem enviada a ESTE número (não se responde pela consulta de outro).
       const para = await this.decifrar(tx, tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc);
-      return mesmoTelefone(para, ev.de) ? e : null;
+      return mesmoTelefone(para, ev.de) ? { envio: e, ambigua: false } : null;
     }
     const candidatos = await tx
       .select()
@@ -676,11 +681,15 @@ export class WhatsappService {
       )
       .orderBy(desc(whatsappOutbox.sentAt), desc(whatsappOutbox.id))
       .limit(LOTE);
+    const doNumero: (typeof candidatos)[number][] = [];
     for (const e of candidatos) {
       if (!e.recipientPhoneEnc) continue;
-      if (mesmoTelefone(await this.decifrar(tx, tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc), ev.de)) return e;
+      if (mesmoTelefone(await this.decifrar(tx, tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc), ev.de)) doNumero.push(e);
     }
-    return null;
+    const [primeiro] = doNumero;
+    if (!primeiro) return null;
+    const emAberto = doNumero.filter((e) => e.appointmentStartsAt.getTime() > agora.getTime());
+    return { envio: primeiro, ambigua: emAberto.length > 1 };
   }
 
   // -------------------------------------------------------------------------------------------------
