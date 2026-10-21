@@ -333,7 +333,8 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
 /**
  * Portal do paciente (0027): na sessão do portal, cada tabela da clínica ou mostra só as linhas do
  * próprio paciente (`portal_titular`), ou nenhuma (`portal_fora`), ou é liberada por decisão registrada
- * (`portal_liberada*`: profissionais, chaves de dados e a trilha, que o gatilho da cadeia lê). Tabela nova
+ * (`portal_liberada*`: profissionais e a LEITURA das chaves de dados; 0033: a trilha virou `portal_fora_select`
+ * e o gatilho da cadeia lê o último elo por função SECURITY DEFINER; chave só leitura). Tabela nova
  * com tenant_id sem uma dessas policies RESTRITIVAS reprova: o padrão do portal é não ver.
  */
 describe('guarda de schema: portal do paciente (0027)', () => {
@@ -356,6 +357,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'public.app_portal_patient()',
       'public.app_portal_account()',
       'public.app_portal_link()',
+      // 0033 (V2 do #68): o gatilho da cadeia lê o último elo por aqui; a sessão do portal não lê a trilha.
+      'public.app_audit_chain_tail(uuid)',
     ]) {
       const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
         SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass

@@ -16,8 +16,10 @@ export function campoPortalRef(tenantId: TenantId, rowId: string, campo: CampoPo
 }
 
 /**
- * Cifra com a chave da clínica; na primeira escrita cifrada provisiona a chave (idempotente, auditado).
- * `atorId`: usuário da clínica; null = o próprio sistema (a chave provisionada pelo portal é do sistema).
+ * Cifra com a chave da clínica. Na primeira escrita cifrada da CLÍNICA (`atorId` = usuário da clínica)
+ * provisiona a chave (idempotente, auditado). Pelo PORTAL (`atorId` null) NUNCA provisiona (V2 do parecer
+ * do #68; o banco também recusa INSERT de chave na sessão do portal, migração 0033): sem chave, falha
+ * fechada (`TenantKeyMissingError`) e a clínica provisiona.
  */
 export async function cifrarCampoPortal(
   cipher: FieldCipher<TenantTx>,
@@ -32,7 +34,7 @@ export async function cifrarCampoPortal(
   try {
     return await cipher.encrypt(tx, ref, valor);
   } catch (e) {
-    if (!(e instanceof TenantKeyMissingError)) throw e;
+    if (!(e instanceof TenantKeyMissingError) || atorId === null) throw e;
     await cipher.provisionTenant(tx, tenantId, atorId);
     return cipher.encrypt(tx, ref, valor);
   }

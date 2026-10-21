@@ -13,6 +13,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog, encounters, patients, portalConsents, portalInvites, portalLinks, portalRightsRequests } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { verifyAuditChain } from '../src/modules/audit/audit-chain';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -475,6 +476,68 @@ describe('defesa no banco: sessão do portal só vê o próprio paciente', () =>
     // Fora do portal (clínica), as policies restritivas não mudam nada.
     const naClinica = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: patients.id }).from(patients), adminA.userId);
     expect(naClinica.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('V2 do #68: SQL arbitrário na sessão do portal não lê a trilha nem mexe em chave', () => {
+  /** Roda `fn` numa transação do portal e devolve o código Postgres do erro (ou 'ok'). Sempre desfaz. */
+  async function noPortal(p: { contaId: string; vinculoId: string }, fn: (tx: Parameters<Parameters<typeof api.db.db.transaction>[0]>[0]) => Promise<unknown>) {
+    try {
+      await api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+        await fn(tx);
+        throw new Error('desfazer');
+      });
+      return 'ok';
+    } catch (e) {
+      for (let x: unknown = e; x instanceof Error; x = x.cause) {
+        const c = (x as { code?: unknown }).code;
+        if (typeof c === 'string') return c;
+      }
+      return (e as Error).message === 'desfazer' ? 'ok' : String(e);
+    }
+  }
+
+  it('audit_log: zero linhas na sessão do portal (nem as do próprio paciente); a função do último elo não responde fora do gatilho', async () => {
+    const p = await contaDe(adminA, pacA1);
+    await api.http().get('/portal/consultas').set(cab(p)).expect(200);
+    const r = await api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+      const todas = await tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log`);
+      const outros = await tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'patient_id' is distinct from ${pacA1}`);
+      const elo = await tx.execute(sql`select * from app_audit_chain_tail(${clinicaA}::uuid) where seq is not null`);
+      const outraClinica = await tx.execute(sql`select * from app_audit_chain_tail(${clinicaB}::uuid) where seq is not null`);
+      return { todas: todas[0]?.n, outros: outros[0]?.n, elo, outraClinica };
+    });
+    expect(r).toEqual({ todas: 0, outros: 0, elo: [], outraClinica: [] });
+    // Fora do portal a clínica continua lendo a trilha, e a cadeia (com os elos gravados pelo portal) fecha.
+    const naClinica = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.actorId, p.contaId)), adminA.userId);
+    expect(naClinica.length).toBeGreaterThanOrEqual(2);
+    const cadeia = await withTenant(api.db.db, clinicaA, (tx) => verifyAuditChain(tx, clinicaA), adminA.userId);
+    expect(cadeia.problems).toEqual([]);
+    expect(cadeia.ok).toBe(true);
+  });
+
+  it('chaves de dados: INSERT e UPDATE recusados (42501); só o contador de uso da DEK cresce, em lote limitado', async () => {
+    const p = await contaDe(adminA, pacA1);
+    const [dek] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ id: string; master_key_id: string }>(
+      sql`select id, master_key_id from tenant_data_keys where tenant_id = ${clinicaA} and status = 'active'`), adminA.userId);
+    expect(dek?.id).toBeTruthy();
+    expect(await noPortal(p, (tx) => tx.execute(sql`insert into tenant_master_keys (id, tenant_id) values (${`local:portal-${randomUUID()}`}, ${clinicaA})`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`insert into tenant_data_keys (tenant_id, master_key_id, wrapped_key) values (${clinicaA}, ${dek?.master_key_id}, ${'x'.repeat(60)})`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_data_keys set status = 'retired', retired_at = now() where id = ${dek?.id}::uuid`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_data_keys set wrapped_key = wrapped_key where id = ${dek?.id}::uuid`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_master_keys set status = 'retired' where tenant_id = ${clinicaA}`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_data_keys set encrypt_count = encrypt_count + 100000 where id = ${dek?.id}::uuid`))).toBe('42501');
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_data_keys set encrypt_count = encrypt_count - 1 where id = ${dek?.id}::uuid`))).toBe('42501');
+    // O que a cifragem faz (somar o uso em lote) continua permitido; ler a chave também (decifrar o próprio dado).
+    expect(await noPortal(p, (tx) => tx.execute(sql`update tenant_data_keys set encrypt_count = encrypt_count + 3 where id = ${dek?.id}::uuid`))).toBe('ok');
+    expect(await noPortal(p, async (tx) => {
+      const r = await tx.execute(sql`select id from tenant_data_keys where id = ${dek?.id}::uuid`);
+      if (r.length !== 1) throw new Error('chave invisível');
+    })).toBe('ok');
+    // E o portal continua cifrando (pedido com detalhe) com a chave já provisionada pela clínica.
+    await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'acesso', detalhe: 'Pedido ficticio V2' }).expect(201);
   });
 });
 

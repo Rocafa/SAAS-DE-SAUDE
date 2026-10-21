@@ -24,6 +24,7 @@ import {
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { RequisicaoParaSessao } from '../auth/auth-context';
 import { insertAudit, type AuditEntry } from '../audit/audit-log';
+import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { assertCanWrite, canRead, EXIT_WINDOW_DAYS, ExitWindowClosedError } from '../exports/access-policy';
@@ -364,7 +365,7 @@ export class PortalService {
   abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<PedidoPortalDto> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const id = randomUUID();
-      const detailEnc = detalhe ? await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, null, id, 'detail', detalhe) : null;
+      const detailEnc = detalhe ? await this.cifrarDetalhe(tx, ctx, id, detalhe) : null;
       const [row] = await tx
         .insert(portalRightsRequests)
         .values({
@@ -576,6 +577,16 @@ export class PortalService {
       situacao: situacaoParaOTitular(r.status),
       resposta,
     };
+  }
+
+  /** O portal nunca provisiona chave (V2 do #68): clínica sem chave = 409, a clínica provisiona. */
+  private async cifrarDetalhe(tx: TenantTx, ctx: ContextoPortal, id: string, detalhe: string): Promise<string> {
+    try {
+      return await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, null, id, 'detail', detalhe);
+    } catch (e) {
+      if (e instanceof TenantKeyMissingError) throw new ConflitoError('clinica_sem_chave_de_dados');
+      throw e;
+    }
   }
 
   /** Trilha da clínica: ator = a conta do portal; sempre com o paciente e a marca do portal. */
