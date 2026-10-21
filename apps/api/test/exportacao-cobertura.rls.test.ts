@@ -41,6 +41,11 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  whatsappInbound,
+  whatsappOptIns,
+  whatsappOutbox,
+  whatsappSettings,
+  whatsappTemplates,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
@@ -94,6 +99,11 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  whatsapp_settings: 'whatsapp.whatsappSettings',
+  whatsapp_opt_ins: 'whatsapp.whatsappOptIns',
+  whatsapp_templates: 'whatsapp.whatsappTemplates',
+  whatsapp_outbox: 'whatsapp.whatsappOutbox',
+  whatsapp_inbound: 'whatsapp.whatsappInbound',
   audit_log: 'auditEvents',
 };
 
@@ -126,6 +136,8 @@ const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
 const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
 const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
+/** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
+const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -304,6 +316,38 @@ beforeAll(async () => {
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
 
+  // WhatsApp (0032): canal, opt-in com prova, modelo neutro, um envio e uma resposta (do webhook = sistema).
+  const ag4 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-08',
+    hora: '10:00',
+  });
+  expect(ag4.status).toBe(201);
+  const ag4Body = ag4.body as { id: string; inicio: string };
+  const envioId = await withTenant(
+    api.db.db,
+    clinicaA,
+    async (tx) => {
+      await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
+      const [o] = await tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: pacienteId, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: admin.userId }).returning();
+      const [t] = await tx
+        .insert(whatsappTemplates)
+        .values({ tenantId: clinicaA, body: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar ou 2 para cancelar.', providerTemplateName: 'lembrete_neutro_v1', createdBy: admin.userId })
+        .returning();
+      const [e] = await tx
+        .insert(whatsappOutbox)
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateId: t?.id ?? null, recipientKind: 'paciente', createdBy: admin.userId })
+        .returning();
+      return e?.id ?? '';
+    },
+    admin.userId,
+  );
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(whatsappInbound).values({ tenantId: clinicaA, providerMessageId: 'wamid.EXPORT1', outboxId: envioId, interpretation: 'outro', outcome: 'sem_acao' }),
+  );
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
@@ -387,7 +431,12 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receiptCounters
           | typeof receipts
           | typeof receiptCancellations
-          | typeof clinicMembers,
+          | typeof clinicMembers
+          | typeof whatsappSettings
+          | typeof whatsappOptIns
+          | typeof whatsappTemplates
+          | typeof whatsappOutbox
+          | typeof whatsappInbound,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -425,6 +474,13 @@ describe('G2 — conteúdo do pacote', () => {
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
         },
+        whatsapp: {
+          whatsappSettings: await n(whatsappSettings),
+          whatsappOptIns: await n(whatsappOptIns),
+          whatsappTemplates: await n(whatsappTemplates),
+          whatsappOutbox: await n(whatsappOutbox),
+          whatsappInbound: await n(whatsappInbound),
+        },
         clinicMembers: await n(clinicMembers),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
@@ -436,7 +492,7 @@ describe('G2 — conteúdo do pacote', () => {
       patients: 2,
       professionals: 3,
       appointmentTypes: 1,
-      appointments: 3,
+      appointments: 4,
       appointmentReschedules: 1,
       insurers: 1,
       insuranceGuides: 1,
@@ -464,6 +520,7 @@ describe('G2 — conteúdo do pacote', () => {
         receipts: 2,
         receiptCancellations: 1,
       },
+      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappTemplates: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
     expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
@@ -548,7 +605,7 @@ describe('G2 — conteúdo do pacote', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);

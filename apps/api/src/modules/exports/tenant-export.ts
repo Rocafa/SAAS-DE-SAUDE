@@ -33,6 +33,7 @@ import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../au
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
+import { exportarWhatsapp, type ExportedWhatsapp, type WhatsappCounts } from '../messaging/whatsapp-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -79,8 +80,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        controle de acesso (LGPD arts. 37 e 46).
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
+ * 1.13.0: WhatsApp (migração 0032): configuração do canal, opt-ins com a prova (referência decifrada),
+ *        modelos, fila de envios e respostas (números e textos decifrados enquanto não passam os 30 dias da
+ *        retenção; depois `null` com `contentPurgedAt`), em `data.whatsapp` e `manifest.counts.whatsapp`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.12.0';
+export const EXPORT_SCHEMA_VERSION = '1.13.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -125,12 +129,19 @@ export const EXPORTED_TABLES = [
   'receipts',
   'receipt_cancellations',
   'clinic_members',
+  // WhatsApp (0032): em data.whatsapp. Histórico de mensagens é dado do paciente: sai inteiro.
+  'whatsapp_settings',
+  'whatsapp_opt_ins',
+  'whatsapp_templates',
+  'whatsapp_outbox',
+  'whatsapp_inbound',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
+  whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
 };
@@ -172,6 +183,8 @@ export interface ExportManifest {
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
+    /** WhatsApp (0032), por tabela. */
+    readonly whatsapp: WhatsappCounts;
     readonly clinicMembers: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
@@ -469,6 +482,8 @@ export interface TenantExportDocument {
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
+    /** WhatsApp (0032). */
+    readonly whatsapp: ExportedWhatsapp;
     readonly clinicMembers: readonly ExportedClinicMember[];
   };
 }
@@ -703,6 +718,10 @@ export async function exportInTransaction(
   }));
   const auditHead = await auditChainHead(tx, ctx.tenantId);
   const financeiro = await exportarFinanceiro(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+  const whatsapp = await exportarWhatsapp(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
@@ -1003,6 +1022,7 @@ export async function exportInTransaction(
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
+      whatsapp: whatsapp.counts,
       clinicMembers: exportedMembers.length,
       auditEvents: auditEvents.length,
     },
@@ -1085,6 +1105,7 @@ export async function exportInTransaction(
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
+        whatsapp: whatsapp.data,
         clinicMembers: exportedMembers,
       },
     },

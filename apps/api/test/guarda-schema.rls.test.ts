@@ -81,6 +81,13 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
+  // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), modelo só retira, envio só
+  // anda para a frente e resposta só perde o conteúdo pela retenção de 30 dias (triggers).
+  whatsapp_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_templates: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_inbound: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
@@ -88,6 +95,7 @@ const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   schema_migrations: 'controle de migração; scripts/migrate.mjs revoga de app_user',
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
+  whatsapp_routes: 'número de negócio -> clínica para o webhook sem sessão (0032); só app_whatsapp_tenant_for_number (SECURITY DEFINER) lê e o trigger da configuração grava',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
