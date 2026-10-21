@@ -502,6 +502,16 @@ describe('central de privacidade: consentimento em histórico (IA em 3 estados)'
     const hist = await api.http().get('/portal/privacidade/consentimentos/lembretes_whatsapp/historico').set(cab(resp)).expect(200);
     expect(hist.body).toEqual([expect.objectContaining({ resposta: 'sim', agindoComo: 'responsavel_legal' })]);
   });
+
+  it('A1 do #68: sem data de nascimento, quem age como titular NÃO consente (falha fechada) e nada é gravado', async () => {
+    const semNasc = await contaDe(adminA, pacA2);
+    expect((await api.http().post('/portal/privacidade/consentimentos/escriba_ia').set(cab(semNasc)).send({ resposta: 'sim' })).body).toMatchObject({
+      statusCode: 409,
+      codigo: 'nascimento_nao_informado',
+    });
+    const hist = await api.http().get('/portal/privacidade/consentimentos/escriba_ia/historico').set(cab(semNasc)).expect(200);
+    expect(hist.body).toEqual([]);
+  });
 });
 
 describe('defesa no banco: sessão do portal só vê o próprio paciente', () => {

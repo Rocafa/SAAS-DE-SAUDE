@@ -508,7 +508,10 @@ export class PortalService {
       if (ctx.agindoComo === 'titular') {
         const p = await this.paciente(tx, ctx);
         const nasc = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, 'birth_date'), p.birthDateEnc) : null;
-        if (nasc && idadeEm(nasc, hojeNaClinica()) < IDADE_CONSENTIMENTO_PROPRIO) throw new ConflitoError('consentimento_pelo_responsavel');
+        // Falha fechada (A1 do #68): sem data de nascimento não dá para saber se é menor; quem age como
+        // titular não consente até a clínica completar o cadastro.
+        if (!nasc) throw new ConflitoError('nascimento_nao_informado');
+        if (idadeEm(nasc, hojeNaClinica()) < IDADE_CONSENTIMENTO_PROPRIO) throw new ConflitoError('consentimento_pelo_responsavel');
       }
       const atual = estadoDoConsentimento((await this.eventos(tx, ctx)).filter((e) => e.purpose === finalidade).at(-1)?.response);
       if (resposta === 'desfeito' && atual === 'nao_respondido') throw new ConflitoError('nada_a_desfazer');
