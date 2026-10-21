@@ -37,6 +37,7 @@
 | Rodada 17.3: ✅ **PR #66** importador (0024) — **VETADO** (V1), correção em andamento: teste instável #63, #65 R14–R16 (0025), #66 V1+R1/R2/R4/R6 (0026) | Maestro @Rocafa (agente engenharia) | 16/10/2026 | PR #66 |
 | Rodada 18.1: backend do **portal do paciente** com contrato próprio (ApiPortal; servidor descobre o paciente pela sessão — correção estrutural do B3 do #47) — migração **0027**, sobre #65 | Maestro @Rocafa (agente engenharia) | 19/10/2026 | branch `eng/portal-paciente` |
 | Rodada 18.2: **responsáveis do paciente** (menores, representante legal, pagador) — migração **0028**, sobre #65 | Maestro @Rocafa (agente engenharia) | 19/10/2026 | branch `eng/responsaveis` |
+| Rodada 18.3: **lembretes e confirmação por WhatsApp** (provedor plugável com adaptador falso; templates neutros; opt-in; respostas confirmam/cancelam) — migração **0032**, sobre #65 | Maestro @Rocafa (agente engenharia) | 20/10/2026 | branch `eng/whatsapp-lembretes` |
 
 ## Livre (pegue colocando seu nome)
 
