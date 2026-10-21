@@ -332,6 +332,20 @@ describe('sem cabeçalho nem parâmetro de tenant/paciente: o servidor descobre 
   });
 });
 
+describe('A4 do #68: paciente inativado perde o portal', () => {
+  it('API 403 vinculo_inativo, some da lista de vínculos e o banco recusa a sessão (42501)', async () => {
+    const pac = await criarPaciente(adminA, 'Dora Ficticia Inativa', { nascimento: '1985-05-05' });
+    const p = await contaDe(adminA, pac);
+    await api.http().get('/portal/consultas').set(cab(p)).expect(200);
+    await api.http().post(`/pacientes/${pac}/inativar`).set(cab(adminA)).send({}).expect(200);
+    expect((await api.http().get('/portal/consultas').set(cab(p))).body).toMatchObject({ statusCode: 403, codigo: 'vinculo_inativo' });
+    expect((await api.http().get('/portal/vinculos').set(cab(p)).expect(200)).body).toEqual([]);
+    await expect(
+      api.db.db.transaction((tx) => tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`)),
+    ).rejects.toMatchObject({ cause: expect.objectContaining({ code: '42501' }) });
+  });
+});
+
 describe('pedidos do titular (LGPD art. 18): registrados e visíveis só para a clínica certa', () => {
   it('portal abre; a clínica A vê e responde; a B não vê; recepção não lê; nada do texto na trilha', async () => {
     const p = await contaDe(adminA, pacA1);

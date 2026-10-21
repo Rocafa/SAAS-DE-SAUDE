@@ -125,3 +125,41 @@ CREATE TRIGGER zz_tenant_master_keys_portal_guard BEFORE INSERT OR UPDATE ON ten
   FOR EACH ROW EXECUTE FUNCTION tenant_keys_portal_guard();
 CREATE TRIGGER zz_tenant_data_keys_portal_guard BEFORE INSERT OR UPDATE ON tenant_data_keys
   FOR EACH ROW EXECUTE FUNCTION tenant_keys_portal_guard();
+
+-- ================================================================ A4. paciente inativo perde o portal
+--
+-- Antes (0027:325-329) só o resgate conferia `patients.active`. Agora a própria abertura da sessão do
+-- portal confere, depois de travar o contexto (o RLS do dono enxerga só o paciente do vínculo): paciente
+-- inativo = 42501, igual a vínculo revogado (a API responde 403 vinculo_inativo). Reativar devolve o acesso;
+-- a revogação definitiva do vínculo continua sendo ato da clínica (motivo fim_do_vinculo).
+CREATE OR REPLACE FUNCTION app_set_portal_session(p_account uuid, p_link uuid) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_xid bigint := txid_current();
+  v     record;
+  c     record;
+BEGIN
+  IF p_account IS NULL OR p_link IS NULL THEN
+    RAISE EXCEPTION 'sessão do portal incompleta' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  SELECT tenant_id, patient_id INTO v FROM public.portal_link_index
+   WHERE link_id = p_link AND account_id = p_account AND revoked_at IS NULL;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'vínculo do portal inexistente, revogado ou de outra conta' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT * INTO c FROM public.tenant_context WHERE xid = v_xid;
+  IF FOUND THEN
+    IF c.portal_link_id IS NOT DISTINCT FROM p_link AND c.portal_account_id IS NOT DISTINCT FROM p_account THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'contexto já definido nesta transação' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  INSERT INTO public.tenant_context (xid, tenant_id, user_id, portal_account_id, portal_link_id, portal_patient_id)
+    VALUES (v_xid, v.tenant_id, '00000000-0000-0000-0000-000000000000'::uuid, p_account, p_link, v.patient_id);
+  IF NOT EXISTS (SELECT 1 FROM public.patients p WHERE p.tenant_id = v.tenant_id AND p.id = v.patient_id AND p.active) THEN
+    RAISE EXCEPTION 'paciente inativo: portal indisponível' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+END;
+$$;

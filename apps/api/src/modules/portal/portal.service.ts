@@ -151,14 +151,19 @@ export class PortalService {
     const ids = await this.vinculosDaConta(sessao.contaId);
     const itens: VinculoDaContaDto[] = [];
     for (const id of ids) {
-      itens.push(
-        await this.db.runPortal(sessao.contaId, id, async (tx) => {
-          const ctx = await this.contexto(tx, sessao.contaId, id);
-          const d = await this.dadosDaSaudacao(tx, ctx);
-          await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_links', metadata: { op: 'list_links', link_id: id } });
-          return { vinculoId: id, clinica: d.clinica, primeiroNome: d.primeiroNome, agindoComo: ctx.agindoComo };
-        }),
-      );
+      try {
+        itens.push(
+          await this.db.runPortal(sessao.contaId, id, async (tx) => {
+            const ctx = await this.contexto(tx, sessao.contaId, id);
+            const d = await this.dadosDaSaudacao(tx, ctx);
+            await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_links', metadata: { op: 'list_links', link_id: id } });
+            return { vinculoId: id, clinica: d.clinica, primeiroNome: d.primeiroNome, agindoComo: ctx.agindoComo };
+          }),
+        );
+      } catch (e) {
+        // Paciente inativo (A4 do #68) ou vínculo revogado entre a listagem e a abertura: some da lista.
+        if (codigoPg(e) !== PG_INSUFFICIENT_PRIVILEGE) throw e;
+      }
     }
     return itens;
   }
