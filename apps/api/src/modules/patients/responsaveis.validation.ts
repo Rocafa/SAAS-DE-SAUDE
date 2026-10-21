@@ -20,6 +20,10 @@ export interface NovoVinculo {
   readonly justificativa?: string;
   /** Início da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
   readonly desde?: string;
+  /** Curatela (obrigatória para o tipo curador, A3 do #67): referência da decisão judicial e escopo, cifrados. */
+  readonly curatela?: { readonly referencia: string; readonly escopo: string };
+  /** Paciente adulto ciente de que um terceiro é o pagador (A7 do #67). */
+  readonly cienciaDoPaciente: boolean;
 }
 
 export interface AlteracaoVinculo {
@@ -36,7 +40,20 @@ export interface Encerramento {
   readonly ate?: string;
 }
 
-const CAMPOS_NOVO = ['responsavelId', 'nome', 'cpf', 'telefone', 'tipo', 'pagador', 'recebeInformacaoClinica', 'justificativa', 'desde'] as const;
+const CAMPOS_NOVO = [
+  'responsavelId',
+  'nome',
+  'cpf',
+  'telefone',
+  'tipo',
+  'pagador',
+  'recebeInformacaoClinica',
+  'justificativa',
+  'desde',
+  'curatelaReferencia',
+  'curatelaEscopo',
+  'cienciaDoPaciente',
+] as const;
 const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica', 'justificativa'] as const;
 
 function cpfOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
@@ -82,6 +99,12 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
   const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica') ?? false;
   const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
   const desde = dataNaoFutura(v, 'desde', hoje);
+  const curatelaReferencia = v.texto('curatelaReferencia', { min: 3, max: 300 });
+  const curatelaEscopo = v.texto('curatelaEscopo', { min: 3, max: 1000 });
+  // Curador exige a decisão judicial e o escopo; os outros tipos não levam estes campos.
+  if (tipo === 'curador' && (curatelaReferencia === undefined || curatelaEscopo === undefined)) v.falhar(curatelaReferencia === undefined ? 'curatelaReferencia' : 'curatelaEscopo');
+  if (tipo !== 'curador' && (v.tem('curatelaReferencia') || v.tem('curatelaEscopo'))) v.falhar('curatelaReferencia');
+  const cienciaDoPaciente = v.booleano('cienciaDoPaciente') ?? false;
   // Ou a pessoa existente, ou os dados de uma nova (nunca os dois, nunca nenhum).
   const temPessoa = v.tem('nome') || v.tem('cpf') || v.tem('telefone');
   if (v.tem('responsavelId') === temPessoa) v.falhar(v.tem('responsavelId') ? 'responsavelId' : 'nome');
@@ -94,6 +117,8 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
     recebeInformacaoClinica,
     ...(justificativa ? { justificativa } : {}),
     ...(desde ? { desde } : {}),
+    ...(curatelaReferencia && curatelaEscopo ? { curatela: { referencia: curatelaReferencia, escopo: curatelaEscopo } } : {}),
+    cienciaDoPaciente,
   };
 }
 
@@ -115,17 +140,38 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   return out;
 }
 
-export function validarPagador(corpo: unknown): { readonly pagador: boolean } {
-  const v = new Validador(exigirObjeto(corpo, ['pagador']));
+export function validarPagador(corpo: unknown): { readonly pagador: boolean; readonly cienciaDoPaciente: boolean } {
+  const v = new Validador(exigirObjeto(corpo, ['pagador', 'cienciaDoPaciente']));
   const pagador = v.booleano('pagador');
   if (pagador === undefined) v.falhar('pagador');
+  const cienciaDoPaciente = v.booleano('cienciaDoPaciente') ?? false;
   v.concluir();
-  return { pagador: pagador as boolean };
+  return { pagador: pagador as boolean, cienciaDoPaciente };
+}
+
+/** Anulação de cadastro errado (A4 do #67): motivo obrigatório, cifrado; nunca na trilha. */
+export function validarAnulacao(corpo: unknown): { readonly motivo: string } {
+  const v = new Validador(exigirObjeto(corpo, ['motivo']));
+  const motivo = v.texto('motivo', { min: 10, max: 500, obrigatorio: true });
+  v.concluir();
+  return { motivo };
+}
+
+/** Emancipação (A3 do #67): data (não futura) e referência do documento (cifrada). */
+export function validarEmancipacao(corpo: unknown, hoje: string): { readonly data: string; readonly documento: string } {
+  const v = new Validador(exigirObjeto(corpo, ['data', 'documento']));
+  const data = dataNaoFutura(v, 'data', hoje);
+  if (!v.tem('data')) v.falhar('data');
+  const documento = v.texto('documento', { min: 3, max: 300, obrigatorio: true });
+  v.concluir();
+  return { data: data as string, documento };
 }
 
 export function validarEncerramento(corpo: unknown, hoje: string): Encerramento {
   const v = new Validador(exigirObjeto(corpo, ['motivo', 'ate']));
   const motivo = v.umDe('motivo', GUARDIAN_END_REASONS, true);
+  // Cadastro errado vai pela anulação (motivo e prazo de descarte); emancipação, pelo registro no paciente.
+  if (motivo === 'cadastro_errado' || motivo === 'emancipacao') v.falhar('motivo');
   const ate = dataNaoFutura(v, 'ate', hoje);
   v.concluir();
   return { motivo: motivo as GuardianEndReason, ...(ate ? { ate } : {}) };

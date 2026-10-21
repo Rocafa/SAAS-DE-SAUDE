@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
+import { mascararCpf } from '../src/modules/patients/responsaveis.service';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -157,7 +158,7 @@ describe('cadastro, cifra e histórico', () => {
   it('recepção cadastra; nome, CPF e telefone só cifrados no banco; a resposta devolve em claro', async () => {
     const pac = await paciente(recepA, { nome: 'Paciente Ficticio Cifra', nascimento: nascidoHa(8) });
     const r = await responsavel(recepA, pac, { nome: NOME_RESP, cpf: CPF_RESP, telefone: TEL_RESP, tipo: 'pai_mae' });
-    expect(r).toMatchObject({ nome: NOME_RESP, cpf: CPF_RESP, telefone: TEL_RESP, tipo: 'pai_mae', parentesco: 'Pai/Mãe', pagador: false });
+    expect(r).toMatchObject({ nome: NOME_RESP, cpf: mascararCpf(CPF_RESP), telefone: TEL_RESP, tipo: 'pai_mae', parentesco: 'Pai/Mãe', pagador: false });
     expect(r.vigencia).toEqual({ desde: hoje(), ate: null, vigente: true });
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, r.responsavelId)));
     const bruto = JSON.stringify(linha);
@@ -173,7 +174,7 @@ describe('cadastro, cifra e histórico', () => {
     const r = await responsavel(recepA, pac, { nome: NOME_RESP, cpf: CPF_RESP, tipo: 'tutor' });
     const alt = await patch(recepA, `/pacientes/${pac}/responsaveis/${r.id}`, { cpf: CPF_RESP_NOVO });
     expect(alt.status, JSON.stringify(alt.body)).toBe(200);
-    expect((alt.body as Resp).cpf).toBe(CPF_RESP_NOVO);
+    expect((alt.body as Resp).cpf).toBe(mascararCpf(CPF_RESP_NOVO));
     const hist = await withTenant(api.db.db, clinicaA, (tx) =>
       tx.select().from(patientGuardianHistory).where(eq(patientGuardianHistory.guardianId, r.responsavelId)),
     );
@@ -357,6 +358,135 @@ describe('V1 do #67: pagador congelado no recebimento (sem retroatividade)', () 
   });
 });
 
+describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e ciência do adulto', () => {
+  it('curatela exige decisão judicial e escopo (cifrados), não vale para menor e só depende da decisão do profissional', async () => {
+    const adulto = await paciente(recepA, { nome: 'Paciente Ficticio Curatelado', nascimento: nascidoHa(40) });
+    const menor = await paciente(recepA, { nome: 'Paciente Ficticio Menor Curatela', nascimento: nascidoHa(10) });
+    const REF = 'Processo ficticio de curatela QZC0001';
+    expect((await post(recepA, `/pacientes/${adulto}/responsaveis`, { nome: 'Curador Ficticio', tipo: 'curador' })).status).toBe(400);
+    const curatela = { curatelaReferencia: REF, curatelaEscopo: 'Atos patrimoniais e negociais (ficticio)' };
+    expect((await post(recepA, `/pacientes/${menor}/responsaveis`, { nome: 'Curador Ficticio', tipo: 'curador', ...curatela })).body).toMatchObject({
+      codigo: 'curatela_de_menor',
+    });
+    const c = await responsavel(recepA, adulto, { nome: 'Curador Ficticio', tipo: 'curador', ...curatela });
+    // Curatela não libera informação clínica por si: sem decisão do profissional, a marca está desligada.
+    expect(c.informacaoClinica.motivo).toBe('marca_desligada');
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, c.id)), recepA.userId);
+    expect(linha?.courtDecisionRefEnc).toMatch(/^v1:/);
+    expect(JSON.stringify(linha)).not.toContain('QZC0001');
+    // Referência visível para admin; recepção não vê.
+    expect((c as unknown as { curatela: unknown }).curatela).toBeNull();
+    const pelaAdmin = ((await get(adminA, `/pacientes/${adulto}/responsaveis`)).body as { itens: { curatela: { referencia: string } | null }[] }).itens;
+    expect(pelaAdmin[0]?.curatela?.referencia).toBe(REF);
+    // Com a decisão do profissional: permitida para o adulto curatelado.
+    await cuidar(adulto);
+    const lig = await patch(profA, `/pacientes/${adulto}/responsaveis/${c.id}`, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA });
+    expect((lig.body as Resp).informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
+  });
+
+  it('emancipação: encerra pai/mãe e tutor hoje, acaba a menoridade; imutável; fora de 16–17 anos recusada', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Emancipado', nascimento: nascidoHa(17) });
+    const pai = await responsavel(recepA, pac, { nome: 'Pai Ficticio Emancipacao', tipo: 'pai_mae', pagador: true });
+    expect((await post(finA, `/pacientes/${pac}/responsaveis/emancipacao`, { data: hoje(), documento: 'Escritura ficticia 1' })).status).toBe(403);
+    const r = await post(recepA, `/pacientes/${pac}/responsaveis/emancipacao`, { data: hoje(), documento: 'Escritura ficticia QZE0001' });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const lista = (await get(recepA, `/pacientes/${pac}/responsaveis?situacao=todos`)).body as { itens: Resp[]; menorDeIdade: boolean; pendencias: string[] };
+    expect(lista).toMatchObject({ menorDeIdade: false, pendencias: [] });
+    expect(lista.itens.find((i) => i.id === pai.id)?.encerramento?.motivo).toBe('emancipacao');
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis/emancipacao`, { data: hoje(), documento: 'Outra ficticia' })).body).toMatchObject({
+      codigo: 'emancipacao_ja_registrada',
+    });
+    const novo = await paciente(recepA, { nome: 'Paciente Ficticio Quinze', nascimento: nascidoHa(15) });
+    expect((await post(recepA, `/pacientes/${novo}/responsaveis/emancipacao`, { data: hoje(), documento: 'Escritura ficticia 2' })).body).toMatchObject({
+      codigo: 'emancipacao_fora_da_idade',
+    });
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis/${pai.id}/encerrar`, { motivo: 'emancipacao' })).status).toBe(400);
+    const [p] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ ref: string }>(sql`select emancipation_ref_enc as ref from patients where id = ${pac}`), recepA.userId);
+    expect(String(p?.ref)).toMatch(/^v1:/);
+  });
+
+  it('anulação de cadastro errado: motivo cifrado, prazo de descarte; descarte apaga a pessoa e não muda recibo nem pagador congelado', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Anulacao', nascimento: nascidoHa(6) });
+    const CPF_ERRADO = cpfFicticio(894);
+    const errado = await responsavel(recepA, pac, { nome: 'Resp Ficticio Errado QZA0001', cpf: cpfFicticio(895), tipo: 'pai_mae', pagador: true });
+    // Corrige o CPF (o anterior vai cifrado ao histórico) e recebe um pagamento com ele pagador.
+    await patch(recepA, `/pacientes/${pac}/responsaveis/${errado.id}`, { cpf: CPF_ERRADO }).expect(200);
+    const pago = await receberSemRecibo(pac);
+    const reciboAntes = (await post(recepA, `/financeiro/recebimentos/${pago}/recibo`)).body as { pagador: unknown; id: string };
+    expect(reciboAntes.pagador).toEqual({ nome: 'Resp Ficticio Errado QZA0001', cpf: CPF_ERRADO });
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/encerrar`, { motivo: 'cadastro_errado' })).status).toBe(400);
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/anular`, { motivo: 'curto' })).status).toBe(400);
+    const an = await post(recepA, `/pacientes/${pac}/responsaveis/${errado.id}/anular`, { motivo: 'Pessoa ficticia cadastrada no paciente errado' });
+    expect(an.status, JSON.stringify(an.body)).toBe(200);
+    const anulado = an.body as Resp & { descarteApos: string };
+    expect(anulado.encerramento?.motivo).toBe('cadastro_errado');
+    expect(anulado.vigencia).toMatchObject({ desde: errado.vigencia.desde, ate: errado.vigencia.desde, vigente: false });
+    expect(anulado.descarteApos > hoje()).toBe(true);
+    // Antes do prazo: o descarte não elimina nada desta pessoa (nem direto no banco).
+    expect(((await post(adminA, '/responsaveis/descarte')).body as { descartados: number }).descartados).toBe(0);
+    expect((await post(recepA, '/responsaveis/descarte')).status).toBe(403);
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.update(guardians).set({ nameEnc: null, cpfEnc: null, phoneEnc: null, discardedAt: new Date() }).where(eq(guardians.id, errado.responsavelId)), recepA.userId),
+      ),
+    ).toContain('55000');
+    // Outra pessoa anulada com o prazo vencendo HOJE (direto no banco: a API sempre dá o prazo cheio).
+    const outro = await responsavel(recepA, pac, { nome: 'Resp Ficticio Vence Hoje QZA0002', cpf: cpfFicticio(896), tipo: 'tutor' });
+    await patch(recepA, `/pacientes/${pac}/responsaveis/${outro.id}`, { telefone: '11900008896' }).expect(200);
+    const [selo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, outro.responsavelId)), recepA.userId);
+    await withTenant(api.db.db, clinicaA, (tx) =>
+      tx
+        .update(patientGuardians)
+        .set({ validUntil: outro.vigencia.desde, endReason: 'cadastro_errado', annulReasonEnc: selo!.nameEnc, discardAfter: hoje(), endedAt: new Date(), endedBy: recepA.userId, updatedBy: recepA.userId })
+        .where(eq(patientGuardians.id, outro.id)), recepA.userId);
+    const run = await post(adminA, '/responsaveis/descarte');
+    expect(run.body).toEqual({ descartados: 1 });
+    const [desc] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, outro.responsavelId)), recepA.userId);
+    expect(desc).toMatchObject({ nameEnc: null, cpfEnc: null, phoneEnc: null });
+    expect(desc?.discardedAt).toBeTruthy();
+    const hist = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(patientGuardianHistory).where(eq(patientGuardianHistory.guardianId, outro.responsavelId)).orderBy(patientGuardianHistory.seq), recepA.userId);
+    expect(hist.map((h) => h.event)).toContain('responsavel_descartado');
+    expect(hist.every((h) => h.prevNameEnc === null && h.prevCpfEnc === null && h.prevPhoneEnc === null)).toBe(true);
+    // Pessoa descartada é terminal e não se vincula de novo.
+    expect((await post(recepA, `/pacientes/${pac}/responsaveis`, { responsavelId: outro.responsavelId, tipo: 'tutor' })).body).toMatchObject({ codigo: 'responsavel_descartado' });
+    // O recibo já emitido e o pagador congelado do recebimento NÃO mudam com a anulação.
+    expect(((await get(finA, `/financeiro/recibos/${reciboAntes.id}`)).body as { pagador: unknown }).pagador).toEqual({ nome: 'Resp Ficticio Errado QZA0001', cpf: CPF_ERRADO });
+    const [pg] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, pago)), recepA.userId);
+    expect(pg?.guardianPayerEnc).toMatch(/^v1:/);
+    // Trilha sem o motivo nem dados da pessoa.
+    const trilha = JSON.stringify(await withTenant(api.db.db, clinicaA, (tx) => tx.select({ m: auditLog.metadata }).from(auditLog).where(eq(auditLog.scope, 'patient_guardians'))));
+    for (const proibido of ['paciente errado', 'QZA0001', CPF_ERRADO]) expect(trilha).not.toContain(proibido);
+  });
+
+  it('CPF do responsável: completo só para admin e financeiro; mascarado para profissional e recepção', async () => {
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Mascara', nascimento: nascidoHa(8) });
+    const CPF = cpfFicticio(897);
+    await responsavel(recepA, pac, { nome: 'Resp Ficticio Mascara', cpf: CPF, tipo: 'pai_mae' });
+    const cpfDe = async (s: Sessao) => (((await get(s, `/pacientes/${pac}/responsaveis`)).body as { itens: Resp[] }).itens[0]?.cpf);
+    expect(await cpfDe(adminA)).toBe(CPF);
+    expect(await cpfDe(finA)).toBe(CPF);
+    expect(await cpfDe(profA)).toBe(mascararCpf(CPF));
+    expect(await cpfDe(recepA)).toBe(mascararCpf(CPF));
+    expect(mascararCpf(CPF)).toMatch(/^\*\*\*\.\*\*\*\.\d{3}-\*\*$/);
+  });
+
+  it('pagador terceiro de paciente ADULTO exige a ciência do paciente (registrada pelo banco)', async () => {
+    const adulto = await paciente(recepA, { nome: 'Paciente Ficticio Adulto Pagador', nascimento: nascidoHa(70) });
+    expect((await post(recepA, `/pacientes/${adulto}/responsaveis`, { nome: 'Filha Ficticia', tipo: 'representante', pagador: true })).body).toMatchObject({
+      codigo: 'ciencia_do_paciente_obrigatoria',
+    });
+    const ok = await responsavel(recepA, adulto, { nome: 'Filha Ficticia', tipo: 'representante', pagador: true, cienciaDoPaciente: true });
+    expect((ok as unknown as { pagadorComCienciaDoPaciente: boolean }).pagadorComCienciaDoPaciente).toBe(true);
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, ok.id)), recepA.userId);
+    expect(linha?.payerPatientAwareBy).toBe(recepA.userId);
+    const outro = await responsavel(recepA, adulto, { nome: 'Filho Ficticio', tipo: 'representante' });
+    expect((await post(recepA, `/pacientes/${adulto}/responsaveis/${outro.id}/pagador`, { pagador: true })).body).toMatchObject({ codigo: 'ciencia_do_paciente_obrigatoria' });
+    await post(recepA, `/pacientes/${adulto}/responsaveis/${outro.id}/pagador`, { pagador: true, cienciaDoPaciente: true }).expect(200);
+  });
+});
+
 describe('maioridade e informação clínica (LGPD art. 14; CC arts. 5º e 1.767)', () => {
   it('aos 18 anos a informação clínica cai sozinha; véspera ainda vale; curatela sobrevive; sem nascimento, negada', async () => {
     const vespera = await paciente(recepA, { nome: 'Paciente Ficticio Vespera', nascimento: nascidoHa(18, 1) });
@@ -505,7 +635,7 @@ describe('nada se apaga e o autor é a sessão (banco)', () => {
         ),
       ),
     ).toContain('23514');
-    await post(recepA, `/pacientes/${pac}/responsaveis/${r.id}/encerrar`, { motivo: 'cadastro_errado' }).expect(200);
+    await post(recepA, `/pacientes/${pac}/responsaveis/${r.id}/encerrar`, { motivo: 'substituido' }).expect(200);
     expect(
       await sqlstate(em((tx) => tx.update(patientGuardians).set({ isPayer: true, updatedBy: recepA.userId }).where(and(eq(patientGuardians.id, r.id))))),
     ).toContain('42501');

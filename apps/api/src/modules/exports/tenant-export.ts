@@ -83,8 +83,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.13.0: responsáveis do paciente (migração 0028): pessoas (nome, CPF e telefone decifrados), vínculos
  *        com vigência, pagador e informação clínica, e o histórico (valores anteriores decifrados), em
  *        `data.guardians` e `manifest.counts.guardians`.
+ * 1.14.0: correções do parecer #67 (migração 0031): `patients[].emancipation*`, `payments[].guardianPayer*`
+ *        (pagador congelado no recebimento, decifrado), decisão clínica, curatela, ciência do paciente e
+ *        anulação nos vínculos (decifrados) e `guardians[].discardedAt`. Contém CPF de terceiros (responsáveis).
  */
-export const EXPORT_SCHEMA_VERSION = '1.13.0';
+export const EXPORT_SCHEMA_VERSION = '1.14.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -210,6 +213,11 @@ export interface ExportedPatient {
   readonly updatedAt: string;
   /** Retenção legal desde (0015); null se não houver. */
   readonly legalHoldSince: string | null;
+  /** Emancipação (0031): data, documento decifrado, quem e quando registrou. */
+  readonly emancipatedOn: string | null;
+  readonly emancipationRef: string | null;
+  readonly emancipationRecordedBy: string | null;
+  readonly emancipationRecordedAt: string | null;
 }
 
 export interface ExportedProfessional {
@@ -743,6 +751,10 @@ export async function exportInTransaction(
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       legalHoldSince: iso(r.legalHoldSince),
+      emancipatedOn: r.emancipatedOn,
+      emancipationRef: await decrypt(r.id, 'emancipation_ref', r.emancipationRefEnc),
+      emancipationRecordedBy: r.emancipationRecordedBy,
+      emancipationRecordedAt: iso(r.emancipationRecordedAt),
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({

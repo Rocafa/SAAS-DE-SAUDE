@@ -316,7 +316,7 @@ beforeAll(async () => {
     .http()
     .post(`/pacientes/${pacienteId}/responsaveis`)
     .set(cab(admin))
-    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, recebeInformacaoClinica: true });
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
   expect(resp.status, JSON.stringify(resp.body)).toBe(201);
   const vinculoId = (resp.body as { id: string }).id;
   await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
@@ -565,7 +565,8 @@ describe('G2 — conteúdo do pacote', () => {
   it('responsáveis (0028): pessoa decifrada, vínculo com vigência e histórico com o valor anterior; nada disso na trilha', () => {
     const g = pkg.json.data.guardians;
     expect(g.guardians[0]).toMatchObject({ name: RESP_NOME, cpf: cpfFicticio(10), phone: '11900000011' });
-    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: true, endReason: 'maioridade' });
+    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: false, endReason: 'maioridade', clinicalInfoBasis: null, annulReason: null });
+    expect(g.patientGuardians[0]?.payerPatientAwareAt).toBeTruthy();
     expect(g.patientGuardians[0]?.validUntil).toBe(g.patientGuardians[0]?.validFrom);
     expect(g.patientGuardianHistory.map((h) => h.event)).toEqual(['responsavel_criado', 'vinculo_criado', 'responsavel_alterado', 'vinculo_encerrado']);
     expect(g.patientGuardianHistory[2]).toMatchObject({ changedFields: 'phone', prevPhone: '11900000010', prevCpf: null });

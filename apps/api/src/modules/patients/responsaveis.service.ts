@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -20,11 +20,13 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { ehPerfil, temPermissao } from '../auth/perfis';
 import { exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
-import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from './guardian-fields';
+import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel, decifrarCampoVinculo } from './guardian-fields';
 import { patientFieldRef } from './patient-fields';
 import {
   faixaEtariaEm,
+  idadeEm,
   informacaoClinica,
   menorEm,
   pendenciasDoCadastro,
@@ -57,6 +59,13 @@ export interface ResponsavelDto {
   readonly faixaEtaria: FaixaEtaria | null;
   readonly vigencia: { readonly desde: string; readonly ate: string | null; readonly vigente: boolean };
   readonly encerramento: { readonly motivo: GuardianEndReason; readonly em: string } | null;
+  /** Curatela (decisão judicial e escopo), só para admin e profissional; null nos outros tipos. */
+  readonly curatela: { readonly referencia: string; readonly escopo: string } | null;
+  /** Pagador de paciente adulto com a ciência do paciente registrada (A7 do #67). */
+  readonly pagadorComCienciaDoPaciente: boolean;
+  /** Anulado (cadastro errado): data a partir da qual a pessoa é descartada. */
+  readonly descarteApos: string | null;
+  readonly pessoaDescartada: boolean;
 }
 
 export interface ListaDeResponsaveis {
@@ -89,6 +98,22 @@ export interface PagadorResponsavel {
 }
 
 export const SCOPE_RESPONSAVEIS = 'patient_guardians';
+
+/** Prazo entre a anulação de um cadastro errado e o descarte da pessoa (PROPOSTA; janela para contestar). */
+export const PRAZO_DESCARTE_ANULADO_DIAS = 30;
+/** CC art. 5º, par. único, I: emancipação a partir dos 16 anos completos. */
+export const IDADE_MINIMA_EMANCIPACAO = 16;
+
+/** CPF mascarado (A5 do #67): só os dígitos 7 a 9, como no exemplo do parecer. */
+export function mascararCpf(cpf: string): string {
+  const d = cpf.replace(/\D/g, '');
+  return d.length === 11 ? `***.***.${d.slice(6, 9)}-**` : '***';
+}
+
+function somarDias(data: string, dias: number): string {
+  const [a, m, d] = data.split('-').map(Number) as [number, number, number];
+  return new Date(Date.UTC(a, m - 1, d + dias)).toISOString().slice(0, 10);
+}
 
 const hojeNaClinica = (): string => noFusoDaClinica(new Date()).data;
 
@@ -169,7 +194,7 @@ export class ResponsaveisService {
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pacienteId)))
         .orderBy(asc(patientGuardians.validFrom), asc(patientGuardians.createdAt), asc(patientGuardians.id));
       const todos: ResponsavelDto[] = [];
-      for (const l of linhas) todos.push(await this.paraDto(tx, ctx.tenantId, l.v, l.g, quadro, hoje));
+      for (const l of linhas) todos.push(await this.paraDto(tx, ctx, l.v, l.g, quadro, hoje));
       const itens = filtro.situacao === 'todos' ? todos : todos.filter((r) => r.vigencia.vigente);
       const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
       await recordAudit(tx, ctx, {
@@ -197,6 +222,7 @@ export class ResponsaveisService {
           .from(guardians)
           .where(and(eq(guardians.tenantId, ctx.tenantId), eq(guardians.id, dados.responsavelId)));
         if (!g) throw new NaoEncontradoError();
+        if (g.discardedAt) throw new ConflitoError('responsavel_descartado');
         pessoa = g;
       } else {
         const p = dados.pessoa as NonNullable<NovoVinculo['pessoa']>;
@@ -221,6 +247,11 @@ export class ResponsaveisService {
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pacienteId), isNull(patientGuardians.endedAt)));
       if (vivos.some((v) => v.guardianId === pessoa.id)) throw new ConflitoError('responsavel_ja_vinculado');
       if (dados.pagador && vivos.some((v) => v.isPayer)) throw new ConflitoError('pagador_ja_definido');
+      const quadro = await this.quadro(tx, ctx.tenantId, pac);
+      const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
+      // A3: curatela é para maior (menor tem pais/tutor); A7: terceiro pagador de adulto exige a ciência dele.
+      if (dados.tipo === 'curador' && menor === true) throw new ConflitoError('curatela_de_menor');
+      if (dados.pagador && menor !== true && !dados.cienciaDoPaciente) throw new ConflitoError('ciencia_do_paciente_obrigatoria');
       const vinculoId = randomUUID();
       const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, vinculoId, dados.justificativa) : {};
       const [v] = await tx
@@ -228,6 +259,13 @@ export class ResponsaveisService {
         .values({
           id: vinculoId,
           ...decisao,
+          ...(dados.curatela
+            ? {
+                courtDecisionRefEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, vinculoId, 'court_decision_ref', dados.curatela.referencia),
+                curatorshipScopeEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, vinculoId, 'curatorship_scope', dados.curatela.escopo),
+              }
+            : {}),
+          ...(dados.pagador && menor !== true ? { payerPatientAwareBy: ctx.userId, payerPatientAwareAt: new Date() } : {}),
           tenantId: ctx.tenantId,
           patientId: pacienteId,
           guardianId: pessoa.id,
@@ -251,9 +289,10 @@ export class ResponsaveisService {
           payer: dados.pagador,
           clinical_info: dados.recebeInformacaoClinica,
           existing_guardian: dados.responsavelId !== undefined,
+          ...(dados.pagador && menor !== true ? { patient_aware: true } : {}),
         },
       });
-      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hoje);
+      return this.paraDto(tx, ctx, vinculo, pessoa, quadro, hoje);
     });
   }
 
@@ -305,17 +344,20 @@ export class ResponsaveisService {
         scope: SCOPE_RESPONSAVEIS,
         metadata: { patient_id: pacienteId, link_id: v.id, guardian_id: g.id, changed: campos.join(',') },
       });
-      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
+      return this.paraDto(tx, ctx, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });
   }
 
   /** Marca (ou desmarca) o pagador. Marcar desmarca o pagador vivo anterior do paciente na mesma transação. */
-  marcarPagador(ctx: RequestContext, pacienteId: string, vinculoId: string, pagador: boolean): Promise<ResponsavelDto> {
+  marcarPagador(ctx: RequestContext, pacienteId: string, vinculoId: string, pagador: boolean, cienciaDoPaciente = false): Promise<ResponsavelDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       // Trava o paciente: duas marcações simultâneas se enfileiram (e o índice único é a última barreira).
       const pac = await this.paciente(tx, ctx, pacienteId, true);
       const { v, g } = await this.travarVinculo(tx, ctx, pacienteId, vinculoId);
       if (v.endedAt) throw new ConflitoError('vinculo_encerrado');
+      const quadro = await this.quadro(tx, ctx.tenantId, pac);
+      const adulto = menorEm(quadro.nascimento, hojeNaClinica(), quadro.emancipadoEm) !== true;
+      if (pagador && !v.isPayer && adulto && !cienciaDoPaciente) throw new ConflitoError('ciencia_do_paciente_obrigatoria');
       let anterior: string | null = null;
       if (pagador && !v.isPayer) {
         const [ant] = await tx
@@ -337,7 +379,7 @@ export class ResponsaveisService {
       if (pagador !== v.isPayer) {
         const [nv] = await tx
           .update(patientGuardians)
-          .set({ isPayer: pagador, updatedBy: ctx.userId })
+          .set({ isPayer: pagador, ...(pagador && adulto ? { payerPatientAwareBy: ctx.userId, payerPatientAwareAt: new Date() } : {}), updatedBy: ctx.userId })
           .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, v.id)))
           .returning();
         vinculo = nv as LinhaVinculo;
@@ -349,11 +391,12 @@ export class ResponsaveisService {
             link_id: v.id,
             changed: 'is_payer',
             payer: pagador,
+            ...(pagador && adulto ? { patient_aware: true } : {}),
             ...(anterior ? { previous_payer_link_id: anterior } : {}),
           },
         });
       }
-      return this.paraDto(tx, ctx.tenantId, vinculo, g, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
+      return this.paraDto(tx, ctx, vinculo, g, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });
   }
 
@@ -391,7 +434,95 @@ export class ResponsaveisService {
         scope: SCOPE_RESPONSAVEIS,
         metadata: { patient_id: pacienteId, link_id: v.id, changed: 'valid_until', reason: dados.motivo },
       });
-      return this.paraDto(tx, ctx.tenantId, nv as LinhaVinculo, g, await this.quadro(tx, ctx.tenantId, pac), hoje);
+      return this.paraDto(tx, ctx, nv as LinhaVinculo, g, await this.quadro(tx, ctx.tenantId, pac), hoje);
+    });
+  }
+
+  /**
+   * Anula um vínculo cadastrado por ENGANO (A4 do #67): vigência vazia (nunca vigente), motivo cifrado e
+   * prazo de descarte. Vencido o prazo, `descartarAnulados` elimina a pessoa se todos os vínculos dela forem
+   * anulados. Recibos emitidos e o pagador congelado nos recebimentos NÃO mudam (são retratos próprios).
+   */
+  anular(ctx: RequestContext, pacienteId: string, vinculoId: string, motivo: string): Promise<ResponsavelDto> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const pac = await this.paciente(tx, ctx, pacienteId);
+      const { v, g } = await this.travarVinculo(tx, ctx, pacienteId, vinculoId);
+      if (v.endedAt) throw new ConflitoError('vinculo_encerrado');
+      const hoje = hojeNaClinica();
+      const descarte = somarDias(hoje, PRAZO_DESCARTE_ANULADO_DIAS);
+      const [nv] = await tx
+        .update(patientGuardians)
+        .set({
+          validUntil: v.validFrom,
+          endReason: 'cadastro_errado',
+          annulReasonEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, v.id, 'annul_reason', motivo),
+          discardAfter: descarte,
+          endedAt: new Date(),
+          endedBy: ctx.userId,
+          updatedBy: ctx.userId,
+        })
+        .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, v.id)))
+        .returning();
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE_RESPONSAVEIS,
+        metadata: { patient_id: pacienteId, link_id: v.id, changed: 'valid_until,annul_reason', reason: 'cadastro_errado', discard_after_days: PRAZO_DESCARTE_ANULADO_DIAS },
+      });
+      return this.paraDto(tx, ctx, nv as LinhaVinculo, g, await this.quadro(tx, ctx.tenantId, pac), hoje);
+    });
+  }
+
+  /**
+   * Registra a emancipação do paciente (A3 do #67; CC art. 5º, par. único — a partir dos 16 anos): data e
+   * referência do documento (cifrada), imutável. Encerra hoje os vínculos vivos de pai/mãe e tutor com o
+   * motivo `emancipacao` (sem retroagir: pagamentos já registrados mantêm o pagador congelado).
+   */
+  registrarEmancipacao(ctx: RequestContext, pacienteId: string, dados: { data: string; documento: string }): Promise<ListaDeResponsaveis> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const pac = await this.paciente(tx, ctx, pacienteId, true);
+      if (pac.emancipatedOn) throw new ConflitoError('emancipacao_ja_registrada');
+      const { nascimento } = await this.quadro(tx, ctx.tenantId, pac);
+      const idade = idadeEm(nascimento, dados.data);
+      if (idade === null || idade < IDADE_MINIMA_EMANCIPACAO || idade >= 18) throw new ConflitoError('emancipacao_fora_da_idade');
+      await tx
+        .update(patients)
+        .set({
+          emancipatedOn: dados.data,
+          emancipationRefEnc: await this.cipher.encrypt(tx, patientFieldRef(ctx.tenantId, pac.id, 'emancipation_ref'), dados.documento),
+          emancipationRecordedBy: ctx.userId,
+          emancipationRecordedAt: new Date(),
+        })
+        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, pac.id)));
+      const hoje = hojeNaClinica();
+      const encerrados = await tx
+        .update(patientGuardians)
+        .set({ validUntil: hoje, endReason: 'emancipacao', endedAt: new Date(), endedBy: ctx.userId, updatedBy: ctx.userId })
+        .where(
+          and(
+            eq(patientGuardians.tenantId, ctx.tenantId),
+            eq(patientGuardians.patientId, pac.id),
+            isNull(patientGuardians.endedAt),
+            inArray(patientGuardians.kind, ['pai_mae', 'tutor']),
+            sql`${patientGuardians.validFrom} <= ${hoje}::date`,
+          ),
+        )
+        .returning({ id: patientGuardians.id });
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE_RESPONSAVEIS,
+        metadata: { patient_id: pac.id, op: 'emancipation', links_ended: encerrados.length },
+      });
+      return { itens: [], menorDeIdade: false, pendencias: [] };
+    });
+  }
+
+  /** Executa o descarte das pessoas de cadastros anulados com o prazo vencido (rota do admin). Só contagens na trilha. */
+  descartarAnulados(ctx: RequestContext): Promise<{ readonly descartados: number }> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const [r] = await tx.execute<{ n: number }>(sql`select app_guardians_discard_run() as n`);
+      const descartados = Number(r?.n ?? 0);
+      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE_RESPONSAVEIS, metadata: { op: 'discard_run', discarded: descartados } });
+      return { descartados };
     });
   }
 
@@ -516,14 +647,25 @@ export class ResponsaveisService {
     };
   }
 
-  private async paraDto(tx: TenantTx, tenantId: TenantId, v: LinhaVinculo, g: LinhaPessoa, quadro: QuadroDoPaciente, hoje: string): Promise<ResponsavelDto> {
+  private async paraDto(tx: TenantTx, ctx: RequestContext, v: LinhaVinculo, g: LinhaPessoa, quadro: QuadroDoPaciente, hoje: string): Promise<ResponsavelDto> {
+    const tenantId = ctx.tenantId;
+    const perfis = ctx.roles.filter(ehPerfil);
+    const cpf = await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc);
+    const curatela =
+      v.courtDecisionRefEnc && v.curatorshipScopeEnc && temPermissao(perfis, 'responsaveis:ver_curatela')
+        ? {
+            referencia: (await decifrarCampoVinculo(this.cipher, tx, tenantId, v.id, 'court_decision_ref', v.courtDecisionRefEnc)) ?? '',
+            escopo: (await decifrarCampoVinculo(this.cipher, tx, tenantId, v.id, 'curatorship_scope', v.curatorshipScopeEnc)) ?? '',
+          }
+        : null;
     const vig = { desde: v.validFrom, ate: v.validUntil };
     return {
       id: v.id,
       responsavelId: g.id,
       pacienteId: v.patientId,
       nome: (await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'name', g.nameEnc)) ?? '',
-      cpf: await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc),
+      // A5 do #67: CPF completo só para quem precisa (admin e financeiro); os demais veem mascarado.
+      cpf: cpf === null || temPermissao(perfis, 'responsaveis:ver_cpf_completo') ? cpf : mascararCpf(cpf),
       telefone: await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'phone', g.phoneEnc),
       tipo: v.kind,
       parentesco: ROTULO_DO_TIPO[v.kind],
@@ -533,6 +675,10 @@ export class ResponsaveisService {
       faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
+      curatela,
+      pagadorComCienciaDoPaciente: v.payerPatientAwareAt !== null,
+      descarteApos: v.discardAfter,
+      pessoaDescartada: g.discardedAt !== null,
     };
   }
 }

@@ -30,6 +30,12 @@ export const PERMISSOES = {
   'responsaveis:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'responsaveis:escrever': ['admin', 'profissional', 'recepcao'],
   'responsaveis:liberar_informacao_clinica': ['profissional'],
+  /** A5 do #67: CPF do responsável completo só para quem precisa (recibo/cadastro fiscal); os demais, mascarado. */
+  'responsaveis:ver_cpf_completo': ['admin', 'financeiro'],
+  /** A3 do #67: referência da decisão judicial e escopo da curatela (cifrados): dono e profissional. */
+  'responsaveis:ver_curatela': ['admin', 'profissional'],
+  /** Emancipação do paciente (data + documento): cadastro (dono e recepção). */
+  'responsaveis:registrar_emancipacao': ['admin', 'recepcao'],
   'agenda:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */

@@ -2,7 +2,7 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import type { RateLimitStore } from '../../security/rate-limit-store';
 import { PatientsController } from './patients.controller';
 import { PatientsService } from './patients.service';
-import { ResponsaveisController } from './responsaveis.controller';
+import { DescarteDeResponsaveisController, ResponsaveisController } from './responsaveis.controller';
 import { ResponsaveisService } from './responsaveis.service';
 import {
   VIGILANCIA_OPCOES,
@@ -21,7 +21,7 @@ export class PatientsModule {
     const { store, ...opcoes } = vigilancia;
     return {
       module: PatientsModule,
-      controllers: [PatientsController, ResponsaveisController],
+      controllers: [PatientsController, ResponsaveisController, DescarteDeResponsaveisController],
       providers: [
         PatientsService,
         ResponsaveisService,

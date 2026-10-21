@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ProibidoError } from '../../common/erros-dominio';
-import { exigirUuid } from '../../common/validacao';
+import { exigirObjeto, exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { temPermissao } from '../auth/perfis';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
@@ -13,6 +13,8 @@ import {
 } from './responsaveis.service';
 import {
   validarAlteracaoVinculo,
+  validarAnulacao,
+  validarEmancipacao,
   validarEncerramento,
   validarFiltroResponsaveis,
   validarNovoVinculo,
@@ -71,7 +73,8 @@ export class ResponsaveisController {
   ): Promise<ResponsavelDto> {
     const pacienteId = exigirUuid(id);
     const vinculo = exigirUuid(vinculoId, 'vinculoId');
-    return this.service.marcarPagador(paraRequestContext(auth), pacienteId, vinculo, validarPagador(corpo).pagador);
+    const dados = validarPagador(corpo);
+    return this.service.marcarPagador(paraRequestContext(auth), pacienteId, vinculo, dados.pagador, dados.cienciaDoPaciente);
   }
 
   @Post(':vinculoId/encerrar')
@@ -88,6 +91,30 @@ export class ResponsaveisController {
     return this.service.encerrar(paraRequestContext(auth), pacienteId, vinculo, validarEncerramento(corpo, noFusoDaClinica(new Date()).data));
   }
 
+  /** Anulação de cadastro errado (A4 do #67): motivo no corpo (cifrado), prazo de descarte. */
+  @Post(':vinculoId/anular')
+  @HttpCode(200)
+  @Permissao('responsaveis:escrever')
+  anular(
+    @Sessao() auth: AuthContext,
+    @Param('id') id: string,
+    @Param('vinculoId') vinculoId: string,
+    @Body() corpo: unknown,
+  ): Promise<ResponsavelDto> {
+    const pacienteId = exigirUuid(id);
+    const vinculo = exigirUuid(vinculoId, 'vinculoId');
+    return this.service.anular(paraRequestContext(auth), pacienteId, vinculo, validarAnulacao(corpo).motivo);
+  }
+
+  /** Emancipação do paciente (A3 do #67): encerra a menoridade; documento só no corpo (cifrado). */
+  @Post('emancipacao')
+  @HttpCode(200)
+  @Permissao('responsaveis:registrar_emancipacao')
+  emancipacao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ListaDeResponsaveis> {
+    const pacienteId = exigirUuid(id);
+    return this.service.registrarEmancipacao(paraRequestContext(auth), pacienteId, validarEmancipacao(corpo, noFusoDaClinica(new Date()).data));
+  }
+
   @Get(':vinculoId/historico')
   @Permissao('responsaveis:ler')
   historico(@Sessao() auth: AuthContext, @Param('id') id: string, @Param('vinculoId') vinculoId: string): Promise<readonly EventoDoHistoricoDto[]> {
@@ -96,7 +123,22 @@ export class ResponsaveisController {
   }
 }
 
-/** Ligar a informação clínica para o responsável: dono ou profissional, nunca a recepção. */
+/** Descarte das pessoas de cadastros anulados com o prazo vencido (A4 do #67): dono da clínica. */
+@Controller('responsaveis/descarte')
+@UseGuards(SessaoGuard)
+export class DescarteDeResponsaveisController {
+  constructor(@Inject(ResponsaveisService) private readonly service: ResponsaveisService) {}
+
+  @Post()
+  @HttpCode(200)
+  @Permissao('cadastros:gerir')
+  executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<{ readonly descartados: number }> {
+    exigirObjeto(corpo ?? {}, []);
+    return this.service.descartarAnulados(paraRequestContext(auth));
+  }
+}
+
+/** Ligar a informação clínica para o responsável: só o profissional (A2 do #67), nunca a recepção nem o admin não clínico. */
 function exigirLiberacaoClinica(auth: AuthContext): void {
   if (!temPermissao(auth.perfis, 'responsaveis:liberar_informacao_clinica')) {
     throw new ProibidoError('liberar_informacao_clinica_sem_permissao');

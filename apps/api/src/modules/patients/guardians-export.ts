@@ -3,10 +3,10 @@ import { asc, eq } from 'drizzle-orm';
 import { guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
-import { guardianFieldRef, type GuardianEncryptedColumn } from './guardian-fields';
+import { guardianFieldRef, guardianLinkFieldRef, type GuardianEncryptedColumn, type GuardianLinkEncryptedColumn } from './guardian-fields';
 
 /**
- * Responsáveis no pacote G2 (migração 0028, schemaVersion 1.13.0): pessoas (nome, CPF e telefone
+ * Responsáveis no pacote G2 (migração 0028, schemaVersion 1.13.0; 1.14.0 com a 0031): pessoas (nome, CPF e telefone
  * DECIFRADOS — o pacote é da clínica, controladora), vínculos com a vigência e o histórico inteiro,
  * inclusive os valores anteriores da pessoa (decifrados). Arquivo próprio para o tenant-export.ts só agregar.
  */
@@ -23,6 +23,7 @@ export interface ExportedGuardians {
     createdBy: string;
     updatedAt: string;
     updatedBy: string;
+    discardedAt: string | null;
   }[];
   readonly patientGuardians: readonly {
     id: string;
@@ -40,6 +41,15 @@ export interface ExportedGuardians {
     createdBy: string;
     updatedAt: string;
     updatedBy: string;
+    clinicalInfoDecidedBy: string | null;
+    clinicalInfoDecidedAt: string | null;
+    clinicalInfoBasis: string | null;
+    courtDecisionRef: string | null;
+    curatorshipScope: string | null;
+    payerPatientAwareBy: string | null;
+    payerPatientAwareAt: string | null;
+    annulReason: string | null;
+    discardAfter: string | null;
   }[];
   readonly patientGuardianHistory: readonly {
     id: string;
@@ -79,6 +89,10 @@ export async function exportarResponsaveis(
     if (valor === null) return null;
     return decifrar().decryptString(tx, guardianFieldRef(tenantId, guardianId, coluna), valor);
   };
+  const decVinculo = async (linkId: string, coluna: GuardianLinkEncryptedColumn, valor: string | null): Promise<string | null> => {
+    if (valor === null) return null;
+    return decifrar().decryptString(tx, guardianLinkFieldRef(tenantId, linkId, coluna), valor);
+  };
   const pessoas = soDaClinica(
     await tx.select().from(guardians).where(eq(guardians.tenantId, tenantId)).orderBy(asc(guardians.createdAt), asc(guardians.id)),
     tenantId,
@@ -111,9 +125,10 @@ export async function exportarResponsaveis(
         createdBy: g.createdBy,
         updatedAt: g.updatedAt.toISOString(),
         updatedBy: g.updatedBy,
+        discardedAt: iso(g.discardedAt),
       })),
     ),
-    patientGuardians: vinculos.map((v) => ({
+    patientGuardians: await Promise.all(vinculos.map(async (v) => ({
       id: v.id,
       patientId: v.patientId,
       guardianId: v.guardianId,
@@ -129,7 +144,16 @@ export async function exportarResponsaveis(
       createdBy: v.createdBy,
       updatedAt: v.updatedAt.toISOString(),
       updatedBy: v.updatedBy,
-    })),
+      clinicalInfoDecidedBy: v.clinicalInfoDecidedBy,
+      clinicalInfoDecidedAt: iso(v.clinicalInfoDecidedAt),
+      clinicalInfoBasis: await decVinculo(v.id, 'clinical_info_basis', v.clinicalInfoBasisEnc),
+      courtDecisionRef: await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc),
+      curatorshipScope: await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc),
+      payerPatientAwareBy: v.payerPatientAwareBy,
+      payerPatientAwareAt: iso(v.payerPatientAwareAt),
+      annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
+      discardAfter: v.discardAfter,
+    }))),
     patientGuardianHistory: await Promise.all(
       historico.map(async (h) => ({
         id: h.id,
