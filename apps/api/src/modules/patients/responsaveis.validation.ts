@@ -16,6 +16,8 @@ export interface NovoVinculo {
   readonly tipo: GuardianKind;
   readonly pagador: boolean;
   readonly recebeInformacaoClinica: boolean;
+  /** Obrigatória ao ligar a informação clínica: a avaliação do profissional (cifrada; nunca na trilha). */
+  readonly justificativa?: string;
   /** Início da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
   readonly desde?: string;
 }
@@ -25,6 +27,7 @@ export interface AlteracaoVinculo {
   readonly cpf?: string | null;
   readonly telefone?: string | null;
   readonly recebeInformacaoClinica?: boolean;
+  readonly justificativa?: string;
 }
 
 export interface Encerramento {
@@ -33,8 +36,8 @@ export interface Encerramento {
   readonly ate?: string;
 }
 
-const CAMPOS_NOVO = ['responsavelId', 'nome', 'cpf', 'telefone', 'tipo', 'pagador', 'recebeInformacaoClinica', 'desde'] as const;
-const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica'] as const;
+const CAMPOS_NOVO = ['responsavelId', 'nome', 'cpf', 'telefone', 'tipo', 'pagador', 'recebeInformacaoClinica', 'justificativa', 'desde'] as const;
+const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica', 'justificativa'] as const;
 
 function cpfOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
   if (bruto === undefined || bruto === null) return bruto;
@@ -48,6 +51,14 @@ function telefoneOuFalha(v: Validador, bruto: string | null | undefined): string
   const n = normalizarTelefone(bruto);
   if (n === undefined) v.falhar('telefone');
   return n;
+}
+
+/** Justificativa só junto com a marca LIGADA, e obrigatória nesse caso (decisão do profissional, A1 do #67). */
+function justificativaDaDecisao(v: Validador, liga: boolean | undefined): string | undefined {
+  const j = v.texto('justificativa', { min: 10, max: 1000 });
+  if (liga === true && j === undefined) v.falhar('justificativa');
+  if (liga !== true && v.tem('justificativa')) v.falhar('justificativa');
+  return j;
 }
 
 function dataNaoFutura(v: Validador, campo: string, hoje: string): string | undefined {
@@ -69,6 +80,7 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
   const tipo = v.umDe('tipo', GUARDIAN_KINDS, true);
   const pagador = v.booleano('pagador') ?? false;
   const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica') ?? false;
+  const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
   const desde = dataNaoFutura(v, 'desde', hoje);
   // Ou a pessoa existente, ou os dados de uma nova (nunca os dois, nunca nenhum).
   const temPessoa = v.tem('nome') || v.tem('cpf') || v.tem('telefone');
@@ -80,6 +92,7 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
     tipo: tipo as GuardianKind,
     pagador,
     recebeInformacaoClinica,
+    ...(justificativa ? { justificativa } : {}),
     ...(desde ? { desde } : {}),
   };
 }
@@ -90,6 +103,7 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   const cpf = cpfOuFalha(v, v.textoOuNulo('cpf', { max: 20 }));
   const telefone = telefoneOuFalha(v, v.textoOuNulo('telefone', { max: 25 }));
   const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica');
+  const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
   v.concluir();
   if (!CAMPOS_ALTERACAO.some((c) => v.tem(c))) throw new EntradaInvalidaError(['corpo']);
   const out: { -readonly [K in keyof AlteracaoVinculo]: AlteracaoVinculo[K] } = {};
@@ -97,6 +111,7 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   if (cpf !== undefined) out.cpf = cpf;
   if (telefone !== undefined) out.telefone = telefone;
   if (recebeInformacaoClinica !== undefined) out.recebeInformacaoClinica = recebeInformacaoClinica;
+  if (justificativa !== undefined) out.justificativa = justificativa;
   return out;
 }
 

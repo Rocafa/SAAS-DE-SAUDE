@@ -11,7 +11,7 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
+import { appointments, auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
@@ -40,6 +40,8 @@ let finA: Sessao;
 let profA: Sessao;
 let adminB: Sessao;
 let profissionalPfA: string;
+/** Profissional ligado ao usuário profA (perfil clínico no banco): quem decide a informação clínica. */
+let profissionalDoProfA: string;
 let tipoA: string;
 let horaSeq = 0;
 
@@ -90,6 +92,24 @@ async function responsavel(s: Sessao, pacienteId: string, corpo: Record<string, 
   return r.body as Resp;
 }
 
+const JUSTIFICATIVA = 'Avaliacao ficticia do profissional: compartilhar o essencial';
+
+/** Vínculo de cuidado de profA com o paciente: consulta confirmada daqui a 1 hora (agenda do dia), criada pela recepção. */
+async function cuidar(pacienteId: string): Promise<void> {
+  const inicio = new Date(Date.now() + 60 * 60_000);
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(appointments).values({
+      tenantId: clinicaA,
+      createdBy: recepA.userId,
+      patientId: pacienteId,
+      professionalId: profissionalDoProfA,
+      appointmentTypeId: tipoA,
+      startsAt: inicio,
+      endsAt: new Date(inicio.getTime() + 40 * 60_000),
+      status: 'confirmed',
+    }), recepA.userId);
+}
+
 /** Recebe hoje uma cobrança PF sem pagador do paciente e emite o recibo; devolve o recibo. */
 async function reciboSemPagador(pacienteId: string) {
   horaSeq++;
@@ -123,6 +143,8 @@ beforeAll(async () => {
   profissionalPfA = id(await post(adminA, '/profissionais', { nome: 'Profissional Ficticia Pediatrica', especialidade: 'Fisioterapia' }));
   tipoA = id(await post(adminA, '/tipos-atendimento', { nome: 'Sessao', minutos: 40 }));
   await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(880) }).expect(200);
+  await api.membro(clinicaA, profA, 'profissional');
+  profissionalDoProfA = id(await post(adminA, '/profissionais', { nome: 'Profissional Ficticia Cuidado', especialidade: 'Psicologia', usuarioId: profA.userId }));
   const caixa = await post(recepA, '/financeiro/caixas', { turno: 'unico' });
   expect(caixa.status, JSON.stringify(caixa.body)).toBe(201);
 });
@@ -340,14 +362,20 @@ describe('maioridade e informação clínica (LGPD art. 14; CC arts. 5º e 1.767
     const vespera = await paciente(recepA, { nome: 'Paciente Ficticio Vespera', nascimento: nascidoHa(18, 1) });
     const fez18 = await paciente(recepA, { nome: 'Paciente Ficticio Fez 18', nascimento: nascidoHa(18) });
     const semData = await paciente(recepA, { nome: 'Paciente Ficticio Sem Data' });
-    const a = await responsavel(adminA, vespera, { nome: 'Resp Ficticio A', tipo: 'pai_mae', recebeInformacaoClinica: true });
-    const b = await responsavel(profA, fez18, { nome: 'Resp Ficticio B', tipo: 'pai_mae', recebeInformacaoClinica: true });
-    const c = await responsavel(adminA, fez18, { nome: 'Curador Ficticio', tipo: 'curador', recebeInformacaoClinica: true });
-    const d = await responsavel(adminA, semData, { nome: 'Resp Ficticio D', tipo: 'pai_mae', recebeInformacaoClinica: true });
+    for (const p of [vespera, fez18, semData]) await cuidar(p);
+    const liga = { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA };
+    const a = await responsavel(profA, vespera, { nome: 'Resp Ficticio A', tipo: 'pai_mae', ...liga });
+    const b = await responsavel(profA, fez18, { nome: 'Resp Ficticio B', tipo: 'pai_mae', ...liga });
+    const d = await responsavel(profA, semData, { nome: 'Resp Ficticio D', tipo: 'pai_mae', ...liga });
+    // Véspera dos 18 (adolescente) com decisão tomada HOJE pelo profissional: permitida.
     expect(a.informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
     expect(b.informacaoClinica).toEqual({ permitida: false, motivo: 'paciente_maior_de_idade' });
-    expect(c.informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
     expect(d.informacaoClinica).toEqual({ permitida: false, motivo: 'sem_data_de_nascimento' });
+    // Decisão gravada pelo banco (autor = sessão) e justificativa só cifrada.
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, a.id)), recepA.userId);
+    expect(linha?.clinicalInfoDecidedBy).toBe(profA.userId);
+    expect(linha?.clinicalInfoBasisEnc).toMatch(/^v1:/);
+    expect(JSON.stringify(linha)).not.toContain('Avaliacao ficticia');
     // A maioridade não encerra o vínculo (o pagador segue valendo), só a informação clínica.
     expect(b.vigencia.vigente).toBe(true);
     const sem = await responsavel(recepA, vespera, { nome: 'Resp Ficticio Sem Marca', tipo: 'tutor' });
@@ -358,13 +386,33 @@ describe('maioridade e informação clínica (LGPD art. 14; CC arts. 5º e 1.767
 describe('permissões', () => {
   it('recepção cadastra mas não liga a informação clínica; financeiro só lê; desligar qualquer um que escreve', async () => {
     const pac = await paciente(recepA, { nome: 'Paciente Ficticio Permissoes', nascimento: nascidoHa(4) });
-    const negado = await post(recepA, `/pacientes/${pac}/responsaveis`, { nome: 'Resp Ficticio', tipo: 'pai_mae', recebeInformacaoClinica: true });
+    const negado = await post(recepA, `/pacientes/${pac}/responsaveis`, { nome: 'Resp Ficticio', tipo: 'pai_mae', recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA });
     expect(negado.status).toBe(403);
     expect(negado.body).toMatchObject({ codigo: 'liberar_informacao_clinica_sem_permissao' });
     const r = await responsavel(recepA, pac, { nome: 'Resp Ficticio', tipo: 'pai_mae' });
-    expect((await patch(recepA, `/pacientes/${pac}/responsaveis/${r.id}`, { recebeInformacaoClinica: true })).status).toBe(403);
-    expect((await patch(profA, `/pacientes/${pac}/responsaveis/${r.id}`, { recebeInformacaoClinica: true })).status).toBe(200);
-    expect((await patch(recepA, `/pacientes/${pac}/responsaveis/${r.id}`, { recebeInformacaoClinica: false })).status).toBe(200);
+    const rota = `/pacientes/${pac}/responsaveis/${r.id}`;
+    const liga = { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA };
+    expect((await patch(recepA, rota, liga)).status).toBe(403);
+    // A2 do #67: admin SEM perfil clínico não liga (nem pela API nem direto no banco).
+    expect((await patch(adminA, rota, liga)).body).toMatchObject({ codigo: 'liberar_informacao_clinica_sem_permissao' });
+    // Profissional sem vínculo de cuidado com o paciente: 403; sem justificativa: 400.
+    expect((await patch(profA, rota, liga)).body).toMatchObject({ codigo: 'sem_vinculo_de_cuidado' });
+    await cuidar(pac);
+    expect((await patch(profA, rota, { recebeInformacaoClinica: true })).status).toBe(400);
+    expect((await patch(profA, rota, liga)).status).toBe(200);
+    expect((await patch(recepA, rota, { recebeInformacaoClinica: false })).status).toBe(200);
+    // Banco: usuário sem o perfil profissional na clínica não grava a decisão (42501).
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).limit(1), recepA.userId);
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx
+            .update(patientGuardians)
+            .set({ receivesClinicalInfo: true, clinicalInfoDecidedBy: adminA.userId, clinicalInfoDecidedAt: new Date(), clinicalInfoBasisEnc: g!.nameEnc, updatedBy: adminA.userId })
+            .where(eq(patientGuardians.id, r.id)),
+        adminA.userId),
+      ),
+    ).toContain('42501');
     expect((await post(finA, `/pacientes/${pac}/responsaveis`, { nome: 'Resp Ficticio Fin', tipo: 'tutor' })).status).toBe(403);
     expect((await post(finA, `/pacientes/${pac}/responsaveis/${r.id}/pagador`, { pagador: true })).status).toBe(403);
     expect((await post(finA, `/pacientes/${pac}/responsaveis/${r.id}/encerrar`, { motivo: 'substituido' })).status).toBe(403);

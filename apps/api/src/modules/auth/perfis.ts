@@ -23,13 +23,13 @@ export const PERMISSOES = {
   /**
    * Responsáveis do paciente (PAC-01.2, migração 0028). Ler: todos (o financeiro precisa do pagador).
    * Cadastrar, alterar, marcar pagador e encerrar vigência: quem escreve o cadastro (a recepção também).
-   * LIGAR a informação clínica para o responsável não é ato de balcão: dono ou profissional (desligar,
-   * qualquer um que escreva). A informação só chega ao responsável com a marca, o vínculo vigente e o
-   * paciente menor (salvo curatela) — ver responsaveis-regras.ts.
+   * LIGAR a informação clínica para o responsável é DECISÃO CLÍNICA: só o profissional, com vínculo de
+   * cuidado e justificativa (A2 do #67: admin sem perfil clínico não liga; desligar, qualquer um que
+   * escreva). Adolescente (12–17): decisão caso a caso, tomada já na adolescência — ver responsaveis-regras.ts.
    */
   'responsaveis:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'responsaveis:escrever': ['admin', 'profissional', 'recepcao'],
-  'responsaveis:liberar_informacao_clinica': ['admin', 'profissional'],
+  'responsaveis:liberar_informacao_clinica': ['profissional'],
   'agenda:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */

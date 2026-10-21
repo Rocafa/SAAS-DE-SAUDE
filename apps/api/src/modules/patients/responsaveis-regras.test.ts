@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { temPermissao } from '../auth/perfis';
-import { idadeEm, informacaoClinica, menorEm, pendenciasDoCadastro, vigenteEm } from './responsaveis-regras';
+import { faixaEtariaEm, idadeEm, informacaoClinica, menorEm, pendenciasDoCadastro, REGRA_INFORMACAO_CLINICA, vigenteEm } from './responsaveis-regras';
 import { validarEncerramento, validarNovoVinculo } from './responsaveis.validation';
 
 const HOJE = '2030-06-15';
-const marca = { tipo: 'pai_mae' as const, recebeInformacaoClinica: true, desde: '2020-01-01', ate: null };
+/** Decisão do profissional tomada HOJE. */
+const marca = { tipo: 'pai_mae' as const, recebeInformacaoClinica: true, desde: '2020-01-01', ate: null, decididaEm: HOJE };
 
 describe('vigência [desde, ate)', () => {
   it('fim exclusivo e sem fim', () => {
@@ -39,6 +40,32 @@ describe('maioridade (CC art. 5º) e informação clínica', () => {
     expect(informacaoClinica(marca, null, HOJE).motivo).toBe('sem_data_de_nascimento');
   });
 
+  it('emancipação encerra a menoridade (CC art. 5º, par. único)', () => {
+    expect(menorEm('2014-01-01', HOJE, '2030-06-01')).toBe(false);
+    expect(menorEm('2014-01-01', HOJE, '2030-07-01')).toBe(true);
+    expect(informacaoClinica(marca, '2014-01-01', HOJE, '2030-06-01').motivo).toBe('paciente_emancipado');
+    expect(faixaEtariaEm('2014-01-01', HOJE, '2030-06-01')).toBe('adulto');
+  });
+
+  it('faixas: até 11 vale a decisão; 12–17 só decisão tomada já na adolescência (padrão protetor); sem decisão, nunca', () => {
+    expect(REGRA_INFORMACAO_CLINICA).toEqual({ idadeInicioAdolescencia: 12, adolescenteCompartilhaComDecisaoAnterior: false });
+    expect(faixaEtariaEm('2018-06-16', HOJE)).toBe('crianca'); // 11 anos
+    expect(faixaEtariaEm('2018-06-15', HOJE)).toBe('adolescente'); // 12 hoje
+    // Criança: decisão de anos atrás vale.
+    expect(informacaoClinica({ ...marca, decididaEm: '2025-01-01' }, '2020-01-01', HOJE).permitida).toBe(true);
+    // Fez 12 hoje: a decisão tomada aos 11 deixa de valer; a tomada hoje vale.
+    expect(informacaoClinica({ ...marca, decididaEm: '2030-06-14' }, '2018-06-15', HOJE)).toEqual({ permitida: false, motivo: 'adolescente_requer_nova_decisao' });
+    expect(informacaoClinica({ ...marca, decididaEm: HOJE }, '2018-06-15', HOJE).permitida).toBe(true);
+    // Regra configurável: aceitar decisão anterior.
+    expect(informacaoClinica({ ...marca, decididaEm: '2025-01-01' }, '2016-01-01', HOJE, null, { idadeInicioAdolescencia: 12, adolescenteCompartilhaComDecisaoAnterior: true }).permitida).toBe(true);
+    // Sem decisão registrada (nunca automático), inclusive curatela.
+    expect(informacaoClinica({ ...marca, decididaEm: null }, '2025-01-01', HOJE).motivo).toBe('sem_decisao_do_profissional');
+    expect(informacaoClinica({ ...marca, tipo: 'curador', decididaEm: null }, '1980-01-01', HOJE).permitida).toBe(false);
+    expect(pendenciasDoCadastro(true, [{ desde: '2020-01-01', ate: null, pagador: true, motivoInformacaoClinica: 'adolescente_requer_nova_decisao' }], HOJE)).toEqual([
+      'revisar_informacao_clinica_adolescente',
+    ]);
+  });
+
   it('pendências do cadastro só para menor', () => {
     expect(pendenciasDoCadastro(true, [], HOJE)).toEqual(['menor_sem_responsavel_vigente', 'menor_sem_pagador_vigente']);
     expect(pendenciasDoCadastro(true, [{ desde: '2020-01-01', ate: null, pagador: false }], HOJE)).toEqual(['menor_sem_pagador_vigente']);
@@ -68,5 +95,7 @@ describe('validação', () => {
     expect(temPermissao(['financeiro'], 'responsaveis:ler')).toBe(true);
     expect(temPermissao(['financeiro'], 'responsaveis:escrever')).toBe(false);
     expect(temPermissao(['profissional'], 'responsaveis:liberar_informacao_clinica')).toBe(true);
+    // A2 do #67: admin sem perfil clínico não liga a informação clínica.
+    expect(temPermissao(['admin'], 'responsaveis:liberar_informacao_clinica')).toBe(false);
   });
 });

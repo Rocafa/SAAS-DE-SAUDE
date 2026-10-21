@@ -34,6 +34,45 @@ export async function cifrarCampoResponsavel(
   }
 }
 
+/**
+ * Colunas cifradas do VÍNCULO (`patient_guardians`, migração 0031): justificativa da decisão clínica,
+ * referência e escopo da curatela e motivo da anulação. AAD = clínica + tabela + coluna + id do vínculo.
+ */
+export type GuardianLinkEncryptedColumn = 'clinical_info_basis' | 'court_decision_ref' | 'curatorship_scope' | 'annul_reason';
+
+export function guardianLinkFieldRef(tenantId: TenantId, linkId: string, column: GuardianLinkEncryptedColumn): FieldRef {
+  return { tenantId, table: 'patient_guardians', column, rowId: linkId };
+}
+
+export async function cifrarCampoVinculo(
+  cipher: FieldCipher<TenantTx>,
+  tx: TenantTx,
+  ctx: RequestContext,
+  linkId: string,
+  column: GuardianLinkEncryptedColumn,
+  valor: string,
+): Promise<string> {
+  const ref = guardianLinkFieldRef(ctx.tenantId, linkId, column);
+  try {
+    return await cipher.encrypt(tx, ref, valor);
+  } catch (e) {
+    if (!(e instanceof TenantKeyMissingError)) throw e;
+    await cipher.provisionTenant(tx, ctx.tenantId, ctx.userId);
+    return cipher.encrypt(tx, ref, valor);
+  }
+}
+
+export async function decifrarCampoVinculo(
+  cipher: FieldCipher<TenantTx>,
+  tx: TenantTx,
+  tenantId: TenantId,
+  linkId: string,
+  column: GuardianLinkEncryptedColumn,
+  valor: string | null,
+): Promise<string | null> {
+  return valor === null ? null : cipher.decryptString(tx, guardianLinkFieldRef(tenantId, linkId, column), valor);
+}
+
 export async function decifrarCampoResponsavel(
   cipher: FieldCipher<TenantTx>,
   tx: TenantTx,

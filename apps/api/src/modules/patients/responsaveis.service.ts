@@ -3,6 +3,7 @@ import { AuditAction, type RequestContext, type TenantId } from '@plataforma/sha
 import { and, asc, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   guardians,
@@ -19,15 +20,19 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { cifrarCampoResponsavel, decifrarCampoResponsavel } from './guardian-fields';
+import { exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
+import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from './guardian-fields';
 import { patientFieldRef } from './patient-fields';
 import {
+  faixaEtariaEm,
   informacaoClinica,
   menorEm,
   pendenciasDoCadastro,
   ROTULO_DO_TIPO,
   vigenteEm,
+  type FaixaEtaria,
   type MotivoInformacaoClinica,
+  type VinculoParaInformacaoClinica,
 } from './responsaveis-regras';
 import type { AlteracaoVinculo, Encerramento, NovoVinculo } from './responsaveis.validation';
 
@@ -48,6 +53,8 @@ export interface ResponsavelDto {
   /** A MARCA no vínculo; se a informação chega de fato ao responsável hoje está em `informacaoClinica`. */
   readonly recebeInformacaoClinica: boolean;
   readonly informacaoClinica: { readonly permitida: boolean; readonly motivo: MotivoInformacaoClinica };
+  /** Faixa do PACIENTE hoje (regra configurável em responsaveis-regras.ts); null sem data de nascimento. */
+  readonly faixaEtaria: FaixaEtaria | null;
   readonly vigencia: { readonly desde: string; readonly ate: string | null; readonly vigente: boolean };
   readonly encerramento: { readonly motivo: GuardianEndReason; readonly em: string } | null;
 }
@@ -87,6 +94,21 @@ const hojeNaClinica = (): string => noFusoDaClinica(new Date()).data;
 
 type LinhaVinculo = typeof patientGuardians.$inferSelect;
 type LinhaPessoa = typeof guardians.$inferSelect;
+interface QuadroDoPaciente {
+  readonly nascimento: string | null;
+  readonly emancipadoEm: string | null;
+}
+
+/** O vínculo no formato da regra pura (decisão do profissional como data no fuso da clínica). */
+function paraRegra(v: LinhaVinculo): VinculoParaInformacaoClinica {
+  return {
+    desde: v.validFrom,
+    ate: v.validUntil,
+    tipo: v.kind,
+    recebeInformacaoClinica: v.receivesClinicalInfo,
+    decididaEm: v.clinicalInfoDecidedAt ? noFusoDaClinica(v.clinicalInfoDecidedAt).data : null,
+  };
+}
 
 /**
  * Responsável pagador VIVO do paciente AGORA (marca de pagador, vínculo não encerrado, início não futuro),
@@ -139,7 +161,7 @@ export class ResponsaveisService {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const pac = await this.paciente(tx, ctx, pacienteId);
       const hoje = hojeNaClinica();
-      const nascimento = await this.nascimento(tx, ctx.tenantId, pac);
+      const quadro = await this.quadro(tx, ctx.tenantId, pac);
       const linhas = await tx
         .select({ v: patientGuardians, g: guardians })
         .from(patientGuardians)
@@ -147,9 +169,9 @@ export class ResponsaveisService {
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pacienteId)))
         .orderBy(asc(patientGuardians.validFrom), asc(patientGuardians.createdAt), asc(patientGuardians.id));
       const todos: ResponsavelDto[] = [];
-      for (const l of linhas) todos.push(await this.paraDto(tx, ctx.tenantId, l.v, l.g, nascimento, hoje));
+      for (const l of linhas) todos.push(await this.paraDto(tx, ctx.tenantId, l.v, l.g, quadro, hoje));
       const itens = filtro.situacao === 'todos' ? todos : todos.filter((r) => r.vigencia.vigente);
-      const menor = menorEm(nascimento, hoje);
+      const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE_RESPONSAVEIS,
@@ -158,7 +180,7 @@ export class ResponsaveisService {
       return {
         itens,
         menorDeIdade: menor,
-        pendencias: pendenciasDoCadastro(menor, todos.map((r) => ({ ...r.vigencia, pagador: r.pagador })), hoje),
+        pendencias: pendenciasDoCadastro(menor, todos.map((r) => ({ ...r.vigencia, pagador: r.pagador, motivoInformacaoClinica: r.informacaoClinica.motivo })), hoje),
       };
     });
   }
@@ -199,9 +221,13 @@ export class ResponsaveisService {
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pacienteId), isNull(patientGuardians.endedAt)));
       if (vivos.some((v) => v.guardianId === pessoa.id)) throw new ConflitoError('responsavel_ja_vinculado');
       if (dados.pagador && vivos.some((v) => v.isPayer)) throw new ConflitoError('pagador_ja_definido');
+      const vinculoId = randomUUID();
+      const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, vinculoId, dados.justificativa) : {};
       const [v] = await tx
         .insert(patientGuardians)
         .values({
+          id: vinculoId,
+          ...decisao,
           tenantId: ctx.tenantId,
           patientId: pacienteId,
           guardianId: pessoa.id,
@@ -227,7 +253,7 @@ export class ResponsaveisService {
           existing_guardian: dados.responsavelId !== undefined,
         },
       });
-      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.nascimento(tx, ctx.tenantId, pac), hoje);
+      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hoje);
     });
   }
 
@@ -261,10 +287,13 @@ export class ResponsaveisService {
         pessoa = ng as LinhaPessoa;
       }
       let vinculo = v;
-      if (dados.recebeInformacaoClinica !== undefined && dados.recebeInformacaoClinica !== v.receivesClinicalInfo) {
+      // Ligar (ou renovar a decisão com nova justificativa, ex.: o paciente fez 12 anos) é decisão do
+      // profissional; desligar é livre (fail-safe).
+      if (dados.recebeInformacaoClinica === true || (dados.recebeInformacaoClinica === false && v.receivesClinicalInfo)) {
+        const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, v.id, dados.justificativa) : {};
         const [nv] = await tx
           .update(patientGuardians)
-          .set({ receivesClinicalInfo: dados.recebeInformacaoClinica, updatedBy: ctx.userId })
+          .set({ receivesClinicalInfo: dados.recebeInformacaoClinica, ...decisao, updatedBy: ctx.userId })
           .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, v.id)))
           .returning();
         vinculo = nv as LinhaVinculo;
@@ -276,7 +305,7 @@ export class ResponsaveisService {
         scope: SCOPE_RESPONSAVEIS,
         metadata: { patient_id: pacienteId, link_id: v.id, guardian_id: g.id, changed: campos.join(',') },
       });
-      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.nascimento(tx, ctx.tenantId, pac), hojeNaClinica());
+      return this.paraDto(tx, ctx.tenantId, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });
   }
 
@@ -324,7 +353,7 @@ export class ResponsaveisService {
           },
         });
       }
-      return this.paraDto(tx, ctx.tenantId, vinculo, g, await this.nascimento(tx, ctx.tenantId, pac), hojeNaClinica());
+      return this.paraDto(tx, ctx.tenantId, vinculo, g, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });
   }
 
@@ -362,7 +391,7 @@ export class ResponsaveisService {
         scope: SCOPE_RESPONSAVEIS,
         metadata: { patient_id: pacienteId, link_id: v.id, changed: 'valid_until', reason: dados.motivo },
       });
-      return this.paraDto(tx, ctx.tenantId, nv as LinhaVinculo, g, await this.nascimento(tx, ctx.tenantId, pac), hoje);
+      return this.paraDto(tx, ctx.tenantId, nv as LinhaVinculo, g, await this.quadro(tx, ctx.tenantId, pac), hoje);
     });
   }
 
@@ -414,7 +443,9 @@ export class ResponsaveisService {
 
   /**
    * Para o portal/comunicações (POR-01.2, COM): o responsável pode receber informação clínica do paciente
-   * HOJE? Marca + vínculo vigente + menor (salvo curatela). Auditado (decisão sobre dado de saúde).
+   * HOJE? Marca por decisão do profissional + vínculo vigente + menor não emancipado (adolescente: decisão
+   * tomada já na adolescência) — salvo curatela. Auditado (decisão sobre dado de saúde). Sem consumidor
+   * nesta rodada: o consumidor (portal/COM) passa por novo parecer (O1 do #67).
    */
   podeReceberInformacaoClinica(ctx: RequestContext, pacienteId: string, vinculoId: string): Promise<boolean> {
     return lerNaClinica(this.db, ctx, async (tx) => {
@@ -424,11 +455,8 @@ export class ResponsaveisService {
         .from(patientGuardians)
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, vinculoId), eq(patientGuardians.patientId, pacienteId)));
       if (!v) throw new NaoEncontradoError();
-      const r = informacaoClinica(
-        { tipo: v.kind, recebeInformacaoClinica: v.receivesClinicalInfo, desde: v.validFrom, ate: v.validUntil },
-        await this.nascimento(tx, ctx.tenantId, pac),
-        hojeNaClinica(),
-      );
+      const quadro = await this.quadro(tx, ctx.tenantId, pac);
+      const r = informacaoClinica(paraRegra(v), quadro.nascimento, hojeNaClinica(), quadro.emancipadoEm);
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE_RESPONSAVEIS,
@@ -436,6 +464,27 @@ export class ResponsaveisService {
       });
       return r.permitida;
     });
+  }
+
+  /**
+   * Decisão do profissional de ligar a informação clínica (A1/A2 do #67): perfil clínico E vínculo de
+   * cuidado com o paciente (403 `sem_vinculo_de_cuidado`), justificativa cifrada; o banco confere o perfil
+   * `profissional` da clínica e grava autor e data.
+   */
+  private async decisaoClinica(
+    tx: TenantTx,
+    ctx: RequestContext,
+    pacienteId: string,
+    vinculoId: string,
+    justificativa: string | undefined,
+  ): Promise<Pick<typeof patientGuardians.$inferInsert, 'clinicalInfoDecidedBy' | 'clinicalInfoDecidedAt' | 'clinicalInfoBasisEnc'>> {
+    await exigirConteudoClinico(tx, ctx, pacienteId);
+    if (!justificativa) throw new EntradaInvalidaError(['justificativa']);
+    return {
+      clinicalInfoDecidedBy: ctx.userId,
+      clinicalInfoDecidedAt: new Date(),
+      clinicalInfoBasisEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, vinculoId, 'clinical_info_basis', justificativa),
+    };
   }
 
   private async paciente(tx: TenantTx, ctx: RequestContext, id: string, travar = false): Promise<typeof patients.$inferSelect> {
@@ -459,11 +508,15 @@ export class ResponsaveisService {
     return l;
   }
 
-  private async nascimento(tx: TenantTx, tenantId: TenantId, pac: typeof patients.$inferSelect): Promise<string | null> {
-    return pac.birthDateEnc ? this.cipher.decryptString(tx, patientFieldRef(tenantId, pac.id, 'birth_date'), pac.birthDateEnc) : null;
+  /** Data de nascimento decifrada e emancipação do paciente (base das regras de idade). */
+  private async quadro(tx: TenantTx, tenantId: TenantId, pac: typeof patients.$inferSelect): Promise<QuadroDoPaciente> {
+    return {
+      nascimento: pac.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pac.id, 'birth_date'), pac.birthDateEnc) : null,
+      emancipadoEm: pac.emancipatedOn,
+    };
   }
 
-  private async paraDto(tx: TenantTx, tenantId: TenantId, v: LinhaVinculo, g: LinhaPessoa, nascimento: string | null, hoje: string): Promise<ResponsavelDto> {
+  private async paraDto(tx: TenantTx, tenantId: TenantId, v: LinhaVinculo, g: LinhaPessoa, quadro: QuadroDoPaciente, hoje: string): Promise<ResponsavelDto> {
     const vig = { desde: v.validFrom, ate: v.validUntil };
     return {
       id: v.id,
@@ -476,7 +529,8 @@ export class ResponsaveisService {
       parentesco: ROTULO_DO_TIPO[v.kind],
       pagador: v.isPayer,
       recebeInformacaoClinica: v.receivesClinicalInfo,
-      informacaoClinica: informacaoClinica({ ...vig, tipo: v.kind, recebeInformacaoClinica: v.receivesClinicalInfo }, nascimento, hoje),
+      informacaoClinica: informacaoClinica(paraRegra(v), quadro.nascimento, hoje, quadro.emancipadoEm),
+      faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
     };
