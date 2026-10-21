@@ -294,3 +294,142 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+-- ================================================================ A2 (preparo). o token sozinho não prova identidade
+--
+-- O resgate passa a ter DOIS passos, os dois por funções SECURITY DEFINER sem contexto prévio:
+--   1. `app_portal_invite_challenge(conta, hash_do_token, hash_do_codigo)`: confere o convite (aberto, válido,
+--      paciente ativo, com telefone no cadastro), guarda o HASH de um código de uso único ligado à CONTA e ao
+--      convite (10 min, 5 tentativas, no máximo 5 envios por convite) e devolve o telefone CIFRADO do
+--      cadastro para a API decifrar e enviar o código pela porta de OTP (dev/test em memória; envio real
+--      com a D4). O destino é sempre o do cadastro da clínica, nunca um informado por quem resgata.
+--   2. `app_portal_redeem_invite(conta, hash_do_token, hash_do_codigo)`: só resgata com o código certo, da
+--      mesma conta, dentro do prazo. Código errado conta tentativa. A versão antiga (só o token) é removida.
+-- O hash do código é HMAC-SHA256 com o próprio token como chave (calculado na API): o banco não guarda nada
+-- que, sozinho, permita adivinhar o código. Toda falha devolve vazio/NULL, sem dizer o motivo.
+-- Responsável legal: o código vai para o telefone do cadastro do paciente até a fase B (telefone do
+-- responsável da 0028).
+CREATE TABLE portal_invite_otp (
+  invite_id  uuid PRIMARY KEY,
+  tenant_id  uuid NOT NULL,
+  account_id uuid NOT NULL,
+  code_hash  text NOT NULL CONSTRAINT portal_invite_otp_code_hash_check CHECK (code_hash ~ '^[0-9a-f]{64}$'),
+  expires_at timestamptz NOT NULL,
+  attempts   integer NOT NULL DEFAULT 0 CONSTRAINT portal_invite_otp_attempts_check CHECK (attempts BETWEEN 0 AND 5),
+  sends      integer NOT NULL DEFAULT 1 CONSTRAINT portal_invite_otp_sends_check CHECK (sends BETWEEN 1 AND 5)
+);
+REVOKE ALL ON portal_invite_otp FROM PUBLIC;
+REVOKE ALL ON portal_invite_otp FROM app_user;
+ALTER TABLE portal_invite_otp ENABLE ROW LEVEL SECURITY;
+ALTER TABLE portal_invite_otp FORCE ROW LEVEL SECURITY;
+CREATE POLICY portal_invite_otp_definer_only ON portal_invite_otp TO CURRENT_USER USING (true) WITH CHECK (true);
+
+CREATE FUNCTION app_portal_invite_challenge(p_account uuid, p_token_hash text, p_code_hash text)
+  RETURNS TABLE (tenant_id uuid, patient_id uuid, invite_id uuid, phone_enc text)
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  l     record;
+  inv   record;
+  v_tel text;
+  o     record;
+BEGIN
+  IF p_account IS NULL OR p_account = '00000000-0000-0000-0000-000000000000'::uuid
+     OR p_token_hash IS NULL OR p_token_hash !~ '^[0-9a-f]{64}$' OR p_code_hash IS NULL OR p_code_hash !~ '^[0-9a-f]{64}$' THEN
+    RETURN;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.tenant_context c WHERE c.xid = txid_current_if_assigned()) THEN
+    RAISE EXCEPTION 'resgate do convite exige transação própria' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT k.tenant_id, k.invite_id INTO l FROM public.portal_invite_lookup k WHERE k.token_hash = p_token_hash;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+  PERFORM public.app_set_tenant(l.tenant_id);
+  PERFORM public.app_set_system_user();
+  SELECT * INTO inv FROM public.portal_invites i WHERE i.tenant_id = l.tenant_id AND i.id = l.invite_id FOR UPDATE;
+  IF NOT FOUND OR inv.redeemed_at IS NOT NULL OR inv.revoked_at IS NOT NULL OR inv.expires_at <= now() THEN
+    RETURN;
+  END IF;
+  SELECT p.phone_enc INTO v_tel FROM public.patients p WHERE p.tenant_id = inv.tenant_id AND p.id = inv.patient_id AND p.active;
+  IF v_tel IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT * INTO o FROM public.portal_invite_otp x WHERE x.invite_id = inv.id FOR UPDATE;
+  IF FOUND THEN
+    IF o.sends >= 5 THEN
+      RETURN;
+    END IF;
+    UPDATE public.portal_invite_otp x
+       SET account_id = p_account, code_hash = p_code_hash, expires_at = now() + interval '10 minutes', attempts = 0, sends = o.sends + 1
+     WHERE x.invite_id = inv.id;
+  ELSE
+    INSERT INTO public.portal_invite_otp (invite_id, tenant_id, account_id, code_hash, expires_at)
+      VALUES (inv.id, inv.tenant_id, p_account, p_code_hash, now() + interval '10 minutes');
+  END IF;
+  RETURN QUERY SELECT inv.tenant_id, inv.patient_id, inv.id, v_tel;
+END;
+$$;
+
+DROP FUNCTION app_portal_redeem_invite(uuid, text);
+CREATE FUNCTION app_portal_redeem_invite(p_account uuid, p_token_hash text, p_code_hash text) RETURNS uuid
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  l      record;
+  inv    record;
+  o      record;
+  v_link uuid;
+BEGIN
+  IF p_account IS NULL OR p_account = '00000000-0000-0000-0000-000000000000'::uuid
+     OR p_token_hash IS NULL OR p_token_hash !~ '^[0-9a-f]{64}$' OR p_code_hash IS NULL OR p_code_hash !~ '^[0-9a-f]{64}$' THEN
+    RETURN NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.tenant_context WHERE xid = txid_current_if_assigned()) THEN
+    RAISE EXCEPTION 'resgate do convite exige transação própria' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT tenant_id, invite_id INTO l FROM public.portal_invite_lookup WHERE token_hash = p_token_hash;
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+  PERFORM public.app_set_tenant(l.tenant_id);
+  PERFORM public.app_set_system_user();
+  SELECT * INTO inv FROM public.portal_invites WHERE tenant_id = l.tenant_id AND id = l.invite_id FOR UPDATE;
+  IF NOT FOUND OR inv.redeemed_at IS NOT NULL OR inv.revoked_at IS NOT NULL OR inv.expires_at <= now() THEN
+    RETURN NULL;
+  END IF;
+  -- Prova de posse do telefone do cadastro: código da MESMA conta, no prazo, dentro das tentativas.
+  SELECT * INTO o FROM public.portal_invite_otp WHERE invite_id = inv.id FOR UPDATE;
+  IF NOT FOUND OR o.account_id IS DISTINCT FROM p_account OR o.expires_at <= now() OR o.attempts >= 5 THEN
+    RETURN NULL;
+  END IF;
+  IF o.code_hash IS DISTINCT FROM p_code_hash THEN
+    UPDATE public.portal_invite_otp SET attempts = o.attempts + 1 WHERE invite_id = inv.id;
+    RETURN NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.patients p WHERE p.tenant_id = inv.tenant_id AND p.id = inv.patient_id AND p.active) THEN
+    RETURN NULL;
+  END IF;
+  -- Código usado: não serve de novo (mesmo que o resgate abaixo falhe por outro motivo).
+  UPDATE public.portal_invite_otp SET attempts = 5 WHERE invite_id = inv.id;
+  SELECT id INTO v_link FROM public.portal_links
+   WHERE tenant_id = inv.tenant_id AND account_id = p_account AND patient_id = inv.patient_id AND revoked_at IS NULL;
+  IF NOT FOUND THEN
+    INSERT INTO public.portal_links (tenant_id, account_id, patient_id, invite_id, acting_as)
+      VALUES (inv.tenant_id, p_account, inv.patient_id, inv.id, inv.acting_as)
+      RETURNING id INTO v_link;
+  END IF;
+  UPDATE public.portal_invites SET redeemed_at = now(), redeemed_account_id = p_account, link_id = v_link
+   WHERE tenant_id = inv.tenant_id AND id = inv.id;
+  INSERT INTO public.audit_log (tenant_id, actor_id, actor_kind, action, scope, metadata)
+    VALUES (inv.tenant_id, p_account, 'paciente_portal', 'create', 'portal_links',
+            jsonb_build_object('op', 'invite_redeemed', 'invite_id', inv.id, 'link_id', v_link,
+                               'patient_id', inv.patient_id, 'acting_as', inv.acting_as, 'otp', true));
+  RETURN v_link;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION app_portal_invite_challenge(uuid, text, text), app_portal_redeem_invite(uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_portal_invite_challenge(uuid, text, text), app_portal_redeem_invite(uuid, text, text) TO app_user;
