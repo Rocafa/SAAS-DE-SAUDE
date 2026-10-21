@@ -289,7 +289,7 @@ describe('evolução versionada e cifrada', () => {
   it('conteúdo validado pelo modelo: chave desconhecida, EVA fora da faixa e campo de outro nicho dão 400 sem eco do valor', async () => {
     const r1 = await api.http().put(`/atendimentos/${atFisio}/registro`).set(cab(fisioA)).send({ versaoBase: 2, conteudo: { tema: PSICO } });
     expect(r1.status).toBe(400);
-    expect(JSON.stringify(r1.body)).not.toContain(PSICO);
+    expect(JSON.stringify(r1.body)).not.toContain('QZX5505');
     const r2 = await api
       .http()
       .put(`/atendimentos/${atFisio}/registro`)
@@ -397,7 +397,7 @@ describe('finalização e adendo', () => {
     expect(Date.parse(adendos[0]?.em ?? '')).not.toBeNaN();
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalAddenda).where(eq(clinicalAddenda.encounterId, atFisio)));
     expect(linha?.textEnc).toMatch(/^v1:/);
-    expect(JSON.stringify(linha)).not.toContain(ADENDO);
+    expect(JSON.stringify(linha)).not.toContain('QZX5504');
   });
 
   it('outro profissional com vínculo lê o registro geral (prontuário único) com o adendo', async () => {
@@ -413,7 +413,7 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     const outro = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
     expect(outro.status).toBe(200);
     expect(outro.body).toMatchObject({ conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null, adendos: [] });
-    expect(JSON.stringify(outro.body)).not.toContain(PSICO);
+    expect(JSON.stringify(outro.body)).not.toContain('QZX5505');
     expect((await api.http().get(`/atendimentos/${atPsi}/versoes`).set(cab(outroA))).status).toBe(403);
     const autor = await api.http().get(`/atendimentos/${atPsi}`).set(cab(psiA));
     expect(autor.body).toMatchObject({ conteudoOculto: false, conteudo: { tema: PSICO } });
@@ -426,7 +426,7 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     expect(corpo.itens.map((i) => i.id).sort()).toEqual([atFisio, atPsi].sort());
     expect(corpo.itens.find((i) => i.id === atPsi)?.conteudoOculto).toBe(true);
     expect(corpo.itens.find((i) => i.id === atFisio)?.conteudoOculto).toBe(false);
-    expect(JSON.stringify(res.body)).not.toContain(PSICO);
+    expect(JSON.stringify(res.body)).not.toContain('QZX5505');
     const pag = await api.http().get(`/pacientes/${pacienteA}/prontuario?pagina=1&limite=1`).set(cab(outroA));
     expect(pag.body).toMatchObject({ pagina: 1, limite: 1, temMais: true });
     expect((pag.body as { itens: unknown[] }).itens).toHaveLength(1);
@@ -463,10 +463,10 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     // O registro escrito sob "só o autor lê" continua só do autor, depois da troca.
     const antigo = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
     expect(antigo.body).toMatchObject({ conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null, sigilo: 'restrito_ao_autor' });
-    expect(JSON.stringify(antigo.body)).not.toContain(PSICO);
+    expect(JSON.stringify(antigo.body)).not.toContain('QZX5505');
     expect((await api.http().get(`/atendimentos/${atPsi}/versoes`).set(cab(outroA))).status).toBe(403);
     const historico = await api.http().get(`/pacientes/${pacienteA}/prontuario`).set(cab(outroA));
-    expect(JSON.stringify(historico.body)).not.toContain(PSICO);
+    expect(JSON.stringify(historico.body)).not.toContain('QZX5505');
     // O atendimento NOVO (aberto depois da troca) grava prontuario_unico e quem tem vínculo lê.
     const agNovo = await agendamento(clinicaA, pacienteA, profissionalDe.get(psiA.userId) as string, tipoA);
     const novo = await api.http().post('/atendimentos').set(cab(psiA)).send({ agendamentoId: agNovo });
@@ -506,7 +506,7 @@ describe('notas privadas (tabela separada, só o autor)', () => {
     expect((lista.body as { id: string }[]).map((n) => n.id)).toEqual([notaId]);
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(privateNotes).where(eq(privateNotes.id, notaId)));
     expect(linha?.contentEnc).toMatch(/^v1:/);
-    expect(JSON.stringify(linha)).not.toContain(NOTA);
+    expect(JSON.stringify(linha)).not.toContain('QZX5506');
   });
 
   it('outro profissional (com vínculo, mesmo no modo prontuário único) não lê: 404 e tentativa auditada; lista vazia', async () => {
@@ -518,7 +518,7 @@ describe('notas privadas (tabela separada, só o autor)', () => {
     ]) {
       const res = await pedir();
       expect(res.status).toBe(404);
-      expect(JSON.stringify(res.body)).not.toContain(NOTA);
+      expect(JSON.stringify(res.body)).not.toContain('QZX5506');
     }
     const lista = await api.http().get(`/pacientes/${pacienteA}/notas-privadas`).set(cab(outroA));
     expect(lista.status).toBe(200);
