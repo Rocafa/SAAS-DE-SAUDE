@@ -508,9 +508,8 @@ describe('G2 — conteúdo do pacote', () => {
     );
     // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
-    // Texto inteiro (não só os 4 dígitos): hash e uuid aleatórios da trilha podem conter '7735'/'7736'.
-    expect(pkg.auditJsonl).not.toContain(REFERENCIA_RETENCAO);
-    expect(pkg.auditJsonl).not.toContain(MOTIVO_RETIRADA);
+    expect(pkg.auditJsonl).not.toContain('QZX7735');
+    expect(pkg.auditJsonl).not.toContain('QZX7736');
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
@@ -568,9 +567,9 @@ describe('G2 — conteúdo do pacote', () => {
     const notas = pkg.json.data.privateNotes;
     expect(notas).toHaveLength(1);
     expect(notas[0]).toMatchObject({ content: NOTA_EXPORTAVEL, exportConsent: true, discardedAt: null });
-    expect(JSON.stringify(pkg.json)).not.toContain(NOTA_RETIDA);
+    expect(JSON.stringify(pkg.json)).not.toContain('QZX7734');
     expect(pkg.json.manifest.counts).toMatchObject({ privateNotes: 1, privateNotesWithheld: 1 });
-    expect(pkg.patientsCsv).not.toContain(NOTA_RETIDA);
+    expect(pkg.patientsCsv).not.toContain('QZX7734');
   });
 
   it('CSV neutraliza fórmula nas colunas novas; o JSON mantém o valor original', () => {
