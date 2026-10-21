@@ -358,3 +358,55 @@ Ficam para as próximas micropartes: escore automático e catálogo de escalas c
 - **R15 (re-revisão 2) — agendamento com profissional e paciente imutáveis (0025).** Trigger `appointments_partes_imutaveis` recusa (42501), para qualquer papel, mudar `appointments.professional_id` ou `patient_id`. A API nunca os altera (trocar de profissional = cancelar e criar outro agendamento); assim os checks de consumo e de cobrança, que rodam no INSERT, não são contornados depois.
 - **R16 (re-revisão 2) — termos proibidos normalizados.** Antes de testar a lista, o texto passa por NFKC, perde os caracteres de formatação e de largura zero (`\p{Cf}`) e os preenchedores invisíveis, e tem os espaços Unicode colapsados (o texto gravado não muda). O CID com separador vale em qualquer caixa e aceita espaço, `.`, `-`, `/` e `_` entre os caracteres (`f 32`, `F/32`, `F_32`, `F<U+200B>32`, `Ｆ３２`); "2 x 10" continua aceito.
 - Prova: `test/financeiro.rls.test.ts` (blocos R1, R2, R5, R7, R9/R10).
+
+## 10. Portal do paciente (rodada 18.1, MVP)
+
+> 20/10/2026 · branch `eng/portal-paciente` (sobre `eng/financeiro`) · migração **0027** (0026 = importador, 0028 = responsáveis, em paralelo) · responde ao veto **B3** do [parecer front-r8](../03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md) (portal usava o contrato da clínica) · toca dado pessoal e de saúde: **passa pelo Guardião antes do merge**.
+
+**Contrato próprio (`ApiPortal`):** nenhuma rota recebe id de paciente ou de clínica. O **servidor** descobre o titular pela sessão: conta do portal → vínculo escolhido na sessão → `app_set_portal_session(conta, vínculo)` no banco, que confere o vínculo ATIVO da conta e trava clínica, paciente e conta na transação. Ids na URL só de consulta/recibo, conferidos contra o titular (alheio = 404, igual a inexistente). GET do portal não aceita query nenhuma (`pacienteId`, `tenantId`... = 400); corpo com chave desconhecida = 400; cabeçalhos `x-tenant-id`/`x-paciente-id` são ignorados.
+
+**Sessão separada (D4):** porta `PortalAuthProvider` (`src/modules/portal/portal-auth.ts`), provedor e guard próprios (`PortalGuard`). Hoje só `DevPortalSessionProvider` (token `Bearer ptl_<43>`, só o SHA-256 em memória), em lista fechada `development`/`test`; fora disso a API **não sobe**. Token da clínica não abre `/portal/*` e token do portal não abre rota da clínica (401; teste em `test/security/sessao-tenant.security.test.ts`). O login real (OTP com limite de tentativas, código de 10 min, cookie próprio — R14 do front-r8) entra com a D4.
+
+**Vínculo por convite da clínica:** a clínica emite um convite (token de 256 bits mostrado **uma vez**; só o SHA-256 no banco; validade 1 h a 7 dias, padrão 72 h) e o envia por fora; a conta resgata. Uso único, dentro da validade, paciente ativo; falha sempre igual (`409 convite_invalido`). O resgate passa só pela função `app_portal_redeem_invite` (SECURITY DEFINER), que abre o contexto da clínica do convite, cria o vínculo e audita (`invite_redeemed`). `agindoComo`: `titular` ou `responsavel_legal`. A clínica revoga convite e vínculo (vínculo revogado = `403 vinculo_inativo` na hora). Conta com vínculo em mais de uma clínica (ou dependentes) escolhe **na sessão** (`POST /portal/sessao/vinculo`); sem escolha e com vários vínculos: `409 escolher_vinculo`.
+
+| Método e rota (paciente, sessão do portal) | Notas |
+|---|---|
+| `GET /portal/vinculos` | clínicas/pacientes da conta: `{vinculoId, clinica, primeiroNome, agindoComo}` |
+| `POST /portal/sessao/vinculo` | `{vinculoId}` (da própria conta, senão 404); grava na sessão do servidor; auditado como `login` |
+| `GET /portal/sessao` | saudação (`primeiroNome`, `clinica`) do vínculo da sessão |
+| `POST /portal/convites/resgate` | `{token}`; devolve `{vinculoId}` e já o escolhe na sessão |
+| `GET /portal/consultas` | próximas (de 2 h atrás a 180 dias, até 50): `{id, data, hora, profissional, status, podeConfirmar, podeCancelar}` — só nome do profissional, sem tipo de atendimento |
+| `POST /portal/consultas/:id/confirmar` · `/desfazer-confirmacao` · `/cancelar` | só as próprias e futuras; **não** usa a função genérica de status: agendado→confirmado, confirmado→agendado, agendado/confirmado→cancelado; cancelar exige antecedência (`PORTAL_CANCEL_MIN_HOURS`, padrão 2 h): `409 status_nao_permite`, `consulta_ja_comecou`, `prazo_de_cancelamento_encerrado`; escrita segue a G1 |
+| `GET /portal/recibos`, `GET /portal/recibos/:id` | só os do paciente (via cobrança); o retrato emitido, com o CPF do **pagador terceiro** mascarado |
+| `GET /portal/documentos` | placeholder `{itens: [], disponivel: false}` (documentos clínicos exigem reforço do login, R14) |
+| `GET /portal/meus-dados` | nome, nome social, telefone, nascimento e CPF **mascarado** |
+| `POST /portal/meus-dados/correcao` | `{detalhe}` → pedido `correcao` para a clínica |
+| `GET`/`POST /portal/solicitacoes` | pedidos do titular (art. 18): `{tipo, detalhe?}`; `tipo` ∈ `acesso`, `correcao`, `portabilidade`, `eliminacao`, `compartilhamento` (aceita `ver_dados`, `corrigir`, `baixar`, `apagar` do front); protocolo `AAAAMMDD-XXXXXXXX`, prazo de 15 dias posto pelo banco; o titular vê `aberto`/`respondido` e a resposta |
+| `GET /portal/privacidade/consentimentos` | `lembretes_whatsapp`, `escriba_ia`, `pesquisa` em 3 estados (`sim`/`nao`/`nao_respondido`; não respondido = NÃO); `escriba_ia` traz `estadoIa` (`nao_informado`/`informado_nao_recusou`/`recusou`) |
+| `POST /portal/privacidade/consentimentos/:finalidade` · `/desfazer` · `GET .../historico` | `{resposta: 'sim'\|'nao'}`; desfazer grava evento `desfeito`; **histórico append-only** (R15) com versão e SHA-256 do texto apresentado, canal e `agindoComo`. Menor de 18 anos agindo como o próprio titular: `409 consentimento_pelo_responsavel` (LGPD art. 14 §1º; conservador até o parecer D8 ⚖️) |
+
+| Método e rota (clínica, sessão da clínica) | Permissão | Notas |
+|---|---|---|
+| `POST /clinica/portal/convites` | `portal:convidar` (admin, recepção) | `{pacienteId, agindoComo?, validadeHoras?}` → `{id, token, expiraEm}` |
+| `POST /clinica/portal/convites/:id/revogar` | `portal:convidar` | só convite aberto (`409 convite_encerrado`) |
+| `GET /clinica/portal/pacientes/:id/vinculos`, `POST /clinica/portal/vinculos/:id/revogar` | `portal:convidar` | revogar: `{motivo}` ∈ `pedido_do_paciente`, `acesso_indevido`, `fim_do_vinculo`, `erro_de_cadastro` |
+| `GET /clinica/portal/pacientes/:id/consentimentos` | `pacientes:ler` | estado atual (e `estadoIa` para o escriba) |
+| `GET /clinica/portal/solicitacoes?situacao=abertos\|todos`, `GET .../:id` | `titular:atender` (admin) | lista sem o detalhe; o detalhe (decifrado) só na leitura individual, auditada |
+| `POST /clinica/portal/solicitacoes/:id/situacao` | `titular:atender` | `{situacao: em_andamento\|atendida\|recusada, resposta?}`; registra o atendimento — **a execução (corrigir, entregar cópia, eliminar) é ato da clínica**, nada é automático; encerrado é final (`409 pedido_encerrado`) |
+
+**Conteúdo clínico:** não é exposto no MVP. Nem rota, nem leitura: na sessão do portal o banco não devolve nenhuma linha de prontuário (abaixo). O acesso ao prontuário vem por pedido `acesso` atendido pela clínica.
+
+**Dados e defesa no banco** (migração `0027_portal_do_paciente.sql`):
+- `portal_invites`, `portal_links`, `portal_consents`, `portal_rights_requests`: RLS FORCE com `app_current_tenant()`, FK compostas, sem DELETE/TRUNCATE para o runtime e gatilhos para qualquer papel: convite emitido/revogado pelo usuário da sessão da clínica e resgatado só pela função; vínculo nasce só do resgate (runtime sem INSERT) e só a clínica revoga; consentimento append-only, gravado só pela sessão do portal no próprio vínculo; pedido aberto só pela sessão do portal e mudado só pela clínica (aberta → em_andamento → atendida/recusada). Detalhe e resposta do pedido só cifrados (`v1:`, chave da clínica).
+- Índices **internos** `portal_invite_lookup` e `portal_link_index` (zero privilégio para o runtime) acham a clínica de um token/vínculo antes de haver contexto.
+- **Policies restritivas:** na sessão do portal, `patients`, `appointments`, `charges`, `payments`, `receipts`, `receipt_cancellations` e as tabelas do portal só mostram o **próprio** paciente (`portal_titular`; vínculos e pedidos também só da própria conta); **todas** as demais tabelas da clínica (prontuário, notas, guias, pacotes, financeiro interno, membros, convites...) não mostram nada (`portal_fora`). Liberadas por decisão registrada (`portal_liberada*`): `professionals` (nome), chaves de dados (decifrar o próprio dado) e `audit_log` (o gatilho da cadeia lê o último elo). A guarda de schema reprova tabela nova com `tenant_id` sem uma dessas policies — **quem criar tabela (ex.: 0026, 0028) precisa da sua `portal_fora` ou `portal_titular`**.
+- Gatilho `zz_appointments_portal_guard`: na sessão do portal, só as três transições acima, em consulta futura do próprio paciente, mudando só o status (criar, remarcar, atender: 42501).
+- Slot do usuário com o sentinela de sistema na transação do portal: nenhum gatilho de "usuário da sessão" da clínica aceita o portal como autor, e `app_set_user` depois dá 42501.
+
+**Auditoria e limite:** toda leitura e escrita grava na trilha da clínica com ator = a conta (`actor_kind = 'paciente_portal'`, novo no CHECK) e `patient_id`/`via: 'portal'` no metadata — só ids, códigos e contagens (nunca texto do pedido, resposta, nome ou CPF; teste confere). Limite por conta no mesmo store do rate limit (`PORTAL_ACCOUNT_MAX` 60 por `PORTAL_ACCOUNT_WINDOW_MS` 60 s): 429 `limite_por_usuario` e um `anomaly_alert` `portal_limite_por_conta` na clínica do vínculo; resgate de convite com teto próprio (`PORTAL_REDEEM_MAX` 10 por 15 min, log `ALERTA_ANOMALIA regra=portal_resgate`).
+
+**G2:** `schemaVersion` **1.14.0** — `data.portal` (`invites` sem o hash do token, `links`, `consents`, `rightsRequests` com detalhe e resposta decifrados) e `manifest.counts.portal`. (1.13.0 reservada ao importador, 0026.)
+
+**Testes:** `test/portal.rls.test.ts` (Postgres real: convite de uso único/expirado/revogado; A não vê B na mesma clínica e em outra; consulta e recibo alheios = 404; consulta passada; cabeçalho ignorado e ids na query/corpo = 400; sessões não se cruzam; escolha de clínica na sessão; vínculo revogado; pedido visível só na clínica certa e trilha sem o texto; consentimento em histórico e menor; policies restritivas e gatilho no banco; trilha `paciente_portal`; limite por conta com alerta), `src/modules/portal/*.test.ts` (regras e provedor), guarda de schema e cobertura G2.
+
+**Fora desta rodada:** login real do portal (D4: OTP, cookie e subdomínio próprios), envio do convite por SMS/WhatsApp, documentos clínicos (exige reforço do fator), responsáveis com cadastro próprio (0028) e o que o responsável vê de adolescente em psicoterapia (R13-c ⚖️), ligação do escriba ao `estadoIa` do portal (hoje o atendimento grava o seu `ai_consent`), prazo do pedido em dias úteis/configurável e encarregado (DPO) como perfil próprio para `titular:atender`.
