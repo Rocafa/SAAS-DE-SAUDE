@@ -173,3 +173,24 @@ Em qualquer das duas, um teste RLS tem de provar que a resposta da simulação �
 **Para virar APROVADO COM RESSALVAS:**
 - a V2 corrigida, pela opção (a) ou (b), com o teste acima;
 - as condições anteriores mantidas (R3, R5, R7 e R9 na fila; R1–R4 e R6 antes da 1ª importação real; merge depois de #63 e #65; CI verde).
+
+## Re-revisão 2 (20/10/2026)
+
+Revisado: `origin/eng/importador` em `1649d69` (`git diff eb0c326..1649d69`, migração 0030).
+
+**Veredito: APROVADO COM RESSALVAS.** A V2 está fechada pela opção (a).
+
+Conferido, tentando burlar:
+- **Oráculo removido:** a 0030 apaga as duas funções e a tabela `import_cpf_fingerprints` (DROP limpo). No código saíram `IMPORT_CPF_FP_KEY`, `chaveImpressaoCpf`, `impressao()`, `cpfsEmOutraClinica()`, o campo do dry-run, `other_clinic_cpfs` da trilha e as entradas no G2 e na exportação. Fora a 0026 (histórico), a 0030, as revisões e o teste que confere a remoção, não sobrou nenhuma referência na árvore.
+- **Teste:** a simulação do mesmo lote dá corpo idêntico (`toStrictEqual`, inclusive `resumoHash`) e evento `dry_run` idêntico antes e depois de B importar e aplicar os mesmos CPFs. Outro teste confere no catálogo que a função e a tabela sumiram.
+- **Canais laterais:** nenhum encontrado.
+  - Duplicidade: `cpfsDaClinica` decifra só os CPFs da própria clínica (filtro `tenant_id` mais RLS). O aviso `ja_cadastrado` só considera a clínica.
+  - Unicidade: o CPF fica só cifrado, com chave por clínica, sem índice único nem índice cego. Nenhum erro de unicidade depende de outra clínica.
+  - Tempo de resposta: a simulação não faz nenhuma consulta entre clínicas, então o tempo depende só do cadastro da própria clínica.
+- **Regra das FK:** o bloco `DO` da 0030 recusa FK para `patients`/`appointments` em CASCADE/SET NULL/SET DEFAULT fora de `app_import_batch_blockers`. O teste lê o catálogo, com sanidade contra lista vazia. Hoje nenhuma FK fica fora da regra.
+
+Ressalvas (operacionais, não bloqueiam):
+- **R10:** apagar `IMPORT_CPF_FP_KEY` do cofre e dos ambientes onde foi criada e registrar o descarte. As impressões que sobrarem em backup somem no ciclo normal de retenção dos backups.
+- **R11:** a regra das FK só é conferida na 0030 e no teste. Toda migração nova com FK para `patients`/`appointments` tem de passar pelo teste do catálogo (ele roda no CI, então basta não removê-lo).
+
+Condições que continuam: R3, R5, R7 e R9 na fila; R1–R4 e R6 a antes da 1ª importação real; merge depois do #63 e do #65; CI verde.
