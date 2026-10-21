@@ -490,14 +490,14 @@ describe('horário, menor de idade e falha', () => {
     const p = await paciente(adminA, tel, nascimento);
     const a = await consulta(adminA, p, 20);
     await optIn(adminA, p);
-    let r = await svc.executarLembretesComoSistema(clinicaA);
+    const r = await svc.executarLembretesComoSistema(clinicaA);
     expect(r.semDestinatario).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(tel)).toHaveLength(0);
     // Responsável desconhecido: 409 (a tabela de responsáveis é de outra branch; aqui, a porta).
     const sem = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'responsavel', responsavelId: randomUUID(), meio: 'verbal_na_recepcao' });
     expect(sem.status).toBe(409);
     await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: RESPONSAVEL_ID, meio: 'verbal_na_recepcao' });
-    r = await svc.executarLembretesComoSistema(clinicaA);
+    expect((await svc.executarLembretesComoSistema(clinicaA)).programados).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(TELEFONE_RESPONSAVEL).length).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(tel)).toHaveLength(0);
     expect(await envioDoAgendamento(clinicaA, a.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: RESPONSAVEL_ID });
