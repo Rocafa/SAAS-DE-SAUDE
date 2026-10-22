@@ -74,7 +74,7 @@ export class PortalClinicaService {
   ) {}
 
   /**
-   * Convite (V1 do #68): `titular` só de 18 anos (ou idade desconhecida); `responsavel_legal` só com
+   * Convite (V1 do #68): `titular` só de 18 anos, com data de nascimento no cadastro (R3); `responsavel_legal` só com
    * `responsavelId` = vínculo VIGENTE da 0028 do mesmo paciente e, fora a curatela, paciente menor não
    * emancipado, com o fim da representação calculado aqui (o banco confere o mesmo, sem ver a data de
    * nascimento, que é cifrada).
@@ -96,6 +96,8 @@ export class PortalClinicaService {
       let representacao: { guardianLinkId: string; guardianId: string; representUntil: string | null } | null = null;
       if (dados.agindoComo === 'titular') {
         if (dados.responsavelId !== undefined) throw new EntradaInvalidaError(['responsavelId']);
+        // R3 do #68 (re-revisão): sem data de nascimento não se sabe se o titular é menor; falha fechada.
+        if (menor === null) throw new ConflitoError('nascimento_nao_informado');
         if (menor === true) {
           throw new ConflitoError((idadeEm(nasc, hoje) ?? 0) < IDADE_MINIMA_TITULAR ? 'titular_menor_de_12' : 'titular_adolescente_requer_decisao');
         }

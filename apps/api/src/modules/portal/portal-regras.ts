@@ -172,7 +172,8 @@ export const IDADE_CONSENTIMENTO_PROPRIO = 18;
 /**
  * V1 do parecer do #68 — responsável legal no portal.
  * - Convite `titular` abaixo de 12 anos: recusado. De 12 a 17: recusado até haver decisão registrada (A1;
- *   parecer D8 ⚖️ pendente). Sem data de nascimento o titular entra, mas não consente (falha fechada).
+ *   parecer D8 ⚖️ pendente). Sem data de nascimento o convite titular é recusado (R3); se a data for apagada
+ *   depois, o titular não consente (falha fechada).
  * - Convite `responsavel_legal`: só com um vínculo VIGENTE da 0028 do mesmo paciente e, fora a curatela,
  *   paciente MENOR não emancipado. A representação acaba no dia dos 18 anos ou no fim da vigência do
  *   vínculo da 0028, o que vier antes (`fimDaRepresentacao`); a curatela segue a vigência do vínculo.

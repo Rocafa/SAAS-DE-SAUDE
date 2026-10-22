@@ -119,8 +119,8 @@ beforeAll(async () => {
   const profB = (await api.http().post('/profissionais').set(cab(adminB)).send({ nome: 'Prof Ficticio B', especialidade: 'Psicologia' })).body as { id: string };
   const tipoB = (await api.http().post('/tipos-atendimento').set(cab(adminB)).send({ nome: 'Sessao B', minutos: 30 })).body as { id: string };
   pacA1 = await criarPaciente(adminA, 'Ana Ficticia Portal', { cpf: cpfFicticio(41), nascimento: '1990-03-04' });
-  pacA2 = await criarPaciente(adminA, 'Bruno Ficticio Vizinho', { cpf: cpfFicticio(42) });
-  pacB1 = await criarPaciente(adminB, 'Ana Ficticia Outra Clinica');
+  pacA2 = await criarPaciente(adminA, 'Bruno Ficticio Vizinho', { cpf: cpfFicticio(42), nascimento: '1985-05-06' });
+  pacB1 = await criarPaciente(adminB, 'Ana Ficticia Outra Clinica', { nascimento: '1992-07-08' });
   pacMenor = await criarPaciente(adminA, 'Caio Ficticio Menor', { nascimento: '2018-01-01' });
   ag.a1x = await agendar(adminA, pacA1, profA.id, tipoA.id, '2027-02-03', '09:00');
   ag.a1y = await agendar(adminA, pacA1, profA.id, tipoA.id, '2027-02-10', '09:00');
@@ -240,7 +240,7 @@ describe('convite: uso único, expiração e revogação', () => {
       api.db.db.transaction((tx) => tx.execute(sql`select app_portal_redeem_invite(${p.contaId}::uuid, ${'a'.repeat(64)})`)),
     ).rejects.toThrow();
     // Paciente sem telefone no cadastro: não há para onde mandar o código (409 igual a convite inválido).
-    const semTel = await criarPaciente(adminA, 'Fabi Ficticia Sem Telefone');
+    const semTel = await criarPaciente(adminA, 'Fabi Ficticia Sem Telefone', { nascimento: '1987-09-10' });
     await withTenant(api.db.db, clinicaA, (tx) => tx.update(patients).set({ phoneEnc: null }).where(eq(patients.id, semTel)), adminA.userId);
     const c2 = await convidar(adminA, semTel);
     expect(await resgatar(api.sessaoPortal(), c2.token)).toMatchObject({ status: 409, codigo: 'convite_invalido' });
@@ -567,8 +567,20 @@ describe('central de privacidade: consentimento em histórico (IA em 3 estados)'
     expect(hist.body).toEqual([expect.objectContaining({ resposta: 'sim', agindoComo: 'responsavel_legal' })]);
   });
 
-  it('A1 do #68: sem data de nascimento, quem age como titular NÃO consente (falha fechada) e nada é gravado', async () => {
-    const semNasc = await contaDe(adminA, pacA2);
+  it('R3 do #68: convite de titular sem data de nascimento é recusado (409 nascimento_nao_informado)', async () => {
+    const semNasc = await criarPaciente(adminA, 'Vera Ficticia Sem Nascimento');
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: semNasc })).body).toMatchObject({
+      statusCode: 409,
+      codigo: 'nascimento_nao_informado',
+    });
+    const convites = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalInvites).where(eq(portalInvites.patientId, semNasc)), adminA.userId);
+    expect(convites).toEqual([]);
+  });
+
+  it('A1 do #68: data de nascimento apagada depois do convite: quem age como titular NÃO consente (falha fechada) e nada é gravado', async () => {
+    const pac = await criarPaciente(adminA, 'Xena Ficticia Cadastro Incompleto', { nascimento: '1980-01-02' });
+    const semNasc = await contaDe(adminA, pac);
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: null }).expect(200);
     expect((await api.http().post('/portal/privacidade/consentimentos/escriba_ia').set(cab(semNasc)).send({ resposta: 'sim' })).body).toMatchObject({
       statusCode: 409,
       codigo: 'nascimento_nao_informado',
