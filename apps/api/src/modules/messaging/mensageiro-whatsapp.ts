@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import type { ModeloDaPlataforma } from './lembretes-regras';
 
 /**
  * Porta do canal WhatsApp (rodada 18.3, HU-COM-003/004/010/011). Toda integração fica atrás desta
@@ -39,6 +40,18 @@ export interface MensageiroWhatsApp {
   assinaturaValida(corpoBruto: Buffer, cabecalho: string | undefined): boolean;
   /** Aperto de mão da inscrição do webhook (GET hub.*): devolve o desafio ou null (403). */
   desafioDaInscricao(modo: unknown, token: unknown, desafio: unknown): string | null;
+  /**
+   * Confere, NA SUBIDA, que cada modelo da plataforma existe no provedor com o MESMO texto aprovado
+   * (V3 do parecer #69). Diferença, modelo ausente ou não aprovado: lança e a API não sobe.
+   */
+  conferirModelos(modelos: readonly ModeloDaPlataforma[]): Promise<void>;
+}
+
+export class ModeloDivergenteError extends Error {
+  constructor(readonly nomeNoProvedor: string, readonly motivo: 'ausente' | 'nao_aprovado' | 'texto_diferente' | 'consulta_falhou') {
+    super(`WhatsApp: modelo ${nomeNoProvedor} ${motivo} no provedor; a API não sobe (V3 do parecer #69)`);
+    this.name = 'ModeloDivergenteError';
+  }
 }
 
 /** Cabeçalho de assinatura da Meta: `sha256=<hex do HMAC-SHA256 do corpo com o app secret>`. */

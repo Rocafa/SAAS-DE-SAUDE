@@ -38,4 +38,9 @@ export class MensageiroFalso implements MensageiroWhatsApp {
   desafioDaInscricao(modo: unknown, token: unknown, desafio: unknown): string | null {
     return desafioSeConfere(this.opcoes.tokenInscricao, modo, token, desafio);
   }
+
+  /** Sem provedor real: nada a conferir (o texto enviado é o da lista, conferido nos testes). */
+  conferirModelos(): Promise<void> {
+    return Promise.resolve();
+  }
 }

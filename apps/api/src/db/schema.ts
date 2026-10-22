@@ -726,21 +726,6 @@ export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
   revokeMethod: text('revoke_method', { enum: WHATSAPP_REVOKE_METHODS }),
 });
 
-/** Modelo da clínica (0032): texto neutro só com {clinica}, {data} e {hora}. */
-export const whatsappTemplates = pgTable('whatsapp_templates', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  tenantId: uuid('tenant_id')
-    .notNull()
-    .references(() => tenants.id),
-  purpose: text('purpose', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
-  body: text('body').notNull(),
-  providerTemplateName: text('provider_template_name').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy: uuid('created_by').notNull(),
-  retiredAt: timestamp('retired_at', { withTimezone: true }),
-  retiredBy: uuid('retired_by'),
-});
-
 /** Fila de envios (0032). Conteúdo cifrado e com retenção de 30 dias. */
 export const whatsappOutbox = pgTable('whatsapp_outbox', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -751,7 +736,8 @@ export const whatsappOutbox = pgTable('whatsapp_outbox', {
   appointmentStartsAt: timestamp('appointment_starts_at', { withTimezone: true }).notNull(),
   patientId: uuid('patient_id').notNull(),
   optInId: uuid('opt_in_id').notNull(),
-  templateId: uuid('template_id'),
+  /** Modelo da plataforma (nome na Meta), da lista fechada (V3 do parecer #69). */
+  templateName: text('template_name').notNull(),
   kind: text('kind', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
   recipientKind: text('recipient_kind', { enum: WHATSAPP_RECIPIENT_KINDS }).notNull(),
   guardianId: uuid('guardian_id'),
@@ -822,7 +808,6 @@ export const schema = {
   receiptCancellations,
   whatsappSettings,
   whatsappOptIns,
-  whatsappTemplates,
   whatsappOutbox,
   whatsappInbound,
 };

@@ -1,4 +1,5 @@
-import { assinaturaHmacValida, desafioSeConfere, type MensagemDeSaida, type MensageiroWhatsApp, type ResultadoDeEnvio } from './mensageiro-whatsapp';
+import { corpoNaMeta, type ModeloDaPlataforma } from './lembretes-regras';
+import { assinaturaHmacValida, desafioSeConfere, ModeloDivergenteError, type MensagemDeSaida, type MensageiroWhatsApp, type ResultadoDeEnvio } from './mensageiro-whatsapp';
 
 /**
  * ESQUELETO do adaptador da WhatsApp Business Cloud API (Meta). Desligado por padrão: só é criado por
@@ -15,7 +16,7 @@ export interface RespostaHttp {
   readonly status: number;
   json(): Promise<unknown>;
 }
-export type ClienteHttp = (url: string, init: { method: 'POST'; headers: Record<string, string>; body: string }) => Promise<RespostaHttp>;
+export type ClienteHttp = (url: string, init: { method: 'POST' | 'GET'; headers: Record<string, string>; body?: string }) => Promise<RespostaHttp>;
 
 export interface CredenciaisCloudApi {
   readonly tokenDeAcesso: string;
@@ -23,6 +24,8 @@ export interface CredenciaisCloudApi {
   readonly tokenInscricao: string;
   /** Versão da Graph API (ex.: v21.0). */
   readonly versaoGraph: string;
+  /** Conta do WhatsApp Business (WABA) onde os modelos estão cadastrados (identificador, não é segredo). */
+  readonly contaWaba: string;
 }
 
 const BASE = 'https://graph.facebook.com';
@@ -35,6 +38,41 @@ export class MensageiroCloudApi implements MensageiroWhatsApp {
     private readonly http: ClienteHttp,
   ) {
     if (!/^v[0-9]{1,3}\.[0-9]{1,2}$/.test(credenciais.versaoGraph)) throw new Error('WHATSAPP_GRAPH_VERSAO inválida');
+    if (!/^[0-9]{5,32}$/.test(credenciais.contaWaba)) throw new Error('WHATSAPP_WABA_ID inválido');
+  }
+
+  /**
+   * V3 do parecer #69: o que sai é o modelo CADASTRADO NA META pelo nome. Na subida, cada modelo da
+   * plataforma é lido da Graph API e o corpo tem de ser IGUAL ao texto aprovado (com {{1}}, {{2}}...),
+   * aprovado (APPROVED) e no idioma da lista. Qualquer divergência derruba a subida.
+   */
+  async conferirModelos(modelos: readonly ModeloDaPlataforma[]): Promise<void> {
+    for (const m of modelos) {
+      const url = `${BASE}/${this.credenciais.versaoGraph}/${this.credenciais.contaWaba}/message_templates?name=${encodeURIComponent(m.nomeNoProvedor)}&fields=name,language,status,components`;
+      let json: unknown;
+      try {
+        const r = await this.http(url, { method: 'GET', headers: { Authorization: `Bearer ${this.credenciais.tokenDeAcesso}` } });
+        if (r.status < 200 || r.status >= 300) throw new ModeloDivergenteError(m.nomeNoProvedor, 'consulta_falhou');
+        json = await r.json();
+      } catch (e) {
+        if (e instanceof ModeloDivergenteError) throw e;
+        throw new ModeloDivergenteError(m.nomeNoProvedor, 'consulta_falhou');
+      }
+      const lista = (json as { data?: unknown } | null)?.data;
+      const achado = (Array.isArray(lista) ? lista : []).find(
+        (t: unknown): t is { status?: unknown; components?: unknown } =>
+          typeof t === 'object' && t !== null && (t as { name?: unknown }).name === m.nomeNoProvedor && (t as { language?: unknown }).language === m.idioma,
+      );
+      if (!achado) throw new ModeloDivergenteError(m.nomeNoProvedor, 'ausente');
+      if (achado.status !== 'APPROVED') throw new ModeloDivergenteError(m.nomeNoProvedor, 'nao_aprovado');
+      const corpos = (Array.isArray(achado.components) ? achado.components : []).filter(
+        (c: unknown): c is { type: string; text?: unknown } => typeof c === 'object' && c !== null && typeof (c as { type?: unknown }).type === 'string',
+      );
+      // Só o corpo (sem cabeçalho, rodapé nem botão que possam levar outro texto).
+      const outros = corpos.filter((c) => c.type.toUpperCase() !== 'BODY');
+      const corpo = corpos.find((c) => c.type.toUpperCase() === 'BODY');
+      if (outros.length > 0 || corpo?.text !== corpoNaMeta(m.corpo)) throw new ModeloDivergenteError(m.nomeNoProvedor, 'texto_diferente');
+    }
   }
 
   async enviar(m: MensagemDeSaida): Promise<ResultadoDeEnvio> {

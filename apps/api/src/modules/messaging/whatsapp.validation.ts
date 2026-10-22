@@ -1,5 +1,5 @@
 import { ehDataValida, EntradaInvalidaError, exigirObjeto, Validador } from '../../common/validacao';
-import { corpoDeModeloValido, textoEhNeutro } from './lembretes-regras';
+import { textoEhNeutro } from './lembretes-regras';
 
 /**
  * Validação ESTRITA das rotas do WhatsApp (chave desconhecida é erro; a resposta diz o campo, nunca o
@@ -40,22 +40,6 @@ export function validarConfiguracao(corpo: unknown): ConfiguracaoWhatsapp {
     ...(enviarAte !== undefined ? { enviarAte } : {}),
     ...(janelaRespostaHoras !== undefined ? { janelaRespostaHoras } : {}),
   };
-}
-
-export interface NovoModelo {
-  readonly texto: string;
-  readonly nomeNoProvedor: string;
-}
-
-export function validarNovoModelo(corpo: unknown): NovoModelo {
-  const v = new Validador(exigirObjeto(corpo, ['texto', 'nomeNoProvedor']));
-  const texto = v.texto('texto', { min: 20, max: 400, obrigatorio: true });
-  const nomeNoProvedor = v.texto('nomeNoProvedor', { max: 64, obrigatorio: true });
-  // Só {clinica}, {data} e {hora}; nenhum termo de especialidade, profissional, condição ou exame.
-  if (texto !== undefined && !corpoDeModeloValido(texto)) v.falhar('texto');
-  if (nomeNoProvedor !== undefined && !/^[a-z0-9_]{1,64}$/.test(nomeNoProvedor)) v.falhar('nomeNoProvedor');
-  v.concluir();
-  return { texto: texto ?? '', nomeNoProvedor: nomeNoProvedor ?? '' };
 }
 
 export interface NovoOptIn {

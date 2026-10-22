@@ -9,7 +9,8 @@ import type { MensageiroWhatsApp } from './mensageiro-whatsapp';
  *   opcional: sem ele, todo webhook é recusado);
  * - `cloud_api`: esqueleto da Cloud API; exige as cláusulas-padrão da ANPD declaradas
  *   (WHATSAPP_R17_CLAUSULAS_PADRAO=assinadas — veto do Guardião, RIPD-whatsapp §8) e as três credenciais
- *   do ambiente. Faltou algo: a API NÃO sobe (erro de deploy, não canal silenciosamente quebrado).
+ *   do ambiente, mais a conta dos modelos (WHATSAPP_WABA_ID): na subida o texto de cada modelo da
+ *   plataforma é conferido na Meta (V3 do parecer #69). Faltou algo: a API NÃO sobe (erro de deploy, não canal silenciosamente quebrado).
  * Qualquer outro valor também derruba o boot.
  */
 export function criarMensageiro(env: NodeJS.ProcessEnv = process.env, http?: ClienteHttp): MensageiroWhatsApp | null {
@@ -23,7 +24,8 @@ export function criarMensageiro(env: NodeJS.ProcessEnv = process.env, http?: Cli
     if (env.WHATSAPP_R17_CLAUSULAS_PADRAO !== 'assinadas') {
       throw new Error('WhatsApp Cloud API bloqueada: cláusulas-padrão da ANPD (Res. 19/2024) não declaradas (R17 do RIPD-whatsapp)');
     }
-    const faltando = ['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_APP_SECRET', 'WHATSAPP_WEBHOOK_VERIFY_TOKEN'].filter((k) => !env[k]);
+    // WHATSAPP_WABA_ID: conta dos modelos, para conferir na subida o texto aprovado (V3 do parecer #69).
+    const faltando = ['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_APP_SECRET', 'WHATSAPP_WEBHOOK_VERIFY_TOKEN', 'WHATSAPP_WABA_ID'].filter((k) => !env[k]);
     if (faltando.length > 0) throw new Error(`WhatsApp Cloud API sem credencial no ambiente: ${faltando.join(', ')}`);
     const cliente: ClienteHttp =
       http ??
@@ -37,6 +39,7 @@ export function criarMensageiro(env: NodeJS.ProcessEnv = process.env, http?: Cli
         segredoDoApp: Buffer.from(env.WHATSAPP_APP_SECRET ?? '', 'base64'),
         tokenInscricao: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '',
         versaoGraph: env.WHATSAPP_GRAPH_VERSAO ?? 'v21.0',
+        contaWaba: env.WHATSAPP_WABA_ID ?? '',
       },
       cliente,
     );

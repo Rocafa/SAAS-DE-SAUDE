@@ -71,14 +71,49 @@ export function textoEhNeutro(texto: string): boolean {
   return !TERMOS.some((re) => re.test(t));
 }
 
-/** Modelo padrão da plataforma (o pedido do Guardião), usado quando a clínica não cadastrou o seu. */
-export const MODELO_PADRAO = {
-  corpo: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar ou 2 para cancelar.',
-  nomeNoProvedor: 'lembrete_neutro_v1',
-} as const;
+/**
+ * Modelos da PLATAFORMA (V3 do parecer #69): lista FECHADA e versionada no código. Cada item junta o
+ * nome do modelo aprovado na Meta e o texto aprovado pelo Guardião; os dois são conferidos JUNTOS:
+ * - no banco, `whatsapp_outbox.template_name` só aceita os nomes de `app_whatsapp_platform_templates()`
+ *   (0032; o teste confere que a lista do banco é igual a esta);
+ * - na subida com `cloud_api`, o texto do modelo cadastrado na Meta tem de ser IGUAL a `corpoNaMeta`
+ *   (`conferirModelos`); se não for, a API não sobe.
+ * A clínica NÃO cria modelo. Modelo novo = nova versão aqui + aprovação do Guardião + migração nova.
+ */
+export interface ModeloDaPlataforma {
+  readonly nomeNoProvedor: string;
+  readonly idioma: 'pt_BR';
+  /** Texto com {clinica}, {data} e {hora} (nesta ordem viram {{1}}, {{2}}, {{3}} na Meta). */
+  readonly corpo: string;
+  /** Onde o Guardião aprovou o texto. */
+  readonly aprovacao: string;
+}
+
+export const MODELOS_DA_PLATAFORMA: readonly ModeloDaPlataforma[] = [
+  {
+    nomeNoProvedor: 'lembrete_neutro_v1',
+    idioma: 'pt_BR',
+    corpo: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar ou 2 para cancelar.',
+    aprovacao: 'docs/03-seguranca-lgpd/revisoes/2026-10-21-pr69.md (modelo padrão pedido pelo Guardião)',
+  },
+];
+
+/** Modelo em uso nos lembretes (o mais recente da lista). */
+export const MODELO_PADRAO: ModeloDaPlataforma = MODELOS_DA_PLATAFORMA[MODELOS_DA_PLATAFORMA.length - 1] as ModeloDaPlataforma;
+
+/** Modelo da plataforma pelo nome; fora da lista: null (o envio não sai). */
+export function modeloDaPlataforma(nome: string): ModeloDaPlataforma | null {
+  return MODELOS_DA_PLATAFORMA.find((m) => m.nomeNoProvedor === nome) ?? null;
+}
 
 const PLACEHOLDER_RE = /\{([^}]*)\}/g;
 const PLACEHOLDERS = ['clinica', 'data', 'hora'] as const;
+
+/** Texto como fica cadastrado na Meta: os placeholders viram {{1}}, {{2}}... na ordem em que aparecem. */
+export function corpoNaMeta(corpo: string): string {
+  let n = 0;
+  return corpo.replace(PLACEHOLDER_RE, () => `{{${++n}}}`);
+}
 
 /** Corpo de modelo aceitável: 20..400 caracteres, só {clinica}/{data}/{hora}, com data e hora, neutro. */
 export function corpoDeModeloValido(corpo: string): boolean {

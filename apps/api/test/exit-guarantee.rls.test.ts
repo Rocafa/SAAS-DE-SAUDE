@@ -134,7 +134,7 @@ describe('G2 — exportação total do tenant', () => {
         receipts: 0,
         receiptCancellations: 0,
       },
-      whatsapp: { whatsappSettings: 0, whatsappOptIns: 0, whatsappTemplates: 0, whatsappOutbox: 0, whatsappInbound: 0 },
+      whatsapp: { whatsappSettings: 0, whatsappOptIns: 0, whatsappOutbox: 0, whatsappInbound: 0 },
       clinicMembers: 0,
       auditEvents: pkg.auditEvents.length,
     });

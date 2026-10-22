@@ -1,6 +1,6 @@
 import type { TenantId } from '@plataforma/shared';
 import { asc, eq } from 'drizzle-orm';
-import { whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappSettings, whatsappTemplates } from '../../db/schema';
+import { whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappSettings } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
 import {
@@ -16,7 +16,7 @@ import {
 /**
  * WhatsApp no pacote G2 (migração 0032, schemaVersion 1.13.0), em `data.whatsapp`. Decisão desta rodada:
  * TUDO sai, porque o histórico de mensagens é dado do paciente e prova do que a clínica combinou com ele
- * (opt-in com a referência do comprovante, modelos, cada envio com status e cada resposta com a
+ * (opt-in com a referência do comprovante, cada envio com o modelo da plataforma usado com status e cada resposta com a
  * interpretação). Conteúdo e números saem DECIFRADOS enquanto existirem; depois da retenção de 30 dias
  * saem `null` com `contentPurgedAt` (o metadado fica).
  */
@@ -49,23 +49,13 @@ export interface ExportedWhatsapp {
     revokedBy: string | null;
     revokeMethod: string | null;
   }[];
-  readonly whatsappTemplates: readonly {
-    id: string;
-    purpose: string;
-    body: string;
-    providerTemplateName: string;
-    createdAt: string;
-    createdBy: string;
-    retiredAt: string | null;
-    retiredBy: string | null;
-  }[];
   readonly whatsappOutbox: readonly {
     id: string;
     appointmentId: string;
     appointmentStartsAt: string;
     patientId: string;
     optInId: string;
-    templateId: string | null;
+    templateName: string;
     kind: string;
     recipientKind: string;
     guardianId: string | null;
@@ -118,10 +108,6 @@ export async function exportarWhatsapp(
     await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.tenantId, tenantId)).orderBy(asc(whatsappOptIns.grantedAt), asc(whatsappOptIns.id)),
     tenantId,
   );
-  const templates = soDaClinica(
-    await tx.select().from(whatsappTemplates).where(eq(whatsappTemplates.tenantId, tenantId)).orderBy(asc(whatsappTemplates.createdAt), asc(whatsappTemplates.id)),
-    tenantId,
-  );
   const outbox = soDaClinica(
     await tx.select().from(whatsappOutbox).where(eq(whatsappOutbox.tenantId, tenantId)).orderBy(asc(whatsappOutbox.createdAt), asc(whatsappOutbox.id)),
     tenantId,
@@ -159,16 +145,6 @@ export async function exportarWhatsapp(
         revokeMethod: o.revokeMethod,
       })),
     ),
-    whatsappTemplates: templates.map((t) => ({
-      id: t.id,
-      purpose: t.purpose,
-      body: t.body,
-      providerTemplateName: t.providerTemplateName,
-      createdAt: t.createdAt.toISOString(),
-      createdBy: t.createdBy,
-      retiredAt: iso(t.retiredAt),
-      retiredBy: t.retiredBy,
-    })),
     whatsappOutbox: await Promise.all(
       outbox.map(async (o) => ({
         id: o.id,
@@ -176,7 +152,7 @@ export async function exportarWhatsapp(
         appointmentStartsAt: o.appointmentStartsAt.toISOString(),
         patientId: o.patientId,
         optInId: o.optInId,
-        templateId: o.templateId,
+        templateName: o.templateName,
         kind: o.kind,
         recipientKind: o.recipientKind,
         guardianId: o.guardianId,
@@ -215,7 +191,6 @@ export async function exportarWhatsapp(
     counts: {
       whatsappSettings: data.whatsappSettings.length,
       whatsappOptIns: data.whatsappOptIns.length,
-      whatsappTemplates: data.whatsappTemplates.length,
       whatsappOutbox: data.whatsappOutbox.length,
       whatsappInbound: data.whatsappInbound.length,
     },

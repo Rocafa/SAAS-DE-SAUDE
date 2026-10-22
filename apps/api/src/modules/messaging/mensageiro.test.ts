@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { corpoNaMeta, MODELOS_DA_PLATAFORMA, MODELO_PADRAO, textoEhNeutro, corpoDeModeloValido } from './lembretes-regras';
 import { MensageiroCloudApi, type ClienteHttp } from './mensageiro-cloud-api';
 import { MensageiroFalso } from './mensageiro-falso';
 import { criarMensageiro } from './mensageiro.factory';
-import { assinarCorpo, lerEventosDoWebhook, MAX_EVENTOS_POR_WEBHOOK, WebhookInvalidoError } from './mensageiro-whatsapp';
+import { assinarCorpo, lerEventosDoWebhook, MAX_EVENTOS_POR_WEBHOOK, ModeloDivergenteError, WebhookInvalidoError } from './mensageiro-whatsapp';
 
 const segredo = randomBytes(32);
 const token = randomBytes(24).toString('base64url');
@@ -115,6 +116,17 @@ describe('escolha do adaptador (lista fechada, desligado por padrão)', () => {
   it('cloud_api exige as cláusulas-padrão da ANPD e as credenciais do ambiente', () => {
     expect(() => criarMensageiro({ NODE_ENV: 'production', WHATSAPP_PROVEDOR: 'cloud_api' })).toThrow(/cláusulas-padrão/);
     expect(() => criarMensageiro({ NODE_ENV: 'production', WHATSAPP_PROVEDOR: 'cloud_api', WHATSAPP_R17_CLAUSULAS_PADRAO: 'assinadas' })).toThrow(/credencial/);
+    // Sem a conta dos modelos (WABA) não há como conferir o texto na Meta: não sobe (V3 do parecer #69).
+    const quaseTudo = {
+      NODE_ENV: 'production',
+      WHATSAPP_PROVEDOR: 'cloud_api',
+      WHATSAPP_R17_CLAUSULAS_PADRAO: 'assinadas',
+      WHATSAPP_ACCESS_TOKEN: randomBytes(16).toString('hex'),
+      WHATSAPP_APP_SECRET: randomBytes(32).toString('base64'),
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: randomBytes(16).toString('hex'),
+    };
+    expect(() => criarMensageiro(quaseTudo)).toThrow(/WHATSAPP_WABA_ID/);
+    expect(criarMensageiro({ ...quaseTudo, WHATSAPP_WABA_ID: '200000000000001' })?.nome).toBe('cloud_api');
   });
 
   it('valor desconhecido derruba o boot', () => {
@@ -123,7 +135,7 @@ describe('escolha do adaptador (lista fechada, desligado por padrão)', () => {
 });
 
 describe('esqueleto da Cloud API (sem rede: cliente HTTP injetado)', () => {
-  const credenciais = { tokenDeAcesso: randomBytes(24).toString('base64url'), segredoDoApp: segredo, tokenInscricao: token, versaoGraph: 'v21.0' };
+  const credenciais = { tokenDeAcesso: randomBytes(24).toString('base64url'), segredoDoApp: segredo, tokenInscricao: token, versaoGraph: 'v21.0', contaWaba: '200000000000001' };
   const mensagem = {
     para: '5511900000001',
     remetente: '100000000000001',
@@ -135,7 +147,7 @@ describe('esqueleto da Cloud API (sem rede: cliente HTTP injetado)', () => {
   it('manda MODELO com parâmetros (nunca texto livre) e lê o id', async () => {
     let enviado: { url: string; body: unknown } | undefined;
     const http: ClienteHttp = (url, init) => {
-      enviado = { url, body: JSON.parse(init.body) };
+      enviado = { url, body: JSON.parse(init.body ?? 'null') };
       return Promise.resolve({ status: 200, json: () => Promise.resolve({ messages: [{ id: 'wamid.X' }] }) });
     };
     const r = await new MensageiroCloudApi(credenciais, http).enviar(mensagem);
@@ -152,5 +164,54 @@ describe('esqueleto da Cloud API (sem rede: cliente HTTP injetado)', () => {
     expect(await new MensageiroCloudApi(credenciais, com(503)).enviar(mensagem)).toMatchObject({ ok: false, definitivo: false });
     const rede: ClienteHttp = () => Promise.reject(new Error('sem rede'));
     expect(await new MensageiroCloudApi(credenciais, rede).enviar(mensagem)).toEqual({ ok: false, codigo: 'rede', definitivo: false });
+  });
+});
+
+describe('modelos: só os da plataforma, nome na Meta e texto conferidos juntos (V3 do parecer #69)', () => {
+  const credenciais = { tokenDeAcesso: randomBytes(24).toString('base64url'), segredoDoApp: segredo, tokenInscricao: token, versaoGraph: 'v21.0', contaWaba: '200000000000001' };
+  const naMeta = (corpo: string, extra: Record<string, unknown> = {}) =>
+    ({ name: MODELO_PADRAO.nomeNoProvedor, language: 'pt_BR', status: 'APPROVED', components: [{ type: 'BODY', text: corpo }], ...extra });
+  const meta = (dados: unknown[], status = 200): ClienteHttp => () => Promise.resolve({ status, json: () => Promise.resolve({ data: dados }) });
+
+  it('lista fechada: cada modelo é neutro, só com {clinica}/{data}/{hora}, e vira {{1}}..{{3}} na Meta', () => {
+    expect(MODELOS_DA_PLATAFORMA.length).toBeGreaterThanOrEqual(1);
+    for (const m of MODELOS_DA_PLATAFORMA) {
+      expect(m.nomeNoProvedor).toMatch(/^[a-z0-9_]{1,64}$/);
+      expect(corpoDeModeloValido(m.corpo)).toBe(true);
+      expect(textoEhNeutro(m.corpo)).toBe(true);
+      expect(corpoNaMeta(m.corpo)).not.toMatch(/\{(clinica|data|hora)\}/);
+    }
+    expect(corpoNaMeta('a {clinica} b {data} c {hora}')).toBe('a {{1}} b {{2}} c {{3}}');
+  });
+
+  it('texto igual e aprovado na Meta: sobe; consulta a conta certa', async () => {
+    let url = '';
+    const http: ClienteHttp = (u) => {
+      url = u;
+      return Promise.resolve({ status: 200, json: () => Promise.resolve({ data: [naMeta(corpoNaMeta(MODELO_PADRAO.corpo))] }) });
+    };
+    await new MensageiroCloudApi(credenciais, http).conferirModelos(MODELOS_DA_PLATAFORMA);
+    expect(url).toContain('/v21.0/200000000000001/message_templates?name=lembrete_neutro_v1');
+  });
+
+  it('texto diferente, cabeçalho extra, não aprovado, ausente ou consulta falha: NÃO sobe', async () => {
+    const certo = corpoNaMeta(MODELO_PADRAO.corpo);
+    const casos: [ClienteHttp, string][] = [
+      [meta([naMeta('Sua sessão de psicoterapia em {{1}} dia {{2}} às {{3}}.')]), 'texto_diferente'],
+      [meta([naMeta(certo, { components: [{ type: 'HEADER', text: 'Clínica de oncologia' }, { type: 'BODY', text: certo }] })]), 'texto_diferente'],
+      [meta([naMeta(certo, { status: 'PENDING' })]), 'nao_aprovado'],
+      [meta([naMeta(certo, { language: 'en_US' })]), 'ausente'],
+      [meta([]), 'ausente'],
+      [meta([], 500), 'consulta_falhou'],
+      [() => Promise.reject(new Error('sem rede')), 'consulta_falhou'],
+    ];
+    for (const [http, motivo] of casos) {
+      const err = await new MensageiroCloudApi(credenciais, http).conferirModelos(MODELOS_DA_PLATAFORMA).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, motivo).toBeInstanceOf(ModeloDivergenteError);
+      expect((err as ModeloDivergenteError).motivo).toBe(motivo);
+    }
   });
 });

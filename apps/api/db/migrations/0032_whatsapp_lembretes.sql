@@ -13,8 +13,8 @@
 -- - whatsapp_opt_ins: opt-in por paciente e finalidade, com PROVA (quando, como, quem registrou e a
 --   referência do comprovante cifrada) e revogação única. Só um usuário da clínica registra (o sistema
 --   e o webhook nunca concedem); o paciente revoga respondendo SAIR (sistema) ou na recepção.
--- - whatsapp_templates: modelo da clínica, texto NEUTRO (só {clinica}, {data}, {hora}; nenhum termo de
---   especialidade, profissional ou condição — conferido aqui e na API). Sem modelo, vale o padrão.
+-- - modelos: SÓ os da plataforma (lista fechada no código: nome na Meta + texto aprovado, conferidos
+--   juntos); a clínica não cria modelo (V3 do parecer #69). A fila guarda o nome do modelo usado.
 -- - whatsapp_outbox: fila de envios (agendado, enviando, enviado, entregue, lido, falhou, cancelado).
 --   Idempotência: um lembrete por (consulta, horário). O INSERT exige opt-in VIGENTE do mesmo paciente e
 --   destinatário (barreira no banco, não só na API).
@@ -207,53 +207,15 @@ CREATE TRIGGER whatsapp_opt_ins_guard BEFORE INSERT OR UPDATE ON whatsapp_opt_in
   FOR EACH ROW EXECUTE FUNCTION whatsapp_opt_ins_guard();
 
 -- ---------------------------------------------------------------------------------------------------
--- Modelos aprovados (texto neutro)
+-- Modelos: SÓ os da plataforma (V3 do parecer #69). A clínica não cria modelo. A lista fechada e
+-- versionada está em lembretes-regras.ts (MODELOS_DA_PLATAFORMA: nome na Meta + texto aprovado pelo
+-- Guardião, conferidos juntos); o banco repete a lista de NOMES e o teste confere que as duas batem.
+-- Modelo novo = nova versão no código + aprovação do Guardião + esta função numa migração nova.
 -- ---------------------------------------------------------------------------------------------------
-CREATE TABLE whatsapp_templates (
-  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id               uuid NOT NULL REFERENCES tenants (id),
-  purpose                 text NOT NULL DEFAULT 'lembrete_consulta' CONSTRAINT whatsapp_templates_purpose_check CHECK (purpose IN ('lembrete_consulta')),
-  body                    text NOT NULL CONSTRAINT whatsapp_templates_body_check CHECK (
-                            char_length(body) BETWEEN 20 AND 400
-                            AND body !~ '[{](?!(clinica|data|hora)[}])'
-                            AND body ~ '[{]data[}]' AND body ~ '[{]hora[}]'
-                            AND app_whatsapp_text_is_neutral(body)),
-  -- Nome do modelo aprovado na Meta (o adaptador real manda o modelo + parâmetros, nunca o texto livre).
-  provider_template_name  text NOT NULL CONSTRAINT whatsapp_templates_provider_check CHECK (provider_template_name ~ '^[a-z0-9_]{1,64}$'),
-  created_at              timestamptz NOT NULL DEFAULT now(),
-  created_by              uuid NOT NULL,
-  retired_at              timestamptz,
-  retired_by              uuid,
-  CONSTRAINT whatsapp_templates_retired_check CHECK ((retired_at IS NULL) = (retired_by IS NULL)),
-  CONSTRAINT whatsapp_templates_id_tenant_key UNIQUE (id, tenant_id)
-);
-CREATE UNIQUE INDEX whatsapp_templates_live_idx ON whatsapp_templates (tenant_id, purpose) WHERE retired_at IS NULL;
-
-CREATE FUNCTION whatsapp_templates_guard() RETURNS trigger
-  LANGUAGE plpgsql
-  SET search_path = pg_catalog, public
-AS $$
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF app_current_user() IS NULL OR NEW.created_by IS DISTINCT FROM app_current_user() OR NEW.retired_at IS NOT NULL THEN
-      RAISE EXCEPTION 'modelo só é criado pelo usuário da sessão' USING ERRCODE = 'insufficient_privilege';
-    END IF;
-    NEW.created_at := now();
-    RETURN NEW;
-  END IF;
-  IF OLD.retired_at IS NOT NULL OR NEW.retired_at IS NULL
-     OR NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.purpose IS DISTINCT FROM OLD.purpose
-     OR NEW.body IS DISTINCT FROM OLD.body OR NEW.provider_template_name IS DISTINCT FROM OLD.provider_template_name
-     OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.created_by IS DISTINCT FROM OLD.created_by
-     OR app_current_user() IS NULL OR NEW.retired_by IS DISTINCT FROM app_current_user() THEN
-    RAISE EXCEPTION 'modelo: só a retirada, uma vez, pelo usuário da sessão' USING ERRCODE = 'insufficient_privilege';
-  END IF;
-  NEW.retired_at := now();
-  RETURN NEW;
-END;
-$$;
-CREATE TRIGGER whatsapp_templates_guard BEFORE INSERT OR UPDATE ON whatsapp_templates
-  FOR EACH ROW EXECUTE FUNCTION whatsapp_templates_guard();
+CREATE FUNCTION app_whatsapp_platform_templates() RETURNS text[]
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$ SELECT ARRAY['lembrete_neutro_v1']::text[] $$;
 
 -- ---------------------------------------------------------------------------------------------------
 -- Fila de envios
@@ -266,8 +228,8 @@ CREATE TABLE whatsapp_outbox (
   appointment_starts_at  timestamptz NOT NULL,
   patient_id             uuid NOT NULL,
   opt_in_id              uuid NOT NULL,
-  -- NULL = modelo padrão da plataforma.
-  template_id            uuid,
+  -- Modelo da PLATAFORMA (nome na Meta), da lista fechada versionada no código.
+  template_name          text NOT NULL CONSTRAINT whatsapp_outbox_template_check CHECK (template_name = ANY (app_whatsapp_platform_templates())),
   kind                   text NOT NULL DEFAULT 'lembrete_consulta' CONSTRAINT whatsapp_outbox_kind_check CHECK (kind IN ('lembrete_consulta')),
   recipient_kind         text NOT NULL CONSTRAINT whatsapp_outbox_recipient_check CHECK (recipient_kind IN ('paciente', 'responsavel')),
   guardian_id            uuid,
@@ -294,7 +256,6 @@ CREATE TABLE whatsapp_outbox (
   CONSTRAINT whatsapp_outbox_appointment_fk FOREIGN KEY (appointment_id, tenant_id) REFERENCES appointments (id, tenant_id),
   CONSTRAINT whatsapp_outbox_patient_fk FOREIGN KEY (patient_id, tenant_id) REFERENCES patients (id, tenant_id),
   CONSTRAINT whatsapp_outbox_opt_in_fk FOREIGN KEY (opt_in_id, tenant_id) REFERENCES whatsapp_opt_ins (id, tenant_id),
-  CONSTRAINT whatsapp_outbox_template_fk FOREIGN KEY (template_id, tenant_id) REFERENCES whatsapp_templates (id, tenant_id),
   CONSTRAINT whatsapp_outbox_id_tenant_key UNIQUE (id, tenant_id),
   -- Idempotência: um lembrete por consulta e horário.
   CONSTRAINT whatsapp_outbox_idempotency_key UNIQUE (tenant_id, appointment_id, kind, appointment_starts_at),
@@ -342,7 +303,7 @@ BEGIN
   -- UPDATE: identidade imutável.
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.appointment_id IS DISTINCT FROM OLD.appointment_id
      OR NEW.appointment_starts_at IS DISTINCT FROM OLD.appointment_starts_at OR NEW.patient_id IS DISTINCT FROM OLD.patient_id
-     OR NEW.opt_in_id IS DISTINCT FROM OLD.opt_in_id OR NEW.template_id IS DISTINCT FROM OLD.template_id OR NEW.kind IS DISTINCT FROM OLD.kind
+     OR NEW.opt_in_id IS DISTINCT FROM OLD.opt_in_id OR NEW.template_name IS DISTINCT FROM OLD.template_name OR NEW.kind IS DISTINCT FROM OLD.kind
      OR NEW.recipient_kind IS DISTINCT FROM OLD.recipient_kind OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id
      OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.created_by IS DISTINCT FROM OLD.created_by THEN
     RAISE EXCEPTION 'envio: identidade imutável' USING ERRCODE = 'insufficient_privilege';
@@ -468,10 +429,6 @@ ALTER TABLE whatsapp_opt_ins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_opt_ins FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_opt_ins
   USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
-ALTER TABLE whatsapp_templates ENABLE ROW LEVEL SECURITY;
-ALTER TABLE whatsapp_templates FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON whatsapp_templates
-  USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
 ALTER TABLE whatsapp_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_outbox FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_outbox
@@ -481,16 +438,14 @@ ALTER TABLE whatsapp_inbound FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_inbound
   USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
 
-REVOKE ALL ON whatsapp_settings, whatsapp_opt_ins, whatsapp_templates, whatsapp_outbox, whatsapp_inbound FROM PUBLIC;
-REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON whatsapp_settings, whatsapp_opt_ins, whatsapp_templates, whatsapp_outbox, whatsapp_inbound FROM app_user;
-GRANT SELECT, INSERT, UPDATE ON whatsapp_settings, whatsapp_opt_ins, whatsapp_templates, whatsapp_outbox, whatsapp_inbound TO app_user;
+REVOKE ALL ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound FROM PUBLIC;
+REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound FROM app_user;
+GRANT SELECT, INSERT, UPDATE ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound TO app_user;
 
 CREATE TRIGGER whatsapp_settings_no_delete BEFORE DELETE ON whatsapp_settings FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_settings_no_truncate BEFORE TRUNCATE ON whatsapp_settings FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_opt_ins_no_delete BEFORE DELETE ON whatsapp_opt_ins FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_opt_ins_no_truncate BEFORE TRUNCATE ON whatsapp_opt_ins FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
-CREATE TRIGGER whatsapp_templates_no_delete BEFORE DELETE ON whatsapp_templates FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
-CREATE TRIGGER whatsapp_templates_no_truncate BEFORE TRUNCATE ON whatsapp_templates FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_outbox_no_delete BEFORE DELETE ON whatsapp_outbox FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_outbox_no_truncate BEFORE TRUNCATE ON whatsapp_outbox FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_inbound_no_delete BEFORE DELETE ON whatsapp_inbound FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();

@@ -45,7 +45,6 @@ import {
   whatsappOptIns,
   whatsappOutbox,
   whatsappSettings,
-  whatsappTemplates,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
@@ -101,7 +100,6 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   clinic_members: 'clinicMembers',
   whatsapp_settings: 'whatsapp.whatsappSettings',
   whatsapp_opt_ins: 'whatsapp.whatsappOptIns',
-  whatsapp_templates: 'whatsapp.whatsappTemplates',
   whatsapp_outbox: 'whatsapp.whatsappOutbox',
   whatsapp_inbound: 'whatsapp.whatsappInbound',
   audit_log: 'auditEvents',
@@ -316,7 +314,7 @@ beforeAll(async () => {
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
 
-  // WhatsApp (0032): canal, opt-in com prova, modelo neutro, um envio e uma resposta (do webhook = sistema).
+  // WhatsApp (0032): canal, opt-in com prova, um envio (modelo da plataforma) e uma resposta (do webhook = sistema).
   const ag4 = await api.http().post('/agendamentos').set(cab(admin)).send({
     pacienteId,
     profissionalId: (prof.body as { id: string }).id,
@@ -332,13 +330,9 @@ beforeAll(async () => {
     async (tx) => {
       await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
       const [o] = await tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: pacienteId, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: admin.userId }).returning();
-      const [t] = await tx
-        .insert(whatsappTemplates)
-        .values({ tenantId: clinicaA, body: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar ou 2 para cancelar.', providerTemplateName: 'lembrete_neutro_v1', createdBy: admin.userId })
-        .returning();
       const [e] = await tx
         .insert(whatsappOutbox)
-        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateId: t?.id ?? null, recipientKind: 'paciente', createdBy: admin.userId })
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', createdBy: admin.userId })
         .returning();
       return e?.id ?? '';
     },
@@ -434,7 +428,6 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof clinicMembers
           | typeof whatsappSettings
           | typeof whatsappOptIns
-          | typeof whatsappTemplates
           | typeof whatsappOutbox
           | typeof whatsappInbound,
       ) =>
@@ -477,7 +470,6 @@ describe('G2 — conteúdo do pacote', () => {
         whatsapp: {
           whatsappSettings: await n(whatsappSettings),
           whatsappOptIns: await n(whatsappOptIns),
-          whatsappTemplates: await n(whatsappTemplates),
           whatsappOutbox: await n(whatsappOutbox),
           whatsappInbound: await n(whatsappInbound),
         },
@@ -520,7 +512,7 @@ describe('G2 — conteúdo do pacote', () => {
         receipts: 2,
         receiptCancellations: 1,
       },
-      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappTemplates: 1, whatsappOutbox: 1, whatsappInbound: 1 },
+      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
     expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);

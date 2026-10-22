@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notExists, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +11,6 @@ import {
   whatsappOptIns,
   whatsappOutbox,
   whatsappSettings,
-  whatsappTemplates,
   type WhatsappOutboxStatus,
   type WhatsappOutcome,
 } from '../../db/schema';
@@ -27,7 +26,6 @@ import { SchedulingService } from '../scheduling/scheduling.service';
 import { DATABASE_HANDLE, TenantDatabase } from '../tenancy/tenancy.module';
 import {
   codigoDeFalha,
-  corpoDeModeloValido,
   dentroDoHorarioDeEnvio,
   interpretarResposta,
   lembreteDevido,
@@ -35,6 +33,8 @@ import {
   MAX_TENTATIVAS,
   mesmoTelefone,
   MODELO_PADRAO,
+  MODELOS_DA_PLATAFORMA,
+  modeloDaPlataforma,
   renderizarLembrete,
   respostaNaJanela,
   telefoneParaWhatsapp,
@@ -51,7 +51,7 @@ import {
   campoWhatsappRef,
   type CampoWhatsapp,
 } from './whatsapp-fields';
-import type { ConfiguracaoWhatsapp, FiltroEnvios, NovoModelo, NovoOptIn } from './whatsapp.validation';
+import type { ConfiguracaoWhatsapp, FiltroEnvios, NovoOptIn } from './whatsapp.validation';
 
 export const MENSAGEIRO_WHATSAPP = Symbol('MENSAGEIRO_WHATSAPP');
 
@@ -101,7 +101,7 @@ function ctxDoSistema(tenantId: TenantId): RequestContext {
  * - trilha só com ids, contagens e códigos (nunca número, texto ou nome).
  */
 @Injectable()
-export class WhatsappService {
+export class WhatsappService implements OnApplicationBootstrap {
   private readonly logger = new Logger('whatsapp');
 
   constructor(
@@ -112,6 +112,11 @@ export class WhatsappService {
     @Inject(FONTE_DE_RESPONSAVEIS) private readonly responsaveis: FonteDeResponsaveis,
     @Inject(MENSAGEIRO_WHATSAPP) private readonly mensageiro: MensageiroWhatsApp | null,
   ) {}
+
+  /** V3 do parecer #69: com o canal ligado, o texto dos modelos no provedor é conferido NA SUBIDA. */
+  async onApplicationBootstrap(): Promise<void> {
+    if (this.mensageiro) await this.mensageiro.conferirModelos(MODELOS_DA_PLATAFORMA);
+  }
 
   get canalLigado(): boolean {
     return this.mensageiro !== null;
@@ -160,46 +165,13 @@ export class WhatsappService {
     });
   }
 
-  listarModelos(ctx: RequestContext): Promise<{ vigente: { id: string | null; texto: string; padrao: boolean }; retirados: number }> {
-    return lerNaClinica(this.db, ctx, async (tx) => {
-      const vivo = await this.modeloVigente(tx, ctx.tenantId);
-      const [r] = await tx
-        .select({ n: count() })
-        .from(whatsappTemplates)
-        .where(and(eq(whatsappTemplates.tenantId, ctx.tenantId), isNotNull(whatsappTemplates.retiredAt)));
-      return { vigente: vivo ? { id: vivo.id, texto: vivo.body, padrao: false } : { id: null, texto: MODELO_PADRAO.corpo, padrao: true }, retirados: r?.n ?? 0 };
-    });
-  }
-
-  /** Novo modelo substitui o vigente (o anterior é retirado na mesma transação). */
-  criarModelo(ctx: RequestContext, dados: NovoModelo): Promise<{ id: string }> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
-      if (!corpoDeModeloValido(dados.texto)) throw new ConflitoError('modelo_nao_neutro');
-      const vivo = await this.modeloVigente(tx, ctx.tenantId);
-      if (vivo) {
-        await tx.update(whatsappTemplates).set({ retiredAt: new Date(), retiredBy: ctx.userId }).where(and(eq(whatsappTemplates.tenantId, ctx.tenantId), eq(whatsappTemplates.id, vivo.id)));
-      }
-      const [t] = await tx
-        .insert(whatsappTemplates)
-        .values({ tenantId: ctx.tenantId, body: dados.texto, providerTemplateName: dados.nomeNoProvedor, createdBy: ctx.userId })
-        .returning({ id: whatsappTemplates.id });
-      if (!t) throw new Error('falha ao criar modelo');
-      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'whatsapp_templates', metadata: { template_id: t.id, replaced: vivo?.id ?? null } });
-      return { id: t.id };
-    });
-  }
-
-  retirarModelo(ctx: RequestContext, id: string): Promise<{ padrao: true }> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
-      const r = await tx
-        .update(whatsappTemplates)
-        .set({ retiredAt: new Date(), retiredBy: ctx.userId })
-        .where(and(eq(whatsappTemplates.tenantId, ctx.tenantId), eq(whatsappTemplates.id, id), isNull(whatsappTemplates.retiredAt)))
-        .returning({ id: whatsappTemplates.id });
-      if (r.length === 0) throw new NaoEncontradoError();
-      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'whatsapp_templates', metadata: { template_id: id, op: 'retire' } });
-      return { padrao: true };
-    });
+  /**
+   * Modelos: SÓ os da plataforma (V3 do parecer #69), lista fechada no código com o nome na Meta e o texto
+   * aprovado. Não lê nada da clínica (não há modelo da clínica).
+   */
+  listarModelos(): { vigente: { nomeNoProvedor: string; texto: string }; disponiveis: { nomeNoProvedor: string; texto: string }[] } {
+    const dto = (m: (typeof MODELOS_DA_PLATAFORMA)[number]) => ({ nomeNoProvedor: m.nomeNoProvedor, texto: m.corpo });
+    return { vigente: dto(MODELO_PADRAO), disponiveis: MODELOS_DA_PLATAFORMA.map(dto) };
   }
 
   // -------------------------------------------------------------------------------------------------
@@ -384,7 +356,7 @@ export class WhatsappService {
       )
       .orderBy(asc(appointments.startsAt), asc(appointments.id))
       .limit(LOTE);
-    const modelo = await this.modeloVigente(tx, ctx.tenantId);
+    const modelo = MODELO_PADRAO;
     let programados = 0;
     let semOptIn = 0;
     let semDestinatario = 0;
@@ -400,7 +372,7 @@ export class WhatsappService {
         semDestinatario++;
         continue;
       }
-      const { texto } = renderizarLembrete(modelo?.body ?? MODELO_PADRAO.corpo, cfg.senderName, a.startsAt);
+      const { texto } = renderizarLembrete(modelo.corpo, cfg.senderName, a.startsAt);
       const id = randomUUID();
       const inseridos = await tx
         .insert(whatsappOutbox)
@@ -411,7 +383,7 @@ export class WhatsappService {
           appointmentStartsAt: a.startsAt,
           patientId: a.patientId,
           optInId: optIn.id,
-          templateId: modelo?.id ?? null,
+          templateName: modelo.nomeNoProvedor,
           recipientKind: optIn.recipientKind,
           guardianId: optIn.guardianId,
           recipientPhoneEnc: await this.cifrar(tx, ctx, id, CAMPO_TELEFONE_ENVIO, telefone),
@@ -462,22 +434,24 @@ export class WhatsappService {
           .select({ vivo: isNull(whatsappOptIns.revokedAt) })
           .from(whatsappOptIns)
           .where(and(eq(whatsappOptIns.tenantId, ctx.tenantId), eq(whatsappOptIns.id, e.optInId)));
+        // Modelo fora da lista fechada da plataforma: não sai (falha fechada).
+        const modelo = modeloDaPlataforma(e.templateName);
         const valido =
+          modelo &&
           cfg.enabled && cfg.senderName && cfg.businessNumberId && opt?.vivo && ag && ag.status === 'scheduled' && ag.startsAt.getTime() === e.appointmentStartsAt.getTime();
-        if (!valido || !e.recipientPhoneEnc || !e.bodyEnc || !cfg.senderName) {
+        if (!valido || !modelo || !e.recipientPhoneEnc || !e.bodyEnc || !cfg.senderName) {
           await tx.update(whatsappOutbox).set({ status: 'cancelado' }).where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.id, e.id)));
           cancelados++;
           continue;
         }
         await tx.update(whatsappOutbox).set({ status: 'enviando' }).where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.id, e.id)));
-        const modelo = e.templateId ? await this.modeloPorId(tx, ctx.tenantId, e.templateId) : null;
-        const { parametros } = renderizarLembrete(modelo?.body ?? MODELO_PADRAO.corpo, cfg.senderName, e.appointmentStartsAt);
+        const { parametros } = renderizarLembrete(modelo.corpo, cfg.senderName, e.appointmentStartsAt);
         prontos.push({
           id: e.id,
           para: await this.decifrar(tx, ctx.tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc),
           texto: await this.decifrar(tx, ctx.tenantId, e.id, CAMPO_TEXTO_ENVIO, e.bodyEnc),
           parametros,
-          modelo: modelo?.providerTemplateName ?? MODELO_PADRAO.nomeNoProvedor,
+          modelo: modelo.nomeNoProvedor,
         });
       }
       return { prontos, cancelados, remetente: cfg.businessNumberId ?? '' };
@@ -749,19 +723,6 @@ export class WhatsappService {
       janelaRespostaHoras: c.replyWindowHours,
       provedor: this.mensageiro?.nome ?? null,
     };
-  }
-
-  private async modeloVigente(tx: TenantTx, tenantId: TenantId) {
-    const [t] = await tx
-      .select()
-      .from(whatsappTemplates)
-      .where(and(eq(whatsappTemplates.tenantId, tenantId), eq(whatsappTemplates.purpose, 'lembrete_consulta'), isNull(whatsappTemplates.retiredAt)));
-    return t ?? null;
-  }
-
-  private async modeloPorId(tx: TenantTx, tenantId: TenantId, id: string) {
-    const [t] = await tx.select().from(whatsappTemplates).where(and(eq(whatsappTemplates.tenantId, tenantId), eq(whatsappTemplates.id, id)));
-    return t ?? null;
   }
 
   private async optInVigente(tx: TenantTx, tenantId: TenantId, pacienteId: string, travar: boolean) {

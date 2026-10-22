@@ -81,7 +81,7 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
  * 1.13.0: WhatsApp (migração 0032): configuração do canal, opt-ins com a prova (referência decifrada),
- *        modelos, fila de envios e respostas (números e textos decifrados enquanto não passam os 30 dias da
+ *        fila de envios (com o modelo da PLATAFORMA usado; a clínica não cria modelo) e respostas (números e textos decifrados enquanto não passam os 30 dias da
  *        retenção; depois `null` com `contentPurgedAt`), em `data.whatsapp` e `manifest.counts.whatsapp`.
  */
 export const EXPORT_SCHEMA_VERSION = '1.13.0';
@@ -132,7 +132,6 @@ export const EXPORTED_TABLES = [
   // WhatsApp (0032): em data.whatsapp. Histórico de mensagens é dado do paciente: sai inteiro.
   'whatsapp_settings',
   'whatsapp_opt_ins',
-  'whatsapp_templates',
   'whatsapp_outbox',
   'whatsapp_inbound',
   'audit_log',

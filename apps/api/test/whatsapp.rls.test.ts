@@ -4,7 +4,7 @@
  * profissional ou tipo de atendimento); "1"/"2" mudam só a consulta daquele envio, dentro da janela e
  * pelas regras da agenda; webhook com assinatura inválida recusado; idempotência; fora do horário não
  * envia; menor recebe pelo responsável (porta); SAIR revoga; barreiras do banco; isolamento entre
- * clínicas em whatsapp_settings, whatsapp_opt_ins, whatsapp_templates, whatsapp_outbox e
+ * clínicas em whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox e
  * whatsapp_inbound; trilha sem número nem texto.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
@@ -12,9 +12,9 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappSettings, whatsappTemplates } from '../src/db/schema';
+import { appointments, auditLog, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappSettings } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
-import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
+import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
 import { assinarCorpo } from '../src/modules/messaging/mensageiro-whatsapp';
 import type { FonteDeResponsaveis } from '../src/modules/messaging/responsaveis.port';
@@ -228,7 +228,7 @@ describe('opt-in: sem ele, nada sai', () => {
           api.db.db,
           clinicaA,
           (tx) =>
-            tx.insert(whatsappOutbox).values({ tenantId: clinicaA, appointmentId: c.id, appointmentStartsAt: c.inicio, patientId: p, optInId: o.id, recipientKind: 'paciente', createdBy: adminA.userId }),
+            tx.insert(whatsappOutbox).values({ tenantId: clinicaA, appointmentId: c.id, appointmentStartsAt: c.inicio, patientId: p, optInId: o.id, templateName: MODELO_PADRAO.nomeNoProvedor, recipientKind: 'paciente', createdBy: adminA.userId }),
           adminA.userId,
         ),
       ),
@@ -263,41 +263,59 @@ describe('texto neutro (falha se houver termo de especialidade sensível)', () =
     expect(m?.mensagem.modelo).toEqual({ nomeNoProvedor: MODELO_PADRAO.nomeNoProvedor, idioma: 'pt_BR', parametros: ['Agendamentos', `${data.slice(8, 10)}/${data.slice(5, 7)}`, hora] });
   });
 
-  it('cada termo sensível é recusado no modelo (400), no nome do remetente (400), na regra e no BANCO', async () => {
+  it('cada termo sensível é recusado no nome do remetente (400), na regra e no BANCO', async () => {
     const termos = [...AMOSTRAS_DE_TERMOS_SENSIVEIS, ESPECIALIDADE];
     for (const termo of termos) {
       expect(textoEhNeutro(`Clinica ${termo}`), termo).toBe(false);
-      const m = await api
-        .http()
-        .post('/whatsapp/modelos')
-        .set(cab(adminA))
-        .send({ texto: `Seu horario de ${termo} em {clinica} dia {data} as {hora}. Responda 1 ou 2.`, nomeNoProvedor: 'lembrete_x' });
-      expect(m.status, termo).toBe(400);
-      expect(JSON.stringify(m.body)).not.toContain(termo);
       const n = await api.http().put('/whatsapp/configuracao').set(cab(adminA)).send({ nomeRemetente: `Clinica ${termo}`.slice(0, 40) });
       expect(n.status, termo).toBe(400);
       const [r] = await api.db.db.execute<{ ok: boolean }>(sql`select app_whatsapp_text_is_neutral(${`Clinica ${termo}`}) as ok`);
       expect(r?.ok, `banco aceitou: ${termo}`).toBe(false);
     }
-    // Placeholder de profissional/especialidade não existe.
-    const ph = await api.http().post('/whatsapp/modelos').set(cab(adminA)).send({ texto: 'Compromisso com {profissional} em {clinica} dia {data} as {hora}.', nomeNoProvedor: 'lembrete_x' });
-    expect(ph.status).toBe(400);
-    // E o banco recusa o modelo mesmo vindo direto.
+  });
+});
+
+describe('modelos: só os da plataforma (V3 do parecer #69)', () => {
+  it('a clínica não cria modelo (409, sem ler o corpo); a lista mostra só os da plataforma', async () => {
+    const m = await api.http().post('/whatsapp/modelos').set(cab(adminA)).send({ texto: MODELO_PADRAO.corpo, nomeNoProvedor: 'lembrete_da_clinica' });
+    expect(m.status).toBe(409);
+    expect(m.body).toMatchObject({ codigo: 'modelo_da_clinica_desligado' });
+    expect((await api.http().post('/whatsapp/modelos').set(cab(recepA)).send({})).status).toBe(403);
+    const l = await api.http().get('/whatsapp/modelos').set(cab(recepA));
+    expect(l.status).toBe(200);
+    expect(l.body).toEqual({
+      vigente: { nomeNoProvedor: MODELO_PADRAO.nomeNoProvedor, texto: MODELO_PADRAO.corpo },
+      disponiveis: MODELOS_DA_PLATAFORMA.map((x) => ({ nomeNoProvedor: x.nomeNoProvedor, texto: x.corpo })),
+    });
+  });
+
+  it('a lista de nomes do banco é IGUAL à do código; nome fora dela é recusado pelo banco', async () => {
+    const [r] = await api.db.db.execute<{ nomes: string[] }>(sql`select app_whatsapp_platform_templates() as nomes`);
+    expect([...(r?.nomes ?? [])].sort()).toEqual(MODELOS_DA_PLATAFORMA.map((m) => m.nomeNoProvedor).sort());
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const c = await consulta(adminA, p, 20);
+    const o = await optIn(adminA, p);
     expect(
       await sqlstate(
         withTenant(
           api.db.db,
           clinicaA,
           (tx) =>
-            tx.insert(whatsappTemplates).values({ tenantId: clinicaA, body: 'Sua consulta de psiquiatria em {clinica} dia {data} as {hora}.', providerTemplateName: 'x', createdBy: adminA.userId }),
+            tx.insert(whatsappOutbox).values({
+              tenantId: clinicaA,
+              appointmentId: c.id,
+              appointmentStartsAt: c.inicio,
+              patientId: p,
+              optInId: o.id,
+              templateName: 'modelo_da_clinica_x',
+              recipientKind: 'paciente',
+              createdBy: adminA.userId,
+            }),
           adminA.userId,
         ),
       ),
     ).toContain('23514');
-    // O modelo padrão e um modelo neutro passam.
-    expect(textoEhNeutro(MODELO_PADRAO.corpo)).toBe(true);
-    const ok = await api.http().post('/whatsapp/modelos').set(cab(adminA)).send({ texto: MODELO_PADRAO.corpo, nomeNoProvedor: 'lembrete_neutro_v1' });
-    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
   });
 });
 
@@ -521,7 +539,7 @@ describe('horário, menor de idade e falha', () => {
 });
 
 describe('isolamento entre clínicas', () => {
-  it('B não vê fila, opt-ins, modelos, respostas nem configuração de A (RLS e API)', async () => {
+  it('B não vê fila, opt-ins, respostas nem configuração de A (RLS e API)', async () => {
     const tel = telefoneNovo();
     const p = await paciente(adminA, tel);
     const a = await consulta(adminA, p, 20);
@@ -530,17 +548,16 @@ describe('isolamento entre clínicas', () => {
     const ea = await envioDoAgendamento(clinicaA, a.id);
     await webhook(corpoDeResposta(numeroA, `55${tel}`, 'ok', ea?.providerMessageId ?? '')).expect(200);
     const contagens = await withTenant(api.db.db, clinicaB, async (tx: TenantTx) => {
-      const n = async (t: typeof whatsappOutbox | typeof whatsappOptIns | typeof whatsappTemplates | typeof whatsappInbound | typeof whatsappSettings) =>
+      const n = async (t: typeof whatsappOutbox | typeof whatsappOptIns | typeof whatsappInbound | typeof whatsappSettings) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t).where(eq(t.tenantId, clinicaA)))[0]?.n;
       return {
         outbox: await n(whatsappOutbox),
         optIns: await n(whatsappOptIns),
-        templates: await n(whatsappTemplates),
         inbound: await n(whatsappInbound),
         settings: await n(whatsappSettings),
       };
     });
-    expect(contagens).toEqual({ outbox: 0, optIns: 0, templates: 0, inbound: 0, settings: 0 });
+    expect(contagens).toEqual({ outbox: 0, optIns: 0, inbound: 0, settings: 0 });
     // Gravar com o tenant de A no contexto de B: o WITH CHECK recusa.
     expect(
       await sqlstate(

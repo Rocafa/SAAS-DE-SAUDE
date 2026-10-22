@@ -81,11 +81,10 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
-  // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), modelo só retira, envio só
+  // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
   // anda para a frente e resposta só perde o conteúdo pela retenção de 30 dias (triggers).
   whatsapp_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
-  whatsapp_templates: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_inbound: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };

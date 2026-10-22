@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Headers, HttpCode, HttpException, Inject, Logger, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { ConflitoError } from '../../common/erros-dominio';
 import { exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { CABECALHO_ASSINATURA, lerEventosDoWebhook, WebhookInvalidoError } from './mensageiro-whatsapp';
 import { WhatsappService } from './whatsapp.service';
-import { validarConfiguracao, validarFiltroEnvios, validarNovoModelo, validarNovoOptIn, validarRevogacao } from './whatsapp.validation';
+import { validarConfiguracao, validarFiltroEnvios, validarNovoOptIn, validarRevogacao } from './whatsapp.validation';
 
 /** Rotas da clínica (com sessão). Na URL só ids, datas e enums. */
 @Controller()
@@ -26,21 +27,18 @@ export class WhatsappController {
 
   @Get('whatsapp/modelos')
   @Permissao('comunicacao:ler')
-  modelos(@Sessao() auth: AuthContext) {
-    return this.service.listarModelos(paraRequestContext(auth));
+  modelos() {
+    return this.service.listarModelos();
   }
 
+  /**
+   * Modelo da clínica DESLIGADO (V3 do parecer #69): só os modelos da plataforma, lista fechada no
+   * código. Volta só com um fluxo pendente -> aprovado pelo Guardião. O corpo nem é lido.
+   */
   @Post('whatsapp/modelos')
   @Permissao('comunicacao:configurar')
-  criarModelo(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
-    return this.service.criarModelo(paraRequestContext(auth), validarNovoModelo(corpo));
-  }
-
-  @Post('whatsapp/modelos/:id/retirar')
-  @HttpCode(200)
-  @Permissao('comunicacao:configurar')
-  retirarModelo(@Sessao() auth: AuthContext, @Param('id') id: string) {
-    return this.service.retirarModelo(paraRequestContext(auth), exigirUuid(id));
+  criarModelo(): never {
+    throw new ConflitoError('modelo_da_clinica_desligado');
   }
 
   @Get('whatsapp/envios')

@@ -159,7 +159,6 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.PUT, '/whatsapp/configuracao'],
       [RequestMethod.GET, '/whatsapp/modelos'],
       [RequestMethod.POST, '/whatsapp/modelos'],
-      [RequestMethod.POST, `/whatsapp/modelos/${id}/retirar`],
       [RequestMethod.GET, '/whatsapp/envios'],
       [RequestMethod.POST, '/whatsapp/lembretes/execucao'],
       [RequestMethod.POST, '/whatsapp/retencao/execucao'],
