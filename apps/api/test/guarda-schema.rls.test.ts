@@ -84,6 +84,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
   // anda para a frente e resposta só perde o conteúdo pela retenção de 30 dias (triggers).
   whatsapp_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Chave do HMAC de comparação de número (V1 do #69): só nasce, nunca muda.
+  whatsapp_phone_keys: { privilegios: ['SELECT', 'INSERT'] },
   whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_inbound: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },

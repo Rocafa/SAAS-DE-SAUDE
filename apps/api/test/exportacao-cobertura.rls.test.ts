@@ -110,6 +110,8 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.subscription_status': 'vai no manifesto (subscription.status)',
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
+  'whatsapp_opt_ins.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone',
+  'whatsapp_outbox.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone enquanto não passa a retenção',
 };
 
 const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -324,15 +326,22 @@ beforeAll(async () => {
   });
   expect(ag4.status).toBe(201);
   const ag4Body = ag4.body as { id: string; inicio: string };
+  // Opt-in pela rota (grava o número que consentiu, cifrado e com HMAC; V1 do parecer #69).
+  const opt = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/whatsapp/opt-in`)
+    .set(cab(admin))
+    .send({ destinatario: 'paciente', meio: 'formulario_assinado', comprovante: 'Termo ficticio export 1' });
+  expect(opt.status, JSON.stringify(opt.body)).toBe(201);
   const envioId = await withTenant(
     api.db.db,
     clinicaA,
     async (tx) => {
       await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
-      const [o] = await tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: pacienteId, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: admin.userId }).returning();
+      const [o] = await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, (opt.body as { id: string }).id));
       const [e] = await tx
         .insert(whatsappOutbox)
-        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', createdBy: admin.userId })
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', recipientPhoneHash: o?.recipientPhoneHash ?? '', createdBy: admin.userId })
         .returning();
       return e?.id ?? '';
     },

@@ -690,7 +690,7 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
 
 export const WHATSAPP_RECIPIENT_KINDS = ['paciente', 'responsavel'] as const;
 export const WHATSAPP_OPT_IN_METHODS = ['verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente'] as const;
-export const WHATSAPP_REVOKE_METHODS = ['pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario'] as const;
+export const WHATSAPP_REVOKE_METHODS = ['pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario', 'numero_mudou'] as const;
 export const WHATSAPP_OUTBOX_STATUSES = ['agendado', 'enviando', 'enviado', 'entregue', 'lido', 'falhou', 'cancelado'] as const;
 export type WhatsappOutboxStatus = (typeof WHATSAPP_OUTBOX_STATUSES)[number];
 export const WHATSAPP_INTERPRETATIONS = ['confirmar', 'cancelar', 'sair', 'outro'] as const;
@@ -707,7 +707,16 @@ export const WHATSAPP_OUTCOMES = [
 ] as const;
 export type WhatsappOutcome = (typeof WHATSAPP_OUTCOMES)[number];
 
-/** Opt-in com prova (0032): quem registrou, como, quando; revogação única. */
+/** Chave da clínica (cifrada) para o HMAC de comparação de número (0032, V1 do parecer #69). Só INSERT. */
+export const whatsappPhoneKeys = pgTable('whatsapp_phone_keys', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  keyEnc: text('key_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Opt-in com prova (0032): quem registrou, como, quando, o NÚMERO que consentiu; revogação única. */
 export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id')
@@ -719,6 +728,9 @@ export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
   purpose: text('purpose', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
   method: text('method', { enum: WHATSAPP_OPT_IN_METHODS }).notNull(),
   evidenceEnc: text('evidence_enc'),
+  /** Número que consentiu (V1): cifrado e com o HMAC da clínica para comparar. */
+  recipientPhoneEnc: text('recipient_phone_enc').notNull(),
+  recipientPhoneHash: text('recipient_phone_hash').notNull(),
   grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
   grantedBy: uuid('granted_by').notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -742,6 +754,8 @@ export const whatsappOutbox = pgTable('whatsapp_outbox', {
   recipientKind: text('recipient_kind', { enum: WHATSAPP_RECIPIENT_KINDS }).notNull(),
   guardianId: uuid('guardian_id'),
   recipientPhoneEnc: text('recipient_phone_enc'),
+  /** HMAC do número de destino; o banco exige que seja o do opt-in (V1). */
+  recipientPhoneHash: text('recipient_phone_hash').notNull(),
   bodyEnc: text('body_enc'),
   status: text('status', { enum: WHATSAPP_OUTBOX_STATUSES }).notNull().default('agendado'),
   attempts: smallint('attempts').notNull().default(0),
@@ -807,6 +821,7 @@ export const schema = {
   receipts,
   receiptCancellations,
   whatsappSettings,
+  whatsappPhoneKeys,
   whatsappOptIns,
   whatsappOutbox,
   whatsappInbound,

@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, notExists, sql } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
@@ -10,6 +10,7 @@ import {
   whatsappInbound,
   whatsappOptIns,
   whatsappOutbox,
+  whatsappPhoneKeys,
   whatsappSettings,
   type WhatsappOutboxStatus,
   type WhatsappOutcome,
@@ -43,8 +44,10 @@ import {
 import type { EventoDeResposta, EventoDeStatus, EventoDoWebhook, MensageiroWhatsApp, ResultadoDeEnvio } from './mensageiro-whatsapp';
 import { FONTE_DE_RESPONSAVEIS, type FonteDeResponsaveis } from './responsaveis.port';
 import {
+  CAMPO_CHAVE_NUMERO,
   CAMPO_EVIDENCIA,
   CAMPO_TELEFONE_ENVIO,
+  CAMPO_TELEFONE_OPTIN,
   CAMPO_TELEFONE_RESPOSTA,
   CAMPO_TEXTO_ENVIO,
   CAMPO_TEXTO_RESPOSTA,
@@ -76,12 +79,19 @@ export interface ResultadoDosLembretes {
   readonly programados: number;
   readonly semOptIn: number;
   readonly semDestinatario: number;
+  /** O número de agora não é o que consentiu: nada sai e o opt-in perde a validade (V1 do parecer #69). */
+  readonly numeroMudou: number;
   readonly enviados: number;
   readonly falharam: number;
   readonly cancelados: number;
 }
 
-const ZERO: Omit<ResultadoDosLembretes, 'motivo'> = { programados: 0, semOptIn: 0, semDestinatario: 0, enviados: 0, falharam: 0, cancelados: 0 };
+const ZERO: Omit<ResultadoDosLembretes, 'motivo'> = { programados: 0, semOptIn: 0, semDestinatario: 0, numeroMudou: 0, enviados: 0, falharam: 0, cancelados: 0 };
+
+/** HMAC-SHA256 do número normalizado (DDI 55) com a chave da clínica: compara sem decifrar (V1). */
+function hashDoNumero(chave: Buffer, telefone: string): string {
+  return createHmac('sha256', chave).update(telefone, 'utf8').digest('hex');
+}
 
 const RANK: Readonly<Record<WhatsappOutboxStatus, number>> = { agendado: 0, enviando: 1, enviado: 2, entregue: 3, lido: 4, falhou: 9, cancelado: 9 };
 
@@ -92,7 +102,10 @@ function ctxDoSistema(tenantId: TenantId): RequestContext {
 
 /**
  * Lembretes e confirmação por WhatsApp (rodada 18.3). Garantias:
- * - nada sai sem opt-in VIGENTE do destinatário (conferido aqui e pelo banco no INSERT da fila);
+ * - nada sai sem opt-in VIGENTE do destinatário PARA O NÚMERO DE AGORA (V1 do parecer #69): o opt-in grava o
+ *   número que consentiu (cifrado + HMAC da clínica); no programar e no despacho o número atual (cadastro ou
+ *   responsável) tem de ter o mesmo HMAC, senão nada sai e o opt-in é revogado como `numero_mudou`. O banco
+ *   confere o HMAC no INSERT da fila e na reserva para envio;
  * - o texto é o modelo neutro renderizado só com nome neutro, data e hora (sem profissional, especialidade
  *   ou tipo de atendimento);
  * - paciente menor recebe pelo responsável (porta FonteDeResponsaveis); sem responsável, não sai;
@@ -207,11 +220,19 @@ export class WhatsappService implements OnApplicationBootstrap {
   registrarOptIn(ctx: RequestContext, pacienteId: string, dados: NovoOptIn): Promise<{ id: string; substituiu: string | null }> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await this.pacienteDaClinica(tx, ctx, pacienteId, true);
+      // V1: o opt-in prova o consentimento DESTE número (o de agora, do cadastro ou do responsável).
+      let telefone: string | null;
       if (dados.destinatario === 'responsavel') {
         const r = await this.responsaveis.responsavelVigente(tx, ctx.tenantId, pacienteId, dados.responsavelId ?? '');
         if (!r) throw new ConflitoError('responsavel_nao_vinculado');
-        if (!telefoneParaWhatsapp(r.telefone)) throw new ConflitoError('responsavel_sem_telefone');
+        telefone = telefoneParaWhatsapp(r.telefone);
+        if (!telefone) throw new ConflitoError('responsavel_sem_telefone');
+      } else {
+        telefone = telefoneParaWhatsapp(await this.telefoneDoCadastro(tx, ctx.tenantId, pacienteId));
+        if (!telefone) throw new ConflitoError('paciente_sem_telefone');
       }
+      const chave = await this.chaveDoNumero(tx, ctx, true);
+      if (!chave) throw new Error('chave de comparação de número ausente');
       const anterior = await this.optInVigente(tx, ctx.tenantId, pacienteId, true);
       if (anterior) {
         await tx
@@ -229,6 +250,8 @@ export class WhatsappService implements OnApplicationBootstrap {
         guardianId: dados.destinatario === 'responsavel' ? (dados.responsavelId ?? null) : null,
         method: dados.meio,
         evidenceEnc: dados.comprovante ? await this.cifrar(tx, ctx, id, CAMPO_EVIDENCIA, dados.comprovante) : null,
+        recipientPhoneEnc: await this.cifrar(tx, ctx, id, CAMPO_TELEFONE_OPTIN, telefone),
+        recipientPhoneHash: hashDoNumero(chave, telefone),
         grantedBy: ctx.userId,
       });
       await recordAudit(tx, ctx, {
@@ -319,18 +342,19 @@ export class WhatsappService implements OnApplicationBootstrap {
     const run = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> => (sistema ? this.db.run(ctx.tenantId, fn) : escreverNaClinica(this.db, ctx, fn));
     const programacao = await run((tx) => this.programar(tx, ctx, agora));
     if (programacao.motivo !== 'ok') return { ...ZERO, ...programacao };
-    const despacho = await this.despachar(ctx, run);
-    return { ...programacao, ...despacho, motivo: 'ok' };
+    const despacho = await this.despachar(ctx, run, agora);
+    return { ...programacao, ...despacho, numeroMudou: programacao.numeroMudou + despacho.numeroMudou, motivo: 'ok' };
   }
 
   private async programar(
     tx: TenantTx,
     ctx: RequestContext,
     agora: Date,
-  ): Promise<Pick<ResultadoDosLembretes, 'motivo' | 'programados' | 'semOptIn' | 'semDestinatario'>> {
+  ): Promise<Pick<ResultadoDosLembretes, 'motivo' | 'programados' | 'semOptIn' | 'semDestinatario' | 'numeroMudou'>> {
+    const nada = { programados: 0, semOptIn: 0, semDestinatario: 0, numeroMudou: 0 };
     const cfg = await this.configuracao(tx, ctx.tenantId);
-    if (!cfg.enabled || !cfg.senderName || !cfg.businessNumberId) return { motivo: 'canal_desligado', programados: 0, semOptIn: 0, semDestinatario: 0 };
-    if (!dentroDoHorarioDeEnvio(agora, cfg.sendFromHour, cfg.sendUntilHour)) return { motivo: 'fora_do_horario', programados: 0, semOptIn: 0, semDestinatario: 0 };
+    if (!cfg.enabled || !cfg.senderName || !cfg.businessNumberId) return { motivo: 'canal_desligado', ...nada };
+    if (!dentroDoHorarioDeEnvio(agora, cfg.sendFromHour, cfg.sendUntilHour)) return { motivo: 'fora_do_horario', ...nada };
     const devidos = await tx
       .select({ id: appointments.id, patientId: appointments.patientId, startsAt: appointments.startsAt })
       .from(appointments)
@@ -357,19 +381,28 @@ export class WhatsappService implements OnApplicationBootstrap {
       .orderBy(asc(appointments.startsAt), asc(appointments.id))
       .limit(LOTE);
     const modelo = MODELO_PADRAO;
+    const chave = await this.chaveDoNumero(tx, ctx, false);
     let programados = 0;
     let semOptIn = 0;
     let semDestinatario = 0;
+    let numeroMudou = 0;
     for (const a of devidos) {
       if (!lembreteDevido(a.startsAt, agora, cfg.reminderHoursBefore)) continue;
       const optIn = await this.optInVigente(tx, ctx.tenantId, a.patientId, false);
-      if (!optIn) {
+      if (!optIn || !chave) {
         semOptIn++;
         continue;
       }
       const telefone = await this.telefoneDoDestinatario(tx, ctx.tenantId, a.patientId, optIn, agora);
       if (!telefone) {
         semDestinatario++;
+        continue;
+      }
+      // V1: o número de agora tem de ser o que consentiu; se mudou, o opt-in perde a validade.
+      const hash = hashDoNumero(chave, telefone);
+      if (hash !== optIn.recipientPhoneHash) {
+        numeroMudou++;
+        await this.invalidarPorNumeroMudado(tx, ctx, optIn.id, optIn.patientId);
         continue;
       }
       const { texto } = renderizarLembrete(modelo.corpo, cfg.senderName, a.startsAt);
@@ -387,6 +420,7 @@ export class WhatsappService implements OnApplicationBootstrap {
           recipientKind: optIn.recipientKind,
           guardianId: optIn.guardianId,
           recipientPhoneEnc: await this.cifrar(tx, ctx, id, CAMPO_TELEFONE_ENVIO, telefone),
+          recipientPhoneHash: hash,
           bodyEnc: await this.cifrar(tx, ctx, id, CAMPO_TEXTO_ENVIO, texto),
           createdBy: ctx.userId === SYSTEM_ACTOR_ID ? null : ctx.userId,
         })
@@ -397,9 +431,9 @@ export class WhatsappService implements OnApplicationBootstrap {
     await recordAudit(tx, ctx, {
       action: AuditAction.Create,
       scope: 'whatsapp_outbox',
-      metadata: { op: 'schedule', count: programados, skipped_no_opt_in: semOptIn, skipped_no_recipient: semDestinatario },
+      metadata: { op: 'schedule', count: programados, skipped_no_opt_in: semOptIn, skipped_no_recipient: semDestinatario, skipped_number_changed: numeroMudou },
     });
-    return { motivo: 'ok', programados, semOptIn, semDestinatario };
+    return { motivo: 'ok', programados, semOptIn, semDestinatario, numeroMudou };
   }
 
   /**
@@ -411,9 +445,10 @@ export class WhatsappService implements OnApplicationBootstrap {
   private async despachar(
     ctx: RequestContext,
     run: <T>(fn: (tx: TenantTx) => Promise<T>) => Promise<T>,
-  ): Promise<Pick<ResultadoDosLembretes, 'enviados' | 'falharam' | 'cancelados'>> {
+    agora: Date,
+  ): Promise<Pick<ResultadoDosLembretes, 'enviados' | 'falharam' | 'cancelados' | 'numeroMudou'>> {
     const mensageiro = this.mensageiro;
-    if (!mensageiro) return { enviados: 0, falharam: 0, cancelados: 0 };
+    if (!mensageiro) return { enviados: 0, falharam: 0, cancelados: 0, numeroMudou: 0 };
     const reservados = await run(async (tx) => {
       const cfg = await this.configuracao(tx, ctx.tenantId);
       const fila = await tx
@@ -425,36 +460,58 @@ export class WhatsappService implements OnApplicationBootstrap {
         .for('update', { skipLocked: true });
       const prontos: { id: string; para: string; texto: string; parametros: string[]; modelo: string }[] = [];
       let cancelados = 0;
+      let numeroMudou = 0;
+      const chave = await this.chaveDoNumero(tx, ctx, false);
+      // Linhas já canceladas nesta passada (número mudado cancela todas as do mesmo opt-in).
+      const jaCancelados = new Set<string>();
       for (const e of fila) {
+        if (jaCancelados.has(e.id)) continue;
         const [ag] = await tx
           .select({ status: appointments.status, startsAt: appointments.startsAt })
           .from(appointments)
           .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, e.appointmentId)));
         const [opt] = await tx
-          .select({ vivo: isNull(whatsappOptIns.revokedAt) })
+          .select()
           .from(whatsappOptIns)
           .where(and(eq(whatsappOptIns.tenantId, ctx.tenantId), eq(whatsappOptIns.id, e.optInId)));
         // Modelo fora da lista fechada da plataforma: não sai (falha fechada).
         const modelo = modeloDaPlataforma(e.templateName);
         const valido =
           modelo &&
-          cfg.enabled && cfg.senderName && cfg.businessNumberId && opt?.vivo && ag && ag.status === 'scheduled' && ag.startsAt.getTime() === e.appointmentStartsAt.getTime();
-        if (!valido || !modelo || !e.recipientPhoneEnc || !e.bodyEnc || !cfg.senderName) {
-          await tx.update(whatsappOutbox).set({ status: 'cancelado' }).where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.id, e.id)));
+          cfg.enabled && cfg.senderName && cfg.businessNumberId && opt && opt.revokedAt === null && ag && ag.status === 'scheduled' && ag.startsAt.getTime() === e.appointmentStartsAt.getTime();
+        if (!valido || !opt || !modelo || !e.recipientPhoneEnc || !e.bodyEnc || !cfg.senderName) {
+          await this.cancelarEnvio(tx, ctx, e.id, null);
           cancelados++;
+          continue;
+        }
+        // V1, de novo no despacho: o número de AGORA (cadastro ou responsável) e o número gravado na fila têm
+        // de ser o que consentiu. Mudou: não sai, e o opt-in perde a validade (a recepção pede outro).
+        const atual = await this.telefoneDoDestinatario(tx, ctx.tenantId, e.patientId, opt, agora);
+        if (!atual) {
+          await this.cancelarEnvio(tx, ctx, e.id, 'sem_destinatario');
+          cancelados++;
+          continue;
+        }
+        const para = await this.decifrar(tx, ctx.tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc);
+        if (!chave || hashDoNumero(chave, atual) !== e.recipientPhoneHash || hashDoNumero(chave, para) !== e.recipientPhoneHash) {
+          const ids = await this.invalidarPorNumeroMudado(tx, ctx, opt.id, opt.patientId);
+          if (!ids.includes(e.id)) await this.cancelarEnvio(tx, ctx, e.id, 'numero_mudou');
+          for (const id of [...ids, e.id]) jaCancelados.add(id);
+          numeroMudou++;
+          cancelados += Math.max(ids.length, 1);
           continue;
         }
         await tx.update(whatsappOutbox).set({ status: 'enviando' }).where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.id, e.id)));
         const { parametros } = renderizarLembrete(modelo.corpo, cfg.senderName, e.appointmentStartsAt);
         prontos.push({
           id: e.id,
-          para: await this.decifrar(tx, ctx.tenantId, e.id, CAMPO_TELEFONE_ENVIO, e.recipientPhoneEnc),
+          para,
           texto: await this.decifrar(tx, ctx.tenantId, e.id, CAMPO_TEXTO_ENVIO, e.bodyEnc),
           parametros,
           modelo: modelo.nomeNoProvedor,
         });
       }
-      return { prontos, cancelados, remetente: cfg.businessNumberId ?? '' };
+      return { prontos, cancelados, numeroMudou, remetente: cfg.businessNumberId ?? '' };
     });
 
     const resultados: { id: string; r: ResultadoDeEnvio }[] = [];
@@ -499,7 +556,7 @@ export class WhatsappService implements OnApplicationBootstrap {
         scope: 'whatsapp_outbox',
         metadata: { op: 'dispatch', sent: enviados, failed: falharam, cancelled: reservados.cancelados, retry: resultados.length - enviados - falharam },
       });
-      return { enviados, falharam, cancelados: reservados.cancelados };
+      return { enviados, falharam, cancelados: reservados.cancelados, numeroMudou: reservados.numeroMudou };
     });
   }
 
@@ -762,13 +819,70 @@ export class WhatsappService implements OnApplicationBootstrap {
     return telefoneParaWhatsapp(telefone);
   }
 
-  private async cancelarPendentes(tx: TenantTx, ctx: RequestContext, optInId: string): Promise<number> {
+  private async cancelarPendentes(tx: TenantTx, ctx: RequestContext, optInId: string, codigo: string | null = null): Promise<number> {
+    return (await this.cancelarPendentesIds(tx, ctx, optInId, codigo)).length;
+  }
+
+  private async cancelarPendentesIds(tx: TenantTx, ctx: RequestContext, optInId: string, codigo: string | null): Promise<string[]> {
     const r = await tx
       .update(whatsappOutbox)
-      .set({ status: 'cancelado' })
+      .set({ status: 'cancelado', ...(codigo ? { failureCode: codigo } : {}) })
       .where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.optInId, optInId), eq(whatsappOutbox.status, 'agendado')))
       .returning({ id: whatsappOutbox.id });
-    return r.length;
+    return r.map((x) => x.id);
+  }
+
+  private async cancelarEnvio(tx: TenantTx, ctx: RequestContext, id: string, codigo: string | null): Promise<void> {
+    await tx
+      .update(whatsappOutbox)
+      .set({ status: 'cancelado', ...(codigo ? { failureCode: codigo } : {}) })
+      .where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.id, id)));
+  }
+
+  /**
+   * V1: o número de agora não é o que consentiu. O opt-in perde a validade (revogado `numero_mudou`, pelo
+   * sistema ou pelo usuário que rodou o job), os envios agendados dele são cancelados com o mesmo código
+   * (a recepção vê na fila e pede um novo opt-in) e a trilha registra só ids e contagens.
+   */
+  private async invalidarPorNumeroMudado(tx: TenantTx, ctx: RequestContext, optInId: string, pacienteId: string): Promise<string[]> {
+    const sistema = ctx.userId === SYSTEM_ACTOR_ID;
+    const r = await tx
+      .update(whatsappOptIns)
+      .set({ revokedAt: new Date(), revokedBy: sistema ? null : ctx.userId, revokeMethod: 'numero_mudou' })
+      .where(and(eq(whatsappOptIns.tenantId, ctx.tenantId), eq(whatsappOptIns.id, optInId), isNull(whatsappOptIns.revokedAt)))
+      .returning({ id: whatsappOptIns.id });
+    const ids = await this.cancelarPendentesIds(tx, ctx, optInId, 'numero_mudou');
+    if (r.length > 0) {
+      this.logger.warn('WHATSAPP_NUMERO_MUDOU opt_in_revogado novo_opt_in_necessario');
+      await recordAudit(tx, ctx, {
+        action: AuditAction.ConsentChange,
+        scope: 'whatsapp_opt_ins',
+        metadata: { op: 'revoke', opt_in_id: optInId, patient_id: pacienteId, method: 'numero_mudou', outbox_cancelled: ids.length },
+      });
+    }
+    return ids;
+  }
+
+  /**
+   * Chave da clínica para o HMAC de comparação de número (V1). Criada na primeira vez (32 bytes aleatórios,
+   * cifrados com a chave da clínica); `criar = false` devolve null se ainda não existe (nenhum opt-in).
+   */
+  private async chaveDoNumero(tx: TenantTx, ctx: RequestContext, criar: boolean): Promise<Buffer | null> {
+    const ref = campoWhatsappRef(ctx.tenantId, ctx.tenantId, CAMPO_CHAVE_NUMERO);
+    const ler = async () => {
+      const [k] = await tx.select({ keyEnc: whatsappPhoneKeys.keyEnc }).from(whatsappPhoneKeys).where(eq(whatsappPhoneKeys.tenantId, ctx.tenantId));
+      return k ? this.cipher.decrypt(tx, ref, k.keyEnc) : null;
+    };
+    const atual = await ler();
+    if (atual || !criar) return atual;
+    const keyEnc = await this.cifrar(tx, ctx, ctx.tenantId, CAMPO_CHAVE_NUMERO, randomBytes(32));
+    await tx.insert(whatsappPhoneKeys).values({ tenantId: ctx.tenantId, keyEnc }).onConflictDoNothing();
+    return ler();
+  }
+
+  private async telefoneDoCadastro(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<string | null> {
+    const [p] = await tx.select({ phoneEnc: patients.phoneEnc }).from(patients).where(and(eq(patients.tenantId, tenantId), eq(patients.id, pacienteId)));
+    return p?.phoneEnc ? this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'phone'), p.phoneEnc) : null;
   }
 
   private async pacienteDaClinica(tx: TenantTx, ctx: RequestContext, id: string, exigirAtivo = false): Promise<void> {
@@ -777,7 +891,7 @@ export class WhatsappService implements OnApplicationBootstrap {
     if (exigirAtivo && !p.ativo) throw new ConflitoError('paciente_inativo');
   }
 
-  private async cifrar(tx: TenantTx, ctx: RequestContext, rowId: string, campo: CampoWhatsapp, valor: string): Promise<string> {
+  private async cifrar(tx: TenantTx, ctx: RequestContext, rowId: string, campo: CampoWhatsapp, valor: string | Uint8Array): Promise<string> {
     const ref = campoWhatsappRef(ctx.tenantId, rowId, campo);
     try {
       return await this.cipher.encrypt(tx, ref, valor);

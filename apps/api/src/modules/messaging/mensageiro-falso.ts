@@ -14,6 +14,8 @@ export class MensageiroFalso implements MensageiroWhatsApp {
   readonly enviadas: { readonly mensagem: MensagemDeSaida; readonly idProvedor: string }[] = [];
   /** Números que o "provedor" recusa (para testar a falha e o fallback). */
   readonly numerosRecusados = new Set<string>();
+  /** Números com falha TEMPORÁRIA (o envio volta para "agendado" e é tentado de novo). */
+  readonly numerosIndisponiveis = new Set<string>();
 
   constructor(
     private readonly opcoes: { readonly segredoWebhook?: Buffer | undefined; readonly tokenInscricao?: string | undefined; readonly nodeEnv?: string | undefined } = {},
@@ -26,6 +28,7 @@ export class MensageiroFalso implements MensageiroWhatsApp {
 
   enviar(mensagem: MensagemDeSaida): Promise<ResultadoDeEnvio> {
     if (this.numerosRecusados.has(mensagem.para)) return Promise.resolve({ ok: false, codigo: '131026', definitivo: true });
+    if (this.numerosIndisponiveis.has(mensagem.para)) return Promise.resolve({ ok: false, codigo: '130429', definitivo: false });
     const idProvedor = `wamid.FAKE${randomUUID().replace(/-/g, '')}`;
     this.enviadas.push({ mensagem, idProvedor });
     return Promise.resolve({ ok: true, idProvedor });

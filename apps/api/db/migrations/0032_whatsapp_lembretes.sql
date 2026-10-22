@@ -10,14 +10,15 @@
 --   do lembrete (padrão 24 h = D-1), horário permitido de envio e janela de resposta.
 -- - whatsapp_routes (INTERNA): número de negócio -> clínica, para o webhook (que chega sem sessão) achar
 --   a clínica. O runtime não lê nem grava: só a função SECURITY DEFINER app_whatsapp_tenant_for_number.
--- - whatsapp_opt_ins: opt-in por paciente e finalidade, com PROVA (quando, como, quem registrou e a
---   referência do comprovante cifrada) e revogação única. Só um usuário da clínica registra (o sistema
+-- - whatsapp_phone_keys: chave da clínica (cifrada) para o HMAC de comparação de número (V1 do #69).
+-- - whatsapp_opt_ins: opt-in por paciente e finalidade, com PROVA (quando, como, quem registrou, a
+--   referência do comprovante cifrada e o NÚMERO QUE CONSENTIU, cifrado e com HMAC) e revogação única. Só um usuário da clínica registra (o sistema
 --   e o webhook nunca concedem); o paciente revoga respondendo SAIR (sistema) ou na recepção.
 -- - modelos: SÓ os da plataforma (lista fechada no código: nome na Meta + texto aprovado, conferidos
 --   juntos); a clínica não cria modelo (V3 do parecer #69). A fila guarda o nome do modelo usado.
 -- - whatsapp_outbox: fila de envios (agendado, enviando, enviado, entregue, lido, falhou, cancelado).
---   Idempotência: um lembrete por (consulta, horário). O INSERT exige opt-in VIGENTE do mesmo paciente e
---   destinatário (barreira no banco, não só na API).
+--   Idempotência: um lembrete por (consulta, horário). O INSERT e a reserva para envio exigem opt-in
+--   VIGENTE do mesmo paciente e destinatário PARA O MESMO NÚMERO (HMAC igual): barreira no banco.
 -- - whatsapp_inbound: respostas recebidas; idempotência pelo id da mensagem no provedor; só o sistema
 --   (webhook) grava.
 -- Conteúdo de mensagem (texto renderizado/recebido e números) fica SÓ cifrado e sai em 30 dias
@@ -132,6 +133,18 @@ REVOKE ALL ON FUNCTION app_whatsapp_tenant_for_number(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_whatsapp_tenant_for_number(text) TO app_user;
 
 -- ---------------------------------------------------------------------------------------------------
+-- Chave de comparação de número, por clínica (V1 do parecer #69). O número fica cifrado; para comparar
+-- "o número de agora é o que consentiu?" sem decifrar tudo, guarda-se HMAC-SHA256(chave da clínica,
+-- número normalizado). A chave é aleatória, cifrada com a chave da clínica (FieldCipher, KMS), nunca sai
+-- do servidor e não muda (só INSERT).
+-- ---------------------------------------------------------------------------------------------------
+CREATE TABLE whatsapp_phone_keys (
+  tenant_id   uuid PRIMARY KEY REFERENCES tenants (id),
+  key_enc     text NOT NULL CONSTRAINT whatsapp_phone_keys_key_check CHECK (app_is_sealed_field(key_enc)),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------------------------------
 -- Opt-in com prova
 -- ---------------------------------------------------------------------------------------------------
 CREATE TABLE whatsapp_opt_ins (
@@ -148,21 +161,29 @@ CREATE TABLE whatsapp_opt_ins (
                      CHECK (method IN ('verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente')),
   -- Referência do comprovante (nº do termo, protocolo), cifrada com a chave da clínica.
   evidence_enc     text CONSTRAINT whatsapp_opt_ins_evidence_check CHECK (evidence_enc IS NULL OR app_is_sealed_field(evidence_enc)),
+  -- O NÚMERO QUE CONSENTIU (V1 do #69): cifrado, e o HMAC da clínica para comparar com o número de agora.
+  -- Número diferente = o opt-in perde a validade (revogado como numero_mudou) e nada sai.
+  recipient_phone_enc  text NOT NULL CONSTRAINT whatsapp_opt_ins_phone_check CHECK (app_is_sealed_field(recipient_phone_enc)),
+  recipient_phone_hash text NOT NULL CONSTRAINT whatsapp_opt_ins_phone_hash_check CHECK (recipient_phone_hash ~ '^[0-9a-f]{64}$'),
   granted_at       timestamptz NOT NULL DEFAULT now(),
   granted_by       uuid NOT NULL,
   revoked_at       timestamptz,
   -- NULL quando o próprio titular revogou pelo canal (SAIR), processado pelo sistema.
   revoked_by       uuid,
   revoke_method    text CONSTRAINT whatsapp_opt_ins_revoke_check
-                     CHECK (revoke_method IS NULL OR revoke_method IN ('pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario')),
+                     CHECK (revoke_method IS NULL OR revoke_method IN ('pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario', 'numero_mudou')),
   CONSTRAINT whatsapp_opt_ins_guardian_check CHECK ((recipient_kind = 'responsavel') = (guardian_id IS NOT NULL)),
   CONSTRAINT whatsapp_opt_ins_revoked_check CHECK (
     (revoked_at IS NULL AND revoke_method IS NULL AND revoked_by IS NULL)
-    OR (revoked_at IS NOT NULL AND revoke_method IS NOT NULL AND ((revoke_method = 'resposta_sair') = (revoked_by IS NULL)))),
+    -- SAIR: sempre o sistema (NULL). numero_mudou: o sistema (job) ou o usuário que rodou o envio. Demais: usuário.
+    OR (revoked_at IS NOT NULL AND revoke_method IS NOT NULL
+        AND (revoke_method <> 'resposta_sair' OR revoked_by IS NULL)
+        AND (revoke_method IN ('resposta_sair', 'numero_mudou') OR revoked_by IS NOT NULL))),
   CONSTRAINT whatsapp_opt_ins_patient_fk FOREIGN KEY (patient_id, tenant_id) REFERENCES patients (id, tenant_id),
   CONSTRAINT whatsapp_opt_ins_id_tenant_key UNIQUE (id, tenant_id)
 );
 CREATE UNIQUE INDEX whatsapp_opt_ins_live_idx ON whatsapp_opt_ins (tenant_id, patient_id, purpose) WHERE revoked_at IS NULL;
+CREATE INDEX whatsapp_opt_ins_phone_idx ON whatsapp_opt_ins (tenant_id, recipient_phone_hash) WHERE revoked_at IS NULL;
 
 CREATE FUNCTION whatsapp_opt_ins_guard() RETURNS trigger
   LANGUAGE plpgsql
@@ -188,13 +209,14 @@ BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.patient_id IS DISTINCT FROM OLD.patient_id
      OR NEW.recipient_kind IS DISTINCT FROM OLD.recipient_kind OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id
      OR NEW.purpose IS DISTINCT FROM OLD.purpose OR NEW.method IS DISTINCT FROM OLD.method OR NEW.evidence_enc IS DISTINCT FROM OLD.evidence_enc
+     OR NEW.recipient_phone_enc IS DISTINCT FROM OLD.recipient_phone_enc OR NEW.recipient_phone_hash IS DISTINCT FROM OLD.recipient_phone_hash
      OR NEW.granted_at IS DISTINCT FROM OLD.granted_at OR NEW.granted_by IS DISTINCT FROM OLD.granted_by
      OR NEW.revoked_at IS NULL THEN
     RAISE EXCEPTION 'opt-in: só a revogação é permitida' USING ERRCODE = 'insufficient_privilege';
   END IF;
-  IF NEW.revoke_method = 'resposta_sair' THEN
+  IF NEW.revoke_method = 'resposta_sair' OR (NEW.revoke_method = 'numero_mudou' AND NEW.revoked_by IS NULL) THEN
     IF NOT app_is_system_session() THEN
-      RAISE EXCEPTION 'revogação pelo canal só pelo processamento do webhook' USING ERRCODE = 'insufficient_privilege';
+      RAISE EXCEPTION 'revogação pelo canal (ou por número mudado, sem usuário) só pelo sistema' USING ERRCODE = 'insufficient_privilege';
     END IF;
   ELSIF app_current_user() IS NULL OR NEW.revoked_by IS DISTINCT FROM app_current_user() THEN
     RAISE EXCEPTION 'revogação registrada pelo usuário da sessão' USING ERRCODE = 'insufficient_privilege';
@@ -235,6 +257,8 @@ CREATE TABLE whatsapp_outbox (
   guardian_id            uuid,
   -- Conteúdo (cifrado; NULL depois da retenção de 30 dias).
   recipient_phone_enc    text CONSTRAINT whatsapp_outbox_phone_check CHECK (recipient_phone_enc IS NULL OR app_is_sealed_field(recipient_phone_enc)),
+  -- HMAC do número de destino: tem de ser o do opt-in (V1). Metadado: fica depois da retenção.
+  recipient_phone_hash   text NOT NULL CONSTRAINT whatsapp_outbox_phone_hash_check CHECK (recipient_phone_hash ~ '^[0-9a-f]{64}$'),
   body_enc               text CONSTRAINT whatsapp_outbox_body_check CHECK (body_enc IS NULL OR app_is_sealed_field(body_enc)),
   status                 text NOT NULL DEFAULT 'agendado' CONSTRAINT whatsapp_outbox_status_check
                            CHECK (status IN ('agendado', 'enviando', 'enviado', 'entregue', 'lido', 'falhou', 'cancelado')),
@@ -280,12 +304,14 @@ BEGIN
     IF NEW.created_by IS DISTINCT FROM app_current_user() THEN
       RAISE EXCEPTION 'autor do envio é o usuário da sessão (ou o sistema)' USING ERRCODE = 'insufficient_privilege';
     END IF;
-    -- Opt-in VIGENTE do mesmo paciente e do mesmo destinatário: sem ele o banco recusa o envio.
+    -- Opt-in VIGENTE do mesmo paciente, do mesmo destinatário e PARA O MESMO NÚMERO (V1): sem ele o banco
+    -- recusa o envio.
     IF NOT EXISTS (
          SELECT 1 FROM whatsapp_opt_ins o
           WHERE o.tenant_id = NEW.tenant_id AND o.id = NEW.opt_in_id AND o.patient_id = NEW.patient_id
             AND o.revoked_at IS NULL AND o.purpose = NEW.kind
             AND o.recipient_kind = NEW.recipient_kind AND o.guardian_id IS NOT DISTINCT FROM NEW.guardian_id
+            AND o.recipient_phone_hash = NEW.recipient_phone_hash
           FOR SHARE) THEN
       RAISE EXCEPTION 'envio sem opt-in vigente do destinatário' USING ERRCODE = 'insufficient_privilege';
     END IF;
@@ -305,6 +331,7 @@ BEGIN
      OR NEW.appointment_starts_at IS DISTINCT FROM OLD.appointment_starts_at OR NEW.patient_id IS DISTINCT FROM OLD.patient_id
      OR NEW.opt_in_id IS DISTINCT FROM OLD.opt_in_id OR NEW.template_name IS DISTINCT FROM OLD.template_name OR NEW.kind IS DISTINCT FROM OLD.kind
      OR NEW.recipient_kind IS DISTINCT FROM OLD.recipient_kind OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id
+     OR NEW.recipient_phone_hash IS DISTINCT FROM OLD.recipient_phone_hash
      OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.created_by IS DISTINCT FROM OLD.created_by THEN
     RAISE EXCEPTION 'envio: identidade imutável' USING ERRCODE = 'insufficient_privilege';
   END IF;
@@ -334,6 +361,14 @@ BEGIN
       RAISE EXCEPTION 'envio: transição de status inválida' USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NEW.status = 'enviando' THEN
+      -- Reserva para envio: o opt-in ainda vale e é do MESMO número (V1), conferido de novo aqui.
+      IF NOT EXISTS (
+           SELECT 1 FROM whatsapp_opt_ins o
+            WHERE o.tenant_id = NEW.tenant_id AND o.id = NEW.opt_in_id AND o.revoked_at IS NULL
+              AND o.recipient_phone_hash = NEW.recipient_phone_hash
+            FOR SHARE) THEN
+        RAISE EXCEPTION 'envio sem opt-in vigente para este número' USING ERRCODE = 'insufficient_privilege';
+      END IF;
       NEW.attempts := OLD.attempts + 1;
     ELSIF NEW.status = 'enviado' THEN
       NEW.sent_at := now();
@@ -429,6 +464,15 @@ ALTER TABLE whatsapp_opt_ins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_opt_ins FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_opt_ins
   USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
+ALTER TABLE whatsapp_phone_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE whatsapp_phone_keys FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON whatsapp_phone_keys
+  USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
+REVOKE ALL ON whatsapp_phone_keys FROM PUBLIC;
+REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON whatsapp_phone_keys FROM app_user;
+GRANT SELECT, INSERT ON whatsapp_phone_keys TO app_user;
+CREATE TRIGGER whatsapp_phone_keys_no_update_delete BEFORE UPDATE OR DELETE ON whatsapp_phone_keys FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
+CREATE TRIGGER whatsapp_phone_keys_no_truncate BEFORE TRUNCATE ON whatsapp_phone_keys FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
 ALTER TABLE whatsapp_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_outbox FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON whatsapp_outbox

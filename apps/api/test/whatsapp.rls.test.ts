@@ -12,7 +12,7 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappSettings } from '../src/db/schema';
+import { appointments, auditLog, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
@@ -58,6 +58,13 @@ const numeroB = `8${String(Date.now()).slice(-10)}2`;
 let seq = 0;
 
 const idDe = (r: { body: unknown }) => (r.body as { id: string }).id;
+
+/** Colunas obrigatórias do opt-in em INSERT direto que o banco tem de recusar ANTES (trigger/RLS). */
+const SELO_FALSO = { recipientPhoneEnc: 'x', recipientPhoneHash: '0'.repeat(64) };
+
+async function optInDoBanco(tenant: TenantId, id: string) {
+  return withTenant(api.db.db, tenant, async (tx) => (await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, id)))[0]);
+}
 
 const telefonesUsados: string[] = [];
 function telefoneNovo(): string {
@@ -211,7 +218,7 @@ describe('opt-in: sem ele, nada sai', () => {
     expect(
       await sqlstate(
         withTenant(api.db.db, clinicaA, (tx) =>
-          tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: p, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: randomUUID() }),
+          tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: p, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: randomUUID(), ...SELO_FALSO }),
         ),
       ),
     ).toContain('42501');
@@ -221,6 +228,7 @@ describe('opt-in: sem ele, nada sai', () => {
     const p = await paciente(adminA, telefoneNovo());
     const c = await consulta(adminA, p, 20);
     const o = await optIn(adminA, p);
+    const hashDoOptIn = (await optInDoBanco(clinicaA, o.id))?.recipientPhoneHash ?? '';
     await api.http().post(`/pacientes/${p}/whatsapp/opt-in/revogar`).set(cab(adminA)).send({ meio: 'pedido_na_recepcao' }).expect(200);
     expect(
       await sqlstate(
@@ -228,7 +236,7 @@ describe('opt-in: sem ele, nada sai', () => {
           api.db.db,
           clinicaA,
           (tx) =>
-            tx.insert(whatsappOutbox).values({ tenantId: clinicaA, appointmentId: c.id, appointmentStartsAt: c.inicio, patientId: p, optInId: o.id, templateName: MODELO_PADRAO.nomeNoProvedor, recipientKind: 'paciente', createdBy: adminA.userId }),
+            tx.insert(whatsappOutbox).values({ tenantId: clinicaA, appointmentId: c.id, appointmentStartsAt: c.inicio, patientId: p, optInId: o.id, templateName: MODELO_PADRAO.nomeNoProvedor, recipientKind: 'paciente', recipientPhoneHash: hashDoOptIn, createdBy: adminA.userId }),
           adminA.userId,
         ),
       ),
@@ -238,6 +246,101 @@ describe('opt-in: sem ele, nada sai', () => {
     expect(
       await sqlstate(
         withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOptIns).set({ revokedAt: null, revokedBy: null, revokeMethod: null }).where(eq(whatsappOptIns.id, o.id)), adminA.userId),
+      ),
+    ).toContain('42501');
+  });
+});
+
+describe('V1: o opt-in vale só para o número que consentiu', () => {
+  it('opt-in grava o número que consentiu, cifrado e com o HMAC', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const o = await optIn(recepA, p);
+    const linha = await optInDoBanco(clinicaA, o.id);
+    expect(linha?.recipientPhoneEnc).toMatch(/^v1:/);
+    expect(linha?.recipientPhoneHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(linha)).not.toContain(tel);
+  });
+
+  it('telefone trocado no cadastro DEPOIS do opt-in: nada sai, o opt-in perde a validade e a recepção vê o motivo', async () => {
+    const tel = telefoneNovo();
+    const novo = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const c = await consulta(adminA, p, 20);
+    const o = await optIn(adminA, p);
+    await api.http().patch(`/pacientes/${p}`).set(cab(adminA)).send({ telefone: novo }).expect(200);
+    const r = await svc.executarLembretesComoSistema(clinicaA);
+    expect(r.numeroMudou).toBeGreaterThanOrEqual(1);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(enviadasPara(novo)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+    expect(await optInDoBanco(clinicaA, o.id)).toMatchObject({ revokeMethod: 'numero_mudou', revokedBy: null });
+    const ver = await api.http().get(`/pacientes/${p}/whatsapp/opt-in`).set(cab(recepA));
+    expect(ver.body).toMatchObject({ vigente: null, historico: [{ meioDaRevogacao: 'numero_mudou' }] });
+    // Novo opt-in com o número novo: aí sai, para o número novo.
+    await optIn(adminA, p);
+    await svc.executarLembretesComoSistema(clinicaA);
+    expect(enviadasPara(novo)).toHaveLength(1);
+    expect(enviadasPara(tel)).toHaveLength(0);
+  });
+
+  it('telefone trocado entre a programação e o despacho: o envio agendado é cancelado (numero_mudou)', async () => {
+    const tel = telefoneNovo();
+    const novo = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const c = await consulta(adminA, p, 20);
+    const o = await optIn(adminA, p);
+    // 1ª passada: programa e o provedor falha TEMPORARIAMENTE; a linha volta para "agendado".
+    falso.numerosIndisponiveis.add(`55${tel}`);
+    await svc.executarLembretesComoSistema(clinicaA);
+    falso.numerosIndisponiveis.delete(`55${tel}`);
+    const linha = await envioDoAgendamento(clinicaA, c.id);
+    expect(linha).toMatchObject({ status: 'agendado', attempts: 1 });
+    const linhaId = linha?.id;
+    // Troca o telefone e roda de novo: o despacho confere o número de agora e cancela.
+    await api.http().patch(`/pacientes/${p}`).set(cab(adminA)).send({ telefone: novo }).expect(200);
+    const r = await svc.executarLembretesComoSistema(clinicaA);
+    expect(r.numeroMudou).toBeGreaterThanOrEqual(1);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(enviadasPara(novo)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toMatchObject({ id: linhaId, status: 'cancelado', failureCode: 'numero_mudou' });
+    expect(await optInDoBanco(clinicaA, o.id)).toMatchObject({ revokeMethod: 'numero_mudou' });
+  });
+
+  it('o BANCO recusa envio com número diferente do consentido (INSERT e reserva para envio)', async () => {
+    const p = await paciente(adminA, telefoneNovo());
+    const c = await consulta(adminA, p, 20);
+    const o = await optIn(adminA, p);
+    const outro = 'f'.repeat(64);
+    expect(
+      await sqlstate(
+        withTenant(
+          api.db.db,
+          clinicaA,
+          (tx) =>
+            tx.insert(whatsappOutbox).values({
+              tenantId: clinicaA,
+              appointmentId: c.id,
+              appointmentStartsAt: c.inicio,
+              patientId: p,
+              optInId: o.id,
+              templateName: MODELO_PADRAO.nomeNoProvedor,
+              recipientKind: 'paciente',
+              recipientPhoneHash: outro,
+              createdBy: adminA.userId,
+            }),
+          adminA.userId,
+        ),
+      ),
+    ).toContain('42501');
+    // O HMAC e o número do opt-in não mudam (nem para "corrigir" o número).
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOptIns).set({ recipientPhoneHash: outro }).where(eq(whatsappOptIns.id, o.id)), adminA.userId)),
+    ).toContain('42501');
+    // Usuário não revoga "como sistema" (numero_mudou sem autor).
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOptIns).set({ revokedAt: new Date(), revokedBy: null, revokeMethod: 'numero_mudou' }).where(eq(whatsappOptIns.id, o.id)), adminA.userId),
       ),
     ).toContain('42501');
   });
@@ -296,6 +399,7 @@ describe('modelos: só os da plataforma (V3 do parecer #69)', () => {
     const p = await paciente(adminA, tel);
     const c = await consulta(adminA, p, 20);
     const o = await optIn(adminA, p);
+    const hashDoOptIn = (await optInDoBanco(clinicaA, o.id))?.recipientPhoneHash ?? '';
     expect(
       await sqlstate(
         withTenant(
@@ -310,6 +414,7 @@ describe('modelos: só os da plataforma (V3 do parecer #69)', () => {
               optInId: o.id,
               templateName: 'modelo_da_clinica_x',
               recipientKind: 'paciente',
+              recipientPhoneHash: hashDoOptIn,
               createdBy: adminA.userId,
             }),
           adminA.userId,
@@ -548,23 +653,29 @@ describe('isolamento entre clínicas', () => {
     const ea = await envioDoAgendamento(clinicaA, a.id);
     await webhook(corpoDeResposta(numeroA, `55${tel}`, 'ok', ea?.providerMessageId ?? '')).expect(200);
     const contagens = await withTenant(api.db.db, clinicaB, async (tx: TenantTx) => {
-      const n = async (t: typeof whatsappOutbox | typeof whatsappOptIns | typeof whatsappInbound | typeof whatsappSettings) =>
+      const n = async (t: typeof whatsappOutbox | typeof whatsappOptIns | typeof whatsappInbound | typeof whatsappSettings | typeof whatsappPhoneKeys) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t).where(eq(t.tenantId, clinicaA)))[0]?.n;
       return {
         outbox: await n(whatsappOutbox),
         optIns: await n(whatsappOptIns),
         inbound: await n(whatsappInbound),
         settings: await n(whatsappSettings),
+        chaves: await n(whatsappPhoneKeys),
       };
     });
-    expect(contagens).toEqual({ outbox: 0, optIns: 0, inbound: 0, settings: 0 });
+    expect(contagens).toEqual({ outbox: 0, optIns: 0, inbound: 0, settings: 0, chaves: 0 });
+    // A chave de comparação de número de A existe (houve opt-in), mas B não a lê nem grava uma no nome de A.
+    expect(await withTenant(api.db.db, clinicaA, async (tx) => (await tx.select().from(whatsappPhoneKeys)).length)).toBe(1);
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaB, (tx) => tx.insert(whatsappPhoneKeys).values({ tenantId: clinicaA, keyEnc: 'x' }), adminB.userId)),
+    ).toContain('42501');
     // Gravar com o tenant de A no contexto de B: o WITH CHECK recusa.
     expect(
       await sqlstate(
         withTenant(
           api.db.db,
           clinicaB,
-          (tx) => tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: p, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: adminB.userId }),
+          (tx) => tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: p, recipientKind: 'paciente', method: 'verbal_na_recepcao', grantedBy: adminB.userId, ...SELO_FALSO }),
           adminB.userId,
         ),
       ),

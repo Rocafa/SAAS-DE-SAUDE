@@ -6,6 +6,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import {
   CAMPO_EVIDENCIA,
   CAMPO_TELEFONE_ENVIO,
+  CAMPO_TELEFONE_OPTIN,
   CAMPO_TELEFONE_RESPOSTA,
   CAMPO_TEXTO_ENVIO,
   CAMPO_TEXTO_RESPOSTA,
@@ -43,6 +44,8 @@ export interface ExportedWhatsapp {
     purpose: string;
     method: string;
     evidence: string | null;
+    /** Número que consentiu (decifrado). O HMAC de comparação não sai (só serve com a chave interna). */
+    recipientPhone: string | null;
     grantedAt: string;
     grantedBy: string;
     revokedAt: string | null;
@@ -138,6 +141,7 @@ export async function exportarWhatsapp(
         purpose: o.purpose,
         method: o.method,
         evidence: await dec(o.id, CAMPO_EVIDENCIA, o.evidenceEnc),
+        recipientPhone: await dec(o.id, CAMPO_TELEFONE_OPTIN, o.recipientPhoneEnc),
         grantedAt: o.grantedAt.toISOString(),
         grantedBy: o.grantedBy,
         revokedAt: iso(o.revokedAt),
