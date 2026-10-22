@@ -140,6 +140,12 @@ function texto(valor: string, max: number): { valor?: string; codigo?: string } 
   return { valor: t };
 }
 
+/** Menor de 18 anos em `hoje` (data UTC), pelo nascimento AAAA-MM-DD já validado. */
+export function ehMenorDeIdade(nascimento: string, hoje: Date): boolean {
+  const ano = Number(nascimento.slice(0, 4)) + 18;
+  return hoje.toISOString().slice(0, 10) < `${ano}${nascimento.slice(4)}`;
+}
+
 function celula(celulas: readonly string[], mapa: Mapeamento, campo: string): string {
   const idx = mapa[campo];
   return idx === undefined ? '' : (celulas[idx] ?? '');
@@ -148,6 +154,8 @@ function celula(celulas: readonly string[], mapa: Mapeamento, campo: string): st
 /**
  * Valida as linhas de um lote de PACIENTES. Erro tira a linha da importação; aviso não. CPF repetido no
  * arquivo: a primeira ocorrência vale, as seguintes são erro. Mesmo nome + nascimento sem CPF: aviso.
+ * Menor de 18 anos pelo nascimento: aviso `menor_sem_responsavel` (R5 do parecer do importador). O cadastro
+ * ainda não tem responsável legal; a linha entra e o admin vê, antes de aplicar, quem vai precisar dele.
  */
 export function validarPacientes(planilha: Planilha, mapa: Mapeamento, hoje: Date = new Date()): Validacao<PacienteDaLinha> {
   const divergencias: Divergencia[] = [];
@@ -187,6 +195,9 @@ export function validarPacientes(planilha: Planilha, mapa: Mapeamento, hoje: Dat
       const chave = `${normalizarBusca(nome.valor)}|${nascimento}`;
       if (nomeNascimento.has(chave)) divergencias.push({ linha: numero, campo: 'nome', codigo: 'possivel_duplicado', gravidade: 'aviso' });
       nomeNascimento.add(chave);
+    }
+    if (nascimento && ehMenorDeIdade(nascimento, hoje)) {
+      divergencias.push({ linha: numero, campo: 'nascimento', codigo: 'menor_sem_responsavel', gravidade: 'aviso' });
     }
     validas.push({
       linha: numero,

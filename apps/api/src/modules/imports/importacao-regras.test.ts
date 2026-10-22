@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { errosDoMapeamento, hashDoPlano, lerData, lerHora, sugerirMapeamento, validarAgenda, validarPacientes, valorParaRelatorio } from './importacao-regras';
+import { ehMenorDeIdade, errosDoMapeamento, hashDoPlano, lerData, lerHora, sugerirMapeamento, validarAgenda, validarPacientes, valorParaRelatorio } from './importacao-regras';
 import { decodificarUtf8, IMPORT_MAX_COLUNAS, lerCsv, neutralizarFormula, pareceZip, PlanilhaInvalidaError } from './planilha-csv';
 
 /** CPF fictício com DV válido e prefixo 000 (faixa não emitida). */
@@ -106,6 +106,19 @@ describe('regras do lote de pacientes', () => {
     );
     // O relatório devolve o valor neutralizado.
     expect(valorParaRelatorio(p, mapa, 4, 'nome')).toBe(`'=HYPERLINK("x")`);
+  });
+
+  it('menor de 18 anos pelo nascimento entra com aviso menor_sem_responsavel (R5), só código', () => {
+    const mapa = { nome: 0, telefone: 1, nascimento: 2 };
+    const p = lerCsv(
+      ['nome;telefone;nascimento', 'Lia Ficticia;11900000011;17/10/2008', 'Rui Ficticio;11900000012;16/10/2008', 'Teo Ficticio;11900000013;'].join('\n'),
+    );
+    const hoje = new Date('2026-10-16T12:00:00Z');
+    const v = validarPacientes(p, mapa, hoje);
+    expect(v.validas.map((x) => x.linha)).toEqual([2, 3, 4]);
+    expect(v.divergencias).toEqual([{ linha: 2, campo: 'nascimento', codigo: 'menor_sem_responsavel', gravidade: 'aviso' }]);
+    expect(ehMenorDeIdade('2008-10-17', hoje)).toBe(true);
+    expect(ehMenorDeIdade('2008-10-16', hoje)).toBe(false);
   });
 
   it('linha com número de colunas diferente do cabeçalho é erro', () => {
