@@ -115,6 +115,16 @@ export class ResponsaveisController {
     return this.service.registrarEmancipacao(paraRequestContext(auth), pacienteId, validarEmancipacao(corpo, noFusoDaClinica(new Date()).data));
   }
 
+  /** A4 do #67: eliminação dos responsáveis com o prontuário, vencida a guarda de 20 anos (dono da clínica). */
+  @Post('eliminacao')
+  @HttpCode(200)
+  @Permissao('cadastros:gerir')
+  eliminacao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
+    const pacienteId = exigirUuid(id);
+    exigirObjeto(corpo ?? {}, []);
+    return this.service.eliminarComOProntuario(paraRequestContext(auth), pacienteId);
+  }
+
   @Get(':vinculoId/historico')
   @Permissao('responsaveis:ler')
   historico(@Sessao() auth: AuthContext, @Param('id') id: string, @Param('vinculoId') vinculoId: string): Promise<readonly EventoDoHistoricoDto[]> {

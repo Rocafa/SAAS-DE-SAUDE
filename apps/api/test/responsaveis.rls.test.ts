@@ -10,6 +10,7 @@
 import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -618,6 +619,84 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
     const outro = await responsavel(recepA, adulto, { nome: 'Filho Ficticio', tipo: 'representante' });
     expect((await post(recepA, `/pacientes/${adulto}/responsaveis/${outro.id}/pagador`, { pagador: true })).body).toMatchObject({ codigo: 'ciencia_do_paciente_obrigatoria' });
     await post(recepA, `/pacientes/${adulto}/responsaveis/${outro.id}/pagador`, { pagador: true, cienciaDoPaciente: true }).expect(200);
+  });
+});
+
+/**
+ * Envelhece em 21 anos o cadastro do paciente e os eventos dos vínculos dele (papel de MIGRAÇÃO; o runtime
+ * não consegue: o histórico é append-only e `occurred_at` é do banco). Só para simular a guarda vencida.
+ */
+async function envelhecer(pacienteId: string): Promise<void> {
+  const url = process.env.DATABASE_MIGRATOR_URL;
+  if (!url) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para simular a guarda vencida');
+  const op = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await op.begin(async (t) => {
+      await t`select app_set_tenant(${clinicaA}::uuid)`;
+      await t`alter table patient_guardian_history disable trigger patient_guardian_history_no_update_delete`;
+      await t`update patient_guardian_history h set occurred_at = h.occurred_at - interval '21 years'
+                from patient_guardians v where v.tenant_id = h.tenant_id and v.id = h.link_id and v.patient_id = ${pacienteId}::uuid`;
+      await t`alter table patient_guardian_history enable trigger patient_guardian_history_no_update_delete`;
+      await t`update patients set created_at = created_at - interval '21 years' where id = ${pacienteId}::uuid`;
+    });
+  } finally {
+    await op.end({ timeout: 5 });
+  }
+}
+
+describe('A4 do 2º parecer do #67: responsáveis na guarda de 20 anos do prontuário', () => {
+  it('nada se elimina na guarda; vencida, o admin elimina vínculos e a pessoa sem outro vínculo, com trilha', async () => {
+    await api.membro(clinicaA, adminA, 'admin');
+    const pac = await paciente(recepA, { nome: 'Paciente Ficticio Guarda', nascimento: nascidoHa(30) });
+    const irmao = await paciente(recepA, { nome: 'Paciente Ficticio Guarda Irmao', nascimento: nascidoHa(30) });
+    const so = await responsavel(recepA, pac, { nome: 'Resp Ficticio So Deste QZE4', cpf: cpfFicticio(850), tipo: 'representante' });
+    await patch(recepA, `/pacientes/${pac}/responsaveis/${so.id}`, { cpf: cpfFicticio(851) }).expect(200);
+    const comp = await responsavel(recepA, pac, { nome: 'Resp Ficticio Compartilhado QZE5', tipo: 'representante' });
+    await responsavel(recepA, irmao, { responsavelId: comp.responsavelId, tipo: 'representante' });
+    const rota = `/pacientes/${pac}/responsaveis/eliminacao`;
+
+    // Na guarda: recepção 403; admin 409; banco recusa (55000) até para o admin.
+    expect((await post(recepA, rota)).status).toBe(403);
+    expect((await post(adminA, rota)).body).toMatchObject({ codigo: 'prazo_de_guarda_do_prontuario' });
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select * from app_patient_guardians_eliminate(${pac}::uuid)`), adminA.userId))).toContain('55000');
+    // A recepção não elimina nem direto no banco (42501).
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ eliminatedAt: new Date() }).where(eq(patientGuardians.id, so.id)), recepA.userId)),
+    ).toContain('42501');
+
+    // Guarda vencida, mas com vínculo vigente: 409.
+    await envelhecer(pac);
+    expect((await post(adminA, rota)).body).toMatchObject({ codigo: 'vinculo_vigente' });
+    for (const v of [so, comp]) await post(recepA, `/pacientes/${pac}/responsaveis/${v.id}/encerrar`, { motivo: 'fim_da_representacao' }).expect(200);
+    // Encerrar gerou evento novo (hoje): a guarda volta a contar dele.
+    expect((await post(adminA, rota)).body).toMatchObject({ codigo: 'prazo_de_guarda_do_prontuario' });
+    await envelhecer(pac);
+
+    const r = await post(adminA, rota);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body).toEqual({ vinculosEliminados: 2, pessoasDescartadas: 1 });
+    const links = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.patientId, pac)), recepA.userId);
+    expect(links.every((l) => l.eliminatedAt !== null && l.annulReasonEnc === null && l.clinicalInfoBasisEnc === null)).toBe(true);
+    const [pSo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, so.responsavelId)), recepA.userId);
+    expect(pSo).toMatchObject({ nameEnc: null, cpfEnc: null, phoneEnc: null });
+    // A pessoa que ainda é responsável do irmão (em guarda) fica.
+    const [pComp] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, comp.responsavelId)), recepA.userId);
+    expect(pComp?.nameEnc).toMatch(/^v1:/);
+    expect(pComp?.discardedAt).toBeNull();
+    const hist = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardianHistory).where(eq(patientGuardianHistory.guardianId, so.responsavelId)), recepA.userId);
+    expect(hist.map((h) => h.event)).toEqual(expect.arrayContaining(['vinculo_eliminado', 'responsavel_descartado']));
+    expect(hist.every((h) => h.prevCpfEnc === null && h.prevNameEnc === null)).toBe(true);
+    // Eliminado é terminal; repetir não elimina mais nada.
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ eliminatedAt: null }).where(eq(patientGuardians.id, so.id)), adminA.userId)),
+    ).toContain('42501');
+    expect((await post(adminA, rota)).body).toEqual({ vinculosEliminados: 0, pessoasDescartadas: 0 });
+    // Trilha só com contagens.
+    const trilha = JSON.stringify(
+      await withTenant(api.db.db, clinicaA, (tx) => tx.select({ m: auditLog.metadata }).from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'record_retention_elimination'`)),
+    );
+    expect(trilha).toContain(pac);
+    for (const proibido of ['QZE4', 'QZE5', cpfFicticio(850), cpfFicticio(851)]) expect(trilha).not.toContain(proibido);
   });
 });
 

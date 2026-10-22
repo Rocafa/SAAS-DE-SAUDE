@@ -546,6 +546,39 @@ export class ResponsaveisService {
     });
   }
 
+  /**
+   * A4 do #67: elimina os responsáveis do paciente JUNTO com o prontuário, vencida a guarda (Lei 13.787/2018,
+   * art. 6º: 20 anos do último registro; `app_patient_record_retention_until`). Antes disso: 409
+   * `prazo_de_guarda_do_prontuario`; retenção legal: 409 `retencao_legal`; vínculo vigente: 409
+   * `vinculo_vigente`. O banco confere tudo de novo. Vínculos perdem os campos cifrados; a pessoa sem outro
+   * vínculo em guarda é descartada. Trilha só com contagens.
+   */
+  eliminarComOProntuario(ctx: RequestContext, pacienteId: string): Promise<{ readonly vinculosEliminados: number; readonly pessoasDescartadas: number }> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const pac = await this.paciente(tx, ctx, pacienteId, true);
+      if (pac.legalHoldSince) throw new ConflitoError('retencao_legal');
+      const [g] = await tx.execute<{ ate: string }>(sql`select app_patient_record_retention_until(${ctx.tenantId}::uuid, ${pac.id}::uuid)::text as ate`);
+      if (!g || g.ate > hojeNaClinica()) throw new ConflitoError('prazo_de_guarda_do_prontuario');
+      const [vivo] = await tx
+        .select({ id: patientGuardians.id })
+        .from(patientGuardians)
+        .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pac.id), isNull(patientGuardians.endedAt)))
+        .limit(1);
+      if (vivo) throw new ConflitoError('vinculo_vigente');
+      const [r] = await tx.execute<{ links_eliminated: number; guardians_discarded: number }>(
+        sql`select * from app_patient_guardians_eliminate(${pac.id}::uuid)`,
+      );
+      const vinculosEliminados = Number(r?.links_eliminated ?? 0);
+      const pessoasDescartadas = Number(r?.guardians_discarded ?? 0);
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE_RESPONSAVEIS,
+        metadata: { op: 'record_retention_elimination', patient_id: pac.id, links: vinculosEliminados, discarded: pessoasDescartadas },
+      });
+      return { vinculosEliminados, pessoasDescartadas };
+    });
+  }
+
   /** Histórico do vínculo e da pessoa: eventos, campos e estado — nunca os valores da pessoa. */
   historico(ctx: RequestContext, pacienteId: string, vinculoId: string): Promise<readonly EventoDoHistoricoDto[]> {
     return lerNaClinica(this.db, ctx, async (tx) => {

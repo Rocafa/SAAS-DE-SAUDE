@@ -759,6 +759,8 @@ export const patientGuardians = pgTable('patient_guardians', {
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),
+  /** 0034 (A4 do #67): eliminado com o prontuário do paciente, vencida a guarda de 20 anos. */
+  eliminatedAt: timestamp('eliminated_at', { withTimezone: true }),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */
