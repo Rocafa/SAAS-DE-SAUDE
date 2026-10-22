@@ -30,7 +30,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { assertCanWrite, canRead, EXIT_WINDOW_DAYS, ExitWindowClosedError } from '../exports/access-policy';
 import { loadTenantSubscription } from '../exports/tenant-subscription';
 import { CAMPO_RECIBO, decifrarCampoFinanceiro } from '../finance/finance-fields';
-import type { ConteudoDoRecibo } from '../finance/financeiro-regras';
+import type { ConteudoDoRecibo, EmitenteDoRecibo } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { guardianFieldRef } from '../patients/guardian-fields';
 import { patientFieldRef } from '../patients/patient-fields';
@@ -75,6 +75,8 @@ export interface ContextoPortal {
   readonly agindoComo: PortalActingAs;
   /** V1 do #68: a PESSOA responsável (guardians da 0028) que age por este vínculo; null para o titular. */
   readonly responsavelId: string | null;
+  /** O vínculo de responsável da 0028 (para saber se é o pagador congelado num recebimento, R1); null para o titular. */
+  readonly vinculoResponsavelId: string | null;
 }
 
 export const ANTECEDENCIA_CANCELAMENTO = Symbol('ANTECEDENCIA_CANCELAMENTO');
@@ -99,11 +101,24 @@ export interface ConsultaPortalDto {
 export interface ReciboPortalResumoDto {
   readonly id: string;
   readonly numero: number;
-  readonly data: string;
+  /** null quando o recibo é de área sensível do adolescente e quem vê é o responsável que não pagou (R1). */
+  readonly data: string | null;
   readonly valorCentavos: number;
   readonly forma: PaymentMethod;
   readonly situacao: 'emitido' | 'cancelado';
+  /** R1 do #68: profissional, especialidade e data ocultos ao responsável que não é o pagador. */
+  readonly restrito: boolean;
 }
+
+/** Recibo no portal: o retrato emitido, com profissional e data ocultáveis (R1 do #68). */
+export type ReciboPortalDto = Omit<ConteudoDoRecibo, 'emitente' | 'dataPagamento'> & {
+  readonly emitente: Omit<EmitenteDoRecibo, 'nome'> & { readonly nome: string | null };
+  readonly dataPagamento: string | null;
+  readonly id: string;
+  readonly numero: number;
+  readonly situacao: 'emitido' | 'cancelado';
+  readonly restrito: boolean;
+};
 
 export interface PedidoPortalDto {
   readonly id: string;
@@ -127,6 +142,8 @@ export interface ConsentimentoPortalDto {
 }
 
 const PG_INSUFFICIENT_PRIVILEGE = '42501';
+/** Descrição do recibo restrito (R1): neutra, não revela área nem procedimento. */
+const DESCRICAO_RECIBO_RESTRITO = 'Atendimento de saúde';
 const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
 
 /** Teto diário de pedidos atingido no vínculo (a transação do portal desfaz; o alerta vem depois). */
@@ -358,25 +375,34 @@ export class PortalService {
   meusRecibos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<ReciboPortalResumoDto[]> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const linhas = await tx
-        .select({ r: receipts, p: payments, cancelado: receiptCancellations.id })
+        .select({ r: receipts, p: payments, cancelado: receiptCancellations.id, sensivel: professionals.sensitiveArea, especialidade: professionals.specialty })
         .from(receipts)
         .innerJoin(payments, and(eq(payments.tenantId, receipts.tenantId), eq(payments.id, receipts.paymentId)))
         .innerJoin(charges, and(eq(charges.tenantId, payments.tenantId), eq(charges.id, payments.chargeId)))
         .leftJoin(receiptCancellations, and(eq(receiptCancellations.tenantId, receipts.tenantId), eq(receiptCancellations.receiptId, receipts.id)))
+        .leftJoin(appointments, and(eq(appointments.tenantId, charges.tenantId), eq(appointments.id, charges.appointmentId)))
+        .leftJoin(professionals, and(eq(professionals.tenantId, charges.tenantId), sql`${professionals.id} = coalesce(${charges.professionalId}, ${appointments.professionalId})`))
         .where(and(eq(receipts.tenantId, ctx.tenantId), eq(charges.patientId, ctx.pacienteId)))
         .orderBy(desc(receipts.issuedAt), desc(receipts.number))
         .limit(100);
-      const itens = linhas.map(
-        (l): ReciboPortalResumoDto => ({
+      const sigilo = await this.sigiloDoAdolescente(tx, ctx);
+      const itens = linhas.map((l): ReciboPortalResumoDto => {
+        const restrito = sigilo && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.p.guardianPayerLinkId);
+        return {
           id: l.r.id,
           numero: l.r.number,
-          data: noFusoDaClinica(l.p.receivedAt).data,
+          data: restrito ? null : noFusoDaClinica(l.p.receivedAt).data,
           valorCentavos: l.p.amountCents,
           forma: l.p.method,
           situacao: l.cancelado ? 'cancelado' : 'emitido',
-        }),
-      );
-      await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'receipts', metadata: { op: 'portal_list', count: itens.length } });
+          restrito,
+        };
+      });
+      await this.auditar(tx, ctx, {
+        action: AuditAction.Read,
+        scope: 'receipts',
+        metadata: { op: 'portal_list', count: itens.length, restricted: itens.filter((i) => i.restrito).length },
+      });
       return itens;
     });
   }
@@ -385,26 +411,49 @@ export class PortalService {
    * Recibo do próprio paciente (retrato emitido). O CPF do PAGADOR terceiro (ex.: responsável) sai
    * mascarado: o recibo inteiro é do pagador; o titular vê o próprio CPF (beneficiário) inteiro.
    */
-  meuRecibo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, id: string): Promise<ConteudoDoRecibo & { id: string; numero: number; situacao: 'emitido' | 'cancelado' }> {
+  meuRecibo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, id: string): Promise<ReciboPortalDto> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const [l] = await tx
-        .select({ r: receipts, cancelado: receiptCancellations.id })
+        .select({
+          r: receipts,
+          cancelado: receiptCancellations.id,
+          pagadorCongelado: payments.guardianPayerLinkId,
+          sensivel: professionals.sensitiveArea,
+          especialidade: professionals.specialty,
+        })
         .from(receipts)
         .innerJoin(payments, and(eq(payments.tenantId, receipts.tenantId), eq(payments.id, receipts.paymentId)))
         .innerJoin(charges, and(eq(charges.tenantId, payments.tenantId), eq(charges.id, payments.chargeId)))
         .leftJoin(receiptCancellations, and(eq(receiptCancellations.tenantId, receipts.tenantId), eq(receiptCancellations.receiptId, receipts.id)))
+        .leftJoin(appointments, and(eq(appointments.tenantId, charges.tenantId), eq(appointments.id, charges.appointmentId)))
+        .leftJoin(professionals, and(eq(professionals.tenantId, charges.tenantId), sql`${professionals.id} = coalesce(${charges.professionalId}, ${appointments.professionalId})`))
         .where(and(eq(receipts.tenantId, ctx.tenantId), eq(receipts.id, id), eq(charges.patientId, ctx.pacienteId)));
       if (!l) throw new NaoEncontradoError();
       if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
       const c = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
       const terceiro = c.pagador.cpf !== null && c.pagador.cpf !== c.beneficiario.cpf;
-      await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'receipts', metadata: { receipt_id: id, receipt_number: l.r.number, op: 'portal_read' } });
-      return {
+      const restrito = (await this.sigiloDoAdolescente(tx, ctx)) && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.pagadorCongelado);
+      await this.auditar(tx, ctx, {
+        action: AuditAction.Read,
+        scope: 'receipts',
+        metadata: { receipt_id: id, receipt_number: l.r.number, op: 'portal_read', restricted: restrito },
+      });
+      const base = {
         ...c,
         pagador: terceiro ? { nome: c.pagador.nome, cpf: mascararCpf(c.pagador.cpf) } : c.pagador,
         id,
         numero: l.r.number,
-        situacao: l.cancelado ? 'cancelado' : 'emitido',
+        situacao: l.cancelado ? ('cancelado' as const) : ('emitido' as const),
+      };
+      if (!restrito) return { ...base, restrito: false };
+      // R1 do #68: sem quem atendeu (nome, documento e conselho do profissional), sem a data e com descrição neutra.
+      const pf = c.emitente.tipo === 'pf';
+      return {
+        ...base,
+        emitente: { ...c.emitente, nome: pf ? null : c.emitente.nome, documento: pf ? null : c.emitente.documento, registroConselho: null, profissionalId: null },
+        dataPagamento: null,
+        descricao: DESCRICAO_RECIBO_RESTRITO,
+        restrito: true,
       };
     });
   }
@@ -667,17 +716,38 @@ export class PortalService {
     );
     if (!c?.tenant_id || !c.patient_id) throw new ProibidoError('vinculo_inativo');
     const [l] = await tx
-      .select({ actingAs: portalLinks.actingAs, guardianId: portalLinks.guardianId })
+      .select({ actingAs: portalLinks.actingAs, guardianId: portalLinks.guardianId, guardianLinkId: portalLinks.guardianLinkId })
       .from(portalLinks)
       .where(and(eq(portalLinks.tenantId, c.tenant_id), eq(portalLinks.id, vinculoId)));
     if (!l) throw new ProibidoError('vinculo_inativo');
-    return { tenantId: c.tenant_id as TenantId, pacienteId: c.patient_id, contaId, vinculoId, agindoComo: l.actingAs, responsavelId: l.guardianId };
+    return { tenantId: c.tenant_id as TenantId, pacienteId: c.patient_id, contaId, vinculoId, agindoComo: l.actingAs, responsavelId: l.guardianId, vinculoResponsavelId: l.guardianLinkId };
   }
 
   private async paciente(tx: TenantTx, ctx: ContextoPortal) {
     const [p] = await tx.select().from(patients).where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, ctx.pacienteId)));
     if (!p) throw new NaoEncontradoError();
     return p;
+  }
+
+  /**
+   * O sigilo do adolescente vale nesta sessão? Só para o responsável legal de paciente com 12 anos ou mais
+   * (ou idade desconhecida: falha fechada). Titular e responsável de criança: não.
+   */
+  private async sigiloDoAdolescente(tx: TenantTx, ctx: ContextoPortal): Promise<boolean> {
+    if (ctx.agindoComo !== 'responsavel_legal') return false;
+    return consultaOcultaAoResponsavel(ctx.agindoComo, await this.faixaEtaria(tx, ctx), true);
+  }
+
+  /**
+   * R1 do #68: o recibo de área sensível (profissional da cobrança ou da consulta; desconhecido = sensível,
+   * inclusive a consulta que o RLS já esconde) fica sem profissional e data para o responsável, A MENOS que
+   * ele seja o pagador congelado no recebimento (0031): aí o recibo é dele (IR). Pagador informado só na
+   * cobrança não é conferido aqui: falha fechada.
+   */
+  private reciboRestrito(ctx: ContextoPortal, sensivel: boolean | null, especialidade: string | null, pagadorCongelado: string | null): boolean {
+    const prof = sensivel !== null && especialidade !== null ? { sensitiveArea: sensivel, specialty: especialidade } : null;
+    if (!areaSensivelDoProfissional(prof)) return false;
+    return pagadorCongelado === null || pagadorCongelado !== ctx.vinculoResponsavelId;
   }
 
   /** Faixa etária do paciente HOJE (regras da 0028/0031); null sem data de nascimento. */

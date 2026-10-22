@@ -832,6 +832,50 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(noBancoCrianca).toEqual([psiCrianca]);
   });
 
+  it('R1: recibo de área sensível do adolescente sem profissional, especialidade e data para o responsável que NÃO é o pagador', async () => {
+    const teen = await criarPaciente(adminA, 'Zara Ficticia Adolescente', { nascimento: nascidoHa(15) });
+    const crianca = await criarPaciente(adminA, 'Abel Ficticio Crianca', { nascimento: nascidoHa(8) });
+    const psi = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Dra Psi Recibo Ficticia', especialidade: 'Clinica', areaSensivel: true }).expect(201)).body as { id: string };
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ professional_id: string; appointment_type_id: string }>(
+      sql`select professional_id, appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const tipo = base?.appointment_type_id as string;
+    const pagador = await responsavelDe(teen, 'Bia Ficticia Mae Pagadora', { pagador: true });
+    const outro = await responsavelDe(teen, 'Caco Ficticio Pai');
+    const recPsi = await recibo(adminA, await agendar(adminA, teen, psi.id, tipo, '2027-03-03', '09:00'));
+    const recFisio = await recibo(adminA, await agendar(adminA, teen, base?.professional_id as string, tipo, '2027-03-03', '11:00'));
+    const respCrianca = await responsavelDe(crianca, 'Dora Ficticia Mae');
+    const recPsiCrianca = await recibo(adminA, await agendar(adminA, crianca, psi.id, tipo, '2027-03-04', '09:00'));
+    const contaPagador = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: pagador });
+    const contaOutro = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: outro });
+    const contaCrianca = await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: respCrianca });
+    type Item = { id: string; data: string | null; restrito: boolean };
+    const lista = async (c: SessaoPortal) => (await api.http().get('/portal/recibos').set(cab(c)).expect(200)).body as Item[];
+    const doc = async (c: SessaoPortal, id: string) =>
+      (await api.http().get(`/portal/recibos/${id}`).set(cab(c)).expect(200)).body as {
+        emitente: { nome: string | null; registroConselho: string | null; profissionalId: string | null };
+        dataPagamento: string | null;
+        descricao: string;
+        restrito: boolean;
+        valorCentavos: number;
+      };
+    // Responsável que NÃO pagou: o recibo de psicologia aparece sem data; o de fisioterapia, inteiro.
+    const doOutro = await lista(contaOutro);
+    expect(doOutro.find((r) => r.id === recPsi)).toMatchObject({ data: null, restrito: true });
+    expect(doOutro.find((r) => r.id === recFisio)).toMatchObject({ restrito: false, data: expect.any(String) });
+    const restrito = await doc(contaOutro, recPsi);
+    expect(restrito).toMatchObject({ restrito: true, dataPagamento: null, valorCentavos: 5000, emitente: { registroConselho: null, profissionalId: null } });
+    expect(JSON.stringify(restrito)).not.toContain('Dra Psi Recibo Ficticia');
+    expect(JSON.stringify(restrito)).not.toContain(psi.id);
+    // Responsável pagador (congelado no recebimento, 0031): o recibo é dele, inteiro.
+    expect((await lista(contaPagador)).find((r) => r.id === recPsi)).toMatchObject({ restrito: false, data: expect.any(String) });
+    expect(await doc(contaPagador, recPsi)).toMatchObject({ restrito: false, dataPagamento: expect.any(String) });
+    // Criança: nada restrito.
+    expect((await lista(contaCrianca)).find((r) => r.id === recPsiCrianca)).toMatchObject({ restrito: false });
+    // Trilha registra a restrição (só contagem/marca).
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.actorId, contaOutro.contaId), eq(auditLog.scope, 'receipts'))), adminA.userId);
+    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'portal_read', restricted: true })]));
+  });
+
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {
     // "Terapeuta" não é pego por texto: a clínica marca. "Saúde Mental" sem a marca: o banco liga sozinho.
     const terapeuta = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Tera Ficticia', especialidade: 'Terapeuta', areaSensivel: true }).expect(201))
