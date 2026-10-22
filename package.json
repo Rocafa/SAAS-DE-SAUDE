@@ -15,7 +15,7 @@
     "db:down": "docker compose down"
   },
   "devDependencies": {
-    "turbo": "^2.1.0",
+    "turbo": "^2.11.9",
     "typescript": "^6.0.3"
   },
   "pnpm": {
