@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { corpoNaMeta, MODELOS_DA_PLATAFORMA, MODELO_PADRAO, textoEhNeutro, corpoDeModeloValido } from './lembretes-regras';
+import { corpoNaMeta, MODELOS_DA_PLATAFORMA, MODELO_PADRAO, textoEhNeutro, corpoDeModeloValido, responsavelRepresentaParaLembrete } from './lembretes-regras';
 import { MensageiroCloudApi, type ClienteHttp } from './mensageiro-cloud-api';
 import { MensageiroFalso } from './mensageiro-falso';
 import { criarMensageiro } from './mensageiro.factory';
@@ -213,5 +213,23 @@ describe('modelos: só os da plataforma, nome na Meta e texto conferidos juntos 
       expect(err, motivo).toBeInstanceOf(ModeloDivergenteError);
       expect((err as ModeloDivergenteError).motivo).toBe(motivo);
     }
+  });
+});
+
+describe('R4 do #69: o responsável representa para o lembrete?', () => {
+  const hoje = '2026-10-22';
+  it('pai/mãe, tutor e representante: só para menor não emancipado, com data de nascimento', () => {
+    for (const tipo of ['pai_mae', 'tutor', 'representante'] as const) {
+      expect(responsavelRepresentaParaLembrete(tipo, '2015-03-01', null, hoje), tipo).toBe(true);
+      expect(responsavelRepresentaParaLembrete(tipo, '2008-10-22', null, hoje), `${tipo} faz 18 hoje`).toBe(false);
+      expect(responsavelRepresentaParaLembrete(tipo, '2008-10-23', null, hoje), `${tipo} faz 18 amanhã`).toBe(true);
+      expect(responsavelRepresentaParaLembrete(tipo, '2009-05-01', '2026-10-01', hoje), `${tipo} emancipado`).toBe(false);
+      expect(responsavelRepresentaParaLembrete(tipo, '2009-05-01', '2026-10-23', hoje), `${tipo} emancipação futura`).toBe(true);
+      expect(responsavelRepresentaParaLembrete(tipo, null, null, hoje), `${tipo} sem nascimento`).toBe(false);
+    }
+  });
+  it('curatela: vale para o adulto', () => {
+    expect(responsavelRepresentaParaLembrete('curador', '1980-01-01', null, hoje)).toBe(true);
+    expect(responsavelRepresentaParaLembrete('curador', null, null, hoje)).toBe(true);
   });
 });

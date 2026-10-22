@@ -1,4 +1,6 @@
+import type { GuardianKind } from '../../db/schema';
 import { normalizarTextoParaChecagem } from '../finance/financeiro-regras';
+import { menorEm } from '../patients/responsaveis-regras';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 
 /**
@@ -219,3 +221,15 @@ export const RETENCAO_DA_PROVA_DO_OPT_IN_ANOS_PROPOSTA = 5;
 export const MAX_RESPOSTAS_POR_ENVIO = 5;
 /** Tentativas de envio antes de virar "falhou" (e ir para a fila da recepção). */
 export const MAX_TENTATIVAS = 3;
+
+/**
+ * R4 do #69 (integração da rodada 19): o lembrete pelo RESPONSÁVEL (vínculo vigente da 0028) só sai enquanto
+ * ele representa o paciente. Curatela: vale para o adulto (o vínculo diz até quando). Os demais tipos
+ * (pai/mãe, tutor, representante): só para MENOR não emancipado — aos 18 anos ou na emancipação (CC art. 5º)
+ * a representação acaba e o paciente decide em nome próprio (novo opt-in). Sem data de nascimento não se
+ * presume menoridade: nada sai (falha fechada, como a V2 do parecer #69).
+ */
+export function responsavelRepresentaParaLembrete(tipo: GuardianKind, nascimento: string | null, emancipadoEm: string | null, hoje: string): boolean {
+  if (tipo === 'curador') return true;
+  return menorEm(nascimento, hoje, emancipadoEm) === true;
+}

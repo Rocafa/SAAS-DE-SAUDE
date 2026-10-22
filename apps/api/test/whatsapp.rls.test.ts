@@ -19,7 +19,6 @@ import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, RESPOSTA_FIXA_OUTRO, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
 import { assinarCorpo } from '../src/modules/messaging/mensageiro-whatsapp';
-import type { FonteDeResponsaveis } from '../src/modules/messaging/responsaveis.port';
 import { MessagingModule } from '../src/modules/messaging/messaging.module';
 import { WhatsappService } from '../src/modules/messaging/whatsapp.service';
 import { DATABASE_HANDLE, RotaDoWhatsapp } from '../src/modules/tenancy/tenancy.module';
@@ -33,12 +32,8 @@ const SEGREDO = randomBytes(32);
 const TOKEN_INSCRICAO = randomBytes(24).toString('base64url');
 const falso = new MensageiroFalso({ segredoWebhook: SEGREDO, tokenInscricao: TOKEN_INSCRICAO, nodeEnv: 'test' });
 
-/** Responsável fictício (a tabela de responsáveis é de outra branch): a porta é injetada. */
-const RESPONSAVEL_ID = randomUUID();
-const TELEFONE_RESPONSAVEL = `119${String(Date.now()).slice(-8)}`;
-const responsaveis: FonteDeResponsaveis = {
-  responsavelVigente: (_tx, _t, _p, id) => Promise.resolve(id === RESPONSAVEL_ID ? { telefone: TELEFONE_RESPONSAVEL } : null),
-};
+/** Telefones de responsáveis fictícios (os responsáveis são os da 0028, criados pela API): nunca na trilha. */
+const telefonesDeResponsaveis: string[] = [];
 
 /** Termos SENSÍVEIS do cadastro: nunca podem aparecer na mensagem. */
 const NOME_PROFISSIONAL = 'Dra QZX Ficticia';
@@ -137,6 +132,24 @@ async function optIn(s: Sessao, pacienteId: string, corpo: Record<string, unknow
   return r.body as { id: string };
 }
 
+/** Responsável (0028) criado pela API: devolve o vínculo, a pessoa e o telefone (fictício). */
+async function responsavel(
+  s: Sessao,
+  pacienteId: string,
+  extra: Record<string, unknown> = { tipo: 'pai_mae' },
+): Promise<{ vinculoId: string; pessoaId: string; telefone: string }> {
+  const telefone = telefoneNovo();
+  telefonesDeResponsaveis.push(telefone);
+  const r = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/responsaveis`)
+    .set(cab(s))
+    .send({ nome: `Responsavel Ficticio WA ${seq}`, telefone, ...extra });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  const b = r.body as { id: string; responsavelId: string };
+  return { vinculoId: b.id, pessoaId: b.responsavelId, telefone };
+}
+
 function corpoDeResposta(numero: string, de: string, texto: string, emRespostaA?: string, idMsg = `wamid.IN${randomUUID().replace(/-/g, '')}`): string {
   return JSON.stringify({
     object: 'whatsapp_business_account',
@@ -180,7 +193,7 @@ async function statusDoAgendamento(tenant: TenantId, id: string) {
 
 beforeAll(async () => {
   owner = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
-  api = await subirApi({ mensageiro: falso, responsaveis });
+  api = await subirApi({ mensageiro: falso });
   svc = api.app.get(WhatsappService);
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
@@ -756,14 +769,15 @@ describe('horário, menor de idade e falha', () => {
     expect(proprio.body).toMatchObject({ codigo: 'paciente_menor_de_idade' });
     await svc.executarLembretesComoSistema(clinicaA);
     expect(enviadasPara(tel)).toHaveLength(0);
-    // Responsável desconhecido: 409 (a tabela de responsáveis é de outra branch; aqui, a porta).
+    // Responsável desconhecido (sem vínculo da 0028 com o paciente): 409.
     const sem = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'responsavel', responsavelId: randomUUID(), meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio resp' });
     expect(sem.status).toBe(409);
-    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: RESPONSAVEL_ID, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio resp' });
+    const resp = await responsavel(adminA, p);
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio resp' });
     expect((await svc.executarLembretesComoSistema(clinicaA)).programados).toBeGreaterThanOrEqual(1);
-    expect(enviadasPara(TELEFONE_RESPONSAVEL).length).toBeGreaterThanOrEqual(1);
+    expect(enviadasPara(resp.telefone).length).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(tel)).toHaveLength(0);
-    expect(await envioDoAgendamento(clinicaA, a.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: RESPONSAVEL_ID });
+    expect(await envioDoAgendamento(clinicaA, a.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: resp.pessoaId });
   });
 
   it('falha definitiva do provedor: "falhou" com fallback para a fila da recepção', async () => {
@@ -931,7 +945,7 @@ describe('auditoria e retenção', () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ m: auditLog.metadata, s: auditLog.scope }).from(auditLog).where(sql`${auditLog.scope} like 'whatsapp%'`));
     expect(linhas.length).toBeGreaterThan(5);
     const texto = JSON.stringify(linhas);
-    for (const t of [...telefonesUsados, TELEFONE_RESPONSAVEL]) expect(texto).not.toContain(t);
+    for (const t of [...telefonesUsados, ...telefonesDeResponsaveis]) expect(texto).not.toContain(t);
     for (const proibido of ['Agendamentos', 'compromisso', 'QZX', 'Termo ficticio', 'SAIR', 'oi 1']) expect(texto).not.toContain(proibido);
   });
 
@@ -945,5 +959,143 @@ describe('auditoria e retenção', () => {
         withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOutbox).set({ bodyEnc: null, recipientPhoneEnc: null, contentPurgedAt: new Date() }).where(eq(whatsappOutbox.id, e?.id ?? '')), adminA.userId),
       ),
     ).toContain('42501');
+  });
+});
+
+/**
+ * R4 do #69 (integração da rodada 19, migração 0036): o lembrete de MENOR sai pelo telefone do responsável
+ * VIGENTE da 0028 (FK `guardian_id` -> guardians). Aos 18 anos ou na emancipação a representação acaba
+ * (fora a curatela); sem responsável vigente, nada sai. Tudo pela porta REAL (ResponsaveisPeloCatalogo).
+ */
+describe('R4 do #69: responsável vigente da 0028, maioridade e emancipação', () => {
+  const anosAtras = (anos: number) => `${new Date().getUTCFullYear() - anos}-01-01`;
+  const rodar = () => svc.executarLembretesComoSistema(clinicaA);
+
+  it('menor com responsável vigente: sai para o telefone do responsável, nunca para o do paciente', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel, anosAtras(9));
+    const resp = await responsavel(adminA, p);
+    await optIn(recepA, p, { destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'formulario_assinado', comprovante: 'Termo ficticio R4-1' });
+    const c = await consulta(adminA, p, 20);
+    await rodar();
+    expect(enviadasPara(resp.telefone)).toHaveLength(1);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toMatchObject({ status: 'enviado', recipientKind: 'responsavel', guardianId: resp.pessoaId });
+  });
+
+  it('vínculo encerrado: nada sai e novo opt-in com a pessoa é recusado', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel, anosAtras(10));
+    const resp = await responsavel(adminA, p);
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-2' });
+    const c = await consulta(adminA, p, 20);
+    await api.http().post(`/pacientes/${p}/responsaveis/${resp.vinculoId}/encerrar`).set(cab(adminA)).send({ motivo: 'decisao_judicial' }).expect(200);
+    const r = await rodar();
+    expect(r.semDestinatario).toBeGreaterThanOrEqual(1);
+    expect(enviadasPara(resp.telefone)).toHaveLength(0);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+    const novo = await api
+      .http()
+      .post(`/pacientes/${p}/whatsapp/opt-in`)
+      .set(cab(adminA))
+      .send({ destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-2b' });
+    expect(novo.status).toBe(409);
+    expect(novo.body).toMatchObject({ codigo: 'responsavel_nao_vinculado' });
+  });
+
+  it('maioridade: com o vínculo ainda vigente, o responsável deixa de receber (e não registra opt-in novo)', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel, anosAtras(17));
+    const resp = await responsavel(adminA, p);
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-3' });
+    // A data de nascimento corrigida para a de um adulto: a representação (pai/mãe) acabou.
+    const corr = await api.http().patch(`/pacientes/${p}`).set(cab(adminA)).send({ nascimento: anosAtras(19) });
+    expect(corr.status, JSON.stringify(corr.body)).toBe(200);
+    const c = await consulta(adminA, p, 20);
+    await rodar();
+    expect(enviadasPara(resp.telefone)).toHaveLength(0);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+    const novo = await api
+      .http()
+      .post(`/pacientes/${p}/whatsapp/opt-in`)
+      .set(cab(adminA))
+      .send({ destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-3b' });
+    expect(novo.status).toBe(409);
+    expect(novo.body).toMatchObject({ codigo: 'responsavel_nao_representa' });
+  });
+
+  it('emancipação: o responsável não recebe mais; o emancipado registra opt-in em nome próprio e recebe', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel, anosAtras(17));
+    const resp = await responsavel(adminA, p);
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: resp.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-4' });
+    const em = await api
+      .http()
+      .post(`/pacientes/${p}/responsaveis/emancipacao`)
+      .set(cab(adminA))
+      .send({ data: noFusoDaClinica(new Date()).data, documento: 'Escritura ficticia R4' });
+    expect(em.status, JSON.stringify(em.body)).toBe(200);
+    const c = await consulta(adminA, p, 20);
+    await rodar();
+    expect(enviadasPara(resp.telefone)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+    // Em nome próprio (troca de destinatário): agora sai para o telefone do paciente.
+    await optIn(adminA, p, { destinatario: 'paciente', meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-4b' });
+    await rodar();
+    expect(enviadasPara(tel)).toHaveLength(1);
+    expect(enviadasPara(resp.telefone)).toHaveLength(0);
+  });
+
+  it('curatela: o curador do paciente ADULTO recebe (a curatela não acaba aos 18)', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel, anosAtras(40));
+    const cur = await responsavel(adminA, p, {
+      tipo: 'curador',
+      curatelaReferencia: 'Processo ficticio 0000-R4',
+      curatelaEscopo: 'Escopo ficticio de teste da curatela',
+    });
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: cur.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-5' });
+    const c = await consulta(adminA, p, 20);
+    await rodar();
+    expect(enviadasPara(cur.telefone)).toHaveLength(1);
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: cur.pessoaId });
+  });
+
+  it('banco (0036): FK de guardian_id para guardians e opt-in de responsável sem vínculo vigente recusado', async () => {
+    const fks = await owner<{ tabela: string; alvo: string }[]>`
+      SELECT conrelid::regclass::text AS tabela, confrelid::regclass::text AS alvo FROM pg_constraint
+       WHERE contype = 'f' AND conname IN ('whatsapp_opt_ins_guardian_fk', 'whatsapp_outbox_guardian_fk') ORDER BY 1`;
+    expect(fks).toEqual([
+      { tabela: 'whatsapp_opt_ins', alvo: 'guardians' },
+      { tabela: 'whatsapp_outbox', alvo: 'guardians' },
+    ]);
+    // Pessoa existente, mas o vínculo é com OUTRO paciente: o gatilho recusa antes de qualquer outra regra.
+    const p = await paciente(adminA, telefoneNovo(), anosAtras(8));
+    const outro = await paciente(adminA, telefoneNovo(), anosAtras(8));
+    const resp = await responsavel(adminA, outro);
+    const erro = await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) =>
+        tx.insert(whatsappOptIns).values({
+          tenantId: clinicaA,
+          patientId: p,
+          recipientKind: 'responsavel',
+          guardianId: resp.pessoaId,
+          method: 'verbal_na_recepcao',
+          grantedBy: adminA.userId,
+          ...SELO_FALSO,
+        }),
+      adminA.userId,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const mensagens: string[] = [];
+    for (let e: unknown = erro; e instanceof Error; e = e.cause) mensagens.push(e.message);
+    expect(mensagens.join(' | ')).toContain('responsável sem vínculo vigente');
   });
 });

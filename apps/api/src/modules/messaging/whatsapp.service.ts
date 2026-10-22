@@ -20,8 +20,8 @@ import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import type { FieldCipher } from '../crypto/field-cipher';
-import { menorDeIdadeEm } from '../finance/financeiro-regras';
 import { patientFieldRef } from '../patients/patient-fields';
+import { menorEm } from '../patients/responsaveis-regras';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { SchedulingService } from '../scheduling/scheduling.service';
 import { RotaDoWhatsapp, TenantDatabase } from '../tenancy/tenancy.module';
@@ -37,6 +37,7 @@ import {
   MODELOS_DA_PLATAFORMA,
   modeloDaPlataforma,
   renderizarLembrete,
+  responsavelRepresentaParaLembrete,
   RESPOSTA_FIXA_OUTRO,
   respostaNaJanela,
   RETENCAO_DO_CONTEUDO_DIAS,
@@ -117,7 +118,8 @@ function ctxDoSistema(tenantId: TenantId): RequestContext {
  *   confere o HMAC no INSERT da fila e na reserva para envio;
  * - o texto é o modelo neutro renderizado só com nome neutro, data e hora (sem profissional, especialidade
  *   ou tipo de atendimento);
- * - paciente menor recebe pelo responsável (porta FonteDeResponsaveis); sem responsável, não sai;
+ * - paciente menor recebe pelo responsável VIGENTE da 0028 (porta FonteDeResponsaveis; FK guardian_id, 0036);
+ *   aos 18 anos ou na emancipação a representação acaba (fora a curatela); sem responsável vigente, não sai;
  * - fora do horário configurado, nada sai;
  * - "1"/"2" mudam SÓ a consulta daquele envio, pelas regras da agenda, dentro da janela;
  * - trilha só com ids, contagens e códigos (nunca número, texto ou nome).
@@ -232,13 +234,19 @@ export class WhatsappService implements OnApplicationBootstrap {
       if (dados.destinatario === 'responsavel') {
         const r = await this.responsaveis.responsavelVigente(tx, ctx.tenantId, pacienteId, dados.responsavelId ?? '');
         if (!r) throw new ConflitoError('responsavel_nao_vinculado');
+        // R4 do #69: fora a curatela, só representa MENOR não emancipado (com data de nascimento).
+        const q = await this.quadroDoPaciente(tx, ctx.tenantId, pacienteId);
+        if (!responsavelRepresentaParaLembrete(r.tipo, q.nascimento, q.emancipadoEm, noFusoDaClinica(new Date()).data)) {
+          throw new ConflitoError('responsavel_nao_representa');
+        }
         telefone = telefoneParaWhatsapp(r.telefone);
         if (!telefone) throw new ConflitoError('responsavel_sem_telefone');
       } else {
         // V2 do parecer #69: em nome próprio só ADULTO com data de nascimento conhecida (falha fechada).
-        const nascimento = await this.nascimentoDoCadastro(tx, ctx.tenantId, pacienteId);
+        const { nascimento, emancipadoEm } = await this.quadroDoPaciente(tx, ctx.tenantId, pacienteId);
         if (!nascimento) throw new ConflitoError('data_de_nascimento_ausente');
-        if (menorDeIdadeEm(nascimento, noFusoDaClinica(new Date()).data)) throw new ConflitoError('paciente_menor_de_idade');
+        // Emancipado (0031) decide em nome próprio, como o adulto (R4 do #69).
+        if (menorEm(nascimento, noFusoDaClinica(new Date()).data, emancipadoEm) !== false) throw new ConflitoError('paciente_menor_de_idade');
         telefone = telefoneParaWhatsapp(await this.telefoneDoCadastro(tx, ctx.tenantId, pacienteId));
         if (!telefone) throw new ConflitoError('paciente_sem_telefone');
       }
@@ -854,19 +862,22 @@ export class WhatsappService implements OnApplicationBootstrap {
     agora: Date,
   ): Promise<string | null> {
     const [p] = await tx
-      .select({ phoneEnc: patients.phoneEnc, birthDateEnc: patients.birthDateEnc, active: patients.active })
+      .select({ phoneEnc: patients.phoneEnc, birthDateEnc: patients.birthDateEnc, active: patients.active, emancipatedOn: patients.emancipatedOn })
       .from(patients)
       .where(and(eq(patients.tenantId, tenantId), eq(patients.id, pacienteId)));
     if (!p?.active) return null;
+    const nascimento = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'birth_date'), p.birthDateEnc) : null;
     if (optIn.recipientKind === 'responsavel') {
+      // R4 do #69: vínculo VIGENTE da 0028 com a pessoa do opt-in e, fora a curatela, paciente menor não
+      // emancipado. Sem isso nada sai (o paciente que fez 18 anos decide em nome próprio, com novo opt-in).
       if (!optIn.guardianId) return null;
       const r = await this.responsaveis.responsavelVigente(tx, tenantId, pacienteId, optIn.guardianId);
-      return telefoneParaWhatsapp(r?.telefone ?? null);
+      if (!r || !responsavelRepresentaParaLembrete(r.tipo, nascimento, p.emancipatedOn, noFusoDaClinica(agora).data)) return null;
+      return telefoneParaWhatsapp(r.telefone);
     }
-    const nascimento = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'birth_date'), p.birthDateEnc) : null;
     // V2 do parecer #69: sem data de nascimento NÃO se presume adulto. Falha fechada: nada sai.
     if (!nascimento || !/^\d{4}-\d{2}-\d{2}$/.test(nascimento)) return null;
-    if (menorDeIdadeEm(nascimento, noFusoDaClinica(agora).data)) return null;
+    if (menorEm(nascimento, noFusoDaClinica(agora).data, p.emancipatedOn) !== false) return null;
     const telefone = p.phoneEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'phone'), p.phoneEnc) : null;
     return telefoneParaWhatsapp(telefone);
   }
@@ -932,10 +943,14 @@ export class WhatsappService implements OnApplicationBootstrap {
     return ler();
   }
 
-  private async nascimentoDoCadastro(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<string | null> {
-    const [p] = await tx.select({ birthDateEnc: patients.birthDateEnc }).from(patients).where(and(eq(patients.tenantId, tenantId), eq(patients.id, pacienteId)));
+  /** Data de nascimento decifrada (null se ausente ou inválida) e emancipação (0031) do paciente. */
+  private async quadroDoPaciente(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<{ nascimento: string | null; emancipadoEm: string | null }> {
+    const [p] = await tx
+      .select({ birthDateEnc: patients.birthDateEnc, emancipatedOn: patients.emancipatedOn })
+      .from(patients)
+      .where(and(eq(patients.tenantId, tenantId), eq(patients.id, pacienteId)));
     const n = p?.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'birth_date'), p.birthDateEnc) : null;
-    return n && /^\d{4}-\d{2}-\d{2}$/.test(n) ? n : null;
+    return { nascimento: n && /^\d{4}-\d{2}-\d{2}$/.test(n) ? n : null, emancipadoEm: p?.emancipatedOn ?? null };
   }
 
   private async telefoneDoCadastro(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<string | null> {

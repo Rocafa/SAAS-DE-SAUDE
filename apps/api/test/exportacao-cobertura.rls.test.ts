@@ -774,8 +774,8 @@ describe('G2 — conteúdo do pacote', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
+    // 3 pacientes (2 do cadastro + 1 do lote importado) e 4 agendamentos (3 + o do WhatsApp).
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
