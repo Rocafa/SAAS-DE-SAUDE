@@ -12,7 +12,7 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
+import { appointments, auditLog, patients, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
@@ -85,7 +85,8 @@ async function sqlstate(p: Promise<unknown>): Promise<unknown[]> {
   return codigos;
 }
 
-async function paciente(s: Sessao, telefone: string, nascimento?: string): Promise<string> {
+/** Paciente fictício; por padrão ADULTO com data de nascimento (sem data, nada sai: V2). `null` = sem data. */
+async function paciente(s: Sessao, telefone: string, nascimento: string | null = '1980-05-10'): Promise<string> {
   const r = await api
     .http()
     .post('/pacientes')
@@ -607,14 +608,33 @@ describe('horário, menor de idade e falha', () => {
     }
   });
 
-  it('menor com opt-in em nome próprio não recebe; com o responsável, vai para o telefone dele', async () => {
+  it('V2: paciente SEM data de nascimento não registra opt-in próprio (409) e, se a data sumir depois, nada sai', async () => {
+    const tel = telefoneNovo();
+    const semData = await paciente(adminA, tel, null);
+    const r = await api.http().post(`/pacientes/${semData}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'paciente', meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio V2' });
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'data_de_nascimento_ausente' });
+    // Adulto com opt-in; a data some do cadastro antes do lembrete: falha fechada, nada sai.
+    const tel2 = telefoneNovo();
+    const p = await paciente(adminA, tel2);
+    const c = await consulta(adminA, p, 20);
+    await optIn(adminA, p);
+    await withTenant(api.db.db, clinicaA, (tx) => tx.update(patients).set({ birthDateEnc: null }).where(eq(patients.id, p)), adminA.userId);
+    const res = await svc.executarLembretesComoSistema(clinicaA);
+    expect(res.semDestinatario).toBeGreaterThanOrEqual(1);
+    expect(enviadasPara(tel2)).toHaveLength(0);
+    expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+  });
+
+  it('menor não registra opt-in em nome próprio (409); com o responsável, vai para o telefone dele', async () => {
     const tel = telefoneNovo();
     const nascimento = `${new Date().getUTCFullYear() - 10}-01-01`;
     const p = await paciente(adminA, tel, nascimento);
     const a = await consulta(adminA, p, 20);
-    await optIn(adminA, p);
-    const r = await svc.executarLembretesComoSistema(clinicaA);
-    expect(r.semDestinatario).toBeGreaterThanOrEqual(1);
+    const proprio = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'paciente', meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio menor' });
+    expect(proprio.status).toBe(409);
+    expect(proprio.body).toMatchObject({ codigo: 'paciente_menor_de_idade' });
+    await svc.executarLembretesComoSistema(clinicaA);
     expect(enviadasPara(tel)).toHaveLength(0);
     // Responsável desconhecido: 409 (a tabela de responsáveis é de outra branch; aqui, a porta).
     const sem = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'responsavel', responsavelId: randomUUID(), meio: 'verbal_na_recepcao' });

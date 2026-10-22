@@ -228,6 +228,10 @@ export class WhatsappService implements OnApplicationBootstrap {
         telefone = telefoneParaWhatsapp(r.telefone);
         if (!telefone) throw new ConflitoError('responsavel_sem_telefone');
       } else {
+        // V2 do parecer #69: em nome próprio só ADULTO com data de nascimento conhecida (falha fechada).
+        const nascimento = await this.nascimentoDoCadastro(tx, ctx.tenantId, pacienteId);
+        if (!nascimento) throw new ConflitoError('data_de_nascimento_ausente');
+        if (menorDeIdadeEm(nascimento, noFusoDaClinica(new Date()).data)) throw new ConflitoError('paciente_menor_de_idade');
         telefone = telefoneParaWhatsapp(await this.telefoneDoCadastro(tx, ctx.tenantId, pacienteId));
         if (!telefone) throw new ConflitoError('paciente_sem_telefone');
       }
@@ -792,8 +796,9 @@ export class WhatsappService implements OnApplicationBootstrap {
   }
 
   /**
-   * Telefone de quem recebe: o do paciente (adulto) ou o do responsável do opt-in. Menor com opt-in em
-   * nome próprio não recebe (R10 do RIPD); responsável sem vínculo vigente (ou sem a tabela, em outra
+   * Telefone de quem recebe: o do paciente (adulto COM data de nascimento conhecida) ou o do responsável do
+   * opt-in. Menor com opt-in em nome próprio não recebe (R10 do RIPD); sem data de nascimento também não
+   * (V2 do parecer #69: falha fechada); responsável sem vínculo vigente (ou sem a tabela, em outra
    * branch) também não.
    */
   private async telefoneDoDestinatario(
@@ -814,6 +819,8 @@ export class WhatsappService implements OnApplicationBootstrap {
       return telefoneParaWhatsapp(r?.telefone ?? null);
     }
     const nascimento = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'birth_date'), p.birthDateEnc) : null;
+    // V2 do parecer #69: sem data de nascimento NÃO se presume adulto. Falha fechada: nada sai.
+    if (!nascimento || !/^\d{4}-\d{2}-\d{2}$/.test(nascimento)) return null;
     if (menorDeIdadeEm(nascimento, noFusoDaClinica(agora).data)) return null;
     const telefone = p.phoneEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'phone'), p.phoneEnc) : null;
     return telefoneParaWhatsapp(telefone);
@@ -878,6 +885,12 @@ export class WhatsappService implements OnApplicationBootstrap {
     const keyEnc = await this.cifrar(tx, ctx, ctx.tenantId, CAMPO_CHAVE_NUMERO, randomBytes(32));
     await tx.insert(whatsappPhoneKeys).values({ tenantId: ctx.tenantId, keyEnc }).onConflictDoNothing();
     return ler();
+  }
+
+  private async nascimentoDoCadastro(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<string | null> {
+    const [p] = await tx.select({ birthDateEnc: patients.birthDateEnc }).from(patients).where(and(eq(patients.tenantId, tenantId), eq(patients.id, pacienteId)));
+    const n = p?.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(tenantId, pacienteId, 'birth_date'), p.birthDateEnc) : null;
+    return n && /^\d{4}-\d{2}-\d{2}$/.test(n) ? n : null;
   }
 
   private async telefoneDoCadastro(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<string | null> {
