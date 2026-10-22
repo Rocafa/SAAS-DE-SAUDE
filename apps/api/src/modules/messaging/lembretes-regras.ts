@@ -93,7 +93,7 @@ export const MODELOS_DA_PLATAFORMA: readonly ModeloDaPlataforma[] = [
   {
     nomeNoProvedor: 'lembrete_neutro_v1',
     idioma: 'pt_BR',
-    corpo: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar ou 2 para cancelar.',
+    corpo: 'Você tem um compromisso em {clinica} dia {data} às {hora}. Responda 1 para confirmar, 2 para cancelar ou SAIR para não receber mais. Este número não lê outras mensagens.',
     aprovacao: 'docs/03-seguranca-lgpd/revisoes/2026-10-21-pr69.md (modelo padrão pedido pelo Guardião)',
   },
 ];
@@ -151,6 +151,13 @@ export function interpretarResposta(texto: string): Interpretacao {
   if (t === 'sair' || t === 'parar' || t === 'pare' || t === 'stop') return 'sair';
   return 'outro';
 }
+
+/**
+ * Resposta FIXA a qualquer mensagem que não seja 1/2/SAIR (R1 do parecer #69). O que o paciente escreveu
+ * não é guardado nem lido (não há inbox): a orientação é ligar para a clínica. Neutra como o lembrete.
+ */
+export const RESPOSTA_FIXA_OUTRO =
+  'Este número só envia lembretes e não lê mensagens. Responda 1 para confirmar, 2 para cancelar ou SAIR para não receber mais. Para qualquer outro assunto, ligue para a clínica.';
 
 /** Antecedência mínima: lembrete que chegaria a menos de 2 h da consulta não sai (vira ruído). */
 export const ANTECEDENCIA_MINIMA_H = 2;

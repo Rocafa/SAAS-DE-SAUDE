@@ -19,9 +19,10 @@
 -- - whatsapp_outbox: fila de envios (agendado, enviando, enviado, entregue, lido, falhou, cancelado).
 --   Idempotência: um lembrete por (consulta, horário). O INSERT e a reserva para envio exigem opt-in
 --   VIGENTE do mesmo paciente e destinatário PARA O MESMO NÚMERO (HMAC igual): barreira no banco.
--- - whatsapp_inbound: respostas recebidas; idempotência pelo id da mensagem no provedor; só o sistema
---   (webhook) grava.
--- Conteúdo de mensagem (texto renderizado/recebido e números) fica SÓ cifrado e sai em 30 dias
+-- - whatsapp_inbound: respostas recebidas, SÓ o metadado (interpretação e resultado; R1 do parecer #69:
+--   texto e número de quem respondeu NÃO são guardados enquanto não houver inbox com leitor);
+--   idempotência pelo id da mensagem no provedor; só o sistema (webhook) grava; nada muda depois.
+-- Conteúdo do envio (texto renderizado e número) fica SÓ cifrado e sai em 30 dias
 -- (app_whatsapp_content_retention_run): o metadado (status, datas, interpretação) fica.
 
 -- ---------------------------------------------------------------------------------------------------
@@ -411,14 +412,13 @@ CREATE TABLE whatsapp_inbound (
   provider_message_id  text NOT NULL CONSTRAINT whatsapp_inbound_provider_check CHECK (provider_message_id ~ '^[A-Za-z0-9._=:+/-]{1,128}$'),
   -- Envio a que a resposta foi associada (NULL: nenhum envio vigente para aquele número).
   outbox_id            uuid,
-  sender_phone_enc     text CONSTRAINT whatsapp_inbound_phone_check CHECK (sender_phone_enc IS NULL OR app_is_sealed_field(sender_phone_enc)),
-  body_enc             text CONSTRAINT whatsapp_inbound_body_check CHECK (body_enc IS NULL OR app_is_sealed_field(body_enc)),
+  -- Sem texto e sem número de quem respondeu (R1 do #69): o envio casado já diz o número, e "outro" é
+  -- respondido com texto fixo (ligue para a clínica) sem guardar o que o paciente escreveu.
   interpretation       text NOT NULL CONSTRAINT whatsapp_inbound_interpretation_check CHECK (interpretation IN ('confirmar', 'cancelar', 'sair', 'outro')),
   outcome              text NOT NULL CONSTRAINT whatsapp_inbound_outcome_check CHECK (outcome IN (
                          'confirmado', 'cancelado', 'ja_estava', 'fora_da_janela', 'consulta_alterada', 'status_nao_permite',
                          'sem_envio', 'opt_out', 'sem_acao')),
   received_at          timestamptz NOT NULL DEFAULT now(),
-  content_purged_at    timestamptz,
   CONSTRAINT whatsapp_inbound_outbox_fk FOREIGN KEY (outbox_id, tenant_id) REFERENCES whatsapp_outbox (id, tenant_id),
   -- Idempotência do webhook (a Meta reentrega).
   CONSTRAINT whatsapp_inbound_provider_key UNIQUE (tenant_id, provider_message_id)
@@ -432,22 +432,14 @@ AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
     -- Só o processamento do webhook (sistema) registra resposta: usuário nenhum fabrica "o paciente disse 1".
-    IF NOT app_is_system_session() OR NEW.content_purged_at IS NOT NULL THEN
+    IF NOT app_is_system_session() THEN
       RAISE EXCEPTION 'resposta só é registrada pelo webhook' USING ERRCODE = 'insufficient_privilege';
     END IF;
     NEW.received_at := now();
     RETURN NEW;
   END IF;
-  -- UPDATE: só a retenção do conteúdo, uma vez, depois do prazo.
-  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.provider_message_id IS DISTINCT FROM OLD.provider_message_id
-     OR NEW.outbox_id IS DISTINCT FROM OLD.outbox_id OR NEW.interpretation IS DISTINCT FROM OLD.interpretation OR NEW.outcome IS DISTINCT FROM OLD.outcome
-     OR NEW.received_at IS DISTINCT FROM OLD.received_at
-     OR OLD.content_purged_at IS NOT NULL OR NEW.body_enc IS NOT NULL OR NEW.sender_phone_enc IS NOT NULL
-     OR OLD.received_at > now() - make_interval(days => app_whatsapp_content_retention_days()) THEN
-    RAISE EXCEPTION 'resposta: só a retenção do conteúdo é permitida' USING ERRCODE = 'insufficient_privilege';
-  END IF;
-  NEW.content_purged_at := now();
-  RETURN NEW;
+  -- UPDATE: nada muda (não há conteúdo a reter; o runtime nem tem UPDATE).
+  RAISE EXCEPTION 'resposta registrada não muda' USING ERRCODE = 'insufficient_privilege';
 END;
 $$;
 CREATE TRIGGER whatsapp_inbound_guard BEFORE INSERT OR UPDATE ON whatsapp_inbound
@@ -484,7 +476,9 @@ CREATE POLICY tenant_isolation ON whatsapp_inbound
 
 REVOKE ALL ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound FROM PUBLIC;
 REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound FROM app_user;
-GRANT SELECT, INSERT, UPDATE ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox, whatsapp_inbound TO app_user;
+REVOKE UPDATE ON whatsapp_inbound FROM app_user;
+GRANT SELECT, INSERT, UPDATE ON whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox TO app_user;
+GRANT SELECT, INSERT ON whatsapp_inbound TO app_user;
 
 CREATE TRIGGER whatsapp_settings_no_delete BEFORE DELETE ON whatsapp_settings FOR EACH ROW EXECUTE FUNCTION finance_reject_mutation();
 CREATE TRIGGER whatsapp_settings_no_truncate BEFORE TRUNCATE ON whatsapp_settings FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
@@ -499,13 +493,12 @@ CREATE TRIGGER whatsapp_inbound_no_truncate BEFORE TRUNCATE ON whatsapp_inbound 
 -- Retenção curta do conteúdo (30 dias): texto e números saem; status, datas e interpretação ficam.
 -- Roda na clínica do contexto (RLS) e com o relógio do banco; sem parâmetro de data. Idempotente.
 -- ---------------------------------------------------------------------------------------------------
-CREATE FUNCTION app_whatsapp_content_retention_run() RETURNS TABLE (outbox_purged integer, inbound_purged integer)
+CREATE FUNCTION app_whatsapp_content_retention_run() RETURNS TABLE (outbox_purged integer)
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
   v_out integer;
-  v_in integer;
   v_limite timestamptz := now() - make_interval(days => app_whatsapp_content_retention_days());
 BEGIN
   IF app_current_tenant() IS NULL THEN
@@ -515,10 +508,7 @@ BEGIN
    WHERE tenant_id = app_current_tenant() AND content_purged_at IS NULL AND created_at <= v_limite
      AND status NOT IN ('agendado', 'enviando');
   GET DIAGNOSTICS v_out = ROW_COUNT;
-  UPDATE public.whatsapp_inbound SET body_enc = NULL, sender_phone_enc = NULL, content_purged_at = now()
-   WHERE tenant_id = app_current_tenant() AND content_purged_at IS NULL AND received_at <= v_limite;
-  GET DIAGNOSTICS v_in = ROW_COUNT;
-  RETURN QUERY SELECT v_out, v_in;
+  RETURN QUERY SELECT v_out;
 END;
 $$;
 REVOKE ALL ON FUNCTION app_whatsapp_content_retention_run() FROM PUBLIC;

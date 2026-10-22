@@ -116,6 +116,24 @@ export class MensageiroCloudApi implements MensageiroWhatsApp {
     };
   }
 
+  /** Texto fixo (R1 do #69) dentro da janela de 24 h de atendimento aberta pela mensagem do paciente. */
+  async responderTextoFixo(m: { readonly para: string; readonly remetente: string; readonly texto: string }): Promise<ResultadoDeEnvio> {
+    if (!/^[0-9]{5,32}$/.test(m.remetente) || !/^[0-9]{8,15}$/.test(m.para)) return { ok: false, codigo: 'destino_invalido', definitivo: true };
+    try {
+      const r = await this.http(`${BASE}/${this.credenciais.versaoGraph}/${m.remetente}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.credenciais.tokenDeAcesso}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messaging_product: 'whatsapp', to: m.para, type: 'text', text: { body: m.texto, preview_url: false } }),
+      });
+      const json: unknown = await r.json().catch(() => null);
+      const id = (json as { messages?: { id?: unknown }[] } | null)?.messages?.[0]?.id;
+      if (r.status >= 200 && r.status < 300 && typeof id === 'string') return { ok: true, idProvedor: id.slice(0, 128) };
+      return { ok: false, codigo: `http_${r.status}`, definitivo: r.status < 500 && r.status !== 429 };
+    } catch {
+      return { ok: false, codigo: 'rede', definitivo: false };
+    }
+  }
+
   assinaturaValida(corpoBruto: Buffer, cabecalho: string | undefined): boolean {
     return assinaturaHmacValida(this.credenciais.segredoDoApp, corpoBruto, cabecalho);
   }

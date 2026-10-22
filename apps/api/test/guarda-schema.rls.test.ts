@@ -88,7 +88,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   whatsapp_phone_keys: { privilegios: ['SELECT', 'INSERT'] },
   whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
-  whatsapp_inbound: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Resposta: só metadado, nasce e não muda (R1 do #69).
+  whatsapp_inbound: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

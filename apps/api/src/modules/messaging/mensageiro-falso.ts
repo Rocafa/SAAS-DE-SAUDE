@@ -12,6 +12,8 @@ import { assinaturaHmacValida, desafioSeConfere, type MensagemDeSaida, type Mens
 export class MensageiroFalso implements MensageiroWhatsApp {
   readonly nome = 'falso' as const;
   readonly enviadas: { readonly mensagem: MensagemDeSaida; readonly idProvedor: string }[] = [];
+  /** Respostas de texto fixo (R1 do parecer #69). */
+  readonly respostasFixas: { readonly para: string; readonly remetente: string; readonly texto: string }[] = [];
   /** Números que o "provedor" recusa (para testar a falha e o fallback). */
   readonly numerosRecusados = new Set<string>();
   /** Números com falha TEMPORÁRIA (o envio volta para "agendado" e é tentado de novo). */
@@ -32,6 +34,11 @@ export class MensageiroFalso implements MensageiroWhatsApp {
     const idProvedor = `wamid.FAKE${randomUUID().replace(/-/g, '')}`;
     this.enviadas.push({ mensagem, idProvedor });
     return Promise.resolve({ ok: true, idProvedor });
+  }
+
+  responderTextoFixo(m: { readonly para: string; readonly remetente: string; readonly texto: string }): Promise<ResultadoDeEnvio> {
+    this.respostasFixas.push(m);
+    return Promise.resolve({ ok: true, idProvedor: `wamid.FAKE${randomUUID().replace(/-/g, '')}` });
   }
 
   assinaturaValida(corpoBruto: Buffer, cabecalho: string | undefined): boolean {

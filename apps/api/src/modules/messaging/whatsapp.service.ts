@@ -37,6 +37,7 @@ import {
   MODELOS_DA_PLATAFORMA,
   modeloDaPlataforma,
   renderizarLembrete,
+  RESPOSTA_FIXA_OUTRO,
   respostaNaJanela,
   telefoneParaWhatsapp,
   ANTECEDENCIA_MINIMA_H,
@@ -48,9 +49,7 @@ import {
   CAMPO_EVIDENCIA,
   CAMPO_TELEFONE_ENVIO,
   CAMPO_TELEFONE_OPTIN,
-  CAMPO_TELEFONE_RESPOSTA,
   CAMPO_TEXTO_ENVIO,
-  CAMPO_TEXTO_RESPOSTA,
   campoWhatsappRef,
   type CampoWhatsapp,
 } from './whatsapp-fields';
@@ -573,6 +572,8 @@ export class WhatsappService implements OnApplicationBootstrap {
     let processados = 0;
     let ignorados = 0;
     const clinicas = new Map<string, TenantId | null>();
+    // Respostas de texto fixo a mandar DEPOIS de gravar (nunca rede dentro da transação).
+    const respostasFixas: { para: string; remetente: string }[] = [];
     for (const ev of eventos) {
       if (!clinicas.has(ev.numeroDaClinica)) {
         const [r] = await this.handle.db.execute<{ t: string | null }>(sql`select app_whatsapp_tenant_for_number(${ev.numeroDaClinica}) as t`);
@@ -587,10 +588,17 @@ export class WhatsappService implements OnApplicationBootstrap {
         const cfg = await this.configuracao(tx, tenantId);
         if (!cfg.enabled) return false;
         const ctx = ctxDoSistema(tenantId);
-        return ev.tipo === 'status' ? this.aplicarStatus(tx, ctx, ev) : this.aplicarResposta(tx, ctx, ev, cfg.replyWindowHours, agora);
+        if (ev.tipo === 'status') return this.aplicarStatus(tx, ctx, ev);
+        const r = await this.aplicarResposta(tx, ctx, ev, cfg.replyWindowHours, agora);
+        if (r === 'responder_texto_fixo') respostasFixas.push({ para: ev.de, remetente: ev.numeroDaClinica });
+        return r !== false;
       });
       if (ok) processados++;
       else ignorados++;
+    }
+    for (const r of respostasFixas) {
+      const res = await this.mensageiro?.responderTextoFixo({ ...r, texto: RESPOSTA_FIXA_OUTRO });
+      if (res && !res.ok) this.logger.warn('WHATSAPP_RESPOSTA_FIXA_FALHOU');
     }
     return { processados, ignorados };
   }
@@ -615,7 +623,18 @@ export class WhatsappService implements OnApplicationBootstrap {
     return true;
   }
 
-  private async aplicarResposta(tx: TenantTx, ctx: RequestContext, ev: EventoDeResposta, janelaHoras: number, agora: Date): Promise<boolean> {
+  /**
+   * Grava SÓ o metadado da resposta (interpretação e resultado; R1 do parecer #69: nem texto nem número).
+   * "outro" (qualquer coisa que não seja 1/2/SAIR, inclusive mídia) devolve `responder_texto_fixo`: o
+   * paciente recebe a orientação fixa de ligar para a clínica e o que ele escreveu é descartado.
+   */
+  private async aplicarResposta(
+    tx: TenantTx,
+    ctx: RequestContext,
+    ev: EventoDeResposta,
+    janelaHoras: number,
+    agora: Date,
+  ): Promise<boolean | 'responder_texto_fixo'> {
     // Idempotência: a Meta reentrega o mesmo id.
     const [ja] = await tx
       .select({ id: whatsappInbound.id })
@@ -673,8 +692,6 @@ export class WhatsappService implements OnApplicationBootstrap {
       tenantId: ctx.tenantId,
       providerMessageId: ev.idProvedor,
       outboxId: envio.id,
-      senderPhoneEnc: await this.cifrar(tx, ctx, id, CAMPO_TELEFONE_RESPOSTA, ev.de),
-      bodyEnc: ev.texto ? await this.cifrar(tx, ctx, id, CAMPO_TEXTO_RESPOSTA, ev.texto) : null,
       interpretation: interpretacao,
       outcome: resultado,
     });
@@ -683,7 +700,7 @@ export class WhatsappService implements OnApplicationBootstrap {
       scope: 'whatsapp_inbound',
       metadata: { inbound_id: id, outbox_id: envio.id, appointment_id: envio.appointmentId, interpretation: interpretacao, outcome: resultado },
     });
-    return true;
+    return interpretacao === 'outro' ? 'responder_texto_fixo' : true;
   }
 
   /**
@@ -731,24 +748,23 @@ export class WhatsappService implements OnApplicationBootstrap {
   // Retenção do conteúdo (30 dias)
   // -------------------------------------------------------------------------------------------------
 
-  executarRetencao(ctx: RequestContext): Promise<{ enviosLimpos: number; respostasLimpas: number }> {
+  executarRetencao(ctx: RequestContext): Promise<{ enviosLimpos: number }> {
     return escreverNaClinica(this.db, ctx, (tx) => this.retencao(tx, ctx));
   }
 
-  executarRetencaoComoSistema(tenantId: TenantId): Promise<{ enviosLimpos: number; respostasLimpas: number }> {
+  executarRetencaoComoSistema(tenantId: TenantId): Promise<{ enviosLimpos: number }> {
     return this.db.run(tenantId, (tx) => this.retencao(tx, ctxDoSistema(tenantId)));
   }
 
-  private async retencao(tx: TenantTx, ctx: RequestContext): Promise<{ enviosLimpos: number; respostasLimpas: number }> {
-    const [r] = await tx.execute<{ outbox_purged: number; inbound_purged: number }>(sql`select * from app_whatsapp_content_retention_run()`);
+  private async retencao(tx: TenantTx, ctx: RequestContext): Promise<{ enviosLimpos: number }> {
+    const [r] = await tx.execute<{ outbox_purged: number }>(sql`select * from app_whatsapp_content_retention_run()`);
     const enviosLimpos = Number(r?.outbox_purged ?? 0);
-    const respostasLimpas = Number(r?.inbound_purged ?? 0);
     await recordAudit(tx, ctx, {
       action: AuditAction.Update,
       scope: 'whatsapp_outbox',
-      metadata: { op: 'content_retention', outbox_purged: enviosLimpos, inbound_purged: respostasLimpas, days: 30 },
+      metadata: { op: 'content_retention', outbox_purged: enviosLimpos, days: 30 },
     });
-    return { enviosLimpos, respostasLimpas };
+    return { enviosLimpos };
   }
 
   // -------------------------------------------------------------------------------------------------

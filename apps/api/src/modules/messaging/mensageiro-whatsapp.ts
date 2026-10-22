@@ -36,6 +36,11 @@ export type ResultadoDeEnvio =
 export interface MensageiroWhatsApp {
   readonly nome: 'falso' | 'cloud_api';
   enviar(mensagem: MensagemDeSaida): Promise<ResultadoDeEnvio>;
+  /**
+   * Resposta de TEXTO FIXO dentro da janela de 24 h aberta pelo paciente (R1 do parecer #69): só a
+   * constante RESPOSTA_FIXA_OUTRO; nunca texto montado com dado.
+   */
+  responderTextoFixo(mensagem: { readonly para: string; readonly remetente: string; readonly texto: string }): Promise<ResultadoDeEnvio>;
   /** Confere `X-Hub-Signature-256` contra o corpo BRUTO (bytes exatos recebidos). */
   assinaturaValida(corpoBruto: Buffer, cabecalho: string | undefined): boolean;
   /** Aperto de mão da inscrição do webhook (GET hub.*): devolve o desafio ou null (403). */

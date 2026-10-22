@@ -771,7 +771,7 @@ export const whatsappOutbox = pgTable('whatsapp_outbox', {
   createdBy: uuid('created_by'),
 });
 
-/** Respostas recebidas (0032): só o webhook (sistema) grava. */
+/** Respostas recebidas (0032): só o webhook (sistema) grava; só metadado, sem texto nem número (R1 do #69). */
 export const whatsappInbound = pgTable('whatsapp_inbound', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id')
@@ -779,12 +779,9 @@ export const whatsappInbound = pgTable('whatsapp_inbound', {
     .references(() => tenants.id),
   providerMessageId: text('provider_message_id').notNull(),
   outboxId: uuid('outbox_id'),
-  senderPhoneEnc: text('sender_phone_enc'),
-  bodyEnc: text('body_enc'),
   interpretation: text('interpretation', { enum: WHATSAPP_INTERPRETATIONS }).notNull(),
   outcome: text('outcome', { enum: WHATSAPP_OUTCOMES }).notNull(),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
-  contentPurgedAt: timestamp('content_purged_at', { withTimezone: true }),
 });
 
 export const schema = {

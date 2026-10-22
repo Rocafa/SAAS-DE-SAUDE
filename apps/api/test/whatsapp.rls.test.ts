@@ -14,7 +14,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, patients, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
-import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
+import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, RESPOSTA_FIXA_OUTRO, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
 import { assinarCorpo } from '../src/modules/messaging/mensageiro-whatsapp';
 import type { FonteDeResponsaveis } from '../src/modules/messaging/responsaveis.port';
@@ -358,7 +358,8 @@ describe('texto neutro (falha se houver termo de especialidade sensível)', () =
     expect(m).toBeDefined();
     const texto = m?.mensagem.texto ?? '';
     const { data, hora } = noFusoDaClinica(c.inicio);
-    expect(texto).toBe(`Você tem um compromisso em Agendamentos dia ${data.slice(8, 10)}/${data.slice(5, 7)} às ${hora}. Responda 1 para confirmar ou 2 para cancelar.`);
+    expect(texto).toBe(MODELO_PADRAO.corpo.replace('{clinica}', 'Agendamentos').replace('{data}', `${data.slice(8, 10)}/${data.slice(5, 7)}`).replace('{hora}', hora));
+    expect(texto).toContain('SAIR');
     expect(textoEhNeutro(texto)).toBe(true);
     for (const proibido of [NOME_PROFISSIONAL, 'QZX', ESPECIALIDADE, 'psiq', 'oncol', TIPO_SENSIVEL]) {
       expect(texto.toLowerCase()).not.toContain(proibido.toLowerCase());
@@ -574,6 +575,36 @@ describe('webhook: assinatura, idempotência e limite', () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappInbound).where(eq(whatsappInbound.outboxId, ea?.id ?? '')));
     expect(linhas).toHaveLength(5);
     expect(linhas.every((l) => l.outcome === 'sem_acao')).toBe(true);
+    // Só 5 respostas fixas (as 2 excedentes nem são processadas).
+    expect(falso.respostasFixas.filter((r) => r.para === `55${tel}`)).toHaveLength(5);
+  });
+
+  it('R1: texto livre não é guardado; o paciente recebe a resposta FIXA (ligue para a clínica)', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const a = await consulta(adminA, p, 19);
+    await optIn(adminA, p);
+    await svc.executarLembretesComoSistema(clinicaA);
+    const ea = await envioDoAgendamento(clinicaA, a.id);
+    const queixa = 'Estou com dor no peito QZX-LIVRE, posso ir?';
+    expect((await webhook(corpoDeResposta(numeroA, `55${tel}`, queixa, ea?.providerMessageId ?? ''))).body).toEqual({ processados: 1, ignorados: 0 });
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappInbound).where(eq(whatsappInbound.outboxId, ea?.id ?? '')));
+    expect(linha).toMatchObject({ interpretation: 'outro', outcome: 'sem_acao' });
+    expect(Object.keys(linha ?? {}).sort()).toEqual(['id', 'interpretation', 'outboxId', 'outcome', 'providerMessageId', 'receivedAt', 'tenantId']);
+    // Nem cifrado: nenhuma coluna de texto ou número existe na tabela de respostas.
+    const [cols] = await api.db.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from information_schema.columns where table_name = 'whatsapp_inbound' and column_name in ('body_enc', 'sender_phone_enc')`,
+    );
+    expect(cols?.n).toBe(0);
+    expect(falso.respostasFixas.filter((r) => r.para === `55${tel}`)).toEqual([{ para: `55${tel}`, remetente: numeroA, texto: RESPOSTA_FIXA_OUTRO }]);
+    expect(textoEhNeutro(RESPOSTA_FIXA_OUTRO)).toBe(true);
+    // "1" não recebe texto fixo (é ação, não conversa).
+    await webhook(corpoDeResposta(numeroA, `55${tel}`, '1', ea?.providerMessageId ?? '')).expect(200);
+    expect(falso.respostasFixas.filter((r) => r.para === `55${tel}`)).toHaveLength(1);
+    // A resposta gravada não muda (nem pelo runtime).
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappInbound).set({ outcome: 'confirmado' }).where(eq(whatsappInbound.id, linha?.id ?? '')), adminA.userId)),
+    ).toContain('42501');
   });
 
   it('o banco só aceita resposta gravada pelo sistema (usuário não fabrica "o paciente disse 1")', async () => {
@@ -745,7 +776,7 @@ describe('auditoria e retenção', () => {
   it('retenção: conteúdo com menos de 30 dias fica; a regra do banco recusa limpar antes', async () => {
     const r = await api.http().post('/whatsapp/retencao/execucao').set(cab(adminA)).send({});
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ enviosLimpos: 0, respostasLimpas: 0 });
+    expect(r.body).toEqual({ enviosLimpos: 0 });
     const [e] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappOutbox).limit(1));
     expect(
       await sqlstate(

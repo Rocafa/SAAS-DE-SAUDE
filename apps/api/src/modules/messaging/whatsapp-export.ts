@@ -7,9 +7,7 @@ import {
   CAMPO_EVIDENCIA,
   CAMPO_TELEFONE_ENVIO,
   CAMPO_TELEFONE_OPTIN,
-  CAMPO_TELEFONE_RESPOSTA,
   CAMPO_TEXTO_ENVIO,
-  CAMPO_TEXTO_RESPOSTA,
   campoWhatsappRef,
   type CampoWhatsapp,
 } from './whatsapp-fields';
@@ -81,12 +79,9 @@ export interface ExportedWhatsapp {
     id: string;
     providerMessageId: string;
     outboxId: string | null;
-    senderPhone: string | null;
-    body: string | null;
     interpretation: string;
     outcome: string;
     receivedAt: string;
-    contentPurgedAt: string | null;
   }[];
 }
 
@@ -176,19 +171,14 @@ export async function exportarWhatsapp(
         createdBy: o.createdBy,
       })),
     ),
-    whatsappInbound: await Promise.all(
-      inbound.map(async (r) => ({
+    whatsappInbound: inbound.map((r) => ({
         id: r.id,
         providerMessageId: r.providerMessageId,
         outboxId: r.outboxId,
-        senderPhone: await dec(r.id, CAMPO_TELEFONE_RESPOSTA, r.senderPhoneEnc),
-        body: await dec(r.id, CAMPO_TEXTO_RESPOSTA, r.bodyEnc),
         interpretation: r.interpretation,
         outcome: r.outcome,
         receivedAt: r.receivedAt.toISOString(),
-        contentPurgedAt: iso(r.contentPurgedAt),
       })),
-    ),
   };
   return {
     data,
