@@ -28,6 +28,7 @@ import {
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { RetencaoFiscalService } from '../src/modules/finance/retencao-fiscal';
+import { mascararCpf } from '../src/modules/patients/responsaveis.service';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -223,16 +224,27 @@ describe('estorno e recibo', () => {
     expect((p as unknown as { aviso: string | null }).aviso).toContain('mensagem do Pix');
     const r = await post(recepA, `/financeiro/recebimentos/${p.id}/recibo`);
     expect(r.status).toBe(200);
+    const comum = { situacao: 'emitido', descricao: 'Atendimento', valorCentavos: 20000, forma: 'pix_manual', pendencias: [] };
+    // 2º parecer do #67: a recepção emite e entrega, mas vê os CPFs mascarados (pagador, beneficiário, emitente PF).
     expect(r.body).toMatchObject({
-      situacao: 'emitido',
-      descricao: 'Atendimento',
-      valorCentavos: 20000,
-      forma: 'pix_manual',
-      emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: cpfFicticio(302), registroConselho: null },
-      pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
-      beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: cpfFicticio(301) },
-      pendencias: [],
+      ...comum,
+      cpfMascarado: true,
+      emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: mascararCpf(cpfFicticio(302)), registroConselho: null },
+      pagador: { nome: PAGADOR, cpf: mascararCpf(cpfFicticio(303)) },
+      beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: mascararCpf(cpfFicticio(301)) },
     });
+    for (const cpf of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303)]) expect(JSON.stringify(r.body)).not.toContain(cpf);
+    expect((await get(recepA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ cpfMascarado: true, pagador: { cpf: mascararCpf(cpfFicticio(303)) } });
+    // Financeiro e admin: o mesmo recibo com os CPFs completos (o retrato gravado é o completo).
+    for (const s of [finA, adminA]) {
+      expect((await get(s, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({
+        ...comum,
+        cpfMascarado: false,
+        emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: cpfFicticio(302), registroConselho: null },
+        pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+        beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: cpfFicticio(301) },
+      });
+    }
     const serial = JSON.stringify(r.body);
     for (const proibido of [TIPO_SENSIVEL, ESPECIALIDADE, CONSELHO, 'Psico']) expect(serial).not.toContain(proibido);
     // O cadastro muda depois; o recibo emitido não.

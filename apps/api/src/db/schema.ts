@@ -573,6 +573,9 @@ export const payments = pgTable('payments', {
   guardianPayerLinkId: uuid('guardian_payer_link_id'),
   guardianPayerEnc: text('guardian_payer_enc'),
   guardianPayerPurgedAt: timestamp('guardian_payer_purged_at', { withTimezone: true }),
+  /** 0034 (R2 do 2º parecer do #67): saneamento único do pagador pelo financeiro (quem e quando, pelo banco). */
+  guardianPayerResolvedBy: uuid('guardian_payer_resolved_by'),
+  guardianPayerResolvedAt: timestamp('guardian_payer_resolved_at', { withTimezone: true }),
 });
 
 /** Estorno total de um recebimento (0018): append-only, no caixa aberto do momento. */
@@ -870,6 +873,8 @@ export const patientGuardians = pgTable('patient_guardians', {
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),
+  /** 0034 (A4 do #67): eliminado com o prontuário do paciente, vencida a guarda de 20 anos. */
+  eliminatedAt: timestamp('eliminated_at', { withTimezone: true }),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */

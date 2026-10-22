@@ -1,5 +1,5 @@
 import type { TenantId } from '@plataforma/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
@@ -50,6 +50,9 @@ export interface ExportedGuardians {
     payerPatientAwareAt: string | null;
     annulReason: string | null;
     discardAfter: string | null;
+    /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
+    eliminatedAt: string | null;
+    recordRetentionUntil: string | null;
   }[];
   readonly patientGuardianHistory: readonly {
     id: string;
@@ -92,6 +95,18 @@ export async function exportarResponsaveis(
   const decVinculo = async (linkId: string, coluna: GuardianLinkEncryptedColumn, valor: string | null): Promise<string | null> => {
     if (valor === null) return null;
     return decifrar().decryptString(tx, guardianLinkFieldRef(tenantId, linkId, coluna), valor);
+  };
+  // A4 do #67: fim da guarda do prontuário do paciente (os vínculos a acompanham), uma consulta por paciente.
+  const guardas = new Map<string, Promise<string | null>>();
+  const guardaDe = (pacienteId: string): Promise<string | null> => {
+    let g = guardas.get(pacienteId);
+    if (!g) {
+      g = tx
+        .execute<{ ate: string | null }>(sql`select app_patient_record_retention_until(${tenantId}::uuid, ${pacienteId}::uuid)::text as ate`)
+        .then((r) => r[0]?.ate ?? null);
+      guardas.set(pacienteId, g);
+    }
+    return g;
   };
   const pessoas = soDaClinica(
     await tx.select().from(guardians).where(eq(guardians.tenantId, tenantId)).orderBy(asc(guardians.createdAt), asc(guardians.id)),
@@ -153,6 +168,8 @@ export async function exportarResponsaveis(
       payerPatientAwareAt: iso(v.payerPatientAwareAt),
       annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
       discardAfter: v.discardAfter,
+      eliminatedAt: iso(v.eliminatedAt),
+      recordRetentionUntil: await guardaDe(v.patientId),
     }))),
     patientGuardianHistory: await Promise.all(
       historico.map(async (h) => ({

@@ -72,6 +72,16 @@ export const PERMISSOES = {
   'financeiro:fiscal': ['admin', 'financeiro'],
   'financeiro:configurar': ['admin'],
   /**
+   * CPF completo no recibo (2º parecer do #67, R3/A6): admin e financeiro. A recepção emite e entrega o
+   * recibo, mas vê os CPFs (pagador, beneficiário e emitente PF) mascarados; o retrato gravado é o completo.
+   */
+  'recibos:ver_cpf_completo': ['admin', 'financeiro'],
+  /**
+   * Saneamento do pagador de recebimento sem congelado (R2 do 2º parecer do #67): o financeiro aponta o
+   * responsável vigente na data do pagamento, uma vez (o banco confere admin/financeiro ativo).
+   */
+  'financeiro:sanear_pagador': ['admin', 'financeiro'],
+  /**
    * Conteúdo clínico (prontuário, evoluções, anexos clínicos). Não há rota nesta rodada; a regra
    * fica explícita para a API de prontuário: perfil clínico E vínculo de cuidado (ver
    * `podeLerConteudoClinico`). Recepção, financeiro e admin não clínico: nunca.

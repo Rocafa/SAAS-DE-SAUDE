@@ -297,6 +297,14 @@ export function validarCorpoVazio(corpo: unknown): void {
   exigirObjeto(corpo ?? {}, []);
 }
 
+/** Saneamento do pagador do recebimento (R2 do 2º parecer do #67): só o id do vínculo, no corpo. */
+export function validarSaneamentoPagador(corpo: unknown): { vinculoId: string } {
+  const v = new Validador(exigirObjeto(corpo, ['vinculoId']));
+  const vinculoId = v.uuid('vinculoId', true);
+  v.concluir();
+  return { vinculoId: vinculoId as string };
+}
+
 /**
  * Emissão do recibo (R2 do #65): `incluirRegistroConselho` é escolhido POR RECIBO (padrão falso), porque
  * o conselho revela a profissão a quem recebe o recibo. A configuração da clínica só habilita a opção.

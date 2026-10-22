@@ -90,8 +90,12 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.15.0: portal do paciente (migrações 0027 e 0033): convites (sem o hash do token), vínculos conta↔paciente
  *        (com o responsável que agiu), histórico de consentimentos e pedidos do titular (detalhe e resposta
  *        decifrados), em `data.portal` e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`.
+ * 1.16.0: ressalvas do 2º parecer do #67 (migração 0034): `payments[].guardianPayerResolvedBy/At`
+ *        (saneamento do pagador pelo financeiro) e, nos vínculos, `eliminatedAt` e `recordRetentionUntil`
+ *        (responsáveis na guarda de 20 anos do prontuário, A4).
+ *        Integração (rodada 19): 1.15.0 era usado pelo portal e pela 0034 em paralelo; o pacote junta os dois em 1.16.0.
  */
-export const EXPORT_SCHEMA_VERSION = '1.15.0';
+export const EXPORT_SCHEMA_VERSION = '1.16.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

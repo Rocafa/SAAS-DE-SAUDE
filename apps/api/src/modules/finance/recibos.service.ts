@@ -6,6 +6,8 @@ import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   charges,
+  guardians,
+  patientGuardians,
   patients,
   paymentReversals,
   payments,
@@ -23,7 +25,10 @@ import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { diasEntre } from '../insurance/guias-regras';
+import { ehPerfil, temPermissao } from '../auth/perfis';
 import { patientFieldRef } from '../patients/patient-fields';
+import { decifrarCampoResponsavel } from '../patients/guardian-fields';
+import { mascararCpf } from '../patients/responsaveis.service';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
@@ -38,6 +43,7 @@ import {
   carregarConfig,
   reciboVivoDoRecebimento,
   SCOPE_CANCELAMENTO_RECIBO,
+  SCOPE_RECEBIMENTOS,
   SCOPE_RECEITA_SAUDE,
   SCOPE_RECIBOS,
   travarCobranca,
@@ -64,6 +70,19 @@ export interface ReciboDto extends ConteudoDoRecibo {
   readonly emitidoEm: string;
   readonly situacao: 'emitido' | 'cancelado';
   readonly cancelamento: { readonly motivo: ReceiptCancelReason; readonly em: string } | null;
+  /** CPFs mascarados para quem não tem `recibos:ver_cpf_completo` (recepção). */
+  readonly cpfMascarado: boolean;
+}
+
+/** CPFs do recibo mascarados (pagador, beneficiário e o documento do emitente PF, que é CPF; CNPJ fica). */
+export function mascararCpfsDoRecibo(c: ConteudoDoRecibo): ConteudoDoRecibo {
+  const pessoa = (p: PessoaDoRecibo): PessoaDoRecibo => ({ ...p, cpf: p.cpf === null ? null : mascararCpf(p.cpf) });
+  return {
+    ...c,
+    pagador: pessoa(c.pagador),
+    beneficiario: pessoa(c.beneficiario),
+    emitente: c.emitente.tipo === 'pf' && c.emitente.documento !== null ? { ...c.emitente, documento: mascararCpf(c.emitente.documento) } : c.emitente,
+  };
 }
 
 /** Item de lista: sem CPF e sem nome (a lista é para conferência; o detalhe abre o recibo). */
@@ -157,6 +176,7 @@ export class RecibosService {
           kind: conteudo.emitente.tipo,
           council_shown: conteudo.emitente.registroConselho !== null,
           pending: conteudo.pendencias.length,
+          full_cpf: temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo'),
         },
       });
       return this.lerRecibo(tx, ctx, id);
@@ -166,7 +186,11 @@ export class RecibosService {
   obter(ctx: RequestContext, id: string): Promise<ReciboDto> {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const r = await this.lerRecibo(tx, ctx, id);
-      await recordAudit(tx, ctx, { action: AuditAction.Read, scope: SCOPE_RECIBOS, metadata: { receipt_id: id, receipt_number: r.numero } });
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Read,
+        scope: SCOPE_RECIBOS,
+        metadata: { receipt_id: id, receipt_number: r.numero, full_cpf: !r.cpfMascarado },
+      });
       return r;
     });
   }
@@ -279,6 +303,7 @@ export class RecibosService {
           .where(and(eq(receipts.tenantId, ctx.tenantId), inArray(receipts.paymentId, usadas.map((l) => l.p.id)), isNull(receiptCancellations.id)));
         for (const r of recs) numeros.set(r.paymentId, r.numero);
       }
+      const anulados = await this.vinculosAnulados(tx, ctx, usadas.map((l) => l.p.guardianPayerLinkId));
       const itens: ItemReceitaSaude[] = [];
       for (const l of usadas) {
         const beneficiario: PessoaDoRecibo = {
@@ -298,7 +323,11 @@ export class RecibosService {
           valorCentavos: l.p.amountCents,
           pagador,
           beneficiario,
-          pendencias: pendenciasDoItem({ pagador, beneficiario }, responsavel),
+          pendencias: pendenciasDoItem(
+            { pagador, beneficiario },
+            responsavel,
+            doResponsavel !== null && l.p.guardianPayerLinkId !== null && anulados.has(l.p.guardianPayerLinkId),
+          ),
         });
       }
       const cpfProf = await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, prof.id, CAMPO_CPF_PROFISSIONAL, perfil?.cpfEnc ?? null);
@@ -332,6 +361,66 @@ export class RecibosService {
         pendencias,
         truncado: linhas.length > MAXIMO_LINHAS_FINANCEIRO,
       };
+    });
+  }
+
+  /**
+   * Saneamento de `pagador_responsavel` (R2 do 2º parecer do #67; api-dominio §10a): recebimento SEM pagador
+   * congelado (ex.: anterior à 0031) ganha, UMA vez, o responsável que o financeiro aponta — vínculo do
+   * paciente da cobrança vigente na DATA do recebimento, não anulado, pessoa não descartada; cobrança sem
+   * pagador próprio; recebimento não estornado. O retrato (nome + CPF de agora da pessoa) é cifrado como o
+   * congelado da 0031; o banco confere tudo de novo e grava quem/quando. Recibo já emitido NÃO muda: para
+   * reemiti-lo, cancele-o (`recibos:cancelar`) e emita de novo. Trilha só com ids.
+   */
+  resolverPagadorResponsavel(
+    ctx: RequestContext,
+    recebimentoId: string,
+    vinculoId: string,
+  ): Promise<{ readonly recebimentoId: string; readonly vinculoId: string; readonly reciboVivoId: string | null }> {
+    return escreverNaClinica(this.db, ctx, async (tx) => {
+      const [p] = await tx.select().from(payments).where(and(eq(payments.tenantId, ctx.tenantId), eq(payments.id, recebimentoId)));
+      if (!p) throw new NaoEncontradoError();
+      const c = await travarCobranca(tx, ctx, p.chargeId);
+      if (c.payerName) throw new ConflitoError('cobranca_com_pagador');
+      if (p.guardianPayerLinkId) throw new ConflitoError('pagador_ja_congelado');
+      if (!formaGeraRecibo(p.method)) throw new ConflitoError('recebimento_de_convenio');
+      const [estorno] = await tx
+        .select({ id: paymentReversals.id })
+        .from(paymentReversals)
+        .where(and(eq(paymentReversals.tenantId, ctx.tenantId), eq(paymentReversals.paymentId, p.id)));
+      if (estorno) throw new ConflitoError('recebimento_estornado');
+      const [l] = await tx
+        .select({ v: patientGuardians, g: guardians })
+        .from(patientGuardians)
+        .innerJoin(guardians, and(eq(guardians.tenantId, patientGuardians.tenantId), eq(guardians.id, patientGuardians.guardianId)))
+        .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, vinculoId), eq(patientGuardians.patientId, c.patientId)));
+      if (!l) throw new NaoEncontradoError();
+      const data = noFusoDaClinica(p.receivedAt).data;
+      const vigente = l.v.validFrom <= data && (l.v.validUntil === null || l.v.validUntil > data);
+      if (!vigente || l.v.endReason === 'cadastro_errado' || l.g.discardedAt !== null || l.g.nameEnc === null) {
+        throw new ConflitoError('vinculo_nao_vigente_no_recebimento');
+      }
+      const retrato = JSON.stringify({
+        nome: (await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.g.id, 'name', l.g.nameEnc)) ?? '',
+        cpf: await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.g.id, 'cpf', l.g.cpfEnc),
+      });
+      const enc = await cifrarCampoFinanceiro(this.cipher, tx, ctx, p.id, CAMPO_PAGADOR_DO_RECEBIMENTO, retrato);
+      const [r] = await tx.execute<{ ok: boolean }>(sql`select app_payment_resolve_guardian_payer(${p.id}::uuid, ${l.v.id}::uuid, ${enc}) as ok`);
+      if (!r?.ok) throw new ConflitoError('pagador_ja_congelado');
+      const vivo = await reciboVivoDoRecebimento(tx, ctx, p.id);
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: SCOPE_RECEBIMENTOS,
+        metadata: {
+          op: 'guardian_payer_resolution',
+          payment_id: p.id,
+          charge_id: c.id,
+          patient_id: c.patientId,
+          link_id: l.v.id,
+          live_receipt: vivo !== null,
+        },
+      });
+      return { recebimentoId: p.id, vinculoId: l.v.id, reciboVivoId: vivo?.id ?? null };
     });
   }
 
@@ -395,7 +484,22 @@ export class RecibosService {
     };
     // R3 do #65: a pendência só fica quando nem a cobrança nem o cadastro dizem quem pagou.
     const responsavel = !c.payerName && !doResponsavel && (await this.pacienteMenor(tx, ctx, pac, dataPagamento));
-    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel) };
+    const anulado = doResponsavel !== null && (await this.vinculosAnulados(tx, ctx, [p.guardianPayerLinkId])).size > 0;
+    return { versao: 1, ...base, pendencias: pendenciasDoRecibo(base, responsavel, anulado) };
+  }
+
+  /**
+   * R1 do 2º parecer do #67: dos vínculos informados (pagador congelado de recebimentos), os anulados como
+   * cadastro errado depois do recebimento. O congelado continua valendo, com a pendência `pagador_anulado`.
+   */
+  private async vinculosAnulados(tx: TenantTx, ctx: RequestContext, ids: readonly (string | null)[]): Promise<Set<string>> {
+    const validos = [...new Set(ids.filter((i): i is string => i !== null))];
+    if (!validos.length) return new Set();
+    const linhas = await tx
+      .select({ id: patientGuardians.id })
+      .from(patientGuardians)
+      .where(and(eq(patientGuardians.tenantId, ctx.tenantId), inArray(patientGuardians.id, validos), eq(patientGuardians.endReason, 'cadastro_errado')));
+    return new Set(linhas.map((l) => l.id));
   }
 
   /** V1 do #67: o responsável pagador gravado no recebimento (null se não houve ou se já eliminado pela retenção). */
@@ -423,9 +527,14 @@ export class RecibosService {
     if (!l) throw new NaoEncontradoError();
     // R7: retrato eliminado pela retenção fiscal (ficam número, valor e datas, sem dado pessoal).
     if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
-    const conteudo = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
+    const gravado = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
+    // 2º parecer do #67: CPF completo no recibo só para admin e financeiro; a recepção (que emite e entrega)
+    // vê pagador, beneficiário e emitente PF mascarados. O retrato gravado continua completo.
+    const completo = temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo');
+    const conteudo: ConteudoDoRecibo = completo ? gravado : mascararCpfsDoRecibo(gravado);
     return {
       ...conteudo,
+      cpfMascarado: !completo,
       id: l.r.id,
       numero: l.r.number,
       recebimentoId: l.r.paymentId,
