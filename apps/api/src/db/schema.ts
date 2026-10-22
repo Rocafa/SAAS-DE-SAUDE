@@ -727,7 +727,8 @@ export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
   guardianId: uuid('guardian_id'),
   purpose: text('purpose', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
   method: text('method', { enum: WHATSAPP_OPT_IN_METHODS }).notNull(),
-  evidenceEnc: text('evidence_enc'),
+  /** Comprovante (obrigatório, R7 do #69), cifrado. */
+  evidenceEnc: text('evidence_enc').notNull(),
   /** Número que consentiu (V1): cifrado e com o HMAC da clínica para comparar. */
   recipientPhoneEnc: text('recipient_phone_enc').notNull(),
   recipientPhoneHash: text('recipient_phone_hash').notNull(),

@@ -45,8 +45,10 @@ export function validarConfiguracao(corpo: unknown): ConfiguracaoWhatsapp {
 export interface NovoOptIn {
   readonly destinatario: 'paciente' | 'responsavel';
   readonly responsavelId?: string;
-  readonly meio: 'verbal_na_recepcao' | 'formulario_assinado' | 'portal_do_paciente';
-  readonly comprovante?: string;
+  /** Pela rota da recepção (R7 do #69): `portal_do_paciente` só pela sessão do portal (#68). */
+  readonly meio: 'verbal_na_recepcao' | 'formulario_assinado';
+  /** Obrigatório (R7 do #69): nº do termo assinado, protocolo do registro verbal etc. */
+  readonly comprovante: string;
 }
 
 export function validarNovoOptIn(corpo: unknown): NovoOptIn {
@@ -54,21 +56,22 @@ export function validarNovoOptIn(corpo: unknown): NovoOptIn {
   const destinatario = v.umDe('destinatario', ['paciente', 'responsavel'] as const, true);
   const responsavelId = v.uuid('responsavelId', destinatario === 'responsavel');
   if (destinatario === 'paciente' && responsavelId !== undefined) v.falhar('responsavelId');
-  const meio = v.umDe('meio', ['verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente'] as const, true);
-  // Referência do comprovante (nº do termo, protocolo): fica cifrada; nunca na trilha.
-  const comprovante = v.texto('comprovante', { max: 120 });
+  const meio = v.umDe('meio', ['verbal_na_recepcao', 'formulario_assinado'] as const, true);
+  // Referência do comprovante (nº do termo, protocolo): OBRIGATÓRIA (R7); fica cifrada; nunca na trilha.
+  const comprovante = v.texto('comprovante', { min: 3, max: 120, obrigatorio: true });
   v.concluir();
   return {
     destinatario: destinatario ?? 'paciente',
     ...(responsavelId ? { responsavelId } : {}),
     meio: meio ?? 'verbal_na_recepcao',
-    ...(comprovante ? { comprovante } : {}),
+    comprovante: comprovante ?? '',
   };
 }
 
-export function validarRevogacao(corpo: unknown): 'pedido_na_recepcao' | 'portal_do_paciente' {
+export function validarRevogacao(corpo: unknown): 'pedido_na_recepcao' {
   const v = new Validador(exigirObjeto(corpo ?? {}, ['meio']));
-  const meio = v.umDe('meio', ['pedido_na_recepcao', 'portal_do_paciente'] as const, true);
+  // Pela recepção (R7 do #69): a revogação pelo portal vem só da sessão do portal (#68).
+  const meio = v.umDe('meio', ['pedido_na_recepcao'] as const, true);
   v.concluir();
   return meio ?? 'pedido_na_recepcao';
 }

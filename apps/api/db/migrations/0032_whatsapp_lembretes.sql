@@ -120,7 +120,9 @@ REVOKE ALL ON FUNCTION whatsapp_settings_route() FROM PUBLIC;
 CREATE TRIGGER whatsapp_settings_route AFTER INSERT OR UPDATE OF business_number_id ON whatsapp_settings
   FOR EACH ROW EXECUTE FUNCTION whatsapp_settings_route();
 
--- Webhook (sem sessão): número de negócio -> clínica, só se o canal estiver LIGADO. Devolve só o id.
+-- Webhook (sem sessão): número de negócio -> clínica. Devolve só o id. NÃO confere se o canal está ligado
+-- (a função não enxerga whatsapp_settings, que tem RLS forçado): o serviço confere `enabled` já dentro do
+-- contexto da clínica, antes de agir. O runtime só chega aqui pelo provider estreito RotaDoWhatsapp.
 CREATE FUNCTION app_whatsapp_tenant_for_number(p_number text) RETURNS uuid
   LANGUAGE sql
   STABLE
@@ -161,7 +163,8 @@ CREATE TABLE whatsapp_opt_ins (
   method           text NOT NULL CONSTRAINT whatsapp_opt_ins_method_check
                      CHECK (method IN ('verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente')),
   -- Referência do comprovante (nº do termo, protocolo), cifrada com a chave da clínica.
-  evidence_enc     text CONSTRAINT whatsapp_opt_ins_evidence_check CHECK (evidence_enc IS NULL OR app_is_sealed_field(evidence_enc)),
+  -- Obrigatório em qualquer meio (R7 do parecer #69): sem comprovante não há prova.
+  evidence_enc     text NOT NULL CONSTRAINT whatsapp_opt_ins_evidence_check CHECK (app_is_sealed_field(evidence_enc)),
   -- O NÚMERO QUE CONSENTIU (V1 do #69): cifrado, e o HMAC da clínica para comparar com o número de agora.
   -- Número diferente = o opt-in perde a validade (revogado como numero_mudou) e nada sai.
   recipient_phone_enc  text NOT NULL CONSTRAINT whatsapp_opt_ins_phone_check CHECK (app_is_sealed_field(recipient_phone_enc)),
@@ -200,6 +203,11 @@ BEGIN
     IF NEW.revoked_at IS NOT NULL THEN
       RAISE EXCEPTION 'opt-in nasce vigente' USING ERRCODE = 'insufficient_privilege';
     END IF;
+    -- R7 do parecer #69: "pelo portal" só pode vir da sessão do PORTAL (#68), que ainda não está integrada
+    -- aqui; a recepção não declara que o portal participou.
+    IF NEW.method = 'portal_do_paciente' THEN
+      RAISE EXCEPTION 'opt-in pelo portal só pela sessão do portal' USING ERRCODE = 'insufficient_privilege';
+    END IF;
     NEW.granted_at := now();
     RETURN NEW;
   END IF;
@@ -214,6 +222,9 @@ BEGIN
      OR NEW.granted_at IS DISTINCT FROM OLD.granted_at OR NEW.granted_by IS DISTINCT FROM OLD.granted_by
      OR NEW.revoked_at IS NULL THEN
     RAISE EXCEPTION 'opt-in: só a revogação é permitida' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NEW.revoke_method = 'portal_do_paciente' THEN
+    RAISE EXCEPTION 'revogação pelo portal só pela sessão do portal' USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF NEW.revoke_method = 'resposta_sair' OR (NEW.revoke_method = 'numero_mudou' AND NEW.revoked_by IS NULL) THEN
     IF NOT app_is_system_session() THEN

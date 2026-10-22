@@ -10,7 +10,7 @@
  * "envelhecer" linhas no teste da limpeza de 30 dias, como dono da tabela). Dados 100% fictícios.
  */
 import type { TenantId } from '@plataforma/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -20,7 +20,9 @@ import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, RES
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
 import { assinarCorpo } from '../src/modules/messaging/mensageiro-whatsapp';
 import type { FonteDeResponsaveis } from '../src/modules/messaging/responsaveis.port';
+import { MessagingModule } from '../src/modules/messaging/messaging.module';
 import { WhatsappService } from '../src/modules/messaging/whatsapp.service';
+import { DATABASE_HANDLE, RotaDoWhatsapp } from '../src/modules/tenancy/tenancy.module';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
@@ -84,7 +86,7 @@ let seq = 0;
 const idDe = (r: { body: unknown }) => (r.body as { id: string }).id;
 
 /** Colunas obrigatórias do opt-in em INSERT direto que o banco tem de recusar ANTES (trigger/RLS). */
-const SELO_FALSO = { recipientPhoneEnc: 'x', recipientPhoneHash: '0'.repeat(64) };
+const SELO_FALSO = { recipientPhoneEnc: 'x', recipientPhoneHash: '0'.repeat(64), evidenceEnc: 'x' };
 
 async function optInDoBanco(tenant: TenantId, id: string) {
   return withTenant(api.db.db, tenant, async (tx) => (await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, id)))[0]);
@@ -129,7 +131,7 @@ async function consulta(s: Sessao, pacienteId: string, horas: number, prof = pro
   return { id: idDe(r), inicio: new Date((r.body as { inicio: string }).inicio) };
 }
 
-async function optIn(s: Sessao, pacienteId: string, corpo: Record<string, unknown> = { destinatario: 'paciente', meio: 'verbal_na_recepcao' }) {
+async function optIn(s: Sessao, pacienteId: string, corpo: Record<string, unknown> = { destinatario: 'paciente', meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio de recepcao' }) {
   const r = await api.http().post(`/pacientes/${pacienteId}/whatsapp/opt-in`).set(cab(s)).send(corpo);
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body as { id: string };
@@ -370,6 +372,67 @@ describe('V1: o opt-in vale só para o número que consentiu', () => {
         withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOptIns).set({ revokedAt: new Date(), revokedBy: null, revokeMethod: 'numero_mudou' }).where(eq(whatsappOptIns.id, o.id)), adminA.userId),
       ),
     ).toContain('42501');
+  });
+});
+
+describe('R6–R8: SAIR vale para o número, prova obrigatória, sem acesso cru ao banco', () => {
+  it('R6: "SAIR" revoga TODOS os opt-ins vigentes do número (dois pacientes, mesmo telefone)', async () => {
+    const tel = telefoneNovo();
+    const p1 = await paciente(adminA, tel);
+    const p2 = await paciente(adminA, tel);
+    const outroTel = telefoneNovo();
+    const p3 = await paciente(adminA, outroTel);
+    await consulta(adminA, p1, 19);
+    await optIn(adminA, p1);
+    await optIn(adminA, p2);
+    await optIn(adminA, p3);
+    await svc.executarLembretesComoSistema(clinicaA);
+    await webhook(corpoDeResposta(numeroA, `55${tel}`, 'SAIR')).expect(200);
+    const opts = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappOptIns).where(inArray(whatsappOptIns.patientId, [p1, p2, p3])));
+    expect(opts.find((o) => o.patientId === p1)).toMatchObject({ revokeMethod: 'resposta_sair' });
+    expect(opts.find((o) => o.patientId === p2)).toMatchObject({ revokeMethod: 'resposta_sair' });
+    // Outro número: intocado.
+    expect(opts.find((o) => o.patientId === p3)?.revokedAt).toBeNull();
+    // O lembrete do segundo paciente não sai mais.
+    await consulta(adminA, p2, 21);
+    await svc.executarLembretesComoSistema(clinicaA);
+    expect(enviadasPara(tel)).toHaveLength(1);
+  });
+
+  it('R7: comprovante obrigatório (400) e "portal" não vem da recepção (400 na rota, 42501 no banco)', async () => {
+    const p = await paciente(adminA, telefoneNovo());
+    const semProva = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(recepA)).send({ destinatario: 'paciente', meio: 'formulario_assinado' });
+    expect(semProva.status).toBe(400);
+    expect(semProva.body).toMatchObject({ campos: ['comprovante'] });
+    const portal = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(recepA)).send({ destinatario: 'paciente', meio: 'portal_do_paciente', comprovante: 'Sessao ficticia' });
+    expect(portal.status).toBe(400);
+    await optIn(recepA, p);
+    const revPortal = await api.http().post(`/pacientes/${p}/whatsapp/opt-in/revogar`).set(cab(recepA)).send({ meio: 'portal_do_paciente' });
+    expect(revPortal.status).toBe(400);
+    // Direto no banco: portal recusado pelo trigger; sem comprovante, NOT NULL.
+    expect(
+      await sqlstate(
+        withTenant(
+          api.db.db,
+          clinicaA,
+          (tx) => tx.insert(whatsappOptIns).values({ tenantId: clinicaA, patientId: p, recipientKind: 'paciente', method: 'portal_do_paciente', grantedBy: recepA.userId, ...SELO_FALSO }),
+          recepA.userId,
+        ),
+      ),
+    ).toContain('42501');
+    const [{ notnull } = { notnull: false }] = await api.db.db.execute<{ notnull: boolean }>(
+      sql`select a.attnotnull as notnull from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relname = 'whatsapp_opt_ins' and a.attname = 'evidence_enc'`,
+    );
+    expect(notnull).toBe(true);
+  });
+
+  it('R8: o handle cru do banco não é exportado; a rota do webhook é um provider estreito', async () => {
+    expect(() => {
+      api.app.select(MessagingModule).get<unknown>(DATABASE_HANDLE, { strict: true });
+    }).toThrow();
+    const rota = api.app.get(RotaDoWhatsapp);
+    expect(await rota.clinicaDoNumero(numeroA)).toBe(clinicaA);
+    expect(await rota.clinicaDoNumero('nao-numero')).toBeNull();
   });
 });
 
@@ -694,9 +757,9 @@ describe('horário, menor de idade e falha', () => {
     await svc.executarLembretesComoSistema(clinicaA);
     expect(enviadasPara(tel)).toHaveLength(0);
     // Responsável desconhecido: 409 (a tabela de responsáveis é de outra branch; aqui, a porta).
-    const sem = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'responsavel', responsavelId: randomUUID(), meio: 'verbal_na_recepcao' });
+    const sem = await api.http().post(`/pacientes/${p}/whatsapp/opt-in`).set(cab(adminA)).send({ destinatario: 'responsavel', responsavelId: randomUUID(), meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio resp' });
     expect(sem.status).toBe(409);
-    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: RESPONSAVEL_ID, meio: 'verbal_na_recepcao' });
+    await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: RESPONSAVEL_ID, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio resp' });
     expect((await svc.executarLembretesComoSistema(clinicaA)).programados).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(TELEFONE_RESPONSAVEL).length).toBeGreaterThanOrEqual(1);
     expect(enviadasPara(tel)).toHaveLength(0);

@@ -15,7 +15,7 @@ import {
   type WhatsappOutboxStatus,
   type WhatsappOutcome,
 } from '../../db/schema';
-import type { DatabaseHandle, TenantTx } from '../../db/tenant-transaction';
+import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
@@ -24,7 +24,7 @@ import { menorDeIdadeEm } from '../finance/financeiro-regras';
 import { patientFieldRef } from '../patients/patient-fields';
 import { janelaDeDias, noFusoDaClinica } from '../scheduling/agenda-regras';
 import { SchedulingService } from '../scheduling/scheduling.service';
-import { DATABASE_HANDLE, TenantDatabase } from '../tenancy/tenancy.module';
+import { RotaDoWhatsapp, TenantDatabase } from '../tenancy/tenancy.module';
 import {
   codigoDeFalha,
   dentroDoHorarioDeEnvio,
@@ -128,7 +128,7 @@ export class WhatsappService implements OnApplicationBootstrap {
 
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
-    @Inject(DATABASE_HANDLE) private readonly handle: DatabaseHandle,
+    @Inject(RotaDoWhatsapp) private readonly rota: RotaDoWhatsapp,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
     @Inject(SchedulingService) private readonly agenda: SchedulingService,
     @Inject(FONTE_DE_RESPONSAVEIS) private readonly responsaveis: FonteDeResponsaveis,
@@ -170,10 +170,8 @@ export class WhatsappService implements OnApplicationBootstrap {
       };
       if (nova.sendUntilHour <= nova.sendFromHour) throw new ConflitoError('horario_de_envio_invalido');
       if (nova.enabled && (!nova.senderName || !nova.businessNumberId)) throw new ConflitoError('configuracao_incompleta');
-      const [dono] = nova.businessNumberId
-        ? await this.handle.db.execute<{ t: string | null }>(sql`select app_whatsapp_tenant_for_number(${nova.businessNumberId}) as t`)
-        : [];
-      if (dono?.t && dono.t !== ctx.tenantId) throw new ConflitoError('numero_ja_registrado');
+      const dono = nova.businessNumberId ? await this.rota.clinicaDoNumero(nova.businessNumberId) : null;
+      if (dono && dono !== ctx.tenantId) throw new ConflitoError('numero_ja_registrado');
       await tx
         .insert(whatsappSettings)
         .values({ tenantId: ctx.tenantId, ...nova, updatedBy: ctx.userId })
@@ -262,7 +260,7 @@ export class WhatsappService implements OnApplicationBootstrap {
         recipientKind: dados.destinatario,
         guardianId: dados.destinatario === 'responsavel' ? (dados.responsavelId ?? null) : null,
         method: dados.meio,
-        evidenceEnc: dados.comprovante ? await this.cifrar(tx, ctx, id, CAMPO_EVIDENCIA, dados.comprovante) : null,
+        evidenceEnc: await this.cifrar(tx, ctx, id, CAMPO_EVIDENCIA, dados.comprovante),
         recipientPhoneEnc: await this.cifrar(tx, ctx, id, CAMPO_TELEFONE_OPTIN, telefone),
         recipientPhoneHash: hashDoNumero(chave, telefone),
         grantedBy: ctx.userId,
@@ -276,7 +274,7 @@ export class WhatsappService implements OnApplicationBootstrap {
     });
   }
 
-  revogarOptIn(ctx: RequestContext, pacienteId: string, meio: 'pedido_na_recepcao' | 'portal_do_paciente'): Promise<{ id: string; enviosCancelados: number }> {
+  revogarOptIn(ctx: RequestContext, pacienteId: string, meio: 'pedido_na_recepcao'): Promise<{ id: string; enviosCancelados: number }> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await this.pacienteDaClinica(tx, ctx, pacienteId);
       const vivo = await this.optInVigente(tx, ctx.tenantId, pacienteId, true);
@@ -586,8 +584,7 @@ export class WhatsappService implements OnApplicationBootstrap {
     const respostasFixas: { para: string; remetente: string }[] = [];
     for (const ev of eventos) {
       if (!clinicas.has(ev.numeroDaClinica)) {
-        const [r] = await this.handle.db.execute<{ t: string | null }>(sql`select app_whatsapp_tenant_for_number(${ev.numeroDaClinica}) as t`);
-        clinicas.set(ev.numeroDaClinica, (r?.t ?? null) as TenantId | null);
+        clinicas.set(ev.numeroDaClinica, await this.rota.clinicaDoNumero(ev.numeroDaClinica));
       }
       const tenantId = clinicas.get(ev.numeroDaClinica);
       if (!tenantId) {
@@ -669,17 +666,23 @@ export class WhatsappService implements OnApplicationBootstrap {
     const interpretacao = interpretarResposta(ev.texto);
     let resultado: WhatsappOutcome = 'sem_acao';
     if (interpretacao === 'sair') {
-      const r = await tx
+      // R6 do parecer #69: SAIR vale para o NÚMERO, não só para o envio citado. Revoga TODOS os opt-ins
+      // vigentes da clínica cujo número consentido (HMAC, V1) é o de quem respondeu (ex.: responsável com
+      // dois filhos), e cancela os agendados de cada um.
+      const chave = await this.chaveDoNumero(tx, ctx, false);
+      const numero = telefoneParaWhatsapp(ev.de);
+      const alvo = chave && numero ? hashDoNumero(chave, numero) : envio.recipientPhoneHash;
+      const revogados = await tx
         .update(whatsappOptIns)
         .set({ revokedAt: new Date(), revokedBy: null, revokeMethod: 'resposta_sair' })
-        .where(and(eq(whatsappOptIns.tenantId, ctx.tenantId), eq(whatsappOptIns.id, envio.optInId), isNull(whatsappOptIns.revokedAt)))
-        .returning({ id: whatsappOptIns.id });
-      const cancelados = await this.cancelarPendentes(tx, ctx, envio.optInId);
-      if (r.length > 0) {
+        .where(and(eq(whatsappOptIns.tenantId, ctx.tenantId), eq(whatsappOptIns.recipientPhoneHash, alvo), isNull(whatsappOptIns.revokedAt)))
+        .returning({ id: whatsappOptIns.id, patientId: whatsappOptIns.patientId });
+      for (const o of revogados) {
+        const cancelados = await this.cancelarPendentes(tx, ctx, o.id);
         await recordAudit(tx, ctx, {
           action: AuditAction.ConsentChange,
           scope: 'whatsapp_opt_ins',
-          metadata: { op: 'revoke', opt_in_id: envio.optInId, patient_id: envio.patientId, method: 'resposta_sair', outbox_cancelled: cancelados },
+          metadata: { op: 'revoke', opt_in_id: o.id, patient_id: o.patientId, method: 'resposta_sair', outbox_cancelled: cancelados, revoked_for_number: revogados.length },
         });
       }
       resultado = 'opt_out';
