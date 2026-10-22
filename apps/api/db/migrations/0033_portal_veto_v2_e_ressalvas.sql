@@ -2,7 +2,13 @@
 -- docs/03-seguranca-lgpd/revisoes/2026-10-20-portal.md (PR #68). Executar com o papel de MIGRAÇÃO (app_migrator).
 -- Ver docs/04-arquitetura/api-dominio.md §10.
 --
--- NUMERAÇÃO: 0028/0031 são dos responsáveis legais (outra branch) e 0032 do WhatsApp. Esta não depende delas.
+-- NUMERAÇÃO E DEPENDÊNCIAS: 0028/0031 são dos responsáveis legais e 0032 do WhatsApp (outra branch). Esta
+-- migração DEPENDE de 0028 e 0031 (seção V1: FKs para `patient_guardians`/`guardians`, vigência, curatela e
+-- emancipação); aplique-as antes. Não depende da 0032.
+--
+-- HISTÓRICO (R7 do parecer 2026-10-22-pr68): o commit 529490e, publicado com a mensagem "wip: trabalho em
+-- andamento salvo antes da retomada", é o MERGE DA FASE B (V1: responsável legal no portal sobre 0028/0031).
+-- Já publicado, não será reescrito; este registro faz as vezes da mensagem descritiva.
 
 -- ================================================================ V2. sessão do portal: trilha e chaves
 --
@@ -313,8 +319,7 @@ $$;
 --      mesma conta, dentro do prazo. Código errado conta tentativa. A versão antiga (só o token) é removida.
 -- O hash do código é HMAC-SHA256 com o próprio token como chave (calculado na API): o banco não guarda nada
 -- que, sozinho, permita adivinhar o código. Toda falha devolve vazio/NULL, sem dizer o motivo.
--- Responsável legal: o código vai para o telefone do cadastro do paciente até a fase B (telefone do
--- responsável da 0028).
+-- Responsável legal: o código vai para o telefone do cadastro DO RESPONSÁVEL (0028), não do paciente.
 CREATE TABLE portal_invite_otp (
   invite_id  uuid PRIMARY KEY,
   tenant_id  uuid NOT NULL,
