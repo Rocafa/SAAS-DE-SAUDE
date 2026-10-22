@@ -92,7 +92,7 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        decifrados), em `data.portal` e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`.
  * 1.16.0: ressalvas do 2º parecer do #67 (migração 0034): `payments[].guardianPayerResolvedBy/At`
  *        (saneamento do pagador pelo financeiro) e, nos vínculos, `eliminatedAt` e `recordRetentionUntil`
- *        (responsáveis na guarda de 20 anos do prontuário, A4).
+ *        (responsáveis na guarda de 20 anos do prontuário, A4); `professionals[].sensitiveArea` (R2 do #68, 0033).
  *        Integração (rodada 19): 1.15.0 era usado pelo portal e pela 0034 em paralelo; o pacote junta os dois em 1.16.0.
  */
 export const EXPORT_SCHEMA_VERSION = '1.16.0';
@@ -243,6 +243,7 @@ export interface ExportedProfessional {
   readonly userId: string | null;
   readonly displayName: string;
   readonly specialty: string;
+  readonly sensitiveArea: boolean;
   readonly capacity: number;
   readonly active: boolean;
   readonly createdAt: string;
@@ -787,6 +788,7 @@ export async function exportInTransaction(
     userId: p.userId,
     displayName: p.displayName,
     specialty: p.specialty,
+    sensitiveArea: p.sensitiveArea,
     capacity: p.capacity,
     active: p.active,
     createdAt: p.createdAt.toISOString(),

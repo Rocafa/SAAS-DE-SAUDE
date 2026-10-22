@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { assertAuditMetadata } from '../audit/audit-metadata';
 import {
+  areaSensivelDoProfissional,
   consentimentoIa,
   consultaOcultaAoResponsavel,
   especialidadeSensivel,
@@ -95,14 +96,26 @@ describe('V1 do #68: representação do responsável e sigilo do adolescente', (
     expect(eventoVale({ actingAs: 'titular', representUntil: null }, '2099-01-01')).toBe(true);
   });
 
-  it('sigilo: responsável não vê psicologia/psiquiatria de adolescente ou idade desconhecida; criança e titular veem', () => {
+  it('sigilo: responsável não vê área sensível de adolescente ou idade desconhecida; criança e titular veem', () => {
     expect(especialidadeSensivel('Psicologia')).toBe(true);
     expect(especialidadeSensivel('Psiquiatria infantil')).toBe(true);
+    expect(especialidadeSensivel('Saúde Mental')).toBe(true);
+    expect(especialidadeSensivel('Terapia TCC')).toBe(true);
     expect(especialidadeSensivel('Fisioterapia')).toBe(false);
-    expect(consultaOcultaAoResponsavel('responsavel_legal', 'adolescente', 'Psicologia')).toBe(true);
-    expect(consultaOcultaAoResponsavel('responsavel_legal', null, 'Psicóloga')).toBe(true);
-    expect(consultaOcultaAoResponsavel('responsavel_legal', 'crianca', 'Psicologia')).toBe(false);
-    expect(consultaOcultaAoResponsavel('responsavel_legal', 'adolescente', 'Fisioterapia')).toBe(false);
-    expect(consultaOcultaAoResponsavel('titular', 'adulto', 'Psicologia')).toBe(false);
+    expect(consultaOcultaAoResponsavel('responsavel_legal', 'adolescente', true)).toBe(true);
+    expect(consultaOcultaAoResponsavel('responsavel_legal', null, true)).toBe(true);
+    expect(consultaOcultaAoResponsavel('responsavel_legal', 'adulto', true)).toBe(true);
+    expect(consultaOcultaAoResponsavel('responsavel_legal', 'crianca', true)).toBe(false);
+    expect(consultaOcultaAoResponsavel('responsavel_legal', 'adolescente', false)).toBe(false);
+    expect(consultaOcultaAoResponsavel('titular', 'adulto', true)).toBe(false);
+  });
+
+  it('R2: a marca ESTRUTURADA decide; texto livre só reforça; profissional desconhecido = sensível', () => {
+    // "Terapeuta" em texto livre não é pego pela expressão: a marca da clínica resolve.
+    expect(areaSensivelDoProfissional({ sensitiveArea: true, specialty: 'Terapeuta' })).toBe(true);
+    expect(areaSensivelDoProfissional({ sensitiveArea: false, specialty: 'Terapeuta' })).toBe(false);
+    expect(areaSensivelDoProfissional({ sensitiveArea: false, specialty: 'Psicóloga' })).toBe(true);
+    expect(areaSensivelDoProfissional({ sensitiveArea: false, specialty: 'Fisioterapia' })).toBe(false);
+    expect(areaSensivelDoProfissional(null)).toBe(true);
   });
 });

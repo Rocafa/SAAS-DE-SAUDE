@@ -58,6 +58,8 @@ export interface ProfissionalDto {
   readonly nome: string;
   readonly especialidade: string;
   readonly capacidade: number;
+  /** R2 do #68: área sensível (sigilo do adolescente no portal). */
+  readonly areaSensivel: boolean;
 }
 
 export interface TipoAtendimentoDto {
@@ -305,7 +307,7 @@ export class SchedulingService {
         .from(professionals)
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.active, true)))
         .orderBy(asc(professionals.displayName), asc(professionals.id));
-      return linhas.map((p) => ({ id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity }));
+      return linhas.map((p) => this.profissionalDto(p));
     });
   }
 
@@ -319,12 +321,34 @@ export class SchedulingService {
           specialty: dados.especialidade,
           capacity: dados.capacidade,
           userId: dados.usuarioId ?? null,
+          sensitiveArea: dados.areaSensivel ?? false,
         })
         .returning();
       if (!p) throw new Error('falha ao criar profissional');
-      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'professionals', metadata: { professional_id: p.id } });
-      return { id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity };
+      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'professionals', metadata: { professional_id: p.id, sensitive_area: p.sensitiveArea } });
+      return this.profissionalDto(p);
     });
+  }
+
+  /**
+   * Marca de área sensível do profissional (R2 do #68): estruturada, decide o sigilo do adolescente no portal.
+   * Desligar não vence a especialidade: se ela parecer de área sensível, o banco mantém a marca ligada.
+   */
+  marcarAreaSensivel(ctx: RequestContext, id: string, areaSensivel: boolean): Promise<ProfissionalDto> {
+    return this.escrita(ctx, async (tx) => {
+      const [p] = await tx
+        .update(professionals)
+        .set({ sensitiveArea: areaSensivel })
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .returning();
+      if (!p) throw new NaoEncontradoError();
+      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'professionals', metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea } });
+      return this.profissionalDto(p);
+    });
+  }
+
+  private profissionalDto(p: typeof professionals.$inferSelect): ProfissionalDto {
+    return { id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity, areaSensivel: p.sensitiveArea };
   }
 
   listarTipos(ctx: RequestContext): Promise<TipoAtendimentoDto[]> {

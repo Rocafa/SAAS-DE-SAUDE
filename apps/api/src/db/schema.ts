@@ -58,6 +58,8 @@ export const professionals = pgTable('professionals', {
   userId: uuid('user_id'),
   displayName: text('display_name').notNull(),
   specialty: text('specialty').notNull(),
+  /** 0033 (R2 do #68): área sensível (psicologia, psiquiatria, saúde mental) marcada pela clínica; a especialidade só reforça. */
+  sensitiveArea: boolean('sensitive_area').notNull().default(false),
   capacity: integer('capacity').notNull().default(1),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

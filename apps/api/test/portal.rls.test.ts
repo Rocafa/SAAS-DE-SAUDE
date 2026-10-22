@@ -817,6 +817,46 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const contaCrianca = await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(crianca, 'Ugo Ficticio Pai') });
     expect(((await api.http().get('/portal/consultas').set(cab(contaCrianca)).expect(200)).body as { id: string }[]).map((c) => c.id)).toContain(psiCrianca);
   });
+
+  it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {
+    // "Terapeuta" não é pego por texto: a clínica marca. "Saúde Mental" sem a marca: o banco liga sozinho.
+    const terapeuta = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Tera Ficticia', especialidade: 'Terapeuta', areaSensivel: true }).expect(201))
+      .body as { id: string; areaSensivel: boolean };
+    expect(terapeuta.areaSensivel).toBe(true);
+    const saudeMental = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Sama Ficticia', especialidade: 'Saúde Mental' }).expect(201))
+      .body as { id: string; areaSensivel: boolean };
+    expect(saudeMental.areaSensivel).toBe(true);
+    // Desligar a marca não vence a especialidade sensível; ligar depois funciona (e é auditado).
+    expect((await api.http().post(`/profissionais/${saudeMental.id}/area-sensivel`).set(cab(adminA)).send({ areaSensivel: false }).expect(201)).body)
+      .toMatchObject({ areaSensivel: true });
+    const nutri = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Nutri Ficticia', especialidade: 'Nutricao' }).expect(201)).body as { id: string; areaSensivel: boolean };
+    expect(nutri.areaSensivel).toBe(false);
+    await api.http().post(`/profissionais/${nutri.id}/area-sensivel`).set(cab(api.sessao(clinicaA, 'recepcao'))).send({ areaSensivel: true }).expect(403);
+    expect((await api.http().post(`/profissionais/${nutri.id}/area-sensivel`).set(cab(adminA)).send({ areaSensivel: true }).expect(201)).body)
+      .toMatchObject({ areaSensivel: true });
+    const teen = await criarPaciente(adminA, 'Wanda Ficticia Adolescente', { nascimento: nascidoHa(13) });
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ appointment_type_id: string }>(
+      sql`select appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const ids: string[] = [];
+    for (const [i, prof] of [terapeuta.id, nutri.id].entries()) {
+      const id = randomUUID();
+      const ini = new Date(Date.now() + (5 + i) * 3_600_000);
+      await withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values({
+        id, tenantId: clinicaA, createdBy: adminA.userId, patientId: teen, professionalId: prof, appointmentTypeId: base?.appointment_type_id as string,
+        startsAt: ini, endsAt: new Date(ini.getTime() + 30 * 60_000), status: 'confirmed',
+      }), adminA.userId);
+      ids.push(id);
+    }
+    const conta = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Yuri Ficticio Pai') });
+    const lista = ((await api.http().get('/portal/consultas').set(cab(conta)).expect(200)).body as { id: string }[]).map((c) => c.id);
+    expect(lista).not.toContain(ids[0]);
+    expect(lista).not.toContain(ids[1]);
+    // Na sessão do portal, professionals é só leitura (nem desligar a marca, nem renomear).
+    await expect(api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${conta.contaId}::uuid, ${conta.vinculoId}::uuid)`);
+      await tx.execute(sql`update professionals set sensitive_area = false where id = ${terapeuta.id}::uuid`);
+    })).rejects.toThrow();
+  });
 });
 
 describe('auditoria e limite por conta', () => {

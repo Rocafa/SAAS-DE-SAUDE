@@ -724,3 +724,39 @@ AS $$
 $$;
 REVOKE ALL ON FUNCTION app_portal_close_ended_representations(uuid), app_portal_tenants_with_links() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_portal_close_ended_representations(uuid), app_portal_tenants_with_links() TO app_user;
+
+-- ================================================================ R2 (re-revisão do #68). área sensível ESTRUTURADA
+--
+-- Antes, o sigilo do adolescente dependia de regex na especialidade em TEXTO LIVRE ("Saúde mental",
+-- "Terapeuta" ou um erro de digitação escapavam). Agora a fonte é `professionals.sensitive_area` (boolean,
+-- marcado pela clínica no cadastro do profissional: psicologia, psiquiatria, saúde mental...). A especialidade
+-- em texto livre fica só como REFORÇO: se ela parecer de área sensível, o banco liga a marca sozinho (nunca
+-- desliga). Na sessão do portal, `professionals` passa a ser só leitura (a `portal_liberada` era FOR ALL).
+ALTER TABLE professionals ADD COLUMN sensitive_area boolean NOT NULL DEFAULT false;
+
+CREATE FUNCTION app_specialty_looks_sensitive(p text) RETURNS boolean
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$
+  SELECT translate(lower(coalesce(p, '')), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc')
+         ~ '(psic|psiq|saude mental|(^|[^a-z])tcc([^a-z]|$))'
+$$;
+
+UPDATE professionals SET sensitive_area = true WHERE app_specialty_looks_sensitive(specialty);
+
+CREATE FUNCTION professionals_sensitive_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF app_portal_patient() IS NOT NULL THEN
+    RAISE EXCEPTION 'professionals: % não permitido na sessão do portal', TG_OP USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF app_specialty_looks_sensitive(NEW.specialty) THEN
+    NEW.sensitive_area := true;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER zz_professionals_sensitive_guard BEFORE INSERT OR UPDATE ON professionals
+  FOR EACH ROW EXECUTE FUNCTION professionals_sensitive_guard();

@@ -197,20 +197,26 @@ type PortalActingAsRegra = 'titular' | 'responsavel_legal';
 /**
  * Sigilo do adolescente no portal (A1 do #68; C3 da re-revisão do #67): o responsável vê agenda, financeiro e
  * cadastro, NADA clínico — nem com a marca de informação clínica da 0031 ligada (o portal não a consulta).
- * Na agenda, consulta de área sensível (psicologia/psiquiatria) de paciente com 12 anos ou mais (ou idade
- * desconhecida) fica OCULTA ao responsável por padrão.
+ * Na agenda, consulta de área sensível de paciente com 12 anos ou mais (ou idade desconhecida) fica OCULTA ao
+ * responsável por padrão.
+ *
+ * R2 do #68: a área sensível sai do campo ESTRUTURADO `professionals.sensitive_area` (marcado pela clínica).
+ * A especialidade em texto livre é só REFORÇO (a mesma expressão do banco, `app_specialty_looks_sensitive`,
+ * que liga a marca sozinho). Profissional desconhecido = sensível (falha fechada).
  */
 export function especialidadeSensivel(especialidade: string): boolean {
   const e = especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  return /psic|psiq/.test(e);
+  return /(psic|psiq|saude mental|(^|[^a-z])tcc([^a-z]|$))/.test(e);
 }
 
-export function consultaOcultaAoResponsavel(
-  agindoComo: PortalActingAsRegra,
-  faixa: 'crianca' | 'adolescente' | 'adulto' | null,
-  especialidade: string,
-): boolean {
-  return agindoComo === 'responsavel_legal' && faixa !== 'crianca' && especialidadeSensivel(especialidade);
+export function areaSensivelDoProfissional(p: { sensitiveArea: boolean; specialty: string } | null | undefined): boolean {
+  return !p || p.sensitiveArea || especialidadeSensivel(p.specialty);
+}
+
+export type FaixaRegra = 'crianca' | 'adolescente' | 'adulto' | null;
+
+export function consultaOcultaAoResponsavel(agindoComo: PortalActingAsRegra, faixa: FaixaRegra, areaSensivel: boolean): boolean {
+  return agindoComo === 'responsavel_legal' && faixa !== 'crianca' && areaSensivel;
 }
 export function idadeEm(nascimento: string, hoje: string): number {
   const [an, mn, dn] = nascimento.split('-').map(Number) as [number, number, number];

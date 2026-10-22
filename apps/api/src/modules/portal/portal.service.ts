@@ -54,6 +54,7 @@ import {
   novoProtocolo,
   primeiroNome,
   situacaoParaOTitular,
+  areaSensivelDoProfissional,
   consultaOcultaAoResponsavel,
   eventoVale,
   TETO_DIARIO_PEDIDOS,
@@ -269,7 +270,7 @@ export class PortalService {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const agora = Date.now();
       const linhas = await tx
-        .select({ a: appointments, profissional: professionals.displayName, especialidade: professionals.specialty })
+        .select({ a: appointments, profissional: professionals.displayName, especialidade: professionals.specialty, sensivel: professionals.sensitiveArea })
         .from(appointments)
         .innerJoin(professionals, and(eq(professionals.tenantId, appointments.tenantId), eq(professionals.id, appointments.professionalId)))
         .where(
@@ -285,7 +286,9 @@ export class PortalService {
       // Sigilo do adolescente (A1 do #68; C3 do #67): responsável não vê consulta de área sensível do paciente
       // com 12 anos ou mais (nem com a marca de informação clínica ligada: o portal não a consulta).
       const faixa = ctx.agindoComo === 'responsavel_legal' ? await this.faixaEtaria(tx, ctx) : null;
-      const visiveis = linhas.filter((l) => !consultaOcultaAoResponsavel(ctx.agindoComo, faixa, l.especialidade));
+      const visiveis = linhas.filter(
+        (l) => !consultaOcultaAoResponsavel(ctx.agindoComo, faixa, areaSensivelDoProfissional({ sensitiveArea: l.sensivel, specialty: l.especialidade })),
+      );
       const itens = visiveis.map(({ a, profissional }): ConsultaPortalDto => {
         const { data, hora } = noFusoDaClinica(a.startsAt);
         const futura = a.startsAt.getTime() > agora;
@@ -323,11 +326,11 @@ export class PortalService {
         if (!a) throw new NaoEncontradoError();
         if (ctx.agindoComo === 'responsavel_legal') {
           const [prof] = await tx
-            .select({ especialidade: professionals.specialty })
+            .select({ sensitiveArea: professionals.sensitiveArea, specialty: professionals.specialty })
             .from(professionals)
             .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, a.professionalId)));
           // Oculta ao responsável = 404, igual a inexistente.
-          if (!prof || consultaOcultaAoResponsavel(ctx.agindoComo, await this.faixaEtaria(tx, ctx), prof.especialidade)) throw new NaoEncontradoError();
+          if (consultaOcultaAoResponsavel(ctx.agindoComo, await this.faixaEtaria(tx, ctx), areaSensivelDoProfissional(prof))) throw new NaoEncontradoError();
         }
         const novo = transicaoDoPortal(acao, a.status);
         if (!novo) throw new ConflitoError('status_nao_permite');

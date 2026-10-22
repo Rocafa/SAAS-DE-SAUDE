@@ -91,6 +91,7 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/agendamentos/${id}/cancelar`],
       [RequestMethod.GET, '/profissionais'],
       [RequestMethod.POST, '/profissionais'],
+      [RequestMethod.POST, `/profissionais/${id}/area-sensivel`],
       [RequestMethod.GET, '/tipos-atendimento'],
       [RequestMethod.POST, '/tipos-atendimento'],
       // Guias e pacotes (0011).
