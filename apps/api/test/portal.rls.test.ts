@@ -892,14 +892,20 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     // Responsável que NÃO pagou: o recibo de psicologia aparece sem data; o de fisioterapia, inteiro.
     const doOutro = await lista(contaOutro);
     expect(doOutro.find((r) => r.id === recPsi)).toMatchObject({ data: null, restrito: true });
-    expect(doOutro.find((r) => r.id === recFisio)).toMatchObject({ restrito: false, data: expect.any(String) });
+    const fisio = doOutro.find((r) => r.id === recFisio);
+    expect(fisio?.restrito).toBe(false);
+    expect(fisio?.data).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const restrito = await doc(contaOutro, recPsi);
     expect(restrito).toMatchObject({ restrito: true, dataPagamento: null, valorCentavos: 5000, emitente: { registroConselho: null, profissionalId: null } });
     expect(JSON.stringify(restrito)).not.toContain('Dra Psi Recibo Ficticia');
     expect(JSON.stringify(restrito)).not.toContain(psi.id);
     // Responsável pagador (congelado no recebimento, 0031): o recibo é dele, inteiro.
-    expect((await lista(contaPagador)).find((r) => r.id === recPsi)).toMatchObject({ restrito: false, data: expect.any(String) });
-    expect(await doc(contaPagador, recPsi)).toMatchObject({ restrito: false, dataPagamento: expect.any(String) });
+    const doPagador = (await lista(contaPagador)).find((r) => r.id === recPsi);
+    expect(doPagador?.restrito).toBe(false);
+    expect(doPagador?.data).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const inteiro = await doc(contaPagador, recPsi);
+    expect(inteiro.restrito).toBe(false);
+    expect(inteiro.dataPagamento).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // Criança: nada restrito.
     expect((await lista(contaCrianca)).find((r) => r.id === recPsiCrianca)).toMatchObject({ restrito: false });
     // Trilha registra a restrição (só contagem/marca).
