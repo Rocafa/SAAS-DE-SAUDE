@@ -1,5 +1,5 @@
 import type { TenantId } from '@plataforma/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { portalConsents, type AiConsentState } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { hojeNaClinica } from '../insurance/guias-regras';
@@ -20,7 +20,13 @@ import { consentimentoIa, estadoDoConsentimento, eventoVale } from './portal-reg
  */
 export async function consentimentoIaDoPaciente(tx: TenantTx, tenantId: TenantId, pacienteId: string): Promise<AiConsentState> {
   const eventos = await tx
-    .select({ response: portalConsents.response, actingAs: portalConsents.actingAs, representUntil: portalConsents.representUntil })
+    .select({
+      response: portalConsents.response,
+      actingAs: portalConsents.actingAs,
+      representUntil: portalConsents.representUntil,
+      representationEndedAt: portalConsents.representationEndedAt,
+      guardianLinkOk: sql<boolean | null>`app_portal_guardian_link_ok(${portalConsents.tenantId}, ${portalConsents.guardianLinkId})`,
+    })
     .from(portalConsents)
     .where(and(eq(portalConsents.tenantId, tenantId), eq(portalConsents.patientId, pacienteId), eq(portalConsents.purpose, 'escriba_ia')))
     .orderBy(asc(portalConsents.createdAt), asc(portalConsents.id));

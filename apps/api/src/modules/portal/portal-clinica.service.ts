@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
@@ -220,6 +220,26 @@ export class PortalClinicaService {
         return r?.n ?? 0;
       });
     }
+    await this.expirarConsentimentosDeResponsavel();
+    return total;
+  }
+
+  /**
+   * JOB do sistema (R4 do #68): encerra (`representation_ended_at`) os consentimentos dados por responsável
+   * cujo vínculo da 0028 acabou (curatela levantada, fim da vigência, anulação). O uso já confere a vigência
+   * na hora; isto deixa o fato no evento e na trilha. Uma transação por clínica. Devolve quantos encerrou.
+   */
+  async expirarConsentimentosDeResponsavel(): Promise<number> {
+    const clinicas = await this.db.semContextoDoPortal(async (tx) =>
+      (await tx.execute<{ t: string }>(sql`select t from app_portal_tenants_with_any_link() as t`)).map((r) => r.t),
+    );
+    let total = 0;
+    for (const t of clinicas) {
+      total += await this.db.semContextoDoPortal(async (tx) => {
+        const [r] = await tx.execute<{ n: number }>(sql`select app_portal_expire_guardian_consents(${t}::uuid) as n`);
+        return r?.n ?? 0;
+      });
+    }
     return total;
   }
 
@@ -308,14 +328,14 @@ export class PortalClinicaService {
   ): Promise<{ finalidade: PortalConsentPurpose; resposta: RespostaConsentimento; estadoIa?: AiConsentState; atualizadoEm: string | null }[]> {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const eventos = await tx
-        .select()
+        .select({ ...getTableColumns(portalConsents), guardianLinkOk: sql<boolean | null>`app_portal_guardian_link_ok(${portalConsents.tenantId}, ${portalConsents.guardianLinkId})` })
         .from(portalConsents)
         .where(and(eq(portalConsents.tenantId, ctx.tenantId), eq(portalConsents.patientId, pacienteId)))
         .orderBy(asc(portalConsents.createdAt), asc(portalConsents.id));
       await recordAudit(tx, ctx, { action: AuditAction.Read, scope: 'portal_consents', metadata: { patient_id: pacienteId, count: eventos.length } });
       const hoje = hojeNaClinica();
       return (Object.keys(CONSENTIMENTOS) as PortalConsentPurpose[]).map((f) => {
-        // V1 do #68: o evento do responsável só vale enquanto a representação valia.
+        // V1 e R4 do #68: o evento do responsável só vale enquanto a representação vale (vínculo da 0028 vigente).
         const ultimo = eventos.filter((e) => e.purpose === f && eventoVale(e, hoje)).at(-1);
         const resposta = estadoDoConsentimento(ultimo?.response);
         return { finalidade: f, resposta, ...(f === 'escriba_ia' ? { estadoIa: consentimentoIa(resposta) } : {}), atualizadoEm: ultimo?.createdAt.toISOString() ?? null };

@@ -62,6 +62,8 @@ export interface ExportedPortal {
     createdAt: string;
     guardianId: string | null;
     representUntil: string | null;
+    guardianLinkId: string | null;
+    representationEndedAt: string | null;
   }[];
   readonly rightsRequests: readonly {
     id: string;
@@ -194,6 +196,8 @@ export async function exportarPortal(
       createdAt: c.createdAt.toISOString(),
       guardianId: c.guardianId,
       representUntil: c.representUntil,
+      guardianLinkId: c.guardianLinkId,
+      representationEndedAt: iso(c.representationEndedAt),
     })),
     rightsRequests,
   };

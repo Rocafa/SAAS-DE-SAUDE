@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type TenantId } from '@plataforma/shared';
-import { and, asc, desc, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, lt, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { comPoliticaDeAssinatura, ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import {
@@ -763,9 +763,10 @@ export class PortalService {
     return { clinica: t?.nome ?? '', primeiroNome: primeiroNome(p.displayName, p.socialName) };
   }
 
+  /** Eventos de consentimento do paciente, com a vigência do vínculo do responsável conferida AGORA (R4). */
   private eventos(tx: TenantTx, ctx: ContextoPortal) {
     return tx
-      .select()
+      .select({ ...getTableColumns(portalConsents), guardianLinkOk: sql<boolean | null>`app_portal_guardian_link_ok(${portalConsents.tenantId}, ${portalConsents.guardianLinkId})` })
       .from(portalConsents)
       .where(and(eq(portalConsents.tenantId, ctx.tenantId), eq(portalConsents.patientId, ctx.pacienteId)))
       .orderBy(asc(portalConsents.createdAt), asc(portalConsents.id));

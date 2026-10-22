@@ -89,11 +89,20 @@ describe('V1 do #68: representação do responsável e sigilo do adolescente', (
   });
 
   it('evento do responsável vale só ANTES do fim (exclusivo); no dia dos 18 volta a não respondido; curatela e titular sempre', () => {
-    const resp = { actingAs: 'responsavel_legal' as const, representUntil: '2030-05-10' };
+    const ok = { representationEndedAt: null, guardianLinkOk: true };
+    const resp = { actingAs: 'responsavel_legal' as const, representUntil: '2030-05-10', ...ok };
     expect(eventoVale(resp, '2030-05-09')).toBe(true);
     expect(eventoVale(resp, '2030-05-10')).toBe(false);
-    expect(eventoVale({ actingAs: 'responsavel_legal', representUntil: null }, '2099-01-01')).toBe(true);
-    expect(eventoVale({ actingAs: 'titular', representUntil: null }, '2099-01-01')).toBe(true);
+    expect(eventoVale({ actingAs: 'responsavel_legal', representUntil: null, ...ok }, '2099-01-01')).toBe(true);
+    expect(eventoVale({ actingAs: 'titular', representUntil: null, representationEndedAt: null, guardianLinkOk: null }, '2099-01-01')).toBe(true);
+  });
+
+  it('R4: o evento do responsável (inclusive o curador) deixa de valer quando o vínculo da 0028 acaba', () => {
+    const curador = { actingAs: 'responsavel_legal' as const, representUntil: null };
+    expect(eventoVale({ ...curador, representationEndedAt: null, guardianLinkOk: true }, '2099-01-01')).toBe(true);
+    expect(eventoVale({ ...curador, representationEndedAt: null, guardianLinkOk: false }, '2026-01-01')).toBe(false);
+    expect(eventoVale({ ...curador, representationEndedAt: null, guardianLinkOk: null }, '2026-01-01')).toBe(false);
+    expect(eventoVale({ ...curador, representationEndedAt: new Date(), guardianLinkOk: true }, '2026-01-01')).toBe(false);
   });
 
   it('sigilo: responsável não vê área sensível de adolescente ou idade desconhecida; criança e titular veem', () => {

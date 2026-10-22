@@ -524,8 +524,13 @@ ALTER TABLE portal_links ADD CONSTRAINT portal_links_revoke_reason_check CHECK (
 ALTER TABLE portal_consents
   ADD COLUMN guardian_id     uuid,
   ADD COLUMN represent_until date,
+  ADD COLUMN guardian_link_id uuid,
+  ADD COLUMN representation_ended_at timestamptz,
   ADD CONSTRAINT portal_consents_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
-  ADD CONSTRAINT portal_consents_guardian_check CHECK ((acting_as = 'responsavel_legal') = (guardian_id IS NOT NULL));
+  ADD CONSTRAINT portal_consents_guardian_link_fk FOREIGN KEY (guardian_link_id, tenant_id) REFERENCES patient_guardians (id, tenant_id),
+  ADD CONSTRAINT portal_consents_guardian_check CHECK ((acting_as = 'responsavel_legal') = (guardian_id IS NOT NULL)),
+  ADD CONSTRAINT portal_consents_guardian_link_check CHECK ((acting_as = 'responsavel_legal') = (guardian_link_id IS NOT NULL)),
+  ADD CONSTRAINT portal_consents_ended_check CHECK (representation_ended_at IS NULL OR acting_as = 'responsavel_legal');
 ALTER TABLE portal_rights_requests
   ADD COLUMN guardian_id uuid,
   ADD CONSTRAINT portal_rights_requests_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
@@ -672,12 +677,14 @@ BEGIN
      OR NEW.link_id IS DISTINCT FROM app_portal_link() OR NEW.account_id IS DISTINCT FROM app_portal_account() THEN
     RAISE EXCEPTION 'consentimento do portal é do titular da sessão do portal' USING ERRCODE = 'insufficient_privilege';
   END IF;
-  SELECT pl.acting_as, pl.guardian_id, pl.represent_until INTO l FROM portal_links pl
+  SELECT pl.acting_as, pl.guardian_id, pl.guardian_link_id, pl.represent_until INTO l FROM portal_links pl
    WHERE pl.tenant_id = NEW.tenant_id AND pl.id = NEW.link_id AND pl.revoked_at IS NULL;
-  IF NOT FOUND OR NEW.created_at IS DISTINCT FROM now() OR NEW.acting_as IS DISTINCT FROM l.acting_as THEN
+  IF NOT FOUND OR NEW.created_at IS DISTINCT FROM now() OR NEW.acting_as IS DISTINCT FROM l.acting_as
+     OR NEW.representation_ended_at IS NOT NULL THEN
     RAISE EXCEPTION 'consentimento fora do vínculo ativo' USING ERRCODE = 'check_violation';
   END IF;
   NEW.guardian_id := l.guardian_id;
+  NEW.guardian_link_id := l.guardian_link_id;
   NEW.represent_until := l.represent_until;
   RETURN NEW;
 END;
@@ -799,3 +806,86 @@ CREATE POLICY portal_sigilo_adolescente ON appointments AS RESTRICTIVE
               OR NOT (SELECT app_portal_hides_sensitive())
               OR NOT EXISTS (SELECT 1 FROM professionals pr
                               WHERE pr.tenant_id = appointments.tenant_id AND pr.id = appointments.professional_id AND pr.sensitive_area)));
+
+-- ================================================================ R4 (re-revisão do #68). o consentimento do responsável expira com o vínculo
+--
+-- Antes, `eventoVale` tratava `represent_until` nulo (curatela) como "vale para sempre": com a curatela
+-- levantada, o vínculo da 0028 encerrado e o portal revogado, o "sim" do curador continuava valendo para o
+-- escriba e para os lembretes. Agora:
+--   - o evento grava QUAL vínculo da 0028 representava (`guardian_link_id`, pelo gatilho, a partir do vínculo
+--     do portal) e vale só enquanto esse vínculo estiver VIGENTE: conferido no momento do uso por
+--     `app_portal_guardian_link_ok` (portal, clínica e `consentimentoIaDoPaciente`);
+--   - o JOB `app_portal_expire_guardian_consents` marca `representation_ended_at` nos eventos de responsável
+--     cujo vínculo acabou (curatela levantada, fim da vigência, anulação), com trilha do sistema. Única
+--     mudança aceita em `portal_consents` (append-only no resto), só pelo dono, uma vez.
+CREATE FUNCTION app_portal_guardian_link_ok(p_tenant uuid, p_guardian_link uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT CASE WHEN p_guardian_link IS NULL OR p_tenant IS DISTINCT FROM public.app_current_tenant() THEN NULL ELSE COALESCE((
+    SELECT g.ended_at IS NULL AND g.end_reason IS NULL
+           AND g.valid_from <= public.app_fiscal_today()
+           AND (g.valid_until IS NULL OR g.valid_until > public.app_fiscal_today())
+      FROM public.patient_guardians g
+     WHERE g.tenant_id = p_tenant AND g.id = p_guardian_link), false) END
+$$;
+REVOKE ALL ON FUNCTION app_portal_guardian_link_ok(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_portal_guardian_link_ok(uuid, uuid) TO app_user;
+
+DROP TRIGGER portal_consents_no_update_delete ON portal_consents;
+CREATE TRIGGER portal_consents_no_delete BEFORE DELETE ON portal_consents FOR EACH ROW EXECUTE FUNCTION portal_reject_mutation();
+CREATE FUNCTION portal_consents_expire_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT app_running_as_owner(TG_RELID) OR OLD.representation_ended_at IS NOT NULL OR NEW.representation_ended_at IS DISTINCT FROM now()
+     OR OLD.acting_as <> 'responsavel_legal'
+     OR (to_jsonb(NEW) - 'representation_ended_at') IS DISTINCT FROM (to_jsonb(OLD) - 'representation_ended_at') THEN
+    RAISE EXCEPTION 'portal_consents: só o job do sistema encerra o consentimento do responsável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER portal_consents_expire_guard BEFORE UPDATE ON portal_consents FOR EACH ROW EXECUTE FUNCTION portal_consents_expire_guard();
+
+-- Job (sistema): uma clínica por transação, que tem de começar aqui. Devolve quantos eventos encerrou.
+CREATE FUNCTION app_portal_expire_guardian_consents(p_tenant uuid) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  r   record;
+  v_n integer := 0;
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.tenant_context WHERE xid = txid_current_if_assigned()) THEN
+    RAISE EXCEPTION 'job de consentimento exige transação própria' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  PERFORM public.app_set_tenant(p_tenant);
+  PERFORM public.app_set_system_user();
+  FOR r IN
+    SELECT c.id, c.patient_id, c.guardian_id, c.guardian_link_id, c.purpose FROM public.portal_consents c
+     WHERE c.tenant_id = p_tenant AND c.acting_as = 'responsavel_legal' AND c.representation_ended_at IS NULL
+     ORDER BY c.id
+     FOR UPDATE
+  LOOP
+    CONTINUE WHEN public.app_portal_guardian_link_ok(p_tenant, r.guardian_link_id);
+    UPDATE public.portal_consents SET representation_ended_at = now() WHERE tenant_id = p_tenant AND id = r.id;
+    INSERT INTO public.audit_log (tenant_id, actor_id, actor_kind, action, scope, metadata)
+      VALUES (p_tenant, '00000000-0000-0000-0000-000000000000'::uuid, 'sistema', 'update', 'portal_consents',
+              jsonb_build_object('op', 'guardian_consent_expired', 'consent_id', r.id, 'purpose', r.purpose,
+                                 'patient_id', r.patient_id, 'guardian_id', r.guardian_id, 'guardian_link_id', r.guardian_link_id));
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END;
+$$;
+-- Clínicas com algum vínculo de portal (ativo ou não; só ids): o consentimento sobrevive à revogação do vínculo.
+CREATE FUNCTION app_portal_tenants_with_any_link() RETURNS SETOF uuid
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT DISTINCT i.tenant_id FROM public.portal_link_index i ORDER BY 1
+$$;
+REVOKE ALL ON FUNCTION app_portal_expire_guardian_consents(uuid), app_portal_tenants_with_any_link() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_portal_expire_guardian_consents(uuid), app_portal_tenants_with_any_link() TO app_user;

@@ -780,6 +780,10 @@ export const portalConsents = pgTable('portal_consents', {
   /** 0033 (V1): qual responsável agiu e até quando a representação valia (gatilho, a partir do vínculo). */
   guardianId: uuid('guardian_id'),
   representUntil: date('represent_until'),
+  /** 0033 (R4): o vínculo da 0028 que representava (o evento vale só enquanto ele estiver vigente). */
+  guardianLinkId: uuid('guardian_link_id'),
+  /** 0033 (R4): quando o job encerrou o evento porque o vínculo do responsável acabou. */
+  representationEndedAt: timestamp('representation_ended_at', { withTimezone: true }),
 });
 
 /** Pedido do titular (0027, LGPD art. 18): registrado para a clínica atender; detalhe e resposta cifrados. */

@@ -832,6 +832,37 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(noBancoCrianca).toEqual([psiCrianca]);
   });
 
+  it('R4: curatela encerrada = o consentimento dado pelo curador deixa de valer na hora; o job registra a expiração', async () => {
+    const adulto = await criarPaciente(adminA, 'Edu Ficticio Curatelado', { nascimento: '1970-04-05' });
+    const curador = await responsavelDe(adulto, 'Fabio Ficticio Curador', {
+      tipo: 'curador',
+      curatelaReferencia: 'Processo ficticio de curatela QZC0068',
+      curatelaEscopo: 'Atos patrimoniais e negociais (ficticio)',
+    });
+    const conta = await contaDe(adminA, adulto, { agindoComo: 'responsavel_legal', responsavelId: curador });
+    await api.http().post('/portal/privacidade/consentimentos/escriba_ia').set(cab(conta)).send({ resposta: 'sim' }).expect(200);
+    const estado = async () => ({
+      clinica: ((await api.http().get(`/clinica/portal/pacientes/${adulto}/consentimentos`).set(cab(adminA)).expect(200)).body as { finalidade: string; resposta: string }[])
+        .find((c) => c.finalidade === 'escriba_ia')?.resposta,
+      ia: await withTenant(api.db.db, clinicaA, (tx) => consentimentoIaDoPaciente(tx, clinicaA, adulto), adminA.userId),
+    });
+    expect(await estado()).toEqual({ clinica: 'sim', ia: 'informado_nao_recusou' });
+    const [ev] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalConsents).where(eq(portalConsents.patientId, adulto)), adminA.userId);
+    expect(ev).toMatchObject({ guardianLinkId: curador, representationEndedAt: null });
+    // Curatela levantada (vínculo da 0028 encerrado): o "sim" do curador deixa de valer JÁ, antes do job.
+    await api.http().post(`/pacientes/${adulto}/responsaveis/${curador}/encerrar`).set(cab(adminA)).send({ motivo: 'decisao_judicial' }).expect(200);
+    expect(await estado()).toEqual({ clinica: 'nao_respondido', ia: 'nao_informado' });
+    // O job marca o evento (uma vez) e deixa trilha do sistema.
+    expect(await api.app.get(PortalClinicaService).expirarConsentimentosDeResponsavel()).toBeGreaterThanOrEqual(1);
+    expect(await api.app.get(PortalClinicaService).expirarConsentimentosDeResponsavel()).toBe(0);
+    const [depois] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalConsents).where(eq(portalConsents.id, ev?.id as string)), adminA.userId);
+    expect(depois?.representationEndedAt).toBeInstanceOf(Date);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.actorKind, 'sistema'), eq(auditLog.scope, 'portal_consents'))), adminA.userId);
+    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'guardian_consent_expired', consent_id: ev?.id, guardian_link_id: curador })]));
+    // Ninguém além do job mexe no evento (append-only): UPDATE pelo runtime é recusado.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.update(portalConsents).set({ representationEndedAt: null }).where(eq(portalConsents.id, ev?.id as string)), adminA.userId)).rejects.toThrow();
+  });
+
   it('R1: recibo de área sensível do adolescente sem profissional, especialidade e data para o responsável que NÃO é o pagador', async () => {
     const teen = await criarPaciente(adminA, 'Zara Ficticia Adolescente', { nascimento: nascidoHa(15) });
     const crianca = await criarPaciente(adminA, 'Abel Ficticio Crianca', { nascimento: nascidoHa(8) });

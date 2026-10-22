@@ -186,11 +186,19 @@ export function fimDaRepresentacao(dezoitoAnos: string, fimDaVigencia: string | 
 
 /**
  * Evento de consentimento ainda vale HOJE? O do titular, sempre. O do responsável, só enquanto a
- * representação valia (`representUntil` exclusivo; null = curatela, segue enquanto o vínculo existir).
- * Depois da maioridade o estado volta a "não respondido" até o titular responder (V1.3 do #68).
+ * representação vale: antes de `representUntil` (exclusivo; null na curatela), sem encerramento pelo job
+ * (`representationEndedAt`) e com o vínculo da 0028 VIGENTE no momento do uso (`guardianLinkOk`, do banco;
+ * desconhecido = não vale). Depois o estado volta a "não respondido" até o titular responder (V1.3 e R4 do #68).
  */
-export function eventoVale(e: { actingAs: PortalActingAsRegra; representUntil: string | null }, hoje: string): boolean {
-  return e.actingAs === 'titular' || e.representUntil === null || hoje < e.representUntil;
+export interface EventoParaValidade {
+  readonly actingAs: PortalActingAsRegra;
+  readonly representUntil: string | null;
+  readonly representationEndedAt: Date | null;
+  readonly guardianLinkOk: boolean | null;
+}
+export function eventoVale(e: EventoParaValidade, hoje: string): boolean {
+  if (e.actingAs === 'titular') return true;
+  return e.guardianLinkOk === true && e.representationEndedAt === null && (e.representUntil === null || hoje < e.representUntil);
 }
 type PortalActingAsRegra = 'titular' | 'responsavel_legal';
 
