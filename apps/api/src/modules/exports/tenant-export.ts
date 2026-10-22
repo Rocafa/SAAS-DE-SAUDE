@@ -107,7 +107,8 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *          fila de envios (com o modelo da PLATAFORMA usado; a clínica não cria modelo) e respostas (só
  *          interpretação e resultado; R1 do #69); número e texto do ENVIO decifrados enquanto não passam os
  *          30 dias da retenção, depois `null` com `contentPurgedAt`, em `data.whatsapp` e
- *          `manifest.counts.whatsapp`. No ramo do WhatsApp saiu como 1.13.0.
+ *          `manifest.counts.whatsapp`. No ramo do WhatsApp saiu como 1.13.0. Na integração (0037),
+ *          `whatsappOptIns[].phonePurgedAt` (número e HMAC apagados com a eliminação do paciente).
  */
 export const EXPORT_SCHEMA_VERSION = '1.17.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';

@@ -1031,7 +1031,14 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
 
 export const WHATSAPP_RECIPIENT_KINDS = ['paciente', 'responsavel'] as const;
 export const WHATSAPP_OPT_IN_METHODS = ['verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente'] as const;
-export const WHATSAPP_REVOKE_METHODS = ['pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario', 'numero_mudou'] as const;
+export const WHATSAPP_REVOKE_METHODS = [
+  'pedido_na_recepcao',
+  'resposta_sair',
+  'portal_do_paciente',
+  'troca_de_destinatario',
+  'numero_mudou',
+  'eliminacao_do_titular',
+] as const;
 export const WHATSAPP_OUTBOX_STATUSES = ['agendado', 'enviando', 'enviado', 'entregue', 'lido', 'falhou', 'cancelado'] as const;
 export type WhatsappOutboxStatus = (typeof WHATSAPP_OUTBOX_STATUSES)[number];
 export const WHATSAPP_INTERPRETATIONS = ['confirmar', 'cancelar', 'sair', 'outro'] as const;
@@ -1071,8 +1078,10 @@ export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
   /** Comprovante (obrigatório, R7 do #69), cifrado. */
   evidenceEnc: text('evidence_enc').notNull(),
   /** Número que consentiu (V1): cifrado e com o HMAC da clínica para comparar. */
-  recipientPhoneEnc: text('recipient_phone_enc').notNull(),
-  recipientPhoneHash: text('recipient_phone_hash').notNull(),
+  /** Nulos só depois da eliminação do paciente (0037, N3 do 2º parecer do #69), com `phonePurgedAt`. */
+  recipientPhoneEnc: text('recipient_phone_enc'),
+  recipientPhoneHash: text('recipient_phone_hash'),
+  phonePurgedAt: timestamp('phone_purged_at', { withTimezone: true }),
   grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
   grantedBy: uuid('granted_by').notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),

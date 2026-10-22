@@ -30,7 +30,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { assertCanWrite, canRead, EXIT_WINDOW_DAYS, ExitWindowClosedError } from '../exports/access-policy';
 import { loadTenantSubscription } from '../exports/tenant-subscription';
 import { CAMPO_RECIBO, decifrarCampoFinanceiro } from '../finance/finance-fields';
-import type { ConteudoDoRecibo, EmitenteDoRecibo } from '../finance/financeiro-regras';
+import type { ConteudoDoRecibo } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { guardianFieldRef } from '../patients/guardian-fields';
 import { patientFieldRef } from '../patients/patient-fields';
@@ -98,26 +98,24 @@ export interface ConsultaPortalDto {
   readonly podeCancelar: boolean;
 }
 
+/**
+ * Recibo na lista do portal. N1 do #68: o recibo de área sensível do adolescente não aparece para o
+ * responsável que não é o pagador (nem como "restrito": a marca revelava a categoria do atendimento).
+ */
 export interface ReciboPortalResumoDto {
   readonly id: string;
   readonly numero: number;
-  /** null quando o recibo é de área sensível do adolescente e quem vê é o responsável que não pagou (R1). */
-  readonly data: string | null;
+  readonly data: string;
   readonly valorCentavos: number;
   readonly forma: PaymentMethod;
   readonly situacao: 'emitido' | 'cancelado';
-  /** R1 do #68: profissional, especialidade e data ocultos ao responsável que não é o pagador. */
-  readonly restrito: boolean;
 }
 
-/** Recibo no portal: o retrato emitido, com profissional e data ocultáveis (R1 do #68). */
-export type ReciboPortalDto = Omit<ConteudoDoRecibo, 'emitente' | 'dataPagamento'> & {
-  readonly emitente: Omit<EmitenteDoRecibo, 'nome'> & { readonly nome: string | null };
-  readonly dataPagamento: string | null;
+/** Recibo no portal: o retrato emitido (o de área sensível do adolescente, só para o pagador; N1 do #68). */
+export type ReciboPortalDto = ConteudoDoRecibo & {
   readonly id: string;
   readonly numero: number;
   readonly situacao: 'emitido' | 'cancelado';
-  readonly restrito: boolean;
 };
 
 export interface PedidoPortalDto {
@@ -142,8 +140,6 @@ export interface ConsentimentoPortalDto {
 }
 
 const PG_INSUFFICIENT_PRIVILEGE = '42501';
-/** Descrição do recibo restrito (R1): neutra, não revela área nem procedimento. */
-const DESCRICAO_RECIBO_RESTRITO = 'Atendimento de saúde';
 const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
 
 /** Teto diário de pedidos atingido no vínculo (a transação do portal desfaz; o alerta vem depois). */
@@ -386,22 +382,25 @@ export class PortalService {
         .orderBy(desc(receipts.issuedAt), desc(receipts.number))
         .limit(100);
       const sigilo = await this.sigiloDoAdolescente(tx, ctx);
-      const itens = linhas.map((l): ReciboPortalResumoDto => {
-        const restrito = sigilo && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.p.guardianPayerLinkId);
-        return {
-          id: l.r.id,
-          numero: l.r.number,
-          data: restrito ? null : noFusoDaClinica(l.p.receivedAt).data,
-          valorCentavos: l.p.amountCents,
-          forma: l.p.method,
-          situacao: l.cancelado ? 'cancelado' : 'emitido',
-          restrito,
-        };
-      });
+      // N1 do #68 (conferência de 22/10): o recibo de área sensível do adolescente NÃO aparece para o
+      // responsável que não é o pagador (nem "neutro": a marca já revelava a categoria). O banco também o
+      // esconde (policy `portal_sigilo_adolescente` da 0037); aqui é a segunda barreira.
+      const itens = linhas
+        .filter((l) => !(sigilo && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.p.guardianPayerLinkId)))
+        .map(
+          (l): ReciboPortalResumoDto => ({
+            id: l.r.id,
+            numero: l.r.number,
+            data: noFusoDaClinica(l.p.receivedAt).data,
+            valorCentavos: l.p.amountCents,
+            forma: l.p.method,
+            situacao: l.cancelado ? 'cancelado' : 'emitido',
+          }),
+        );
       await this.auditar(tx, ctx, {
         action: AuditAction.Read,
         scope: 'receipts',
-        metadata: { op: 'portal_list', count: itens.length, restricted: itens.filter((i) => i.restrito).length },
+        metadata: { op: 'portal_list', count: itens.length },
       });
       return itens;
     });
@@ -429,31 +428,25 @@ export class PortalService {
         .leftJoin(professionals, and(eq(professionals.tenantId, charges.tenantId), sql`${professionals.id} = coalesce(${charges.professionalId}, ${appointments.professionalId})`))
         .where(and(eq(receipts.tenantId, ctx.tenantId), eq(receipts.id, id), eq(charges.patientId, ctx.pacienteId)));
       if (!l) throw new NaoEncontradoError();
+      // N1 do #68: recibo de área sensível do adolescente, para o responsável que não pagou = 404 (como se não
+      // existisse; o banco já não devolve a linha, policy da 0037).
+      if ((await this.sigiloDoAdolescente(tx, ctx)) && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.pagadorCongelado)) {
+        throw new NaoEncontradoError();
+      }
       if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
       const c = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
       const terceiro = c.pagador.cpf !== null && c.pagador.cpf !== c.beneficiario.cpf;
-      const restrito = (await this.sigiloDoAdolescente(tx, ctx)) && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.pagadorCongelado);
       await this.auditar(tx, ctx, {
         action: AuditAction.Read,
         scope: 'receipts',
-        metadata: { receipt_id: id, receipt_number: l.r.number, op: 'portal_read', restricted: restrito },
+        metadata: { receipt_id: id, receipt_number: l.r.number, op: 'portal_read' },
       });
-      const base = {
+      return {
         ...c,
         pagador: terceiro ? { nome: c.pagador.nome, cpf: mascararCpf(c.pagador.cpf) } : c.pagador,
         id,
         numero: l.r.number,
         situacao: l.cancelado ? ('cancelado' as const) : ('emitido' as const),
-      };
-      if (!restrito) return { ...base, restrito: false };
-      // R1 do #68: sem quem atendeu (nome, documento e conselho do profissional), sem a data e com descrição neutra.
-      const pf = c.emitente.tipo === 'pf';
-      return {
-        ...base,
-        emitente: { ...c.emitente, nome: pf ? null : c.emitente.nome, documento: pf ? null : c.emitente.documento, registroConselho: null, profissionalId: null },
-        dataPagamento: null,
-        descricao: DESCRICAO_RECIBO_RESTRITO,
-        restrito: true,
       };
     });
   }

@@ -49,8 +49,14 @@ export class MensageiroFalso implements MensageiroWhatsApp {
     return desafioSeConfere(this.opcoes.tokenInscricao, modo, token, desafio);
   }
 
+  /** Simula modelo editado na Meta (N1 do 2º parecer do #69): a conferência falha enquanto estiver ligado. */
+  modeloDivergente = false;
+  /** Quantas vezes a conferência rodou (o teste confere que é diária, não a cada envio). */
+  conferencias = 0;
+
   /** Sem provedor real: nada a conferir (o texto enviado é o da lista, conferido nos testes). */
   conferirModelos(): Promise<void> {
-    return Promise.resolve();
+    this.conferencias++;
+    return this.modeloDivergente ? Promise.reject(new Error('modelo divergente (falso)')) : Promise.resolve();
   }
 }

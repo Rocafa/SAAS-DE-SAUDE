@@ -44,6 +44,8 @@ export interface ExportedWhatsapp {
     evidence: string | null;
     /** Número que consentiu (decifrado). O HMAC de comparação não sai (só serve com a chave interna). */
     recipientPhone: string | null;
+    /** 0037 (N3 do 2º parecer do #69): número e HMAC apagados com a eliminação do paciente; null se não. */
+    phonePurgedAt: string | null;
     grantedAt: string;
     grantedBy: string;
     revokedAt: string | null;
@@ -138,6 +140,7 @@ export async function exportarWhatsapp(
         method: o.method,
         evidence: await dec(o.id, CAMPO_EVIDENCIA, o.evidenceEnc),
         recipientPhone: await dec(o.id, CAMPO_TELEFONE_OPTIN, o.recipientPhoneEnc),
+        phonePurgedAt: iso(o.phonePurgedAt),
         grantedAt: o.grantedAt.toISOString(),
         grantedBy: o.grantedBy,
         revokedAt: iso(o.revokedAt),

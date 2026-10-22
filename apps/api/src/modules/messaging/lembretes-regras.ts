@@ -1,6 +1,6 @@
 import type { GuardianKind } from '../../db/schema';
 import { normalizarTextoParaChecagem } from '../finance/financeiro-regras';
-import { menorEm } from '../patients/responsaveis-regras';
+import { idadeEm, menorEm, REGRA_INFORMACAO_CLINICA } from '../patients/responsaveis-regras';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 
 /**
@@ -219,6 +219,8 @@ export const RETENCAO_DA_PROVA_DO_OPT_IN_ANOS_PROPOSTA = 5;
 
 /** Até 5 respostas são processadas por envio; o excesso é descartado sem gravar (limite do webhook). */
 export const MAX_RESPOSTAS_POR_ENVIO = 5;
+/** N2 do 2º parecer do #69: no máximo UMA resposta fixa ("ligue para a clínica") por envio. */
+export const MAX_RESPOSTAS_FIXAS_POR_ENVIO = 1;
 /** Tentativas de envio antes de virar "falhou" (e ir para a fila da recepção). */
 export const MAX_TENTATIVAS = 3;
 
@@ -232,4 +234,15 @@ export const MAX_TENTATIVAS = 3;
 export function responsavelRepresentaParaLembrete(tipo: GuardianKind, nascimento: string | null, emancipadoEm: string | null, hoje: string): boolean {
   if (tipo === 'curador') return true;
   return menorEm(nascimento, hoje, emancipadoEm) === true;
+}
+
+/**
+ * R4 (c) do #69: o sigilo do adolescente vale para o lembrete ao responsável? Como no portal (0033): a partir
+ * dos 12 anos (`REGRA_INFORMACAO_CLINICA`), com idade desconhecida (falha fechada) e na curatela (o
+ * curatelado é adulto). Só a criança (< 12) tem a agenda inteira lembrada ao responsável.
+ */
+export function sigiloDoAdolescenteNoLembrete(tipo: GuardianKind, nascimento: string | null, hoje: string): boolean {
+  if (tipo === 'curador') return true;
+  const idade = idadeEm(nascimento, hoje);
+  return idade === null || idade >= REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia;
 }

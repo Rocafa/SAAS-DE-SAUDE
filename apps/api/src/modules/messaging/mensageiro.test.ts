@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { corpoNaMeta, MODELOS_DA_PLATAFORMA, MODELO_PADRAO, textoEhNeutro, corpoDeModeloValido, responsavelRepresentaParaLembrete } from './lembretes-regras';
+import { corpoNaMeta, MODELOS_DA_PLATAFORMA, MODELO_PADRAO, textoEhNeutro, corpoDeModeloValido, responsavelRepresentaParaLembrete, sigiloDoAdolescenteNoLembrete } from './lembretes-regras';
 import { MensageiroCloudApi, type ClienteHttp } from './mensageiro-cloud-api';
 import { MensageiroFalso } from './mensageiro-falso';
 import { criarMensageiro } from './mensageiro.factory';
@@ -231,5 +231,11 @@ describe('R4 do #69: o responsável representa para o lembrete?', () => {
   it('curatela: vale para o adulto', () => {
     expect(responsavelRepresentaParaLembrete('curador', '1980-01-01', null, hoje)).toBe(true);
     expect(responsavelRepresentaParaLembrete('curador', null, null, hoje)).toBe(true);
+  });
+  it('R4 (c): sigilo do adolescente a partir dos 12 anos, com idade desconhecida e na curatela', () => {
+    expect(sigiloDoAdolescenteNoLembrete('pai_mae', '2014-10-23', hoje)).toBe(false);
+    expect(sigiloDoAdolescenteNoLembrete('pai_mae', '2014-10-22', hoje)).toBe(true);
+    expect(sigiloDoAdolescenteNoLembrete('tutor', null, hoje)).toBe(true);
+    expect(sigiloDoAdolescenteNoLembrete('curador', '1980-01-01', hoje)).toBe(true);
   });
 });

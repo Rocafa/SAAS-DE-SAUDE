@@ -7,6 +7,7 @@ import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica'
 import {
   appointments,
   patients,
+  professionals,
   whatsappInbound,
   whatsappOptIns,
   whatsappOutbox,
@@ -30,6 +31,7 @@ import {
   dentroDoHorarioDeEnvio,
   interpretarResposta,
   lembreteDevido,
+  MAX_RESPOSTAS_FIXAS_POR_ENVIO,
   MAX_RESPOSTAS_POR_ENVIO,
   MAX_TENTATIVAS,
   mesmoTelefone,
@@ -39,6 +41,7 @@ import {
   renderizarLembrete,
   responsavelRepresentaParaLembrete,
   RESPOSTA_FIXA_OUTRO,
+  sigiloDoAdolescenteNoLembrete,
   respostaNaJanela,
   RETENCAO_DO_CONTEUDO_DIAS,
   telefoneParaWhatsapp,
@@ -137,9 +140,37 @@ export class WhatsappService implements OnApplicationBootstrap {
     @Inject(MENSAGEIRO_WHATSAPP) private readonly mensageiro: MensageiroWhatsApp | null,
   ) {}
 
+  /** Última conferência dos modelos no provedor (ms) e se ela divergiu (N1 do 2º parecer do #69). */
+  private modelosConferidosEm: number | null = null;
+  private modelosDivergentes = false;
+
   /** V3 do parecer #69: com o canal ligado, o texto dos modelos no provedor é conferido NA SUBIDA. */
   async onApplicationBootstrap(): Promise<void> {
-    if (this.mensageiro) await this.mensageiro.conferirModelos(MODELOS_DA_PLATAFORMA);
+    if (this.mensageiro) {
+      await this.mensageiro.conferirModelos(MODELOS_DA_PLATAFORMA);
+      this.modelosConferidosEm = Date.now();
+    }
+  }
+
+  /**
+   * N1 do 2º parecer do #69: a Meta deixa editar um modelo aprovado (e reaprova sem passar por nós), então a
+   * conferência da subida não basta. Reconfere no máximo a cada 24 h (e a cada execução enquanto estiver
+   * divergente); divergiu ou a consulta falhou = o despacho PARA (`canal_desligado`), não só loga. Cada
+   * processo que despacha reconfere sozinho (sem estado compartilhado). Devolve se os modelos estão ok.
+   */
+  async reconferirModelos(forcar = false): Promise<boolean> {
+    if (!this.mensageiro) return false;
+    const vencida = this.modelosConferidosEm === null || Date.now() - this.modelosConferidosEm >= 24 * HORA_MS;
+    if (!forcar && !vencida && !this.modelosDivergentes) return true;
+    try {
+      await this.mensageiro.conferirModelos(MODELOS_DA_PLATAFORMA);
+      this.modelosDivergentes = false;
+    } catch {
+      this.modelosDivergentes = true;
+      this.logger.error('WHATSAPP_MODELO_DIVERGENTE: despacho parado até a próxima conferência ok');
+    }
+    this.modelosConferidosEm = Date.now();
+    return !this.modelosDivergentes;
   }
 
   get canalLigado(): boolean {
@@ -358,6 +389,8 @@ export class WhatsappService implements OnApplicationBootstrap {
    */
   async executarLembretes(ctx: RequestContext, agora: Date = new Date(), sistema = false): Promise<ResultadoDosLembretes> {
     if (!this.mensageiro) return { motivo: 'canal_desligado', ...ZERO };
+    // N1 do 2º parecer do #69: conferência diária do modelo na Meta; divergente = nada sai.
+    if (!(await this.reconferirModelos())) return { motivo: 'canal_desligado', ...ZERO };
     const run = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> => (sistema ? this.db.run(ctx.tenantId, fn) : escreverNaClinica(this.db, ctx, fn));
     const programacao = await run((tx) => this.programar(tx, ctx, agora));
     if (programacao.motivo !== 'ok') return { ...ZERO, ...programacao };
@@ -375,7 +408,7 @@ export class WhatsappService implements OnApplicationBootstrap {
     if (!cfg.enabled || !cfg.senderName || !cfg.businessNumberId) return { motivo: 'canal_desligado', ...nada };
     if (!dentroDoHorarioDeEnvio(agora, cfg.sendFromHour, cfg.sendUntilHour)) return { motivo: 'fora_do_horario', ...nada };
     const devidos = await tx
-      .select({ id: appointments.id, patientId: appointments.patientId, startsAt: appointments.startsAt })
+      .select({ id: appointments.id, patientId: appointments.patientId, startsAt: appointments.startsAt, professionalId: appointments.professionalId })
       .from(appointments)
       .where(
         and(
@@ -412,7 +445,7 @@ export class WhatsappService implements OnApplicationBootstrap {
         semOptIn++;
         continue;
       }
-      const telefone = await this.telefoneDoDestinatario(tx, ctx.tenantId, a.patientId, optIn, agora);
+      const telefone = await this.telefoneDoDestinatario(tx, ctx.tenantId, a.patientId, optIn, agora, a.professionalId);
       if (!telefone) {
         semDestinatario++;
         continue;
@@ -486,7 +519,7 @@ export class WhatsappService implements OnApplicationBootstrap {
       for (const e of fila) {
         if (jaCancelados.has(e.id)) continue;
         const [ag] = await tx
-          .select({ status: appointments.status, startsAt: appointments.startsAt })
+          .select({ status: appointments.status, startsAt: appointments.startsAt, professionalId: appointments.professionalId })
           .from(appointments)
           .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, e.appointmentId)));
         const [opt] = await tx
@@ -505,7 +538,7 @@ export class WhatsappService implements OnApplicationBootstrap {
         }
         // V1, de novo no despacho: o número de AGORA (cadastro ou responsável) e o número gravado na fila têm
         // de ser o que consentiu. Mudou: não sai, e o opt-in perde a validade (a recepção pede outro).
-        const atual = await this.telefoneDoDestinatario(tx, ctx.tenantId, e.patientId, opt, agora);
+        const atual = await this.telefoneDoDestinatario(tx, ctx.tenantId, e.patientId, opt, agora, ag?.professionalId ?? null);
         if (!atual) {
           await this.cancelarEnvio(tx, ctx, e.id, 'sem_destinatario');
           cancelados++;
@@ -672,6 +705,15 @@ export class WhatsappService implements OnApplicationBootstrap {
       return false;
     }
     const interpretacao = interpretarResposta(ev.texto);
+    // N2 do 2º parecer do #69: no máximo UMA resposta fixa por envio (quem escreve várias vezes não recebe o
+    // mesmo texto de novo). Conta os "outro" já gravados para este envio, antes de gravar o atual.
+    const [fixasAntes] =
+      interpretacao === 'outro'
+        ? await tx
+            .select({ n: count() })
+            .from(whatsappInbound)
+            .where(and(eq(whatsappInbound.tenantId, ctx.tenantId), eq(whatsappInbound.outboxId, envio.id), eq(whatsappInbound.interpretation, 'outro')))
+        : [];
     let resultado: WhatsappOutcome = 'sem_acao';
     if (interpretacao === 'sair') {
       // R6 do parecer #69: SAIR vale para o NÚMERO, não só para o envio citado. Revoga TODOS os opt-ins
@@ -721,7 +763,7 @@ export class WhatsappService implements OnApplicationBootstrap {
       scope: 'whatsapp_inbound',
       metadata: { inbound_id: id, outbox_id: envio.id, appointment_id: envio.appointmentId, interpretation: interpretacao, outcome: resultado },
     });
-    return interpretacao === 'outro' ? 'responder_texto_fixo' : true;
+    return interpretacao === 'outro' && (fixasAntes?.n ?? 0) < MAX_RESPOSTAS_FIXAS_POR_ENVIO ? 'responder_texto_fixo' : true;
   }
 
   /**
@@ -778,7 +820,9 @@ export class WhatsappService implements OnApplicationBootstrap {
    * JOB do sistema, por clínica (sem usuário: a trilha grava `sistema`). O agendador chama uma vez por dia
    * para cada clínica com o canal configurado (ver api-dominio.md §13). Idempotente.
    */
-  executarRetencaoComoSistema(tenantId: TenantId): Promise<ResultadoDaLimpeza> {
+  async executarRetencaoComoSistema(tenantId: TenantId): Promise<ResultadoDaLimpeza> {
+    // N1 do 2º parecer do #69: o job diário também reconfere os modelos (no máximo 1 vez a cada 24 h).
+    await this.reconferirModelos();
     return this.db.run(tenantId, (tx) => this.retencao(tx, ctxDoSistema(tenantId)));
   }
 
@@ -860,6 +904,8 @@ export class WhatsappService implements OnApplicationBootstrap {
     pacienteId: string,
     optIn: typeof whatsappOptIns.$inferSelect,
     agora: Date,
+    /** Profissional da consulta do lembrete (sigilo do adolescente, R4 c); null = desconhecido. */
+    profissionalId: string | null,
   ): Promise<string | null> {
     const [p] = await tx
       .select({ phoneEnc: patients.phoneEnc, birthDateEnc: patients.birthDateEnc, active: patients.active, emancipatedOn: patients.emancipatedOn })
@@ -872,7 +918,11 @@ export class WhatsappService implements OnApplicationBootstrap {
       // emancipado. Sem isso nada sai (o paciente que fez 18 anos decide em nome próprio, com novo opt-in).
       if (!optIn.guardianId) return null;
       const r = await this.responsaveis.responsavelVigente(tx, tenantId, pacienteId, optIn.guardianId);
-      if (!r || !responsavelRepresentaParaLembrete(r.tipo, nascimento, p.emancipatedOn, noFusoDaClinica(agora).data)) return null;
+      const hoje = noFusoDaClinica(agora).data;
+      if (!r || !responsavelRepresentaParaLembrete(r.tipo, nascimento, p.emancipatedOn, hoje)) return null;
+      // R4 (c): sigilo do adolescente (12+, idade desconhecida ou curatelado), como no portal: consulta com
+      // profissional de área sensível (desconhecido = sensível) não vira lembrete para o responsável.
+      if (sigiloDoAdolescenteNoLembrete(r.tipo, nascimento, hoje) && (await this.areaSensivel(tx, tenantId, profissionalId))) return null;
       return telefoneParaWhatsapp(r.telefone);
     }
     // V2 do parecer #69: sem data de nascimento NÃO se presume adulto. Falha fechada: nada sai.
@@ -941,6 +991,16 @@ export class WhatsappService implements OnApplicationBootstrap {
     const keyEnc = await this.cifrar(tx, ctx, ctx.tenantId, CAMPO_CHAVE_NUMERO, randomBytes(32));
     await tx.insert(whatsappPhoneKeys).values({ tenantId: ctx.tenantId, keyEnc }).onConflictDoNothing();
     return ler();
+  }
+
+  /** Profissional de área sensível (0033, `sensitive_area`)? Desconhecido = sensível (falha fechada). */
+  private async areaSensivel(tx: TenantTx, tenantId: TenantId, profissionalId: string | null): Promise<boolean> {
+    if (!profissionalId) return true;
+    const [pr] = await tx
+      .select({ s: professionals.sensitiveArea })
+      .from(professionals)
+      .where(and(eq(professionals.tenantId, tenantId), eq(professionals.id, profissionalId)));
+    return pr?.s ?? true;
   }
 
   /** Data de nascimento decifrada (null se ausente ou inválida) e emancipação (0031) do paciente. */

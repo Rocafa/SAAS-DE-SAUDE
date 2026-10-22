@@ -879,38 +879,98 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const contaPagador = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: pagador });
     const contaOutro = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: outro });
     const contaCrianca = await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: respCrianca });
-    type Item = { id: string; data: string | null; restrito: boolean };
+    type Item = { id: string; data: string };
     const lista = async (c: SessaoPortal) => (await api.http().get('/portal/recibos').set(cab(c)).expect(200)).body as Item[];
     const doc = async (c: SessaoPortal, id: string) =>
-      (await api.http().get(`/portal/recibos/${id}`).set(cab(c)).expect(200)).body as {
-        emitente: { nome: string | null; registroConselho: string | null; profissionalId: string | null };
-        dataPagamento: string | null;
-        descricao: string;
-        restrito: boolean;
-        valorCentavos: number;
-      };
-    // Responsável que NÃO pagou: o recibo de psicologia aparece sem data; o de fisioterapia, inteiro.
+      (await api.http().get(`/portal/recibos/${id}`).set(cab(c)).expect(200)).body as { dataPagamento: string; valorCentavos: number; restrito?: unknown };
+    // N1 (conferência de 22/10): para o responsável que NÃO pagou, o recibo de psicologia NÃO aparece (nem
+    // "restrito") e o detalhe é 404; o de fisioterapia aparece inteiro.
     const doOutro = await lista(contaOutro);
-    expect(doOutro.find((r) => r.id === recPsi)).toMatchObject({ data: null, restrito: true });
+    expect(doOutro.map((r) => r.id)).not.toContain(recPsi);
     const fisio = doOutro.find((r) => r.id === recFisio);
-    expect(fisio?.restrito).toBe(false);
     expect(fisio?.data).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const restrito = await doc(contaOutro, recPsi);
-    expect(restrito).toMatchObject({ restrito: true, dataPagamento: null, valorCentavos: 5000, emitente: { registroConselho: null, profissionalId: null } });
-    expect(JSON.stringify(restrito)).not.toContain('Dra Psi Recibo Ficticia');
-    expect(JSON.stringify(restrito)).not.toContain(psi.id);
+    expect(JSON.stringify(doOutro)).not.toContain('restrito');
+    await api.http().get(`/portal/recibos/${recPsi}`).set(cab(contaOutro)).expect(404);
     // Responsável pagador (congelado no recebimento, 0031): o recibo é dele, inteiro.
     const doPagador = (await lista(contaPagador)).find((r) => r.id === recPsi);
-    expect(doPagador?.restrito).toBe(false);
     expect(doPagador?.data).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const inteiro = await doc(contaPagador, recPsi);
-    expect(inteiro.restrito).toBe(false);
     expect(inteiro.dataPagamento).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    // Criança: nada restrito.
-    expect((await lista(contaCrianca)).find((r) => r.id === recPsiCrianca)).toMatchObject({ restrito: false });
-    // Trilha registra a restrição (só contagem/marca).
-    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.actorId, contaOutro.contaId), eq(auditLog.scope, 'receipts'))), adminA.userId);
-    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ op: 'portal_read', restricted: true })]));
+    expect(inteiro.restrito).toBeUndefined();
+    // Criança: aparece.
+    expect((await lista(contaCrianca)).map((r) => r.id)).toContain(recPsiCrianca);
+
+    // N2 (conferência de 22/10): com SQL ARBITRÁRIO na sessão do portal, nada de psicologia do adolescente
+    // por charges/payments/receipts/receipt_cancellations (JOIN com a marca do profissional) para quem não
+    // pagou; o pagador congelado vê; o responsável da criança vê; a clínica vê tudo.
+    const sensivelNoBanco = async (c: SessaoPortal & { vinculoId: string }) =>
+      api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+        const linhas = async (q: ReturnType<typeof sql>) => (await tx.execute<{ id: string }>(q)).map((x) => x.id);
+        return {
+          cobrancas: await linhas(sql`select c.id from charges c
+              left join appointments a on a.tenant_id = c.tenant_id and a.id = c.appointment_id
+              join professionals pr on pr.tenant_id = c.tenant_id and pr.id = coalesce(c.professional_id, a.professional_id)
+             where pr.sensitive_area`),
+          cobrancasDoProf: await linhas(sql`select c.id from charges c where c.professional_id = ${psi.id}::uuid`),
+          recebimentos: await linhas(sql`select p.id from payments p join charges c on c.tenant_id = p.tenant_id and c.id = p.charge_id
+             where c.professional_id = ${psi.id}::uuid`),
+          recibos: await linhas(sql`select r.id from receipts r where r.id = ${recPsi}::uuid`),
+          cancelamentos: await linhas(sql`select rc.id from receipt_cancellations rc where rc.receipt_id = ${recPsi}::uuid`),
+          // Cobrança de área sensível: invisível também para UPDATE (0 linhas; o portal não escreve, a 0027 já barra).
+          mudou: (await tx.execute(sql`select id from charges where professional_id = ${psi.id}::uuid for update`)).length,
+        };
+      });
+    const outroNoBanco = await sensivelNoBanco(contaOutro);
+    expect(outroNoBanco).toEqual({ cobrancas: [], cobrancasDoProf: [], recebimentos: [], recibos: [], cancelamentos: [], mudou: 0 });
+    const pagadorNoBanco = await sensivelNoBanco(contaPagador);
+    expect(pagadorNoBanco.cobrancasDoProf.length).toBeGreaterThanOrEqual(1);
+    expect(pagadorNoBanco.recebimentos.length).toBeGreaterThanOrEqual(1);
+    expect(pagadorNoBanco.recibos).toEqual([recPsi]);
+    // O responsável que não pagou continua vendo o que não é sensível (fisioterapia) pelo banco.
+    const fisioNoBanco = await api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${contaOutro.contaId}::uuid, ${contaOutro.vinculoId}::uuid)`);
+      return (await tx.execute<{ id: string }>(sql`select id from receipts where id = ${recFisio}::uuid`)).map((x) => x.id);
+    });
+    expect(fisioNoBanco).toEqual([recFisio]);
+    const criancaNoBanco = await api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${contaCrianca.contaId}::uuid, ${contaCrianca.vinculoId}::uuid)`);
+      return (await tx.execute<{ id: string }>(sql`select id from receipts where id = ${recPsiCrianca}::uuid`)).map((x) => x.id);
+    });
+    expect(criancaNoBanco).toEqual([recPsiCrianca]);
+    const naClinica = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ id: string }>(sql`select id from receipts where id = ${recPsi}::uuid`), adminA.userId);
+    expect(naClinica.map((x) => x.id)).toEqual([recPsi]);
+  });
+
+  it('N3: mudar a data de nascimento recalcula o sigilo (dia dos 12) e o fim da representação; o banco fecha se o serviço não recalcular', async () => {
+    const pac = await criarPaciente(adminA, 'Nina Ficticia Recalculo', { nascimento: nascidoHa(9) });
+    const resp = await responsavelDe(pac, 'Otto Ficticio Pai Recalculo');
+    const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    const vinculo = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId))[0];
+    expect(await vinculo()).toMatchObject({ confidentialFrom: nascidoHa(9 - 12), representUntil: nascidoHa(9 - 18) });
+    // Pela API: a clínica corrige para mais cedo (14 anos). O sigilo passa a valer (dia dos 12 já passou).
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(14) }).expect(200);
+    expect(await vinculo()).toMatchObject({ confidentialFrom: nascidoHa(14 - 12), representUntil: nascidoHa(14 - 18) });
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)), adminA.userId);
+    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ patient_id: pac, count: 1, closed: false })]));
+    // Direto no banco (sem o serviço): a data cifrada muda e o gatilho FECHA na hora (sigilo e representação hoje).
+    const hoje = hojeNaClinica();
+    // Troca pelo valor cifrado de OUTRO paciente da mesma clínica (selado, data diferente): o banco não lê a data.
+    const outro = await criarPaciente(adminA, 'Pedro Ficticio Doador', { nascimento: nascidoHa(5) });
+    await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) => tx.execute(sql`update patients set birth_date_enc = (select birth_date_enc from patients where id = ${outro}::uuid) where id = ${pac}::uuid`),
+      adminA.userId,
+    );
+    const depois = await vinculo();
+    expect(depois?.confidentialFrom && depois.confidentialFrom <= hoje).toBe(true);
+    expect(depois?.representUntil && depois.representUntil <= hoje).toBe(true);
+    // Ninguém além do recálculo muda as duas colunas (nem o admin, direto).
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(portalLinks).set({ confidentialFrom: '2099-01-01' }).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId),
+    ).rejects.toThrow();
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {

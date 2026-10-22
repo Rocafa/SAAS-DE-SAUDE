@@ -677,8 +677,8 @@ describe('webhook: assinatura, idempotência e limite', () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappInbound).where(eq(whatsappInbound.outboxId, ea?.id ?? '')));
     expect(linhas).toHaveLength(5);
     expect(linhas.every((l) => l.outcome === 'sem_acao')).toBe(true);
-    // Só 5 respostas fixas (as 2 excedentes nem são processadas).
-    expect(falso.respostasFixas.filter((r) => r.para === `55${tel}`)).toHaveLength(5);
+    // N2 do 2º parecer do #69: UMA resposta fixa por envio, por mais que o paciente escreva.
+    expect(falso.respostasFixas.filter((r) => r.para === `55${tel}`)).toHaveLength(1);
   });
 
   it('R1: texto livre não é guardado; o paciente recebe a resposta FIXA (ligue para a clínica)', async () => {
@@ -1048,6 +1048,12 @@ describe('R4 do #69: responsável vigente da 0028, maioridade e emancipação', 
     expect(enviadasPara(resp.telefone)).toHaveLength(0);
   });
 
+  /** Profissional SEM área sensível (o `profA` deste arquivo é de Psiquiatria). */
+  let profNeutro: string;
+  beforeAll(async () => {
+    profNeutro = idDe(await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Fisio Ficticio R4', especialidade: 'Fisioterapia' }));
+  });
+
   it('curatela: o curador do paciente ADULTO recebe (a curatela não acaba aos 18)', async () => {
     const tel = telefoneNovo();
     const p = await paciente(adminA, tel, anosAtras(40));
@@ -1057,11 +1063,32 @@ describe('R4 do #69: responsável vigente da 0028, maioridade e emancipação', 
       curatelaEscopo: 'Escopo ficticio de teste da curatela',
     });
     await optIn(adminA, p, { destinatario: 'responsavel', responsavelId: cur.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-5' });
-    const c = await consulta(adminA, p, 20);
+    const c = await consulta(adminA, p, 20, profNeutro);
     await rodar();
     expect(enviadasPara(cur.telefone)).toHaveLength(1);
     expect(enviadasPara(tel)).toHaveLength(0);
     expect(await envioDoAgendamento(clinicaA, c.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: cur.pessoaId });
+  });
+
+  it('R4 (c) sigilo do adolescente: consulta de área sensível do 12+ não vira lembrete ao responsável; a da criança vira', async () => {
+    const telT = telefoneNovo();
+    const teen = await paciente(adminA, telT, anosAtras(14));
+    const respT = await responsavel(adminA, teen);
+    await optIn(adminA, teen, { destinatario: 'responsavel', responsavelId: respT.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-6' });
+    const psiq = await consulta(adminA, teen, 20); // profA: Psiquiatria (área sensível)
+    const fisio = await consulta(adminA, teen, 21, profNeutro);
+    const r = await rodar();
+    expect(r.semDestinatario).toBeGreaterThanOrEqual(1);
+    expect(await envioDoAgendamento(clinicaA, psiq.id)).toBeUndefined();
+    expect(await envioDoAgendamento(clinicaA, fisio.id)).toMatchObject({ recipientKind: 'responsavel', guardianId: respT.pessoaId });
+    expect(enviadasPara(respT.telefone)).toHaveLength(1);
+    // Criança (< 12): a agenda inteira é lembrada ao responsável, inclusive a de área sensível.
+    const crianca = await paciente(adminA, telefoneNovo(), anosAtras(8));
+    const respC = await responsavel(adminA, crianca);
+    await optIn(adminA, crianca, { destinatario: 'responsavel', responsavelId: respC.pessoaId, meio: 'verbal_na_recepcao', comprovante: 'Registro ficticio R4-7' });
+    const psiqC = await consulta(adminA, crianca, 20);
+    await rodar();
+    expect(await envioDoAgendamento(clinicaA, psiqC.id)).toMatchObject({ recipientKind: 'responsavel' });
   });
 
   it('banco (0036): FK de guardian_id para guardians e opt-in de responsável sem vínculo vigente recusado', async () => {
@@ -1097,5 +1124,85 @@ describe('R4 do #69: responsável vigente da 0028, maioridade e emancipação', 
     const mensagens: string[] = [];
     for (let e: unknown = erro; e instanceof Error; e = e.cause) mensagens.push(e.message);
     expect(mensagens.join(' | ')).toContain('responsável sem vínculo vigente');
+  });
+});
+
+/** Ressalvas novas do 2º parecer do #69 (22/10), resolvidas na integração (migração 0037). */
+describe('2º parecer do #69: N1 (modelo reconferido), N3 + R3 (eliminação do paciente)', () => {
+  it('N1: modelo divergente na reconferência PARA o despacho; voltando a conferir, sai', async () => {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    await optIn(adminA, p);
+    const c = await consulta(adminA, p, 20);
+    falso.modeloDivergente = true;
+    try {
+      expect(await svc.reconferirModelos(true)).toBe(false);
+      const r = await svc.executarLembretesComoSistema(clinicaA);
+      expect(r).toMatchObject({ motivo: 'canal_desligado', programados: 0, enviados: 0 });
+      expect(enviadasPara(tel)).toHaveLength(0);
+      expect(await envioDoAgendamento(clinicaA, c.id)).toBeUndefined();
+    } finally {
+      falso.modeloDivergente = false;
+    }
+    // Divergente = reconfere a cada execução; voltou a bater, o despacho segue.
+    expect((await svc.executarLembretesComoSistema(clinicaA)).motivo).toBe('ok');
+    expect(enviadasPara(tel)).toHaveLength(1);
+    // Conferido ok: a próxima execução não chama o provedor de novo (no máximo 1 vez a cada 24 h).
+    const antes = falso.conferencias;
+    await svc.executarLembretesComoSistema(clinicaA);
+    expect(falso.conferencias).toBe(antes);
+  });
+
+  it('N3 + R3: eliminado o paciente (guarda vencida), saem envios, respostas e o número/HMAC do opt-in', async () => {
+    await api.membro(clinicaA, adminA, 'admin');
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    await optIn(adminA, p);
+    const c = await consulta(adminA, p, 20);
+    await svc.executarLembretesComoSistema(clinicaA);
+    const e = await envioDoAgendamento(clinicaA, c.id);
+    expect(e?.status).toBe('enviado');
+    await webhook(corpoDeResposta(numeroA, `55${tel}`, 'oi', e?.providerMessageId ?? '')).expect(200);
+    const rota = `/pacientes/${p}/responsaveis/eliminacao`;
+    // Na guarda: a API recusa e o banco também (55000), e o runtime nunca apaga a fila direto (42501).
+    expect((await api.http().post(rota).set(cab(adminA)).send({})).body).toMatchObject({ codigo: 'prazo_de_guarda_do_prontuario' });
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select * from app_patient_guardians_eliminate(${p}::uuid)`), adminA.userId)),
+    ).toContain('55000');
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`delete from whatsapp_outbox where patient_id = ${p}::uuid`), adminA.userId)),
+    ).toContain('42501');
+    // Guarda vencida (papel de migração envelhece o cadastro: o runtime não consegue).
+    await owner.begin(async (t) => {
+      await t`select app_set_tenant(${clinicaA}::uuid)`;
+      await t`update patients set created_at = created_at - interval '21 years' where id = ${p}::uuid`;
+    });
+    const r = await api.http().post(rota).set(cab(adminA)).send({});
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const restos = await withTenant(
+      api.db.db,
+      clinicaA,
+      async (tx) => ({
+        fila: await tx.select().from(whatsappOutbox).where(eq(whatsappOutbox.patientId, p)),
+        respostas: await tx.select().from(whatsappInbound).where(eq(whatsappInbound.outboxId, e?.id ?? '')),
+        optIns: await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.patientId, p)),
+      }),
+      adminA.userId,
+    );
+    expect(restos.fila).toEqual([]);
+    expect(restos.respostas).toEqual([]);
+    expect(restos.optIns).toHaveLength(1);
+    expect(restos.optIns[0]).toMatchObject({ recipientPhoneEnc: null, recipientPhoneHash: null, revokeMethod: 'eliminacao_do_titular', revokedBy: null });
+    expect(restos.optIns[0]?.phonePurgedAt).toBeInstanceOf(Date);
+    expect(restos.optIns[0]?.revokedAt).toBeInstanceOf(Date);
+    // A prova do opt-in fica (regra própria de retenção ⚖️); nada mais muda no opt-in eliminado.
+    expect(restos.optIns[0]?.evidenceEnc).toMatch(/^v1:/);
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) => tx.update(whatsappOptIns).set({ phonePurgedAt: null }).where(eq(whatsappOptIns.patientId, p)), adminA.userId),
+      ),
+    ).toContain('42501');
+    // Idempotente.
+    expect((await api.http().post(rota).set(cab(adminA)).send({})).status).toBe(200);
   });
 });

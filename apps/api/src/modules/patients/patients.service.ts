@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, eq, like, type SQL } from 'drizzle-orm';
+import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
@@ -10,8 +10,10 @@ import { recordAudit } from '../audit/audit-log';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
+import { aniversarioDe, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
 import {
   normalizarBusca,
   type AlteracaoPaciente,
@@ -163,8 +165,30 @@ export class PatientsService {
         scope: SCOPE,
         metadata: { patient_id: id, changed: campos.join(',') },
       });
+      if (dados.nascimento !== undefined) await this.recalcularSigiloDoPortal(tx, ctx, id, dados.nascimento ?? null);
       return this.paraDto(tx, ctx.tenantId, linha);
     });
+  }
+
+  /**
+   * N3 do #68 (conferência de 22/10): a data de nascimento mudou. O banco já FECHOU os vínculos/convites de
+   * responsável do portal (gatilho da 0037: sigilo valendo e representação encerrada hoje); aqui o serviço
+   * recalcula pelo dia dos 12 (sigilo do adolescente) e dos 18 (fim da representação) da data nova. Sem data
+   * válida, fica fechado. Trilha só com a contagem.
+   */
+  private async recalcularSigiloDoPortal(tx: TenantTx, ctx: RequestContext, id: string, nascimento: string | null): Promise<void> {
+    const valida = nascimento !== null && /^\d{4}-\d{2}-\d{2}$/.test(nascimento);
+    const sigilo = valida ? aniversarioDe(nascimento, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia) : null;
+    const maioridade = valida ? aniversarioDe(nascimento, IDADE_MAIORIDADE) : null;
+    const [r] = await tx.execute<{ n: number }>(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date) as n`);
+    const n = Number(r?.n ?? 0);
+    if (n > 0) {
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: 'portal_links',
+        metadata: { op: 'confidentiality_recalculated', patient_id: id, count: n, closed: !valida },
+      });
+    }
   }
 
   /** Inativar, nunca apagar (retenção por conselho; front-r8 R4). Idempotente. */
