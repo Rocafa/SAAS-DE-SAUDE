@@ -31,6 +31,7 @@ export interface ExportedPortal {
     guardianLinkId: string | null;
     guardianId: string | null;
     representUntil: string | null;
+    confidentialFrom: string | null;
   }[];
   readonly links: readonly {
     id: string;
@@ -45,6 +46,7 @@ export interface ExportedPortal {
     guardianLinkId: string | null;
     guardianId: string | null;
     representUntil: string | null;
+    confidentialFrom: string | null;
   }[];
   readonly consents: readonly {
     id: string;
@@ -161,6 +163,7 @@ export async function exportarPortal(
       guardianLinkId: c.guardianLinkId,
       guardianId: c.guardianId,
       representUntil: c.representUntil,
+      confidentialFrom: c.confidentialFrom,
     })),
     links: vinculos.map((l) => ({
       id: l.id,
@@ -175,6 +178,7 @@ export async function exportarPortal(
       guardianLinkId: l.guardianLinkId,
       guardianId: l.guardianId,
       representUntil: l.representUntil,
+      confidentialFrom: l.confidentialFrom,
     })),
     consents: consentimentos.map((c) => ({
       id: c.id,

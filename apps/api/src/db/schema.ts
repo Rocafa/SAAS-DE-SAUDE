@@ -737,6 +737,8 @@ export const portalInvites = pgTable('portal_invites', {
   guardianLinkId: uuid('guardian_link_id'),
   guardianId: uuid('guardian_id'),
   representUntil: date('represent_until'),
+  /** 0033: a partir de quando vale o sigilo do adolescente (em claro; dia dos 12 anos; curatela = dia do convite). */
+  confidentialFrom: date('confidential_from'),
 });
 
 /** Vínculo conta do portal ↔ paciente ↔ clínica (0027): nasce só do resgate; a clínica revoga. */
@@ -756,6 +758,7 @@ export const portalLinks = pgTable('portal_links', {
   guardianLinkId: uuid('guardian_link_id'),
   guardianId: uuid('guardian_id'),
   representUntil: date('represent_until'),
+  confidentialFrom: date('confidential_from'),
 });
 
 /** Consentimento como histórico (0027, R15 do front-r8): append-only; o estado é o último evento. */

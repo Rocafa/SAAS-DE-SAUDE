@@ -436,8 +436,8 @@ BEGIN
   SELECT id INTO v_link FROM public.portal_links
    WHERE tenant_id = inv.tenant_id AND account_id = p_account AND patient_id = inv.patient_id AND revoked_at IS NULL;
   IF NOT FOUND THEN
-    INSERT INTO public.portal_links (tenant_id, account_id, patient_id, invite_id, acting_as, guardian_link_id, guardian_id, represent_until)
-      VALUES (inv.tenant_id, p_account, inv.patient_id, inv.id, inv.acting_as, inv.guardian_link_id, inv.guardian_id, inv.represent_until)
+    INSERT INTO public.portal_links (tenant_id, account_id, patient_id, invite_id, acting_as, guardian_link_id, guardian_id, represent_until, confidential_from)
+      VALUES (inv.tenant_id, p_account, inv.patient_id, inv.id, inv.acting_as, inv.guardian_link_id, inv.guardian_id, inv.represent_until, inv.confidential_from)
       RETURNING id INTO v_link;
   END IF;
   UPDATE public.portal_invites SET redeemed_at = now(), redeemed_account_id = p_account, link_id = v_link
@@ -502,20 +502,22 @@ ALTER TABLE portal_invites
   ADD COLUMN guardian_link_id uuid,
   ADD COLUMN guardian_id      uuid,
   ADD COLUMN represent_until  date,
+  ADD COLUMN confidential_from date,
   ADD CONSTRAINT portal_invites_guardian_link_fk FOREIGN KEY (guardian_link_id, tenant_id) REFERENCES patient_guardians (id, tenant_id),
   ADD CONSTRAINT portal_invites_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
   ADD CONSTRAINT portal_invites_acting_shape_check CHECK (
-    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL)
-    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL));
+    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL AND confidential_from IS NULL)
+    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL AND confidential_from IS NOT NULL));
 ALTER TABLE portal_links
   ADD COLUMN guardian_link_id uuid,
   ADD COLUMN guardian_id      uuid,
   ADD COLUMN represent_until  date,
+  ADD COLUMN confidential_from date,
   ADD CONSTRAINT portal_links_guardian_link_fk FOREIGN KEY (guardian_link_id, tenant_id) REFERENCES patient_guardians (id, tenant_id),
   ADD CONSTRAINT portal_links_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
   ADD CONSTRAINT portal_links_acting_shape_check CHECK (
-    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL)
-    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL));
+    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL AND confidential_from IS NULL)
+    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL AND confidential_from IS NOT NULL));
 ALTER TABLE portal_links DROP CONSTRAINT portal_links_revoke_reason_check;
 ALTER TABLE portal_links ADD CONSTRAINT portal_links_revoke_reason_check CHECK (revoke_reason IS NULL OR revoke_reason IN (
   'pedido_do_paciente', 'acesso_indevido', 'fim_do_vinculo', 'erro_de_cadastro', 'maioridade_do_titular', 'fim_da_representacao'));
@@ -593,7 +595,8 @@ BEGIN
      OR NEW.token_hash IS DISTINCT FROM OLD.token_hash OR NEW.acting_as IS DISTINCT FROM OLD.acting_as
      OR NEW.expires_at IS DISTINCT FROM OLD.expires_at OR NEW.created_by IS DISTINCT FROM OLD.created_by
      OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.guardian_link_id IS DISTINCT FROM OLD.guardian_link_id
-     OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id OR NEW.represent_until IS DISTINCT FROM OLD.represent_until THEN
+     OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id OR NEW.represent_until IS DISTINCT FROM OLD.represent_until
+     OR NEW.confidential_from IS DISTINCT FROM OLD.confidential_from THEN
     RAISE EXCEPTION 'identidade do convite é imutável' USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF OLD.redeemed_at IS NOT NULL OR OLD.revoked_at IS NOT NULL THEN
@@ -637,7 +640,7 @@ BEGIN
      OR NEW.patient_id IS DISTINCT FROM OLD.patient_id OR NEW.invite_id IS DISTINCT FROM OLD.invite_id
      OR NEW.acting_as IS DISTINCT FROM OLD.acting_as OR NEW.created_at IS DISTINCT FROM OLD.created_at
      OR NEW.guardian_link_id IS DISTINCT FROM OLD.guardian_link_id OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id
-     OR NEW.represent_until IS DISTINCT FROM OLD.represent_until THEN
+     OR NEW.represent_until IS DISTINCT FROM OLD.represent_until OR NEW.confidential_from IS DISTINCT FROM OLD.confidential_from THEN
     RAISE EXCEPTION 'identidade do vínculo é imutável' USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF OLD.revoked_at IS NOT NULL THEN
@@ -760,3 +763,39 @@ END;
 $$;
 CREATE TRIGGER zz_professionals_sensitive_guard BEFORE INSERT OR UPDATE ON professionals
   FOR EACH ROW EXECUTE FUNCTION professionals_sensitive_guard();
+
+-- ================================================================ Sigilo do adolescente também no BANCO (pendência da agenda)
+--
+-- Antes, a regra de idade era só do serviço: a data de nascimento é cifrada e o banco não a lê. Com SQL
+-- arbitrário na sessão do portal, o responsável lia pela `portal_titular` as consultas de psicologia do
+-- adolescente. Agora:
+--   - `confidential_from` (em claro, no convite e no vínculo de responsável; NULL para o titular): a partir de
+--     que dia o sigilo vale. Gravado pela API no convite (dia dos 12 anos; curatela = dia do convite, o
+--     curatelado é adulto), copiado para o vínculo no resgate e imutável. É a mesma natureza de
+--     `represent_until`, que já está em claro (dia dos 18).
+--   - `app_portal_hides_sensitive()`: na sessão do portal, o vínculo é de responsável e o sigilo já vale hoje
+--     (vínculo não achado = esconde, falha fechada). Fora do portal, falso.
+--   - policy RESTRICTIVE `portal_sigilo_adolescente` em `appointments`: com o sigilo valendo, a consulta com
+--     profissional de área sensível (`professionals.sensitive_area`, R2) não aparece para o responsável, para
+--     ler nem para mudar. Criança: aparece. Titular: aparece.
+-- Recibos e cobranças continuam com a regra no serviço (R1: o responsável que não é o pagador vê o recibo sem
+-- profissional, especialidade e data): esconder a linha no banco tiraria o recibo de quem tem direito a ele, e
+-- o conteúdo do recibo é um retrato cifrado que o banco não lê.
+CREATE FUNCTION app_portal_hides_sensitive() RETURNS boolean
+  LANGUAGE sql STABLE
+  SET search_path = pg_catalog, public
+AS $$
+  SELECT CASE WHEN public.app_portal_patient() IS NULL THEN false ELSE COALESCE((
+    SELECT l.acting_as = 'responsavel_legal' AND (l.confidential_from IS NULL OR l.confidential_from <= public.app_fiscal_today())
+      FROM public.portal_links l
+     WHERE l.tenant_id = public.app_current_tenant() AND l.id = public.app_portal_link()), true) END
+$$;
+REVOKE ALL ON FUNCTION app_portal_hides_sensitive() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_portal_hides_sensitive() TO app_user;
+
+CREATE POLICY portal_sigilo_adolescente ON appointments AS RESTRICTIVE
+  USING (tenant_id = (SELECT app_current_tenant())
+         AND ((SELECT app_portal_patient()) IS NULL
+              OR NOT (SELECT app_portal_hides_sensitive())
+              OR NOT EXISTS (SELECT 1 FROM professionals pr
+                              WHERE pr.tenant_id = appointments.tenant_id AND pr.id = appointments.professional_id AND pr.sensitive_area)));

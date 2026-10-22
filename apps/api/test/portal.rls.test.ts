@@ -810,12 +810,26 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
       return {
         ats: await tx.select({ id: encounters.id }).from(encounters),
         marcas: await tx.select({ id: patientGuardians.id }).from(patientGuardians),
+        // Sigilo também no banco: com SQL arbitrário, a consulta de área sensível do adolescente não aparece
+        // (nem para ler, nem para mudar); a de fisioterapia aparece.
+        consultas: (await tx.execute<{ id: string }>(sql`select id from appointments`)).map((x) => x.id),
+        mudou: (await tx.execute(sql`update appointments set status = 'scheduled' where id = ${psiTeen} returning id`)).length,
       };
     });
-    expect(noBanco).toEqual({ ats: [], marcas: [] });
+    expect(noBanco).toEqual({ ats: [], marcas: [], consultas: [fisioTeen], mudou: 0 });
+    const [linkTeen] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId);
+    expect(linkTeen?.confidentialFrom).toBe(nascidoHa(14 - 12));
+    // A clínica (fora do portal) continua vendo tudo.
+    const naClinica = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: appointments.id }).from(appointments).where(eq(appointments.patientId, teen)), adminA.userId);
+    expect(new Set(naClinica.map((x) => x.id))).toEqual(new Set([psiTeen, fisioTeen]));
     // Criança: a agenda inteira aparece para o responsável (sigilo por padrão vale a partir dos 12).
     const contaCrianca = await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(crianca, 'Ugo Ficticio Pai') });
     expect(((await api.http().get('/portal/consultas').set(cab(contaCrianca)).expect(200)).body as { id: string }[]).map((c) => c.id)).toContain(psiCrianca);
+    const noBancoCrianca = await api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${contaCrianca.contaId}::uuid, ${contaCrianca.vinculoId}::uuid)`);
+      return (await tx.execute<{ id: string }>(sql`select id from appointments`)).map((x) => x.id);
+    });
+    expect(noBancoCrianca).toEqual([psiCrianca]);
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {

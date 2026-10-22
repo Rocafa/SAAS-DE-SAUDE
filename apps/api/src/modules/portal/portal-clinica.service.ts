@@ -25,7 +25,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { patientFieldRef } from '../patients/patient-fields';
-import { aniversarioDe, idadeEm, menorEm, vigenteEm } from '../patients/responsaveis-regras';
+import { aniversarioDe, idadeEm, menorEm, REGRA_INFORMACAO_CLINICA, vigenteEm } from '../patients/responsaveis-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
 import {
@@ -93,7 +93,7 @@ export class PortalClinicaService {
       const nasc = p.nascEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, dados.pacienteId, 'birth_date'), p.nascEnc) : null;
       const hoje = hojeNaClinica();
       const menor = menorEm(nasc, hoje, p.emancipadoEm);
-      let representacao: { guardianLinkId: string; guardianId: string; representUntil: string | null } | null = null;
+      let representacao: { guardianLinkId: string; guardianId: string; representUntil: string | null; confidentialFrom: string } | null = null;
       if (dados.agindoComo === 'titular') {
         if (dados.responsavelId !== undefined) throw new EntradaInvalidaError(['responsavelId']);
         // R3 do #68 (re-revisão): sem data de nascimento não se sabe se o titular é menor; falha fechada.
@@ -110,12 +110,15 @@ export class PortalClinicaService {
         if (!g) throw new NaoEncontradoError();
         if (g.endedAt !== null || !vigenteEm({ desde: g.validFrom, ate: g.validUntil }, hoje)) throw new ConflitoError('responsavel_nao_vigente');
         if (g.kind === 'curador') {
-          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: null };
+          // Curatelado é adulto: o sigilo da área sensível vale desde já.
+          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: null, confidentialFrom: hoje };
         } else {
           if (menor === null) throw new ConflitoError('nascimento_nao_informado');
           if (!menor) throw new ConflitoError('responsavel_so_para_menor');
           const ate = fimDaRepresentacao(aniversarioDe(nasc as string, IDADE_MAIORIDADE), g.validUntil);
-          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: ate };
+          // Sigilo do adolescente (C3 do #67; R2): vale no banco a partir do dia dos 12 anos (em claro, como o dos 18).
+          const sigilo = aniversarioDe(nasc as string, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia);
+          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: ate, confidentialFrom: sigilo };
         }
       }
       const { token, hash } = novoTokenDeConvite();
