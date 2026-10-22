@@ -194,3 +194,33 @@ Ressalvas (operacionais, não bloqueiam):
 - **R11:** a regra das FK só é conferida na 0030 e no teste. Toda migração nova com FK para `patients`/`appointments` tem de passar pelo teste do catálogo (ele roda no CI, então basta não removê-lo).
 
 Condições que continuam: R3, R5, R7 e R9 na fila; R1–R4 e R6 a antes da 1ª importação real; merge depois do #63 e do #65; CI verde.
+
+## Conferência das ressalvas (22/10/2026)
+
+Revisado: `git diff 1649d69..origin/eng/importador` (migração 0035, `scripts/migrate.mjs`, `importacao-regras.ts` e o teste, `importador.rls.test.ts`, WBS e `api-dominio.md`).
+
+**Veredito: APROVADO COM RESSALVAS** (mantido). R7 e R11 resolvidas, R5 resolvida na parte do importador. Aceito o que ficou de fora, com as condições abaixo.
+
+Resolvidas:
+- **R11:** a 0035 cria `app_assert_regra_fk_desfazer()` (`SET search_path`, `REVOKE ... FROM PUBLIC`) e o runner a chama **dentro** da transação de cada migração, antes de gravar em `schema_migrations`. Uma FK em CASCADE/SET NULL/SET DEFAULT fora de `app_import_batch_blockers` derruba a migração inteira. O teste prova três coisas: o runtime não executa a função, a FK em CASCADE é recusada e a tabela não fica no banco (rollback).
+  - *Observação, sem prazo:* a função procura o nome da tabela no **texto** da função de bloqueios. Um nome que só aparece num comentário dela passaria. Hoje não há esse caso, e quem revisa a migração vê. Se um dia a função de bloqueios for reescrita, melhor trocar por uma lista explícita de tabelas.
+- **R5 (parte do importador):** o aviso `menor_sem_responsavel` sai no validar e no simular (`planejarPacientes` reusa `validarPacientes`). Ele leva só linha, campo e código, sem valor, e não impede a linha de entrar. O teste cobre a véspera e o dia dos 18 anos.
+  - Uma limitação aceita: a data de "hoje" é a UTC. Entre 21h e 24h de Brasília, na véspera do aniversário, o aviso pode errar por um dia. Como é só aviso, fica assim.
+  - Fica **aberta** a outra parte: quando o cadastro ganhar o responsável legal (#67), o importador recebe as colunas do responsável com as mesmas regras. Prazo mantido: antes do piloto com pediatria ou TO infantil.
+- **R7:** a WBS MIG-02.4 agora diz ≤ 7 dias após o envio, com expiração no banco. Bate com o `IMPORT_RAW_TTL_HOURS` (1 a 168 h).
+
+Aceito ficar de fora:
+- **R10** (apagar `IMPORT_CPF_FP_KEY` do cofre): é tarefa de infra, não de código. Na árvore, a chave só aparece em comentário da 0026 e da 0030. Condições:
+  - a tarefa entra na fila com dono (`devops-ci`) e prazo antes da 1ª importação real;
+  - o descarte fica registrado com data, ambientes e quem apagou;
+  - a chave não pode ser reaproveitada para outro HMAC.
+- **R3** (crypto-shredding por lote) **e R9** (índice cego com HMAC no KMS): os prazos já eram os do parecer, R3 antes da 1ª importação real e R9 antes do GA. Aceito porque o importador nasce **desligado** em produção. Conferi `loadImportacaoConfig`: com `NODE_ENV=production`, só liga com `IMPORTADOR_HABILITADO=true` explícito, e um valor inválido derruba o boot. Condições:
+  - **Corrigir a regra de ligar.** Hoje `api-dominio.md` diz que basta o 1º ciclo do agendador com `alarme = false`. Isso permitiria ligar sem a R3. A regra tem de exigir **R1–R4 e R6 fechadas**, a R3 incluída (ou a alternativa da R3: o prazo do backup declarado como prazo máximo no termo e no ROPA), e o registro do Guardião na fila. Corrigir no próximo PR que tocar o importador e antes de qualquer `IMPORTADOR_HABILITADO=true` em produção.
+  - A R9 entra no checklist do GA. Até lá, `cpfsDaClinica` continua decifrando só dentro da clínica e da transação, como conferido.
+
+Condições que continuam:
+- R1–R4 e R6 fechadas antes da 1ª importação real;
+- R5 (colunas do responsável) antes do piloto com pediatria;
+- R9 antes do GA;
+- merge depois do #63 e do #65;
+- CI verde, inclusive o teste da R11 com `DATABASE_MIGRATOR_URL`.

@@ -40,13 +40,18 @@
 | Rodada 18.3: **lembretes e confirmação por WhatsApp** (provedor plugável com adaptador falso; templates neutros; opt-in; respostas confirmam/cancelam) — migração **0032**, sobre #65 | Maestro @Rocafa (agente engenharia) | 20/10/2026 | branch `eng/whatsapp-lembretes` |
 | Rodada 19.1: ✅ correção do veto do **#67** (responsáveis; pagador congelado no recebimento) — migração **0031** — **APROVADO COM RESSALVAS** | Maestro @Rocafa (agente engenharia) | 21/10/2026 | branch `eng/responsaveis` |
 | Pendências do #67 (parecer 21/10, C2): A1 escopo da informação e pedido de sigilo do adolescente; A3 tipo `apoiador`; A4 responsáveis na retenção de 20 anos; CPF completo no recibo emitido pela recepção; R1 anular pagador com recebimentos exige `financeiro:operar` e marca `pagador_anulado`; R2 documentar como o financeiro resolve `pagador_responsavel`. **C1:** merge só com `responsaveis.rls` e `financeiro.rls` verdes no CI. **C3:** nada consome a marca clínica (portal/comunicação) sem A1 e novo parecer | Maestro @Rocafa | 21/10/2026 | a fazer |
-| Rodada 19.2: correção do veto do **#68** (portal). Fase A: trilha de auditoria bloqueada na sessão do portal + ressalvas; Fase B (depois do 19.1): responsável só para menor/curatela, ligado ao `guardian_id` — migração **0033** | Maestro @Rocafa (agente engenharia) | 21/10/2026 | branch `eng/portal-paciente` |
+| Rodada 19.2: ✅ correção do veto do **#68** (portal, 0033) — **APROVADO COM RESSALVAS** em 22/10; ressalvas R1–R4/R7 em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | branch `eng/portal-paciente` |
+| Rodada 19.4: ✅ ressalvas do #67 (R1, R2, A4, recibo mascarado) — migração **0034**, G2 1.15.0 | Maestro @Rocafa (agente engenharia) | 22/10/2026 | branch `eng/responsaveis` |
+| Rodada 19.5: **#69** WhatsApp (0032) **VETADO** em 21/10 (opt-in sem número, menor sem nascimento, modelo sem lista fechada) — correção em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | PR #69 |
 | Rodada 19.3: integração #66/#67/#68/WhatsApp sobre #65 (ordem das migrações, versão do G2, guarda de schema), depois dos vetos corrigidos | Maestro @Rocafa | 21/10/2026 | a fazer |
 
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
+| **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
+| **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
+| **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
