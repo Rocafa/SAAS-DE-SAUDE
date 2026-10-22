@@ -100,6 +100,15 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
   import_issues: { privilegios: ['SELECT', 'INSERT'] },
   import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
+  // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
+  // anda para a frente e resposta só perde o conteúdo pela retenção de 30 dias (triggers).
+  whatsapp_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Chave do HMAC de comparação de número (V1 do #69): só nasce, nunca muda.
+  whatsapp_phone_keys: { privilegios: ['SELECT', 'INSERT'] },
+  whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Resposta: só metadado, nasce e não muda (R1 do #69).
+  whatsapp_inbound: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
@@ -110,6 +119,7 @@ const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   portal_link_index: 'índice vínculo do portal -> conta/clínica/paciente (0027); só as funções SECURITY DEFINER do portal leem/gravam',
   portal_invite_otp: 'hash do código de resgate do convite (0033, A2 do #68); só as funções SECURITY DEFINER do portal leem/gravam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
+  whatsapp_routes: 'número de negócio -> clínica para o webhook sem sessão (0032); só app_whatsapp_tenant_for_number (SECURITY DEFINER) lê e o trigger da configuração grava',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
@@ -351,7 +361,13 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
  * com tenant_id sem uma dessas policies RESTRITIVAS reprova: o padrão do portal é não ver.
  */
 /** WhatsApp (0032): tabelas da clínica fora da sessão do portal. */
-const PORTAL_FORA_WHATSAPP: readonly string[] = [];
+const PORTAL_FORA_WHATSAPP: readonly string[] = [
+  'whatsapp_settings',
+  'whatsapp_phone_keys',
+  'whatsapp_opt_ins',
+  'whatsapp_outbox',
+  'whatsapp_inbound',
+];
 
 describe('guarda de schema: portal do paciente (0027)', () => {
   it('toda tabela da aplicação com tenant_id tem policy restritiva do portal', async () => {

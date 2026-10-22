@@ -82,6 +82,18 @@ export const PERMISSOES = {
    */
   'financeiro:sanear_pagador': ['admin', 'financeiro'],
   /**
+   * WhatsApp (rodada 18.3, HU-COM-003/004/010/011). Nada disto é conteúdo clínico: o lembrete leva só nome
+   * neutro, data e hora.
+   * - ler: configuração, modelo vigente e fila de envios (status e fallback, sem número nem texto);
+   * - opt_in: registrar (com prova) e revogar o opt-in do paciente, na recepção;
+   * - configurar: ligar o canal, nome neutro, número de negócio, horários e modelo;
+   * - executar: disparar o job de lembretes e a retenção de conteúdo à mão (o normal é o job do sistema).
+   */
+  'comunicacao:ler': ['admin', 'recepcao'],
+  'comunicacao:opt_in': ['admin', 'recepcao'],
+  'comunicacao:configurar': ['admin'],
+  'comunicacao:executar': ['admin'],
+  /**
    * Conteúdo clínico (prontuário, evoluções, anexos clínicos). Não há rota nesta rodada; a regra
    * fica explícita para a API de prontuário: perfil clínico E vínculo de cuidado (ver
    * `podeLerConteudoClinico`). Recepção, financeiro e admin não clínico: nunca.

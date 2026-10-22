@@ -1013,6 +1013,121 @@ export const patientGuardianHistory = pgTable('patient_guardian_history', {
   occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** WhatsApp (migração 0032, rodada 18.3): canal da clínica, desligado por padrão, remetente neutro. */
+export const whatsappSettings = pgTable('whatsapp_settings', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  enabled: boolean('enabled').notNull().default(false),
+  senderName: text('sender_name'),
+  businessNumberId: text('business_number_id'),
+  reminderHoursBefore: smallint('reminder_hours_before').notNull().default(24),
+  sendFromHour: smallint('send_from_hour').notNull().default(8),
+  sendUntilHour: smallint('send_until_hour').notNull().default(20),
+  replyWindowHours: smallint('reply_window_hours').notNull().default(48),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+});
+
+export const WHATSAPP_RECIPIENT_KINDS = ['paciente', 'responsavel'] as const;
+export const WHATSAPP_OPT_IN_METHODS = ['verbal_na_recepcao', 'formulario_assinado', 'portal_do_paciente'] as const;
+export const WHATSAPP_REVOKE_METHODS = ['pedido_na_recepcao', 'resposta_sair', 'portal_do_paciente', 'troca_de_destinatario', 'numero_mudou'] as const;
+export const WHATSAPP_OUTBOX_STATUSES = ['agendado', 'enviando', 'enviado', 'entregue', 'lido', 'falhou', 'cancelado'] as const;
+export type WhatsappOutboxStatus = (typeof WHATSAPP_OUTBOX_STATUSES)[number];
+export const WHATSAPP_INTERPRETATIONS = ['confirmar', 'cancelar', 'sair', 'outro'] as const;
+export const WHATSAPP_OUTCOMES = [
+  'confirmado',
+  'cancelado',
+  'ja_estava',
+  'fora_da_janela',
+  'consulta_alterada',
+  'status_nao_permite',
+  'sem_envio',
+  'opt_out',
+  'sem_acao',
+] as const;
+export type WhatsappOutcome = (typeof WHATSAPP_OUTCOMES)[number];
+
+/** Chave da clínica (cifrada) para o HMAC de comparação de número (0032, V1 do parecer #69). Só INSERT. */
+export const whatsappPhoneKeys = pgTable('whatsapp_phone_keys', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  keyEnc: text('key_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Opt-in com prova (0032): quem registrou, como, quando, o NÚMERO que consentiu; revogação única. */
+export const whatsappOptIns = pgTable('whatsapp_opt_ins', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  recipientKind: text('recipient_kind', { enum: WHATSAPP_RECIPIENT_KINDS }).notNull(),
+  guardianId: uuid('guardian_id'),
+  purpose: text('purpose', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
+  method: text('method', { enum: WHATSAPP_OPT_IN_METHODS }).notNull(),
+  /** Comprovante (obrigatório, R7 do #69), cifrado. */
+  evidenceEnc: text('evidence_enc').notNull(),
+  /** Número que consentiu (V1): cifrado e com o HMAC da clínica para comparar. */
+  recipientPhoneEnc: text('recipient_phone_enc').notNull(),
+  recipientPhoneHash: text('recipient_phone_hash').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  grantedBy: uuid('granted_by').notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
+  revokeMethod: text('revoke_method', { enum: WHATSAPP_REVOKE_METHODS }),
+});
+
+/** Fila de envios (0032). Conteúdo cifrado e com retenção de 30 dias. */
+export const whatsappOutbox = pgTable('whatsapp_outbox', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  appointmentId: uuid('appointment_id').notNull(),
+  appointmentStartsAt: timestamp('appointment_starts_at', { withTimezone: true }).notNull(),
+  patientId: uuid('patient_id').notNull(),
+  optInId: uuid('opt_in_id').notNull(),
+  /** Modelo da plataforma (nome na Meta), da lista fechada (V3 do parecer #69). */
+  templateName: text('template_name').notNull(),
+  kind: text('kind', { enum: ['lembrete_consulta'] }).notNull().default('lembrete_consulta'),
+  recipientKind: text('recipient_kind', { enum: WHATSAPP_RECIPIENT_KINDS }).notNull(),
+  guardianId: uuid('guardian_id'),
+  recipientPhoneEnc: text('recipient_phone_enc'),
+  /** HMAC do número de destino; o banco exige que seja o do opt-in (V1). */
+  recipientPhoneHash: text('recipient_phone_hash').notNull(),
+  bodyEnc: text('body_enc'),
+  status: text('status', { enum: WHATSAPP_OUTBOX_STATUSES }).notNull().default('agendado'),
+  attempts: smallint('attempts').notNull().default(0),
+  providerMessageId: text('provider_message_id'),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  failedAt: timestamp('failed_at', { withTimezone: true }),
+  /** Reserva para envio (agendado -> enviando); presa > 24 h, a retenção encerra como falhou (R2). */
+  dispatchStartedAt: timestamp('dispatch_started_at', { withTimezone: true }),
+  failureCode: text('failure_code'),
+  needsFallback: boolean('needs_fallback').notNull().default(false),
+  contentPurgedAt: timestamp('content_purged_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by'),
+});
+
+/** Respostas recebidas (0032): só o webhook (sistema) grava; só metadado, sem texto nem número (R1 do #69). */
+export const whatsappInbound = pgTable('whatsapp_inbound', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  providerMessageId: text('provider_message_id').notNull(),
+  outboxId: uuid('outbox_id'),
+  interpretation: text('interpretation', { enum: WHATSAPP_INTERPRETATIONS }).notNull(),
+  outcome: text('outcome', { enum: WHATSAPP_OUTCOMES }).notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const schema = {
   tenants,
   patients,
@@ -1053,4 +1168,9 @@ export const schema = {
   importRawFiles,
   importIssues,
   importBatchRecords,
+  whatsappSettings,
+  whatsappPhoneKeys,
+  whatsappOptIns,
+  whatsappOutbox,
+  whatsappInbound,
 };

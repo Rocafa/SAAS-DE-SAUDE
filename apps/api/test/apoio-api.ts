@@ -46,7 +46,9 @@ export interface ApiDeTeste {
   fechar(): Promise<void>;
 }
 
-export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseudonymSigner' | 'portalLimites'> = {}): Promise<ApiDeTeste> {
+export async function subirApi(
+  adapters: Pick<AppAdapters, 'vigilancia' | 'pseudonymSigner' | 'portalLimites' | 'mensageiro' | 'responsaveis'> = {},
+): Promise<ApiDeTeste> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória');
   const sessoes = new DevSessionProvider('test');
@@ -63,7 +65,8 @@ export async function subirApi(adapters: Pick<AppAdapters, 'vigilancia' | 'pseud
       }),
     ],
   }).compile();
-  const app = moduleRef.createNestApplication({ logger: false });
+  // rawBody como no main.ts (HMAC do webhook do WhatsApp sobre o corpo bruto).
+  const app = moduleRef.createNestApplication({ logger: false, rawBody: true });
   await app.init();
   const db = createDatabase(url, { max: 2 });
   const fundadores = new Map<TenantId, string>();

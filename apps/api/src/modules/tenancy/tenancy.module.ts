@@ -54,6 +54,22 @@ export class TenantDatabase implements OnApplicationShutdown {
   }
 }
 
+/**
+ * Rota do webhook do WhatsApp (R8 do parecer #69): a ÚNICA consulta sem contexto de clínica que o domínio
+ * precisa (número de negócio -> clínica, pela função SECURITY DEFINER da 0032). Provider estreito, no lugar
+ * de exportar o handle cru do banco: nenhum módulo injeta DATABASE_HANDLE.
+ */
+@Injectable()
+export class RotaDoWhatsapp {
+  constructor(@Inject(DATABASE_HANDLE) private readonly handle: DatabaseHandle) {}
+
+  async clinicaDoNumero(numero: string): Promise<TenantId | null> {
+    if (!/^[0-9]{5,32}$/.test(numero)) return null;
+    const [r] = await this.handle.db.execute<{ t: string | null }>(sql`select app_whatsapp_tenant_for_number(${numero}) as t`);
+    return (r?.t ?? null) as TenantId | null;
+  }
+}
+
 @Module({})
 export class TenancyModule {
   static forRoot(options: { databaseUrl: string; tuning?: Partial<DatabaseTuning> }): DynamicModule {
@@ -63,8 +79,11 @@ export class TenancyModule {
       providers: [
         { provide: DATABASE_HANDLE, useFactory: () => createDatabase(options.databaseUrl, options.tuning) },
         TenantDatabase,
+        RotaDoWhatsapp,
       ],
-      exports: [TenantDatabase],
+      // O handle cru NÃO sai (R8 do #69): tabela de clínica só por TenantDatabase.run; a rota do webhook do
+      // WhatsApp, só por RotaDoWhatsapp.clinicaDoNumero.
+      exports: [TenantDatabase, RotaDoWhatsapp],
     };
   }
 }

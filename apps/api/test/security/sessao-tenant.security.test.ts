@@ -176,6 +176,17 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/pacientes/${id}/responsaveis/emancipacao`],
       [RequestMethod.POST, `/responsaveis/descarte`],
       [RequestMethod.POST, `/pacientes/${id}/responsaveis/eliminacao`],
+      // WhatsApp (0032). O webhook não tem sessão: é autenticado pelo HMAC (test/whatsapp.rls.test.ts).
+      [RequestMethod.GET, '/whatsapp/configuracao'],
+      [RequestMethod.PUT, '/whatsapp/configuracao'],
+      [RequestMethod.GET, '/whatsapp/modelos'],
+      [RequestMethod.POST, '/whatsapp/modelos'],
+      [RequestMethod.GET, '/whatsapp/envios'],
+      [RequestMethod.POST, '/whatsapp/lembretes/execucao'],
+      [RequestMethod.POST, '/whatsapp/retencao/execucao'],
+      [RequestMethod.GET, `/pacientes/${id}/whatsapp/opt-in`],
+      [RequestMethod.POST, `/pacientes/${id}/whatsapp/opt-in`],
+      [RequestMethod.POST, `/pacientes/${id}/whatsapp/opt-in/revogar`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));

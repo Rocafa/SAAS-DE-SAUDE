@@ -13,6 +13,10 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
+import { criarMensageiro } from './modules/messaging/mensageiro.factory';
+import type { MensageiroWhatsApp } from './modules/messaging/mensageiro-whatsapp';
+import { MessagingModule } from './modules/messaging/messaging.module';
+import type { FonteDeResponsaveis } from './modules/messaging/responsaveis.port';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
 import { createPortalAuthProvider, type PortalAuthProvider } from './modules/portal/portal-auth';
@@ -43,6 +47,10 @@ export interface AppAdapters {
   readonly portalOtpSender?: PortalOtpSender;
   /** Limite por conta do portal; padrão: ambiente (loadPortalLimites). */
   readonly portalLimites?: PortalLimites;
+  /** Canal WhatsApp; padrão: criarMensageiro (WHATSAPP_PROVEDOR; desligado se vazio). `null` = desligado. */
+  readonly mensageiro?: MensageiroWhatsApp | null;
+  /** Telefone do responsável do paciente; padrão: pelo catálogo (tolera a ausência da 0028). */
+  readonly responsaveis?: FonteDeResponsaveis;
 }
 
 @Module({})
@@ -59,6 +67,7 @@ export class AppModule {
     const portalAuthProvider = adapters.portalAuthProvider ?? createPortalAuthProvider(process.env);
     const portalOtpSender = adapters.portalOtpSender ?? createPortalOtpSender(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
+    const mensageiro = adapters.mensageiro !== undefined ? adapters.mensageiro : criarMensageiro(process.env);
     const pacientes = PatientsModule.forRoot({
       store,
       fecharStore: adapters.rateLimitStore === undefined,
@@ -92,6 +101,8 @@ export class AppModule {
         }),
         // Importador: grava pacientes com a mesma cifra/regras do cadastro (mesma instância).
         ImportsModule.forRoot(pacientes),
+        // WhatsApp (rodada 18.3): lembretes D-1 e confirmação; desligado por padrão.
+        MessagingModule.forRoot({ mensageiro, ...(adapters.responsaveis ? { responsaveis: adapters.responsaveis } : {}) }),
       ],
     };
   }

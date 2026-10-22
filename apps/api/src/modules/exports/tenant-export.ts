@@ -36,6 +36,7 @@ import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '..
 import { exportarPortal, type ExportedPortal, type PortalCounts } from '../portal/portal-export';
 import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
 import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
+import { exportarWhatsapp, type ExportedWhatsapp, type WhatsappCounts } from '../messaging/whatsapp-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -102,6 +103,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *          `patients[].importBatchId` e `appointments[].importBatchId` (marca imutável do lote, V1). Arquivo
  *          bruto e divergências ficam fora (motivo em EXPORT_EXCLUDED_TABLES). No ramo do importador saiu
  *          como 1.13.0/1.14.0, que colidiam com responsáveis e portal.
+ *        - WhatsApp (migração 0032): configuração do canal, opt-ins com a prova (referência decifrada),
+ *          fila de envios (com o modelo da PLATAFORMA usado; a clínica não cria modelo) e respostas (só
+ *          interpretação e resultado; R1 do #69); número e texto do ENVIO decifrados enquanto não passam os
+ *          30 dias da retenção, depois `null` com `contentPurgedAt`, em `data.whatsapp` e
+ *          `manifest.counts.whatsapp`. No ramo do WhatsApp saiu como 1.13.0.
  */
 export const EXPORT_SCHEMA_VERSION = '1.17.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
@@ -160,6 +166,11 @@ export const EXPORTED_TABLES = [
   // Importador (0024): em data.imports. Arquivo bruto e divergências ficam fora (EXPORT_EXCLUDED_TABLES).
   'import_batches',
   'import_batch_records',
+  // WhatsApp (0032): em data.whatsapp. Histórico de mensagens é dado do paciente: sai inteiro.
+  'whatsapp_settings',
+  'whatsapp_opt_ins',
+  'whatsapp_outbox',
+  'whatsapp_inbound',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -169,6 +180,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_invite_lookup: 'índice interno token -> clínica do convite (0027); o convite sai em portal_invites',
   portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
+  whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
+  whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
   import_raw_files:
@@ -216,6 +229,8 @@ export interface ExportManifest {
     readonly finance: FinanceCounts;
     /** Responsáveis do paciente (0028), por tabela. */
     readonly guardians: GuardiansCounts;
+    /** WhatsApp (0032), por tabela. */
+    readonly whatsapp: WhatsappCounts;
     readonly clinicMembers: number;
     /** Portal do paciente (0027), por tabela. */
     readonly portal: PortalCounts;
@@ -529,6 +544,8 @@ export interface TenantExportDocument {
     readonly finance: ExportedFinance;
     /** Responsáveis do paciente (0028). */
     readonly guardians: ExportedGuardians;
+    /** WhatsApp (0032). */
+    readonly whatsapp: ExportedWhatsapp;
     readonly clinicMembers: readonly ExportedClinicMember[];
     /** Portal do paciente (0027). */
     readonly portal: ExportedPortal;
@@ -780,6 +797,10 @@ export async function exportInTransaction(
     return options.cipher;
   });
   const importacoes = await exportarImportacoes(tx, ctx.tenantId);
+  const whatsapp = await exportarWhatsapp(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -1085,6 +1106,7 @@ export async function exportInTransaction(
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
       guardians: responsaveis.counts,
+      whatsapp: whatsapp.counts,
       clinicMembers: exportedMembers.length,
       portal: portal.counts,
       imports: importacoes.counts,
@@ -1170,6 +1192,7 @@ export async function exportInTransaction(
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
         guardians: responsaveis.data,
+        whatsapp: whatsapp.data,
         clinicMembers: exportedMembers,
         portal: portal.data,
         imports: importacoes.data,

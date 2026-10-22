@@ -51,6 +51,10 @@ import {
   importBatches,
   importBatchRecords,
   tenants,
+  whatsappInbound,
+  whatsappOptIns,
+  whatsappOutbox,
+  whatsappSettings,
 } from '../src/db/schema';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -119,6 +123,10 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   patient_guardian_history: 'guardians.patientGuardianHistory',
   import_batches: 'imports.batches',
   import_batch_records: 'imports.batchRecords',
+  whatsapp_settings: 'whatsapp.whatsappSettings',
+  whatsapp_opt_ins: 'whatsapp.whatsappOptIns',
+  whatsapp_outbox: 'whatsapp.whatsappOutbox',
+  whatsapp_inbound: 'whatsapp.whatsappInbound',
   audit_log: 'auditEvents',
 };
 
@@ -128,6 +136,8 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
   'portal_invites.token_hash': 'hash do token de uso único do convite: credencial, não sai (0027)',
+  'whatsapp_opt_ins.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone',
+  'whatsapp_outbox.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone enquanto não passa a retenção',
 };
 
 const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -154,6 +164,8 @@ const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
 const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
 const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
+/** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
+const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -422,6 +434,40 @@ beforeAll(async () => {
       clinicaConfirmada: (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ nome: tenants.displayName }).from(tenants)))[0]?.nome,
     })
     .expect(200);
+  // WhatsApp (0032): canal, opt-in com prova, um envio (modelo da plataforma) e uma resposta (do webhook = sistema).
+  const ag4 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-08',
+    hora: '10:00',
+  });
+  expect(ag4.status).toBe(201);
+  const ag4Body = ag4.body as { id: string; inicio: string };
+  // Opt-in pela rota (grava o número que consentiu, cifrado e com HMAC; V1 do parecer #69).
+  const opt = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/whatsapp/opt-in`)
+    .set(cab(admin))
+    .send({ destinatario: 'paciente', meio: 'formulario_assinado', comprovante: 'Termo ficticio export 1' });
+  expect(opt.status, JSON.stringify(opt.body)).toBe(201);
+  const envioId = await withTenant(
+    api.db.db,
+    clinicaA,
+    async (tx) => {
+      await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
+      const [o] = await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, (opt.body as { id: string }).id));
+      const [e] = await tx
+        .insert(whatsappOutbox)
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', recipientPhoneHash: o?.recipientPhoneHash ?? '', createdBy: admin.userId })
+        .returning();
+      return e?.id ?? '';
+    },
+    admin.userId,
+  );
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(whatsappInbound).values({ tenantId: clinicaA, providerMessageId: 'wamid.EXPORT1', outboxId: envioId, interpretation: 'outro', outcome: 'sem_acao' }),
+  );
 
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
@@ -513,7 +559,11 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof portalRightsRequests
           | typeof guardians
           | typeof patientGuardians
-          | typeof patientGuardianHistory,
+          | typeof patientGuardianHistory
+          | typeof whatsappSettings
+          | typeof whatsappOptIns
+          | typeof whatsappOutbox
+          | typeof whatsappInbound,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -556,6 +606,12 @@ describe('G2 — conteúdo do pacote', () => {
           patientGuardians: await n(patientGuardians),
           patientGuardianHistory: await n(patientGuardianHistory),
         },
+        whatsapp: {
+          whatsappSettings: await n(whatsappSettings),
+          whatsappOptIns: await n(whatsappOptIns),
+          whatsappOutbox: await n(whatsappOutbox),
+          whatsappInbound: await n(whatsappInbound),
+        },
         clinicMembers: await n(clinicMembers),
         portal: {
           invites: await n(portalInvites),
@@ -578,7 +634,7 @@ describe('G2 — conteúdo do pacote', () => {
       imports: { batches: 1, batchRecords: 1 },
       professionals: 3,
       appointmentTypes: 1,
-      appointments: 3,
+      appointments: 4,
       appointmentReschedules: 1,
       insurers: 1,
       insuranceGuides: 1,
@@ -613,6 +669,7 @@ describe('G2 — conteúdo do pacote', () => {
         patientGuardians: 1,
         patientGuardianHistory: 4,
       },
+      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
     expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
@@ -718,6 +775,7 @@ describe('G2 — conteúdo do pacote', () => {
     );
     expect(linhas).toHaveLength(1);
     expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
