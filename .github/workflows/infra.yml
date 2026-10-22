@@ -123,11 +123,25 @@ jobs:
           grep -q 'log_group_name *= *aws_cloudwatch_log_group.rds\["postgresql"\].name' staging/auditoria-banco.tf
           grep -q 'alarm_actions *= *\[aws_sns_topic.alertas_seguranca.arn\]' staging/auditoria-banco.tf
           # R12: função, policy e dono também alertam; a conferência pós-deploy existe.
-          for f in disable-trigger drop-trigger alter-role no-force-rls disable-rls \
-                   create-function alter-function drop-function \
-                   create-policy alter-policy drop-policy owner-to; do
+          # R10 do #58: constraint, índice, rule, REPLICA/ALWAYS, GRANT/REVOKE, session_replication_role.
+          for f in alter-table-guardas constraint session-replication-role owner-to \
+                   drop-trigger alter-role create-function alter-function drop-function \
+                   create-policy alter-policy drop-policy drop-index create-rule \
+                   grant revoke grant-role alter-default-privileges; do
             grep -Eq "^\s*$f\s*=" staging/auditoria-banco.tf || { echo "filtro $f ausente"; exit 1; }
           done
+          # Cada palavra-chave das regex agrupadas continua lá (DISABLE TRIGGER, NO FORCE RLS,
+          # DISABLE RLS, DISABLE RULE, ENABLE REPLICA, ENABLE ALWAYS, DROP/ALTER CONSTRAINT, DROP NOT NULL).
+          for k in '[Tt][Rr][Ii][Gg][Gg][Ee][Rr]"' '[Nn][Oo]\\s+[Ff][Oo][Rr][Cc][Ee]' \
+                   '[Dd][Ii][Ss][Aa][Bb][Ll][Ee]\\s+[Rr][Oo][Ww]' '[Dd][Ii][Ss][Aa][Bb][Ll][Ee]\\s+[Rr][Uu][Ll][Ee]' \
+                   '[Rr][Ee][Pp][Ll][Ii][Cc][Aa]"' '[Aa][Ll][Ww][Aa][Yy][Ss]"' \
+                   '[Dd][Rr][Oo][Pp]\\s+[Cc][Oo][Nn]' '[Aa][Ll][Tt][Ee][Rr]\\s+[Cc][Oo][Nn]' \
+                   '[Dd][Rr][Oo][Pp]\\s+[Nn][Oo][Tt]\\s+[Nn][Uu][Ll][Ll]'; do
+            grep -Fq "$k" staging/auditoria-banco.tf || { echo "regex sem $k"; exit 1; }
+          done
+          # Cota do CloudWatch: no máximo 5 filtros com regex por log group.
+          n=$(grep -Ec '^\s*[a-z-]+\s*=\s*"%' staging/auditoria-banco.tf)
+          [ "$n" -le 5 ] || { echo "$n filtros com regex (máximo 5 por log group)"; exit 1; }
           grep -Eiq 'CREATE EXTENSION IF NOT EXISTS pgaudit' ../rds/bootstrap.sql
           grep -Eq "SET LOCAL pgaudit.log = 'none'" ../rds/bootstrap.sql
           # Ressalvas do PR #58 (infra-staging.md §4.1).
