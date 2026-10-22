@@ -11,7 +11,7 @@ import type { TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
@@ -439,7 +439,7 @@ describe('R6 do #66: arquivo de outra clínica', () => {
 
   it('R11 (0035): o runner confere a regra das FK a cada migração; FK nova em CASCADE é recusada e desfeita', async () => {
     // O runner chama a função dentro da transação de cada migração aplicada.
-    const runner = readFileSync(fileURLToPath(new URL('../scripts/migrate.mjs', import.meta.url)), 'utf8');
+    const runner = readFileSync(join(process.cwd(), 'scripts', 'migrate.mjs'), 'utf8');
     expect(runner).toContain('app_assert_regra_fk_desfazer()');
     // O runtime não executa a função (só o papel de migração).
     const [priv] = await withTenant(api.db.db, clinicaA, (tx) =>
