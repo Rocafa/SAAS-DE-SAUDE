@@ -1,5 +1,5 @@
 #!/bin/sh
-# Conferência pós-deploy das guardas do banco (R12 do parecer do PR #61).
+# Conferência pós-deploy das guardas do banco (R12 do parecer do PR #61; R10 do parecer do PR #58).
 # Compara a impressão digital (verificar-guardas.sql) do banco com a esperada, gerada a partir
 # das migrações do repositório num Postgres 16 descartável. Só lê catálogo; nada de dado.
 #
@@ -68,20 +68,46 @@ autoteste() {
   [ "$(grep -c . "$WORK/antes.tsv")" -gt 0 ] || { echo "impressão vazia" >&2; exit 1; }
   impressao > "$WORK/de-novo.tsv"
   comparar "$WORK/antes.tsv" "$WORK/de-novo.tsv" >/dev/null || { echo "FALHA: impressão não determinística" >&2; exit 1; }
-  # Adulterações que o alarme de DDL avisa; a conferência tem de apontar cada uma.
+  # Adulterações que o alarme de DDL avisa; a conferência tem de apontar cada uma. Todas são do
+  # alcance do app_migrator (dono das tabelas), o perfil que a R12 do #61 e a R10 do #58 vigiam.
   psql --no-psqlrc -X -q -v ON_ERROR_STOP=1 \
     -c 'CREATE OR REPLACE FUNCTION public.audit_log_reject_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$' \
     -c 'ALTER FUNCTION public.app_current_tenant() SET work_mem = '"'1MB'" \
     -c 'ALTER POLICY tenant_isolation ON public.patients USING (true)' \
-    -c 'ALTER TABLE public.patients NO FORCE ROW LEVEL SECURITY'
+    -c 'ALTER TABLE public.patients NO FORCE ROW LEVEL SECURITY' \
+    -c 'ALTER TABLE public.tenant_master_keys DROP CONSTRAINT tenant_master_keys_destroyed_check' \
+    -c 'ALTER TABLE public.tenant_master_keys ALTER COLUMN tenant_id DROP NOT NULL' \
+    -c 'DROP INDEX public.tenant_master_keys_one_active_idx' \
+    -c 'CREATE RULE r10_autoteste AS ON UPDATE TO public.audit_log DO INSTEAD NOTHING' \
+    -c 'ALTER TABLE public.audit_log ENABLE REPLICA TRIGGER audit_log_no_update_delete' \
+    -c 'ALTER TABLE public.audit_log ENABLE ALWAYS TRIGGER audit_log_no_truncate' \
+    -c 'GRANT DELETE ON public.audit_log TO app_user' \
+    -c 'GRANT UPDATE (subscription_status) ON public.tenants TO app_user' \
+    -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT TRUNCATE ON TABLES TO app_user'
   impressao > "$WORK/depois.tsv"
-  esperadas="funcao	public.app_current_tenant()
+  # Objeto alterado aparece dos dois lados do diff; removido só em "<"; criado só em ">".
+  esperadas="$(LC_ALL=C sort <<'FIM'
+funcao	public.app_current_tenant()
 funcao	public.audit_log_reject_mutation()
 policy	public.patients/tenant_isolation
-tabela	public.patients"
-  achadas="$(diff "$WORK/antes.tsv" "$WORK/depois.tsv" | sed -n 's/^> //p' | cut -f1,2)"
+tabela	public.patients
+constraint	public.tenant_master_keys/tenant_master_keys_destroyed_check
+contagem	constraint
+tabela	public.tenant_master_keys
+indice	public.tenant_master_keys/tenant_master_keys_one_active_idx
+contagem	indice
+regra	public.audit_log/r10_autoteste
+contagem	regra
+trigger	public.audit_log/audit_log_no_update_delete
+trigger	public.audit_log/audit_log_no_truncate
+tabela	public.audit_log
+tabela	public.tenants
+privpadrao	app_migrator/public/r
+FIM
+)"
+  achadas="$(diff "$WORK/antes.tsv" "$WORK/depois.tsv" | sed -n 's/^[<>] //p' | cut -f1,2 | LC_ALL=C sort -u)"
   if [ "$achadas" = "$esperadas" ]; then
-    echo "autoteste ok: $(grep -c . "$WORK/antes.tsv") objetos; as 4 adulterações apareceram."
+    echo "autoteste ok: $(grep -c . "$WORK/antes.tsv") linhas; as 13 adulterações apareceram."
   else
     printf 'FALHA no autoteste. Esperado:\n%s\nVeio:\n%s\n' "$esperadas" "$achadas" >&2; exit 1
   fi

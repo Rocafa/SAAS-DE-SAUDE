@@ -168,7 +168,9 @@ jobs:
     # R12 do PR #61: a conferência pós-deploy precisa funcionar ANTES de ser preciso. Sobe um
     # PostgreSQL 16 descartável no runner (sem rede, sem segredo: senhas geradas na hora), aplica
     # bootstrap + migrações do repositório e prova que CREATE OR REPLACE FUNCTION, ALTER FUNCTION,
-    # ALTER POLICY e NO FORCE RLS aparecem na comparação.
+    # ALTER POLICY e NO FORCE RLS aparecem na comparação, e também (R10 do #58) DROP CONSTRAINT,
+    # DROP NOT NULL, DROP INDEX, CREATE RULE, ENABLE REPLICA/ALWAYS TRIGGER, GRANT de tabela e de
+    # coluna e ALTER DEFAULT PRIVILEGES.
     name: conferência das guardas do banco (autoteste)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
