@@ -22,7 +22,7 @@ Os prazos contam a partir do evento indicado. "Controladora" e "operadora" se re
 | Dado | Prazo | Fundamento | Tipo |
 |---|---|---|---|
 | Prontuário médico e odontológico | **20 anos** a partir do último registro | Lei 13.787/2018, art. 6º (FATO); CFM Res. 1.821/2007; CFO (prontuário obrigatório, Código de Ética Odontológica) | FATO / ⚖️ prazo CFO |
-| Prontuário de psicologia | **5 anos** no mínimo | CFP Res. 01/2009, art. 4º (FATO). **PROPOSTA:** a configuração padrão do tenant de psicologia é 5 anos, e a clínica pode estender | ⚖️ |
+| Prontuário de psicologia | **20 anos** a partir do último registro (piso da plataforma) | CFP Res. 01/2009, art. 4º fixa **mínimo de 5 anos** (FATO). A Lei 13.787/2018 (20 anos para prontuário de paciente) amplia esse mínimo: **decisão do Guardião LGPD de 14/10/2026** ([parecer #63](revisoes/2026-10-14-pr63.md)), adotar 20 anos para todo prontuário, inclusive psicologia. Notas privadas descartadas seguem regra própria (lápide + eliminação em 30 dias) | Decisão Guardião / ⚖️ confirmar com o advogado |
 | Prontuário de fisioterapia/TO, nutrição e fonoaudiologia | **20 anos** (padrão conservador) até a matriz por conselho (J9) ser validada | PROPOSTA: usar a Lei 13.787 como teto por analogia | ⚖️ |
 | Documentos assinados (receitas, atestados, laudos) e gravação de teleconsulta autorizada | Junto ao prontuário | Integram o prontuário (CFM Res. 2.314/2022, telemedicina) | FATO |
 | Trilha de auditoria do prontuário | Igual ao prontuário (D7.1) | SBIS NGS1 (auditoria); prova de integridade | PROPOSTA |
