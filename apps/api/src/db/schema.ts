@@ -764,6 +764,8 @@ export const whatsappOutbox = pgTable('whatsapp_outbox', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true }),
   readAt: timestamp('read_at', { withTimezone: true }),
   failedAt: timestamp('failed_at', { withTimezone: true }),
+  /** Reserva para envio (agendado -> enviando); presa > 24 h, a retenção encerra como falhou (R2). */
+  dispatchStartedAt: timestamp('dispatch_started_at', { withTimezone: true }),
   failureCode: text('failure_code'),
   needsFallback: boolean('needs_fallback').notNull().default(false),
   contentPurgedAt: timestamp('content_purged_at', { withTimezone: true }),

@@ -69,6 +69,7 @@ export interface ExportedWhatsapp {
     deliveredAt: string | null;
     readAt: string | null;
     failedAt: string | null;
+    dispatchStartedAt: string | null;
     failureCode: string | null;
     needsFallback: boolean;
     contentPurgedAt: string | null;
@@ -164,6 +165,7 @@ export async function exportarWhatsapp(
         deliveredAt: iso(o.deliveredAt),
         readAt: iso(o.readAt),
         failedAt: iso(o.failedAt),
+        dispatchStartedAt: iso(o.dispatchStartedAt),
         failureCode: o.failureCode,
         needsFallback: o.needsFallback,
         contentPurgedAt: iso(o.contentPurgedAt),

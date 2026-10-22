@@ -202,6 +202,19 @@ export function codigoDeFalha(codigo: string): string {
   return c.length > 0 ? c : 'desconhecido';
 }
 
+/**
+ * Retenção (R2/R3 do parecer #69; matriz-retencao.md §3). O banco aplica os números (0032:
+ * app_whatsapp_content_retention_days e app_whatsapp_stuck_sending_hours); aqui só para a trilha e a doc.
+ * - CONTEÚDO do envio (texto renderizado e número, cifrados): 30 dias;
+ * - "enviando" preso: 24 h, depois "falhou" com fallback; "agendado" de consulta passada: cancelado;
+ * - METADADO (status, datas, códigos, HMAC do número; respostas só com interpretação/resultado):
+ *   acompanha o cadastro do paciente (sai com a eliminação dele);
+ * - OPT-IN e prova: enquanto vigente + prazo prescricional após a revogação (PROPOSTA 5 anos ⚖️).
+ */
+export const RETENCAO_DO_CONTEUDO_DIAS = 30;
+export const ENVIANDO_PRESO_HORAS = 24;
+export const RETENCAO_DA_PROVA_DO_OPT_IN_ANOS_PROPOSTA = 5;
+
 /** Até 5 respostas são processadas por envio; o excesso é descartado sem gravar (limite do webhook). */
 export const MAX_RESPOSTAS_POR_ENVIO = 5;
 /** Tentativas de envio antes de virar "falhou" (e ir para a fila da recepção). */

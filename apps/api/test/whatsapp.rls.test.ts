@@ -6,11 +6,13 @@
  * envia; menor recebe pelo responsável (porta); SAIR revoga; barreiras do banco; isolamento entre
  * clínicas em whatsapp_settings, whatsapp_opt_ins, whatsapp_outbox e
  * whatsapp_inbound; trilha sem número nem texto.
- * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
+ * Pré-requisitos: migrações aplicadas, DATABASE_URL = papel app_user e DATABASE_MIGRATOR_URL (só para
+ * "envelhecer" linhas no teste da limpeza de 30 dias, como dono da tabela). Dados 100% fictícios.
  */
 import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, patients, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -40,6 +42,28 @@ const responsaveis: FonteDeResponsaveis = {
 const NOME_PROFISSIONAL = 'Dra QZX Ficticia';
 const ESPECIALIDADE = 'Psiquiatria';
 const TIPO_SENSIVEL = 'Consulta oncologica QZX';
+
+const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para este teste (envelhecer linhas na limpeza)');
+let owner: postgres.Sql;
+
+/**
+ * "Envelhece" uma linha da fila como DONO da tabela (o runtime não consegue: o trigger carimba com o
+ * relógio do banco). Sem RLS forçado e sem o trigger só dentro desta transação.
+ */
+async function envelhecer(id: string, campos: { criadoHaDias?: number; consultaHaHoras?: number; enviandoHaHoras?: number }): Promise<void> {
+  await owner.begin(async (tx) => {
+    await tx`alter table whatsapp_outbox no force row level security`;
+    await tx`alter table whatsapp_outbox disable trigger whatsapp_outbox_guard`;
+    if (campos.criadoHaDias !== undefined) await tx`update whatsapp_outbox set created_at = now() - make_interval(days => ${campos.criadoHaDias}) where id = ${id}`;
+    if (campos.consultaHaHoras !== undefined)
+      await tx`update whatsapp_outbox set appointment_starts_at = now() - make_interval(hours => ${campos.consultaHaHoras}) where id = ${id}`;
+    if (campos.enviandoHaHoras !== undefined)
+      await tx`update whatsapp_outbox set status = 'enviando', dispatch_started_at = now() - make_interval(hours => ${campos.enviandoHaHoras}) where id = ${id}`;
+    await tx`alter table whatsapp_outbox enable trigger whatsapp_outbox_guard`;
+    await tx`alter table whatsapp_outbox force row level security`;
+  });
+}
 
 let api: ApiDeTeste;
 let svc: WhatsappService;
@@ -153,6 +177,7 @@ async function statusDoAgendamento(tenant: TenantId, id: string) {
 }
 
 beforeAll(async () => {
+  owner = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
   api = await subirApi({ mensageiro: falso, responsaveis });
   svc = api.app.get(WhatsappService);
   clinicaA = await api.novaClinica();
@@ -179,6 +204,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await owner?.end();
   await api?.fechar();
 });
 
@@ -764,6 +790,79 @@ describe('isolamento entre clínicas', () => {
   });
 });
 
+describe('limpeza (R2/R3): job chamável, 30 dias, nenhuma linha presa', () => {
+  /** Envio de verdade (programado e despachado pelo job), para envelhecer depois. */
+  async function envioReal(falhaTemporaria = false) {
+    const tel = telefoneNovo();
+    const p = await paciente(adminA, tel);
+    const c = await consulta(adminA, p, 20);
+    await optIn(adminA, p);
+    if (falhaTemporaria) falso.numerosIndisponiveis.add(`55${tel}`);
+    try {
+      await svc.executarLembretesComoSistema(clinicaA);
+    } finally {
+      falso.numerosIndisponiveis.delete(`55${tel}`);
+    }
+    const e = await envioDoAgendamento(clinicaA, c.id);
+    if (!e) throw new Error('envio não programado');
+    return e;
+  }
+
+  it('job do sistema: conteúdo com mais de 30 dias sai (texto e número); status, datas e HMAC ficam; idempotente', async () => {
+    const velho = await envioReal();
+    const novo = await envioReal();
+    expect(velho.status).toBe('enviado');
+    await envelhecer(velho.id, { criadoHaDias: 31 });
+    await envelhecer(novo.id, { criadoHaDias: 29 });
+    const r = await svc.executarRetencaoComoSistema(clinicaA);
+    expect(r.enviosLimpos).toBeGreaterThanOrEqual(1);
+    const depois = await envioDoAgendamento(clinicaA, velho.appointmentId);
+    expect(depois).toMatchObject({ bodyEnc: null, recipientPhoneEnc: null, status: 'enviado', recipientPhoneHash: velho.recipientPhoneHash });
+    expect(depois?.contentPurgedAt).not.toBeNull();
+    expect(depois?.sentAt).not.toBeNull();
+    // 29 dias: fica.
+    expect((await envioDoAgendamento(clinicaA, novo.appointmentId))?.bodyEnc).toMatch(/^v1:/);
+    // De novo: nada a fazer (idempotente).
+    expect(await svc.executarRetencaoComoSistema(clinicaA)).toEqual({ agendadosExpirados: 0, enviosInterrompidos: 0, enviosLimpos: 0 });
+    // Trilha do job: ator sistema, só contagens.
+    const [t] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'whatsapp_outbox'), sql`${auditLog.metadata}->>'op' = 'content_retention'`, sql`${auditLog.metadata}->>'outbox_purged' <> '0'`)),
+    );
+    expect(t).toMatchObject({ actorKind: 'sistema' });
+  });
+
+  it('"agendado" de consulta que já passou: cancelado (expirado) e o conteúdo sai aos 30 dias', async () => {
+    const e = await envioReal(true);
+    expect(e).toMatchObject({ status: 'agendado', attempts: 1 });
+    await envelhecer(e.id, { criadoHaDias: 31, consultaHaHoras: 2 });
+    const r = await svc.executarRetencaoComoSistema(clinicaA);
+    expect(r.agendadosExpirados).toBeGreaterThanOrEqual(1);
+    expect(await envioDoAgendamento(clinicaA, e.appointmentId)).toMatchObject({ status: 'cancelado', failureCode: 'expirado', bodyEnc: null, recipientPhoneEnc: null });
+  });
+
+  it('"enviando" preso há mais de 24 h: falhou (envio_interrompido) com fallback, sem reenviar; o conteúdo sai aos 30 dias', async () => {
+    const e = await envioReal(true);
+    const antes = falso.enviadas.length;
+    await envelhecer(e.id, { criadoHaDias: 31, enviandoHaHoras: 25 });
+    // Preso há menos de 24 h: fica (pode ser um envio em andamento).
+    const outro = await envioReal(true);
+    await envelhecer(outro.id, { enviandoHaHoras: 1 });
+    const r = await svc.executarRetencaoComoSistema(clinicaA);
+    expect(r.enviosInterrompidos).toBeGreaterThanOrEqual(1);
+    expect(await envioDoAgendamento(clinicaA, e.appointmentId)).toMatchObject({
+      status: 'falhou',
+      failureCode: 'envio_interrompido',
+      needsFallback: true,
+      bodyEnc: null,
+      recipientPhoneEnc: null,
+    });
+    expect((await envioDoAgendamento(clinicaA, outro.appointmentId))?.status).toBe('enviando');
+    // Nada foi reenviado.
+    await svc.executarLembretesComoSistema(clinicaA);
+    expect(falso.enviadas.length).toBe(antes);
+  });
+});
+
 describe('auditoria e retenção', () => {
   it('trilha do WhatsApp sem número de telefone, texto da mensagem ou do comprovante', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) => tx.select({ m: auditLog.metadata, s: auditLog.scope }).from(auditLog).where(sql`${auditLog.scope} like 'whatsapp%'`));
@@ -776,7 +875,7 @@ describe('auditoria e retenção', () => {
   it('retenção: conteúdo com menos de 30 dias fica; a regra do banco recusa limpar antes', async () => {
     const r = await api.http().post('/whatsapp/retencao/execucao').set(cab(adminA)).send({});
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ enviosLimpos: 0 });
+    expect(r.body).toMatchObject({ enviosLimpos: 0 });
     const [e] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(whatsappOutbox).limit(1));
     expect(
       await sqlstate(

@@ -39,6 +39,7 @@ import {
   renderizarLembrete,
   RESPOSTA_FIXA_OUTRO,
   respostaNaJanela,
+  RETENCAO_DO_CONTEUDO_DIAS,
   telefoneParaWhatsapp,
   ANTECEDENCIA_MINIMA_H,
 } from './lembretes-regras';
@@ -83,6 +84,15 @@ export interface ResultadoDosLembretes {
   readonly enviados: number;
   readonly falharam: number;
   readonly cancelados: number;
+}
+
+export interface ResultadoDaLimpeza {
+  /** "agendado" de consulta que já começou: cancelado (expirado). */
+  readonly agendadosExpirados: number;
+  /** "enviando" há mais de 24 h: falhou (envio_interrompido), com fallback para a recepção. */
+  readonly enviosInterrompidos: number;
+  /** Envios com mais de 30 dias que perderam o conteúdo (texto e número). */
+  readonly enviosLimpos: number;
 }
 
 const ZERO: Omit<ResultadoDosLembretes, 'motivo'> = { programados: 0, semOptIn: 0, semDestinatario: 0, numeroMudou: 0, enviados: 0, falharam: 0, cancelados: 0 };
@@ -745,26 +755,42 @@ export class WhatsappService implements OnApplicationBootstrap {
   }
 
   // -------------------------------------------------------------------------------------------------
-  // Retenção do conteúdo (30 dias)
+  // Limpeza (R2/R3 do parecer #69): job da clínica, chamável pelo agendador e pela rota do admin
   // -------------------------------------------------------------------------------------------------
 
-  executarRetencao(ctx: RequestContext): Promise<{ enviosLimpos: number }> {
+  /** Pela rota (admin): o ator da trilha é o usuário da sessão. */
+  executarRetencao(ctx: RequestContext): Promise<ResultadoDaLimpeza> {
     return escreverNaClinica(this.db, ctx, (tx) => this.retencao(tx, ctx));
   }
 
-  executarRetencaoComoSistema(tenantId: TenantId): Promise<{ enviosLimpos: number }> {
+  /**
+   * JOB do sistema, por clínica (sem usuário: a trilha grava `sistema`). O agendador chama uma vez por dia
+   * para cada clínica com o canal configurado (ver api-dominio.md §11). Idempotente.
+   */
+  executarRetencaoComoSistema(tenantId: TenantId): Promise<ResultadoDaLimpeza> {
     return this.db.run(tenantId, (tx) => this.retencao(tx, ctxDoSistema(tenantId)));
   }
 
-  private async retencao(tx: TenantTx, ctx: RequestContext): Promise<{ enviosLimpos: number }> {
-    const [r] = await tx.execute<{ outbox_purged: number }>(sql`select * from app_whatsapp_content_retention_run()`);
+  private async retencao(tx: TenantTx, ctx: RequestContext): Promise<ResultadoDaLimpeza> {
+    const [r] = await tx.execute<{ scheduled_expired: number; sending_interrupted: number; outbox_purged: number }>(
+      sql`select * from app_whatsapp_content_retention_run()`,
+    );
+    const agendadosExpirados = Number(r?.scheduled_expired ?? 0);
+    const enviosInterrompidos = Number(r?.sending_interrupted ?? 0);
     const enviosLimpos = Number(r?.outbox_purged ?? 0);
+    if (enviosInterrompidos > 0) this.logger.warn('WHATSAPP_ENVIO_INTERROMPIDO fallback=fila_da_recepcao');
     await recordAudit(tx, ctx, {
       action: AuditAction.Update,
       scope: 'whatsapp_outbox',
-      metadata: { op: 'content_retention', outbox_purged: enviosLimpos, days: 30 },
+      metadata: {
+        op: 'content_retention',
+        scheduled_expired: agendadosExpirados,
+        sending_interrupted: enviosInterrompidos,
+        outbox_purged: enviosLimpos,
+        days: RETENCAO_DO_CONTEUDO_DIAS,
+      },
     });
-    return { enviosLimpos };
+    return { agendadosExpirados, enviosInterrompidos, enviosLimpos };
   }
 
   // -------------------------------------------------------------------------------------------------

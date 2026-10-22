@@ -47,7 +47,7 @@ Fontes dos dados: cadastro do paciente (nome e telefone, fornecidos à clínica)
 | Categorias de dados sensíveis | **Por inferência:** a existência do vínculo com a clínica. **Por conteúdo:** tudo o que o paciente escrever no inbox — sintoma, diagnóstico, foto, exame |
 | Metadados que a Meta obtém de todo modo | Número do paciente, número da clínica, carimbos de tempo, status de entrega e leitura. Mesmo com conteúdo criptografado, **o grafo de quem fala com qual clínica de saúde é dado sensível** ⚖️ |
 | Volume estimado | ESTIMATIVA: 1 a 4 mensagens por consulta, mais o inbox. Larga escala desde o piloto |
-| Prazo de retenção | Mensagem fora do prontuário: **12 meses** (proposta). Incorporada ao prontuário: segue o prontuário. Na Meta: segundo a política dela, **fora do nosso controle** |
+| Prazo de retenção | **Lembrete (0032, parecer #69):** conteúdo do envio (texto e número, cifrados) **30 dias**; metadado (status, datas, HMAC do número; resposta só com interpretação e resultado) **acompanha o cadastro do paciente**; opt-in e prova **enquanto vigente + 5 anos** (proposta ⚖️); resposta livre **não é guardada** enquanto não houver inbox (R1). Detalhe em [matriz-retencao.md](matriz-retencao.md) §3. **Inbox (futuro):** mensagem fora do prontuário **12 meses** (proposta); incorporada ao prontuário, segue o prontuário. Na Meta: segundo a política dela, **fora do nosso controle** |
 | Abrangência / armazenamento | Nossa cópia: AWS São Paulo. Trânsito e processamento no canal: **exterior** |
 | Transferência internacional | **Sim, inevitável.** Art. 33; cláusulas-padrão da Res. CD/ANPD 19/2024 |
 

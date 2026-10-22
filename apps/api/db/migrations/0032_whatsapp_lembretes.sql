@@ -269,6 +269,9 @@ CREATE TABLE whatsapp_outbox (
   delivered_at           timestamptz,
   read_at                timestamptz,
   failed_at              timestamptz,
+  -- Quando a linha foi reservada para envio (agendado -> enviando). Presa em "enviando" há mais de 24 h
+  -- (queda do processo no meio do envio) a retenção a encerra como "falhou" (R2 do parecer #69).
+  dispatch_started_at    timestamptz,
   -- Código do provedor ou nosso (nunca a mensagem de erro, que pode ecoar o número).
   failure_code           text CONSTRAINT whatsapp_outbox_failure_check CHECK (failure_code IS NULL OR failure_code ~ '^[a-z0-9_]{1,32}$'),
   -- Falhou: a recepção precisa avisar por outro meio (fila da recepção; SMS/e-mail entram com COM-04).
@@ -299,7 +302,7 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.status <> 'agendado' OR NEW.attempts <> 0 OR NEW.provider_message_id IS NOT NULL OR NEW.sent_at IS NOT NULL
        OR NEW.delivered_at IS NOT NULL OR NEW.read_at IS NOT NULL OR NEW.failed_at IS NOT NULL OR NEW.content_purged_at IS NOT NULL
-       OR NEW.needs_fallback THEN
+       OR NEW.needs_fallback OR NEW.dispatch_started_at IS NOT NULL THEN
       RAISE EXCEPTION 'envio nasce agendado' USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF NEW.created_by IS DISTINCT FROM app_current_user() THEN
@@ -371,6 +374,7 @@ BEGIN
         RAISE EXCEPTION 'envio sem opt-in vigente para este número' USING ERRCODE = 'insufficient_privilege';
       END IF;
       NEW.attempts := OLD.attempts + 1;
+      NEW.dispatch_started_at := now();
     ELSIF NEW.status = 'enviado' THEN
       NEW.sent_at := now();
     ELSIF NEW.status = 'entregue' THEN
@@ -383,6 +387,7 @@ BEGIN
       NEW.needs_fallback := true;
     END IF;
   ELSIF NEW.attempts IS DISTINCT FROM OLD.attempts OR NEW.sent_at IS DISTINCT FROM OLD.sent_at OR NEW.delivered_at IS DISTINCT FROM OLD.delivered_at
+     OR NEW.dispatch_started_at IS DISTINCT FROM OLD.dispatch_started_at
      OR NEW.read_at IS DISTINCT FROM OLD.read_at OR NEW.failed_at IS DISTINCT FROM OLD.failed_at OR NEW.needs_fallback IS DISTINCT FROM OLD.needs_fallback THEN
     RAISE EXCEPTION 'envio: carimbos só mudam com o status' USING ERRCODE = 'insufficient_privilege';
   END IF;
@@ -399,6 +404,12 @@ CREATE FUNCTION app_whatsapp_content_retention_days() RETURNS integer
   LANGUAGE sql IMMUTABLE
   SET search_path = pg_catalog
 AS $$ SELECT 30 $$;
+
+-- Linha presa em "enviando" além disto é encerrada como "falhou" (com fallback) pela retenção (R2).
+CREATE FUNCTION app_whatsapp_stuck_sending_hours() RETURNS integer
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$ SELECT 24 $$;
 
 CREATE TRIGGER whatsapp_outbox_guard BEFORE INSERT OR UPDATE ON whatsapp_outbox
   FOR EACH ROW EXECUTE FUNCTION whatsapp_outbox_guard();
@@ -490,25 +501,41 @@ CREATE TRIGGER whatsapp_inbound_no_delete BEFORE DELETE ON whatsapp_inbound FOR 
 CREATE TRIGGER whatsapp_inbound_no_truncate BEFORE TRUNCATE ON whatsapp_inbound FOR EACH STATEMENT EXECUTE FUNCTION finance_reject_mutation();
 
 -- ---------------------------------------------------------------------------------------------------
--- Retenção curta do conteúdo (30 dias): texto e números saem; status, datas e interpretação ficam.
--- Roda na clínica do contexto (RLS) e com o relógio do banco; sem parâmetro de data. Idempotente.
+-- Limpeza (job da clínica; R2/R3 do parecer #69). Roda na clínica do contexto (RLS) e com o relógio do
+-- banco; sem parâmetro de data; idempotente. Nesta ordem:
+-- 1. "agendado" de consulta que já começou nunca vai sair: vira "cancelado" (failure_code expirado);
+-- 2. "enviando" há mais de 24 h (queda no meio do envio; não se reenvia, para não mandar duas vezes): vira
+--    "falhou" (envio_interrompido) com fallback para a recepção;
+-- 3. CONTEÚDO (texto renderizado e número, cifrados) de envio com mais de 30 dias sai; ficam status,
+--    datas, códigos e o HMAC do número (metadado; prazo em matriz-retencao.md §3, R3).
+-- Depois de 1 e 2 nenhuma linha fica presa: toda linha antiga entra no passo 3.
 -- ---------------------------------------------------------------------------------------------------
-CREATE FUNCTION app_whatsapp_content_retention_run() RETURNS TABLE (outbox_purged integer)
+CREATE FUNCTION app_whatsapp_content_retention_run()
+  RETURNS TABLE (scheduled_expired integer, sending_interrupted integer, outbox_purged integer)
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
+  v_exp integer;
+  v_int integer;
   v_out integer;
   v_limite timestamptz := now() - make_interval(days => app_whatsapp_content_retention_days());
 BEGIN
   IF app_current_tenant() IS NULL THEN
     RAISE EXCEPTION 'retenção do WhatsApp sem clínica no contexto' USING ERRCODE = 'insufficient_privilege';
   END IF;
+  UPDATE public.whatsapp_outbox SET status = 'cancelado', failure_code = 'expirado'
+   WHERE tenant_id = app_current_tenant() AND status = 'agendado' AND appointment_starts_at <= now();
+  GET DIAGNOSTICS v_exp = ROW_COUNT;
+  UPDATE public.whatsapp_outbox SET status = 'falhou', failure_code = 'envio_interrompido'
+   WHERE tenant_id = app_current_tenant() AND status = 'enviando'
+     AND dispatch_started_at <= now() - make_interval(hours => app_whatsapp_stuck_sending_hours());
+  GET DIAGNOSTICS v_int = ROW_COUNT;
   UPDATE public.whatsapp_outbox SET body_enc = NULL, recipient_phone_enc = NULL, content_purged_at = now()
    WHERE tenant_id = app_current_tenant() AND content_purged_at IS NULL AND created_at <= v_limite
      AND status NOT IN ('agendado', 'enviando');
   GET DIAGNOSTICS v_out = ROW_COUNT;
-  RETURN QUERY SELECT v_out;
+  RETURN QUERY SELECT v_exp, v_int, v_out;
 END;
 $$;
 REVOKE ALL ON FUNCTION app_whatsapp_content_retention_run() FROM PUBLIC;
