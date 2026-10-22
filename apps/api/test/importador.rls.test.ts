@@ -10,6 +10,9 @@
 import type { TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -432,6 +435,36 @@ describe('R6 do #66: arquivo de outra clínica', () => {
     expect(fora, 'FK em CASCADE/SET NULL fora de app_import_batch_blockers').toEqual([]);
     // Hoje nenhuma é CASCADE/SET NULL (a única, import_cpf_fingerprints, saiu com a 0030).
     expect(fks.filter((f) => !['r', 'a'].includes(f.ondelete))).toEqual([]);
+  });
+
+  it('R11 (0035): o runner confere a regra das FK a cada migração; FK nova em CASCADE é recusada e desfeita', async () => {
+    // O runner chama a função dentro da transação de cada migração aplicada.
+    const runner = readFileSync(fileURLToPath(new URL('../scripts/migrate.mjs', import.meta.url)), 'utf8');
+    expect(runner).toContain('app_assert_regra_fk_desfazer()');
+    // O runtime não executa a função (só o papel de migração).
+    const [priv] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ pode: boolean }>(sql`select has_function_privilege('app_user', 'public.app_assert_regra_fk_desfazer()', 'EXECUTE') as pode`), adminA.userId);
+    expect(priv?.pode).toBe(false);
+    // Uma "migração" com FK em CASCADE para patients falha na regra (e é desfeita: rollback).
+    const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+    if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste da R11');
+    const mig = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
+    try {
+      await mig.unsafe('SELECT public.app_assert_regra_fk_desfazer()');
+      const tabela = `r11_fk_teste_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      const erro = await mig
+        .begin(async (tx) => {
+          await tx.unsafe(`CREATE TABLE ${tabela} (tenant_id uuid NOT NULL, patient_id uuid NOT NULL,
+            FOREIGN KEY (tenant_id, patient_id) REFERENCES patients (tenant_id, id) ON DELETE CASCADE)`);
+          await tx.unsafe('SELECT public.app_assert_regra_fk_desfazer()');
+        })
+        .then(() => null, (e: unknown) => e as { message?: string });
+      expect(erro?.message ?? '').toMatch(/não é RESTRICT/);
+      const [ficou] = await mig.unsafe(`SELECT to_regclass('public.${tabela}')::text AS t`);
+      expect(ficou?.t ?? null).toBeNull();
+    } finally {
+      await mig.end({ timeout: 5 });
+    }
   });
 });
 
