@@ -7,7 +7,7 @@
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
 import type { TenantId, UserId } from '@plataforma/shared';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -709,6 +709,51 @@ describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente;
     }
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, consumido)));
     expect(linha).toMatchObject({ professionalId: profissionalPfA, patientId: pacienteA });
+  });
+
+  it('R17: sessão de pacote só aceita o estorno, uma vez, pelo usuário da sessão; SQL injetado não desfaz estorno nem troca agendamento/pacote (0029)', async () => {
+    // Cenário da R17: Y atendeu e a sessão de Y foi estornada; X atende depois. Desfazer o estorno de Y tem de falhar.
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R17', total: 4 }));
+    const outroPacote = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R17 outro', total: 4 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    const [deY] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const estorno = await post(finA, `/pacotes/${pacoteId}/consumos/${deY!.id}/estornar`, { motivo: 'lancamento_errado' });
+    expect(estorno.status, JSON.stringify(estorno.body)).toBeLessThan(300);
+    await consumir(pacoteId, await agendamento({ prof: profissionalPfA }));
+    const [deX] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(packageSessions).where(and(eq(packageSessions.packageId, pacoteId), isNull(packageSessions.reversedAt))));
+    const outroAg = await agendamento({ prof: profissionalPfA });
+    const upd = (sessaoId: string, set: Partial<typeof packageSessions.$inferInsert>, quem: string) =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(packageSessions).set(set).where(eq(packageSessions.id, sessaoId)), quem);
+
+    for (const s of [recepA, adminA, finA, profA]) {
+      // Desfazer o estorno (reversed_* de volta a NULL) e reestornar com outro motivo/autor.
+      expect(await sqlstate(upd(deY!.id, { reversedAt: null, reversedBy: null, reversalReason: null }, s.userId))).toContain('42501');
+      expect(await sqlstate(upd(deY!.id, { reversalReason: 'pacote_errado' }, s.userId))).toContain('42501');
+      // Trocar agendamento, pacote ou autoria de uma sessão viva.
+      expect(await sqlstate(upd(deX!.id, { appointmentId: outroAg }, s.userId))).toContain('42501');
+      expect(await sqlstate(upd(deX!.id, { packageId: outroPacote }, s.userId))).toContain('42501');
+      expect(await sqlstate(upd(deX!.id, { consumedBy: s.userId, consumedAt: new Date(0) }, s.userId))).toContain('42501');
+      // Estorno em nome de outra pessoa, ou "estorno" que troca o agendamento junto.
+      const outro = s === finA ? recepA : finA;
+      expect(await sqlstate(upd(deX!.id, { reversedAt: new Date(), reversedBy: outro.userId, reversalReason: 'lancamento_errado' }, s.userId))).toContain('42501');
+      expect(
+        await sqlstate(upd(deX!.id, { reversedAt: new Date(), reversedBy: s.userId, reversalReason: 'lancamento_errado', appointmentId: outroAg }, s.userId)),
+      ).toContain('42501');
+    }
+    // Sem usuário na transação, nem o estorno passa.
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) =>
+      tx.update(packageSessions).set({ reversedAt: new Date(), reversedBy: finA.userId, reversalReason: 'lancamento_errado' }).where(eq(packageSessions.id, deX!.id))))).toContain('42501');
+
+    const [y, x] = await withTenant(api.db.db, clinicaA, (tx) =>
+      Promise.all([deY, deX].map(async (d) => (await tx.select().from(packageSessions).where(eq(packageSessions.id, d!.id)))[0])));
+    expect(y).toMatchObject({ reversedBy: finA.userId, reversalReason: 'lancamento_errado', appointmentId: deY!.appointmentId, packageId: pacoteId });
+    expect(y?.reversedAt).not.toBeNull();
+    expect(x).toMatchObject({ reversedAt: null, reversedBy: null, appointmentId: deX!.appointmentId, packageId: pacoteId, consumedBy: deX!.consumedBy });
+
+    // O estorno legítimo pela API continua funcionando, uma vez só.
+    expect((await post(finA, `/pacotes/${pacoteId}/consumos/${deX!.id}/estornar`, { motivo: 'status_corrigido' })).status).toBeLessThan(300);
+    expect(await sqlstate(upd(deX!.id, { reversedAt: new Date(), reversedBy: finA.userId, reversalReason: 'pacote_errado' }, finA.userId))).toContain('42501');
   });
 });
 

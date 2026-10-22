@@ -11,6 +11,7 @@ import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module'
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
+import { ImportsModule } from './modules/imports/imports.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
@@ -89,6 +90,8 @@ export class AppModule {
           otp: portalOtpSender,
           limites: adapters.portalLimites ?? loadPortalLimites(process.env),
         }),
+        // Importador: grava pacientes com a mesma cifra/regras do cadastro (mesma instância).
+        ImportsModule.forRoot(pacientes),
       ],
     };
   }

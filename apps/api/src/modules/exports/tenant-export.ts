@@ -35,6 +35,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
 import { exportarPortal, type ExportedPortal, type PortalCounts } from '../portal/portal-export';
 import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
+import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -94,8 +95,15 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        (saneamento do pagador pelo financeiro) e, nos vínculos, `eliminatedAt` e `recordRetentionUntil`
  *        (responsáveis na guarda de 20 anos do prontuário, A4); `professionals[].sensitiveArea` (R2 do #68, 0033).
  *        Integração (rodada 19): 1.15.0 era usado pelo portal e pela 0034 em paralelo; o pacote junta os dois em 1.16.0.
+ * 1.17.0: integração da rodada 19 (importador e WhatsApp juntos numa versão só, maior que as anteriores):
+ *        - importador (migrações 0024 e 0026): lotes de importação (aceite do termo de migração e hash do
+ *          texto, mapeamento, contagens, hash da simulação, confirmação da clínica de origem, evidência do
+ *          descarte do arquivo bruto) e o livro do lote, em `data.imports` e `manifest.counts.imports`;
+ *          `patients[].importBatchId` e `appointments[].importBatchId` (marca imutável do lote, V1). Arquivo
+ *          bruto e divergências ficam fora (motivo em EXPORT_EXCLUDED_TABLES). No ramo do importador saiu
+ *          como 1.13.0/1.14.0, que colidiam com responsáveis e portal.
  */
-export const EXPORT_SCHEMA_VERSION = '1.16.0';
+export const EXPORT_SCHEMA_VERSION = '1.17.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -149,6 +157,9 @@ export const EXPORTED_TABLES = [
   'guardians',
   'patient_guardians',
   'patient_guardian_history',
+  // Importador (0024): em data.imports. Arquivo bruto e divergências ficam fora (EXPORT_EXCLUDED_TABLES).
+  'import_batches',
+  'import_batch_records',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -160,6 +171,10 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
+  import_raw_files:
+    'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
+  import_issues:
+    'divergências da validação/simulação (0024): diagnóstico refeito a cada rodada, só linha, campo e código (sem valor); os totais estão em import_batches, que sai no pacote',
 };
 
 export interface ExportManifest {
@@ -204,6 +219,8 @@ export interface ExportManifest {
     readonly clinicMembers: number;
     /** Portal do paciente (0027), por tabela. */
     readonly portal: PortalCounts;
+    /** Importador (0024): lotes e livro do lote. */
+    readonly imports: ImportCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -236,6 +253,8 @@ export interface ExportedPatient {
   readonly emancipationRef: string | null;
   readonly emancipationRecordedBy: string | null;
   readonly emancipationRecordedAt: string | null;
+  /** Lote de importação que criou o paciente (0026); null se cadastrado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 export interface ExportedProfessional {
@@ -278,6 +297,8 @@ export interface ExportedAppointment {
   readonly rescheduledBy: string | null;
   /** Horário travado depois de atendimento ou falta (0014). */
   readonly rescheduleLocked: boolean;
+  /** Lote de importação que criou o agendamento (0026); null se marcado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 /** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
@@ -511,6 +532,8 @@ export interface TenantExportDocument {
     readonly clinicMembers: readonly ExportedClinicMember[];
     /** Portal do paciente (0027). */
     readonly portal: ExportedPortal;
+    /** Importador (0024). */
+    readonly imports: ExportedImports;
   };
 }
 
@@ -756,6 +779,7 @@ export async function exportInTransaction(
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
+  const importacoes = await exportarImportacoes(tx, ctx.tenantId);
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -781,6 +805,7 @@ export async function exportInTransaction(
       emancipationRef: await decrypt(r.id, 'emancipation_ref', r.emancipationRefEnc),
       emancipationRecordedBy: r.emancipationRecordedBy,
       emancipationRecordedAt: iso(r.emancipationRecordedAt),
+      importBatchId: r.importBatchId,
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({
@@ -817,6 +842,7 @@ export async function exportInTransaction(
     createdBy: a.createdBy,
     rescheduledBy: a.rescheduledBy,
     rescheduleLocked: a.rescheduleLocked,
+    importBatchId: a.importBatchId,
   }));
   const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
     id: r.id,
@@ -1061,6 +1087,7 @@ export async function exportInTransaction(
       guardians: responsaveis.counts,
       clinicMembers: exportedMembers.length,
       portal: portal.counts,
+      imports: importacoes.counts,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -1145,6 +1172,7 @@ export async function exportInTransaction(
         guardians: responsaveis.data,
         clinicMembers: exportedMembers,
         portal: portal.data,
+        imports: importacoes.data,
       },
     },
     patientsCsv,

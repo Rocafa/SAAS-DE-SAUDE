@@ -135,65 +135,75 @@ export class SchedulingService {
   }
 
   criar(ctx: RequestContext, dados: NovoAgendamento): Promise<AgendamentoDto> {
-    return this.escrita(ctx, async (tx) => {
-      const [paciente] = await tx
-        .select({ ativo: patients.active })
-        .from(patients)
-        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, dados.pacienteId)));
-      if (!paciente) throw new NaoEncontradoError();
-      if (!paciente.ativo) throw new ConflitoError('paciente_inativo');
-      const profissional = await this.profissionalAtivo(tx, ctx, dados.profissionalId);
-      const [tipo] = await tx
-        .select()
-        .from(appointmentTypes)
-        .where(
-          and(
-            eq(appointmentTypes.tenantId, ctx.tenantId),
-            eq(appointmentTypes.id, dados.tipoId),
-            eq(appointmentTypes.active, true),
-          ),
-        );
-      if (!tipo) throw new NaoEncontradoError();
+    return this.escrita(ctx, (tx) => this.criarNaTransacao(tx, ctx, dados));
+  }
 
-      const inicio = paraInstante(dados.data, dados.hora);
-      // R7 da re-revisão do #61: não se marca no passado (a folga é a mesma da janela de atendimento).
-      if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
-      const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
-      await this.travarAgenda(tx, ctx, profissional.id);
-      if (!dados.encaixe) {
-        const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
-        if (ocupados >= capacidadeDoHorario(profissional.capacity, tipo.capacity)) {
-          throw new ConflitoError('horario_lotado');
-        }
+  /**
+   * Marcação com TODAS as regras (paciente ativo, profissional e tipo ativos, não no passado, capacidade
+   * sob trava por profissional, quem criou) e auditoria, na transação do chamador. Usada pela rota e pelo
+   * importador de agenda (`importBatchId` vai na auditoria).
+   */
+  async criarNaTransacao(tx: TenantTx, ctx: RequestContext, dados: NovoAgendamento, importBatchId?: string): Promise<AgendamentoDto> {
+    const [paciente] = await tx
+      .select({ ativo: patients.active })
+      .from(patients)
+      .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, dados.pacienteId)));
+    if (!paciente) throw new NaoEncontradoError();
+    if (!paciente.ativo) throw new ConflitoError('paciente_inativo');
+    const profissional = await this.profissionalAtivo(tx, ctx, dados.profissionalId);
+    const [tipo] = await tx
+      .select()
+      .from(appointmentTypes)
+      .where(
+        and(
+          eq(appointmentTypes.tenantId, ctx.tenantId),
+          eq(appointmentTypes.id, dados.tipoId),
+          eq(appointmentTypes.active, true),
+        ),
+      );
+    if (!tipo) throw new NaoEncontradoError();
+
+    const inicio = paraInstante(dados.data, dados.hora);
+    // R7 da re-revisão do #61: não se marca no passado (a folga é a mesma da janela de atendimento).
+    if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
+    const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
+    await this.travarAgenda(tx, ctx, profissional.id);
+    if (!dados.encaixe) {
+      const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
+      if (ocupados >= capacidadeDoHorario(profissional.capacity, tipo.capacity)) {
+        throw new ConflitoError('horario_lotado');
       }
-      const [linha] = await tx
-        .insert(appointments)
-        .values({
-          tenantId: ctx.tenantId,
-          patientId: dados.pacienteId,
-          professionalId: profissional.id,
-          appointmentTypeId: tipo.id,
-          startsAt: inicio,
-          endsAt: fim,
-          isWalkIn: dados.encaixe,
-          // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
-          // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
-          createdBy: ctx.userId,
-        })
-        .returning();
-      if (!linha) throw new Error('falha ao criar agendamento');
-      await recordAudit(tx, ctx, {
-        action: AuditAction.Create,
-        scope: SCOPE,
-        metadata: {
-          appointment_id: linha.id,
-          patient_id: linha.patientId,
-          walk_in: linha.isWalkIn,
-          self_scheduled: profissional.userId === ctx.userId,
-        },
-      });
-      return paraDto(linha);
+    }
+    const [linha] = await tx
+      .insert(appointments)
+      .values({
+        tenantId: ctx.tenantId,
+        patientId: dados.pacienteId,
+        professionalId: profissional.id,
+        appointmentTypeId: tipo.id,
+        startsAt: inicio,
+        endsAt: fim,
+        isWalkIn: dados.encaixe,
+        // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
+        // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
+        createdBy: ctx.userId,
+        // 0026 (V1 do importador): marca imutável do lote; o desfazer só apaga o que a tem.
+        ...(importBatchId ? { importBatchId } : {}),
+      })
+      .returning();
+    if (!linha) throw new Error('falha ao criar agendamento');
+    await recordAudit(tx, ctx, {
+      action: AuditAction.Create,
+      scope: SCOPE,
+      metadata: {
+        appointment_id: linha.id,
+        patient_id: linha.patientId,
+        walk_in: linha.isWalkIn,
+        self_scheduled: profissional.userId === ctx.userId,
+        ...(importBatchId ? { import_batch_id: importBatchId } : {}),
+      },
     });
+    return paraDto(linha);
   }
 
   /**
@@ -400,6 +410,11 @@ export class SchedulingService {
       .for('update');
     if (!a) throw new NaoEncontradoError();
     return a;
+  }
+
+  /** Para a simulação do importador: vagas já ocupadas no horário (mesma regra da marcação). */
+  vagasOcupadas(tx: TenantTx, ctx: RequestContext, profissionalId: string, inicio: Date, fim: Date): Promise<number> {
+    return this.ocupados(tx, ctx, profissionalId, inicio, fim);
   }
 
   /** Agendamentos que ocupam vaga e se sobrepõem a [inicio, fim) para o profissional. */

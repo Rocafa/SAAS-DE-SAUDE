@@ -467,7 +467,7 @@ Partes: **01** Importadores · **02** Processo de migração assistida
 | MIG-02.1 | Dry-run e divergências | Simulação completa com relatório de divergências antes de efetivar | Engenharia | MIG-01.1 | S | MVP | Cliente aprova relatório antes da efetivação |
 | MIG-02.2 | Rollback | Desfazer importação inteira com segurança | Engenharia | MIG-02.1 | S | MVP | Rollback total em < 30 min sem afetar dados criados depois (ou bloqueio explícito) |
 | MIG-02.3 | Painel de migração assistida | Backoffice: status, responsável, checklist e comunicação com o cliente | Produto | ADM-01.1 | N | MVP | Tempo médio de migração medido; SLA ≤ 5 dias úteis |
-| MIG-02.4 | Termo e segurança da migração | Instrução do controlador, canal seguro de envio de arquivos, descarte dos arquivos brutos | LGPD | MIG-02.3, LGP-01.4 | S | MVP | Arquivos brutos descartados em ≤ 30 dias após aceite; evidência registrada |
+| MIG-02.4 | Termo e segurança da migração | Instrução do controlador, canal seguro de envio de arquivos, descarte dos arquivos brutos | LGPD | MIG-02.3, LGP-01.4 | S | MVP | Arquivos brutos descartados em ≤ 7 dias após o envio (expiração no banco); evidência registrada |
 
 ## 20. EXP — Exportação de dados
 
