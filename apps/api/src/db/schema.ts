@@ -41,6 +41,11 @@ export const patients = pgTable('patients', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0015 (D1.4 do #63): retenção legal; enquanto marcada, nada do paciente é expurgado. */
   legalHoldSince: timestamp('legal_hold_since', { withTimezone: true }),
+  /** Migração 0031 (A3 do #67): emancipação (CC art. 5º, par. único) — data, documento cifrado, autor; imutável. */
+  emancipatedOn: date('emancipated_on'),
+  emancipationRefEnc: text('emancipation_ref_enc'),
+  emancipationRecordedBy: uuid('emancipation_recorded_by'),
+  emancipationRecordedAt: timestamp('emancipation_recorded_at', { withTimezone: true }),
 });
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
@@ -561,6 +566,13 @@ export const payments = pgTable('payments', {
   amountCents: integer('amount_cents').notNull(),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
   receivedBy: uuid('received_by').notNull(),
+  /**
+   * Migração 0031 (V1 do #67): pagador do cadastro CONGELADO no recebimento — o vínculo e o retrato
+   * cifrado (nome + CPF). Recibo tardio e Receita Saúde usam só isto; o retrato sai na retenção fiscal.
+   */
+  guardianPayerLinkId: uuid('guardian_payer_link_id'),
+  guardianPayerEnc: text('guardian_payer_enc'),
+  guardianPayerPurgedAt: timestamp('guardian_payer_purged_at', { withTimezone: true }),
 });
 
 /** Estorno total de um recebimento (0018): append-only, no caixa aberto do momento. */
@@ -684,8 +696,11 @@ export const tenantDataKeys = pgTable(
 /** Portal do paciente (migração 0027). `acting_as`: a conta age como o titular ou como responsável legal. */
 export const PORTAL_ACTING_AS = ['titular', 'responsavel_legal'] as const;
 export type PortalActingAs = (typeof PORTAL_ACTING_AS)[number];
+/** Motivos que a CLÍNICA usa ao revogar. */
 export const PORTAL_LINK_REVOKE_REASONS = ['pedido_do_paciente', 'acesso_indevido', 'fim_do_vinculo', 'erro_de_cadastro'] as const;
 export type PortalLinkRevokeReason = (typeof PORTAL_LINK_REVOKE_REASONS)[number];
+/** 0033 (V1 do #68): motivos só do job do sistema (fim da representação do responsável). */
+export const PORTAL_LINK_SYSTEM_REVOKE_REASONS = ['maioridade_do_titular', 'fim_da_representacao'] as const;
 export const PORTAL_CONSENT_PURPOSES = ['lembretes_whatsapp', 'escriba_ia', 'pesquisa'] as const;
 export type PortalConsentPurpose = (typeof PORTAL_CONSENT_PURPOSES)[number];
 export const PORTAL_CONSENT_RESPONSES = ['sim', 'nao', 'desfeito'] as const;
@@ -713,6 +728,10 @@ export const portalInvites = pgTable('portal_invites', {
   linkId: uuid('link_id'),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   revokedBy: uuid('revoked_by'),
+  /** 0033 (V1): vínculo de responsável da 0028, a pessoa e o fim da representação (null na curatela). */
+  guardianLinkId: uuid('guardian_link_id'),
+  guardianId: uuid('guardian_id'),
+  representUntil: date('represent_until'),
 });
 
 /** Vínculo conta do portal ↔ paciente ↔ clínica (0027): nasce só do resgate; a clínica revoga. */
@@ -728,7 +747,10 @@ export const portalLinks = pgTable('portal_links', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   revokedBy: uuid('revoked_by'),
-  revokeReason: text('revoke_reason', { enum: PORTAL_LINK_REVOKE_REASONS }),
+  revokeReason: text('revoke_reason', { enum: [...PORTAL_LINK_REVOKE_REASONS, ...PORTAL_LINK_SYSTEM_REVOKE_REASONS] }),
+  guardianLinkId: uuid('guardian_link_id'),
+  guardianId: uuid('guardian_id'),
+  representUntil: date('represent_until'),
 });
 
 /** Consentimento como histórico (0027, R15 do front-r8): append-only; o estado é o último evento. */
@@ -747,6 +769,9 @@ export const portalConsents = pgTable('portal_consents', {
   textHash: text('text_hash').notNull(),
   channel: text('channel', { enum: ['portal'] }).notNull().default('portal'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** 0033 (V1): qual responsável agiu e até quando a representação valia (gatilho, a partir do vínculo). */
+  guardianId: uuid('guardian_id'),
+  representUntil: date('represent_until'),
 });
 
 /** Pedido do titular (0027, LGPD art. 18): registrado para a clínica atender; detalhe e resposta cifrados. */
@@ -769,6 +794,107 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   handledBy: uuid('handled_by'),
   handledAt: timestamp('handled_at', { withTimezone: true }),
   answerEnc: text('answer_enc'),
+  /** 0033 (V1): qual responsável abriu (gatilho, a partir do vínculo). */
+  guardianId: uuid('guardian_id'),
+});
+
+/** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */
+export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante'] as const;
+export type GuardianKind = (typeof GUARDIAN_KINDS)[number];
+export const GUARDIAN_END_REASONS = [
+  'maioridade',
+  'fim_da_representacao',
+  'decisao_judicial',
+  'substituido',
+  'cadastro_errado',
+  'pedido_do_titular',
+  'emancipacao',
+] as const;
+export type GuardianEndReason = (typeof GUARDIAN_END_REASONS)[number];
+export const GUARDIAN_HISTORY_EVENTS = [
+  'responsavel_criado',
+  'responsavel_alterado',
+  'responsavel_descartado',
+  'vinculo_criado',
+  'vinculo_alterado',
+  'vinculo_encerrado',
+] as const;
+
+/** A pessoa responsável (0028): nome, CPF e telefone SÓ cifrados (chave da clínica). */
+export const guardians = pgTable('guardians', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  /** NULL só depois do descarte (0031: cadastro errado com o prazo vencido). */
+  nameEnc: text('name_enc'),
+  cpfEnc: text('cpf_enc'),
+  phoneEnc: text('phone_enc'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+  discardedAt: timestamp('discarded_at', { withTimezone: true }),
+});
+
+/** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */
+export const patientGuardians = pgTable('patient_guardians', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  guardianId: uuid('guardian_id').notNull(),
+  kind: text('kind', { enum: GUARDIAN_KINDS }).notNull(),
+  isPayer: boolean('is_payer').notNull().default(false),
+  receivesClinicalInfo: boolean('receives_clinical_info').notNull().default(false),
+  validFrom: date('valid_from').notNull(),
+  validUntil: date('valid_until'),
+  endReason: text('end_reason', { enum: GUARDIAN_END_REASONS }),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  endedBy: uuid('ended_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+  // 0031 (parecer do #67): decisão do PROFISSIONAL sobre a informação clínica (autor/data pelo banco).
+  clinicalInfoDecidedBy: uuid('clinical_info_decided_by'),
+  clinicalInfoDecidedAt: timestamp('clinical_info_decided_at', { withTimezone: true }),
+  clinicalInfoBasisEnc: text('clinical_info_basis_enc'),
+  /** Curatela: referência da decisão judicial e escopo, cifrados e imutáveis. */
+  courtDecisionRefEnc: text('court_decision_ref_enc'),
+  curatorshipScopeEnc: text('curatorship_scope_enc'),
+  /** Paciente adulto ciente de que um terceiro é o pagador (autor/data pelo banco). */
+  payerPatientAwareBy: uuid('payer_patient_aware_by'),
+  payerPatientAwareAt: timestamp('payer_patient_aware_at', { withTimezone: true }),
+  /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
+  annulReasonEnc: text('annul_reason_enc'),
+  discardAfter: date('discard_after'),
+});
+
+/** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */
+export const patientGuardianHistory = pgTable('patient_guardian_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** Identidade gerada pelo banco: ordem dos eventos (mesma transação = mesmo now()). */
+  seq: bigint('seq', { mode: 'number' }).generatedAlwaysAsIdentity(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  guardianId: uuid('guardian_id').notNull(),
+  linkId: uuid('link_id'),
+  event: text('event', { enum: GUARDIAN_HISTORY_EVENTS }).notNull(),
+  changedFields: text('changed_fields').notNull().default(''),
+  prevNameEnc: text('prev_name_enc'),
+  prevCpfEnc: text('prev_cpf_enc'),
+  prevPhoneEnc: text('prev_phone_enc'),
+  kind: text('kind', { enum: GUARDIAN_KINDS }),
+  isPayer: boolean('is_payer'),
+  receivesClinicalInfo: boolean('receives_clinical_info'),
+  validFrom: date('valid_from'),
+  validUntil: date('valid_until'),
+  endReason: text('end_reason', { enum: GUARDIAN_END_REASONS }),
+  actorId: uuid('actor_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const schema = {
@@ -804,4 +930,7 @@ export const schema = {
   receiptCounters,
   receipts,
   receiptCancellations,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
 };

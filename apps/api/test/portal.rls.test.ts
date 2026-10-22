@@ -11,9 +11,21 @@ import type { TenantId } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, encounters, patients, portalConsents, portalInvites, portalLinks, portalRightsRequests } from '../src/db/schema';
+import {
+  appointments,
+  auditLog,
+  encounters,
+  patientGuardians,
+  patients,
+  portalConsents,
+  portalInvites,
+  portalLinks,
+  portalRightsRequests,
+} from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyAuditChain } from '../src/modules/audit/audit-chain';
+import { hojeNaClinica } from '../src/modules/insurance/guias-regras';
+import { PortalClinicaService } from '../src/modules/portal/portal-clinica.service';
 import { consentimentoIaDoPaciente } from '../src/modules/portal/consentimento-ia';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
@@ -81,6 +93,19 @@ async function contaDe(s: Sessao, pacienteId: string, extra: Record<string, unkn
   const r = await resgatar(p, token);
   expect(r.status).toBe(200);
   return { ...p, vinculoId: r.vinculoId as string };
+}
+
+/** Responsável (0028) do paciente, com o mesmo telefone fictício (destino do código); devolve o id do VÍNCULO. */
+async function responsavelDe(pacienteId: string, nome: string, extra: Record<string, unknown> = {}): Promise<string> {
+  const r = await api.http().post(`/pacientes/${pacienteId}/responsaveis`).set(cab(adminA)).send({ nome, tipo: 'pai_mae', telefone: TELEFONE, ...extra });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  return (r.body as { id: string }).id;
+}
+
+/** Data de nascimento de quem completa `anos` em hoje + `dias` (hoje no fuso da clínica). */
+function nascidoHa(anos: number, dias = 0): string {
+  const [a, m, d] = hojeNaClinica().split('-').map(Number) as [number, number, number];
+  return new Date(Date.UTC(a - anos, m - 1, d + dias)).toISOString().slice(0, 10);
 }
 
 beforeAll(async () => {
@@ -533,11 +558,10 @@ describe('central de privacidade: consentimento em histórico (IA em 3 estados)'
   });
 
   it('menor de idade: só o responsável legal responde consentimento (LGPD art. 14)', async () => {
-    const proprio = await contaDe(adminA, pacMenor);
-    expect((await api.http().post('/portal/privacidade/consentimentos/lembretes_whatsapp').set(cab(proprio)).send({ resposta: 'sim' })).body).toMatchObject({
-      codigo: 'consentimento_pelo_responsavel',
-    });
-    const resp = await contaDe(adminA, pacMenor, { agindoComo: 'responsavel_legal' });
+    // V1 do #68: criança de 8 anos nem é convidada como titular; quem age é o responsável cadastrado (0028).
+    const proprio = await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacMenor });
+    expect(proprio.body).toMatchObject({ statusCode: 409, codigo: 'titular_menor_de_12' });
+    const resp = await contaDe(adminA, pacMenor, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(pacMenor, 'Gil Ficticio Pai') });
     await api.http().post('/portal/privacidade/consentimentos/lembretes_whatsapp').set(cab(resp)).send({ resposta: 'sim' }).expect(200);
     const hist = await api.http().get('/portal/privacidade/consentimentos/lembretes_whatsapp/historico').set(cab(resp)).expect(200);
     expect(hist.body).toEqual([expect.objectContaining({ resposta: 'sim', agindoComo: 'responsavel_legal' })]);
@@ -658,6 +682,128 @@ describe('V2 do #68: SQL arbitrário na sessão do portal não lê a trilha nem 
     })).toBe('ok');
     // E o portal continua cifrando (pedido com detalhe) com a chave já provisionada pela clínica.
     await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'acesso', detalhe: 'Pedido ficticio V2' }).expect(201);
+  });
+});
+
+describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao responsável da 0028', () => {
+  it('convite: adulto, sem responsável, criança/adolescente como titular e emancipado são recusados (API e banco)', async () => {
+    const respAdulto = await responsavelDe(pacA1, 'Hugo Ficticio Parente', { cienciaDoPaciente: true });
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacA1, agindoComo: 'responsavel_legal', responsavelId: respAdulto })).body)
+      .toMatchObject({ statusCode: 409, codigo: 'responsavel_so_para_menor' });
+    await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacMenor, agindoComo: 'responsavel_legal' }).expect(400);
+    // Responsável de OUTRO paciente não serve (404).
+    await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacMenor, agindoComo: 'responsavel_legal', responsavelId: respAdulto }).expect(404);
+    const teen = await criarPaciente(adminA, 'Iara Ficticia Adolescente', { nascimento: nascidoHa(15) });
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: teen })).body).toMatchObject({ codigo: 'titular_adolescente_requer_decisao' });
+    // Emancipado (16+): responsável deixa de valer.
+    const eman = await criarPaciente(adminA, 'Joao Ficticio Emancipado', { nascimento: nascidoHa(17) });
+    const respEman = await responsavelDe(eman, 'Kelly Ficticia Mae');
+    await api.http().post(`/pacientes/${eman}/responsaveis/emancipacao`).set(cab(adminA)).send({ data: hojeNaClinica(), documento: 'Escritura ficticia 001' }).expect(200);
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: eman, agindoComo: 'responsavel_legal', responsavelId: respEman })).status).toBe(409);
+    // Direto no banco: responsável sem vínculo da 0028, ou sem fim da representação = recusado.
+    const respTeen = await responsavelDe(teen, 'Leo Ficticio Pai');
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, respTeen)), adminA.userId);
+    const base = { tenantId: clinicaA, patientId: teen, actingAs: 'responsavel_legal' as const, expiresAt: sql`now() + interval '1 day'`, createdBy: adminA.userId };
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({ ...base, tokenHash: 'd'.repeat(64) }), adminA.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
+      ...base, tokenHash: 'e'.repeat(64), guardianLinkId: respTeen, guardianId: g?.guardianId as string,
+    }), adminA.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
+      ...base, patientId: eman, tokenHash: 'f'.repeat(64), guardianLinkId: respEman, guardianId: g?.guardianId as string, representUntil: nascidoHa(-1),
+    }), adminA.userId)).rejects.toThrow();
+  });
+
+  it('o código vai ao telefone DO RESPONSÁVEL; vínculo, consentimento, pedido e trilha registram qual responsável agiu', async () => {
+    const menor = await criarPaciente(adminA, 'Mia Ficticia Menor', { nascimento: nascidoHa(10) });
+    const pai = await responsavelDe(menor, 'Nilo Ficticio Pai', { telefone: '11900003333' });
+    const mae = await responsavelDe(menor, 'Olga Ficticia Mae');
+    // Código para o telefone do pai (não o do paciente).
+    const p = api.sessaoPortal();
+    const { token } = await convidar(adminA, menor, { agindoComo: 'responsavel_legal', responsavelId: pai });
+    await api.http().post('/portal/convites/resgate').set(cab(p)).send({ token }).expect(200);
+    const codigo = api.otp.ultimoCodigo('11900003333') as string;
+    const vPai = (await api.http().post('/portal/convites/resgate/confirmar').set(cab(p)).send({ token, codigo }).expect(200)).body as { vinculoId: string };
+    const contaMae = await contaDe(adminA, menor, { agindoComo: 'responsavel_legal', responsavelId: mae });
+    await api.http().post('/portal/privacidade/consentimentos/pesquisa').set(cab(p)).send({ resposta: 'sim' }).expect(200);
+    await api.http().post('/portal/privacidade/consentimentos/pesquisa').set(cab(contaMae)).send({ resposta: 'nao' }).expect(200);
+    await api.http().post('/portal/solicitacoes').set(cab(contaMae)).send({ tipo: 'acesso' }).expect(201);
+    const [gPai] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, pai)), adminA.userId);
+    const [gMae] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, mae)), adminA.userId);
+    const r = await withTenant(api.db.db, clinicaA, async (tx) => ({
+      link: (await tx.select().from(portalLinks).where(eq(portalLinks.id, vPai.vinculoId)))[0],
+      consents: await tx.select().from(portalConsents).where(eq(portalConsents.patientId, menor)).orderBy(portalConsents.createdAt),
+      pedidos: await tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.patientId, menor)),
+      trilha: await tx.select().from(auditLog).where(and(eq(auditLog.actorId, contaMae.contaId), eq(auditLog.scope, 'portal_consents'))),
+    }), adminA.userId);
+    expect(r.link).toMatchObject({ guardianLinkId: pai, guardianId: gPai?.guardianId, representUntil: nascidoHa(-8) });
+    expect(r.consents.map((c) => [c.response, c.guardianId])).toEqual([['sim', gPai?.guardianId], ['nao', gMae?.guardianId]]);
+    expect(r.pedidos.map((x) => x.guardianId)).toEqual([gMae?.guardianId]);
+    expect(r.trilha[0]?.metadata).toMatchObject({ guardian_id: gMae?.guardianId });
+  });
+
+  it('fim da vigência do responsável (0028) ou emancipação: acesso cai na hora; o job registra a revogação', async () => {
+    const menor = await criarPaciente(adminA, 'Pedro Ficticio Menor', { nascimento: nascidoHa(16) });
+    const resp = await responsavelDe(menor, 'Quiteria Ficticia Tutora', { tipo: 'tutor' });
+    const conta = await contaDe(adminA, menor, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    await api.http().get('/portal/consultas').set(cab(conta)).expect(200);
+    await api.http().post(`/pacientes/${menor}/responsaveis/emancipacao`).set(cab(adminA)).send({ data: hojeNaClinica(), documento: 'Escritura ficticia 002' }).expect(200);
+    expect((await api.http().get('/portal/consultas').set(cab(conta))).body).toMatchObject({ statusCode: 403, codigo: 'vinculo_inativo' });
+    expect(await api.app.get(PortalClinicaService).encerrarRepresentacoesVencidas()).toBeGreaterThanOrEqual(1);
+    const lista = (await api.http().get(`/clinica/portal/pacientes/${menor}/vinculos`).set(cab(adminA)).expect(200)).body as { id: string; motivo: string; responsavelId: string }[];
+    expect(lista).toEqual([expect.objectContaining({ id: conta.vinculoId, motivo: 'fim_da_representacao', responsavelId: resp })]);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.actorKind, 'sistema'), eq(auditLog.scope, 'portal_links'))), adminA.userId);
+    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ link_id: conta.vinculoId, reason: 'fim_da_representacao' })]));
+    // A clínica não usa os motivos do sistema.
+    await api.http().post(`/clinica/portal/vinculos/${conta.vinculoId}/revogar`).set(cab(adminA)).send({ motivo: 'maioridade_do_titular' }).expect(400);
+  });
+
+  it('C3/A1: responsável vê agenda, financeiro e cadastro; nada clínico, nem com a marca de informação clínica ligada; adolescente sem psicologia', async () => {
+    const teen = await criarPaciente(adminA, 'Rita Ficticia Adolescente', { nascimento: nascidoHa(14) });
+    const crianca = await criarPaciente(adminA, 'Sami Ficticio Crianca', { nascimento: nascidoHa(9) });
+    // Psicóloga com usuário e vínculo de cuidado: liga a marca da 0031 (decisão do profissional).
+    const psi = api.sessao(clinicaA, 'profissional');
+    await api.membro(clinicaA, psi, 'profissional');
+    const profPsi = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Psi Ficticia', especialidade: 'Psicologia', usuarioId: psi.userId }).expect(201)).body as { id: string };
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ professional_id: string; appointment_type_id: string }>(
+      sql`select professional_id, appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const consulta = async (pac: string, prof: string, horas: number) => {
+      const id = randomUUID();
+      const ini = new Date(Date.now() + horas * 3_600_000);
+      await withTenant(api.db.db, clinicaA, (tx) => tx.insert(appointments).values({
+        id, tenantId: clinicaA, createdBy: adminA.userId, patientId: pac, professionalId: prof, appointmentTypeId: base?.appointment_type_id as string,
+        startsAt: ini, endsAt: new Date(ini.getTime() + 30 * 60_000), status: 'confirmed',
+      }), adminA.userId);
+      return id;
+    };
+    const psiTeen = await consulta(teen, profPsi.id, 1);
+    const fisioTeen = await consulta(teen, base?.professional_id as string, 30);
+    const psiCrianca = await consulta(crianca, profPsi.id, 2);
+    const respTeen = await responsavelDe(teen, 'Tais Ficticia Mae');
+    const marca = await api.http().patch(`/pacientes/${teen}/responsaveis/${respTeen}`).set(cab(psi))
+      .send({ recebeInformacaoClinica: true, justificativa: 'Avaliacao ficticia: compartilhar o essencial' });
+    expect(marca.status, JSON.stringify(marca.body)).toBe(200);
+    expect((marca.body as { informacaoClinica: { permitida: boolean } }).informacaoClinica.permitida).toBe(true);
+    const conta = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: respTeen });
+    const lista = ((await api.http().get('/portal/consultas').set(cab(conta)).expect(200)).body as { id: string }[]).map((c) => c.id);
+    expect(lista).toContain(fisioTeen);
+    expect(lista).not.toContain(psiTeen);
+    await api.http().post(`/portal/consultas/${psiTeen}/confirmar`).set(cab(conta)).send({}).expect(404);
+    for (const rota of ['/portal/prontuario', '/portal/atendimentos', '/portal/evolucoes', '/portal/informacao-clinica']) await api.http().get(rota).set(cab(conta)).expect(404);
+    expect((await api.http().get('/portal/documentos').set(cab(conta)).expect(200)).body).toEqual({ itens: [], disponivel: false });
+    await api.http().get('/portal/recibos').set(cab(conta)).expect(200);
+    await api.http().get('/portal/meus-dados').set(cab(conta)).expect(200);
+    // No banco, a sessão do responsável não vê prontuário nem a tabela da marca (0028/0031).
+    const noBanco = await api.db.db.transaction(async (tx) => {
+      await tx.execute(sql`select app_set_portal_session(${conta.contaId}::uuid, ${conta.vinculoId}::uuid)`);
+      return {
+        ats: await tx.select({ id: encounters.id }).from(encounters),
+        marcas: await tx.select({ id: patientGuardians.id }).from(patientGuardians),
+      };
+    });
+    expect(noBanco).toEqual({ ats: [], marcas: [] });
+    // Criança: a agenda inteira aparece para o responsável (sigilo por padrão vale a partir dos 12).
+    const contaCrianca = await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(crianca, 'Ugo Ficticio Pai') });
+    expect(((await api.http().get('/portal/consultas').set(cab(contaCrianca)).expect(200)).body as { id: string }[]).map((c) => c.id)).toContain(psiCrianca);
   });
 });
 

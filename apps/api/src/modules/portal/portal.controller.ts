@@ -204,12 +204,19 @@ export class PortalClinicaController {
   @Post('convites')
   @Permissao('portal:convidar')
   convidar(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
-    const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'agindoComo', 'validadeHoras']));
+    const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'agindoComo', 'validadeHoras', 'responsavelId']));
     const pacienteId = v.uuid('pacienteId', true);
     const agindoComo = v.umDe('agindoComo', PORTAL_ACTING_AS, false) ?? 'titular';
     const validadeHoras = v.inteiro('validadeHoras', { min: VALIDADE_CONVITE_HORAS.min, max: VALIDADE_CONVITE_HORAS.max }) ?? VALIDADE_CONVITE_HORAS.padrao;
+    // V1 do #68: responsável legal = o vínculo de responsável (0028) do paciente que vai usar o portal.
+    const responsavelId = v.uuid('responsavelId', false);
     v.concluir();
-    return this.service.emitirConvite(paraRequestContext(auth), { pacienteId: pacienteId as string, agindoComo, validadeHoras });
+    return this.service.emitirConvite(paraRequestContext(auth), {
+      pacienteId: pacienteId as string,
+      agindoComo,
+      validadeHoras,
+      ...(responsavelId ? { responsavelId } : {}),
+    });
   }
 
   @Post('convites/:id/revogar')

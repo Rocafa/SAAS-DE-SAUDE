@@ -161,6 +161,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.patients p WHERE p.tenant_id = v.tenant_id AND p.id = v.patient_id AND p.active) THEN
     RAISE EXCEPTION 'paciente inativo: portal indisponível' USING ERRCODE = 'insufficient_privilege';
   END IF;
+  -- V1 (seção V1 abaixo): responsável legal só enquanto a representação vale HOJE.
+  IF NOT public.app_portal_representation_ok(v.tenant_id, p_link) THEN
+    RAISE EXCEPTION 'representação do responsável encerrada: portal indisponível' USING ERRCODE = 'insufficient_privilege';
+  END IF;
 END;
 $$;
 
@@ -201,6 +205,8 @@ BEGIN
          WHERE r.tenant_id = NEW.tenant_id AND r.link_id = NEW.link_id AND r.created_at > now() - interval '1 day') >= 5 THEN
       RAISE EXCEPTION 'teto diário de pedidos do titular atingido' USING ERRCODE = 'program_limit_exceeded';
     END IF;
+    -- V1: qual responsável agiu sai do vínculo (nunca de quem grava).
+    NEW.guardian_id := (SELECT l.guardian_id FROM portal_links l WHERE l.tenant_id = NEW.tenant_id AND l.id = NEW.link_id);
     NEW.due_at := NEW.created_at + interval '15 days';
     RETURN NEW;
   END IF;
@@ -208,7 +214,7 @@ BEGIN
      OR NEW.link_id IS DISTINCT FROM OLD.link_id OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.kind IS DISTINCT FROM OLD.kind
      OR NEW.acting_as IS DISTINCT FROM OLD.acting_as OR NEW.protocol IS DISTINCT FROM OLD.protocol
      OR NEW.detail_enc IS DISTINCT FROM OLD.detail_enc OR NEW.created_at IS DISTINCT FROM OLD.created_at
-     OR NEW.due_at IS DISTINCT FROM OLD.due_at THEN
+     OR NEW.due_at IS DISTINCT FROM OLD.due_at OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id THEN
     RAISE EXCEPTION 'pedido do titular: identidade e detalhe são imutáveis' USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF v_user IS NULL OR app_portal_patient() IS NOT NULL OR NEW.handled_by IS DISTINCT FROM v_user OR NEW.handled_at IS DISTINCT FROM now() THEN
@@ -325,7 +331,7 @@ ALTER TABLE portal_invite_otp FORCE ROW LEVEL SECURITY;
 CREATE POLICY portal_invite_otp_definer_only ON portal_invite_otp TO CURRENT_USER USING (true) WITH CHECK (true);
 
 CREATE FUNCTION app_portal_invite_challenge(p_account uuid, p_token_hash text, p_code_hash text)
-  RETURNS TABLE (tenant_id uuid, patient_id uuid, invite_id uuid, phone_enc text)
+  RETURNS TABLE (tenant_id uuid, patient_id uuid, invite_id uuid, phone_enc text, phone_guardian_id uuid)
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
 AS $$
@@ -352,7 +358,15 @@ BEGIN
   IF NOT FOUND OR inv.redeemed_at IS NOT NULL OR inv.revoked_at IS NOT NULL OR inv.expires_at <= now() THEN
     RETURN;
   END IF;
-  SELECT p.phone_enc INTO v_tel FROM public.patients p WHERE p.tenant_id = inv.tenant_id AND p.id = inv.patient_id AND p.active;
+  IF NOT EXISTS (SELECT 1 FROM public.patients p WHERE p.tenant_id = inv.tenant_id AND p.id = inv.patient_id AND p.active) THEN
+    RETURN;
+  END IF;
+  -- Titular: telefone do cadastro do paciente. Responsável (V1): telefone do cadastro DO RESPONSÁVEL (0028).
+  IF inv.guardian_id IS NULL THEN
+    SELECT p.phone_enc INTO v_tel FROM public.patients p WHERE p.tenant_id = inv.tenant_id AND p.id = inv.patient_id;
+  ELSE
+    SELECT g.phone_enc INTO v_tel FROM public.guardians g WHERE g.tenant_id = inv.tenant_id AND g.id = inv.guardian_id;
+  END IF;
   IF v_tel IS NULL THEN
     RETURN;
   END IF;
@@ -368,7 +382,7 @@ BEGIN
     INSERT INTO public.portal_invite_otp (invite_id, tenant_id, account_id, code_hash, expires_at)
       VALUES (inv.id, inv.tenant_id, p_account, p_code_hash, now() + interval '10 minutes');
   END IF;
-  RETURN QUERY SELECT inv.tenant_id, inv.patient_id, inv.id, v_tel;
+  RETURN QUERY SELECT inv.tenant_id, inv.patient_id, inv.id, v_tel, inv.guardian_id;
 END;
 $$;
 
@@ -417,8 +431,8 @@ BEGIN
   SELECT id INTO v_link FROM public.portal_links
    WHERE tenant_id = inv.tenant_id AND account_id = p_account AND patient_id = inv.patient_id AND revoked_at IS NULL;
   IF NOT FOUND THEN
-    INSERT INTO public.portal_links (tenant_id, account_id, patient_id, invite_id, acting_as)
-      VALUES (inv.tenant_id, p_account, inv.patient_id, inv.id, inv.acting_as)
+    INSERT INTO public.portal_links (tenant_id, account_id, patient_id, invite_id, acting_as, guardian_link_id, guardian_id, represent_until)
+      VALUES (inv.tenant_id, p_account, inv.patient_id, inv.id, inv.acting_as, inv.guardian_link_id, inv.guardian_id, inv.represent_until)
       RETURNING id INTO v_link;
   END IF;
   UPDATE public.portal_invites SET redeemed_at = now(), redeemed_account_id = p_account, link_id = v_link
@@ -426,10 +440,282 @@ BEGIN
   INSERT INTO public.audit_log (tenant_id, actor_id, actor_kind, action, scope, metadata)
     VALUES (inv.tenant_id, p_account, 'paciente_portal', 'create', 'portal_links',
             jsonb_build_object('op', 'invite_redeemed', 'invite_id', inv.id, 'link_id', v_link,
-                               'patient_id', inv.patient_id, 'acting_as', inv.acting_as, 'otp', true));
+                               'patient_id', inv.patient_id, 'acting_as', inv.acting_as, 'guardian_id', inv.guardian_id, 'otp', true));
   RETURN v_link;
 END;
 $$;
 
 REVOKE ALL ON FUNCTION app_portal_invite_challenge(uuid, text, text), app_portal_redeem_invite(uuid, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_portal_invite_challenge(uuid, text, text), app_portal_redeem_invite(uuid, text, text) TO app_user;
+
+-- ================================================================ V1. responsável legal no portal
+--
+-- Depende da 0028/0031 (responsáveis). Antes (0027) `responsavel_legal` era só um rótulo: qualquer paciente,
+-- qualquer idade, sem saber QUAL responsável. Agora:
+--   - convite e vínculo de responsável apontam para o vínculo de responsável da 0028 (`guardian_link_id`,
+--     FK composta) e para a pessoa (`guardian_id`); titular não aponta para nada;
+--   - só para MENOR não emancipado (pai/mãe, tutor, representante) ou CURATELA (a 0031 exige a decisão
+--     judicial e o escopo no vínculo do curador). A data de nascimento é cifrada, então a API calcula o
+--     fim da representação (`represent_until` = dia dos 18 anos, ou o fim da vigência do vínculo, o que vier
+--     antes) e o banco exige a data, confere que é futura, que o vínculo da 0028 está vigente e que o
+--     paciente não foi emancipado; curatela não tem data (vale a vigência do vínculo);
+--   - `app_set_portal_session` recusa (42501) vínculo de responsável cuja representação não vale HOJE (fez 18,
+--     emancipado, vínculo da 0028 encerrado): o acesso cai no dia, sem depender de job. O job
+--     `app_portal_close_ended_representations` registra a revogação (motivos novos `maioridade_do_titular` e
+--     `fim_da_representacao`), com trilha;
+--   - consentimentos e pedidos gravam QUAL responsável agiu (`guardian_id`, preenchido pelo gatilho a partir
+--     do vínculo) e o consentimento guarda até quando a representação valia (`represent_until`): depois
+--     dela, o evento do responsável deixa de valer e o estado volta a "não respondido" até o titular responder;
+--   - as tabelas dos responsáveis (0028) ficam fora da sessão do portal (`portal_fora`); só as funções do
+--     dono leem o vínculo da 0028.
+
+-- Tabelas da 0028 (criadas depois da 0027): fora do portal. O dono (funções SECURITY DEFINER) lê o vínculo.
+CREATE POLICY portal_fora ON patient_guardians AS RESTRICTIVE
+  USING (tenant_id = (SELECT app_current_tenant())
+         AND ((SELECT app_portal_patient()) IS NULL OR (SELECT app_running_as_owner('public.patient_guardians'::regclass))))
+  WITH CHECK (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL);
+DO $$
+DECLARE t text;
+BEGIN
+  FOR t IN
+    SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+       AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped)
+       AND c.relname NOT IN ('tenant_context', 'portal_invite_lookup', 'portal_link_index', 'portal_invite_otp')
+       AND NOT EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = c.relname
+                        AND p.permissive = 'RESTRICTIVE' AND p.policyname ~ '^portal_(titular|fora|liberada)')
+     ORDER BY c.relname
+  LOOP
+    EXECUTE format('CREATE POLICY portal_fora ON %I AS RESTRICTIVE '
+      'USING (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL) '
+      'WITH CHECK (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL)', t);
+  END LOOP;
+END;
+$$;
+
+ALTER TABLE portal_invites
+  ADD COLUMN guardian_link_id uuid,
+  ADD COLUMN guardian_id      uuid,
+  ADD COLUMN represent_until  date,
+  ADD CONSTRAINT portal_invites_guardian_link_fk FOREIGN KEY (guardian_link_id, tenant_id) REFERENCES patient_guardians (id, tenant_id),
+  ADD CONSTRAINT portal_invites_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
+  ADD CONSTRAINT portal_invites_acting_shape_check CHECK (
+    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL)
+    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL));
+ALTER TABLE portal_links
+  ADD COLUMN guardian_link_id uuid,
+  ADD COLUMN guardian_id      uuid,
+  ADD COLUMN represent_until  date,
+  ADD CONSTRAINT portal_links_guardian_link_fk FOREIGN KEY (guardian_link_id, tenant_id) REFERENCES patient_guardians (id, tenant_id),
+  ADD CONSTRAINT portal_links_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
+  ADD CONSTRAINT portal_links_acting_shape_check CHECK (
+    (acting_as = 'titular' AND guardian_link_id IS NULL AND guardian_id IS NULL AND represent_until IS NULL)
+    OR (acting_as = 'responsavel_legal' AND guardian_link_id IS NOT NULL AND guardian_id IS NOT NULL));
+ALTER TABLE portal_links DROP CONSTRAINT portal_links_revoke_reason_check;
+ALTER TABLE portal_links ADD CONSTRAINT portal_links_revoke_reason_check CHECK (revoke_reason IS NULL OR revoke_reason IN (
+  'pedido_do_paciente', 'acesso_indevido', 'fim_do_vinculo', 'erro_de_cadastro', 'maioridade_do_titular', 'fim_da_representacao'));
+ALTER TABLE portal_consents
+  ADD COLUMN guardian_id     uuid,
+  ADD COLUMN represent_until date,
+  ADD CONSTRAINT portal_consents_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
+  ADD CONSTRAINT portal_consents_guardian_check CHECK ((acting_as = 'responsavel_legal') = (guardian_id IS NOT NULL));
+ALTER TABLE portal_rights_requests
+  ADD COLUMN guardian_id uuid,
+  ADD CONSTRAINT portal_rights_requests_guardian_fk FOREIGN KEY (guardian_id, tenant_id) REFERENCES guardians (id, tenant_id),
+  ADD CONSTRAINT portal_rights_requests_guardian_check CHECK ((acting_as = 'responsavel_legal') = (guardian_id IS NOT NULL));
+CREATE INDEX portal_links_guardian_idx ON portal_links (tenant_id, guardian_link_id) WHERE guardian_link_id IS NOT NULL;
+
+-- A representação do vínculo do portal vale HOJE? Titular: sempre. Responsável: vínculo da 0028 vigente e,
+-- fora a curatela, paciente não emancipado e antes de `represent_until`. Lida pelo dono (RLS da clínica do
+-- contexto); não exposta ao runtime.
+CREATE FUNCTION app_portal_representation_ok(p_tenant uuid, p_link uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT CASE WHEN l.acting_as = 'titular' THEN true ELSE COALESCE((
+    SELECT g.ended_at IS NULL AND g.end_reason IS NULL
+           AND g.valid_from <= public.app_fiscal_today()
+           AND (g.valid_until IS NULL OR g.valid_until > public.app_fiscal_today())
+           AND (g.kind = 'curador'
+                OR (l.represent_until IS NOT NULL AND l.represent_until > public.app_fiscal_today()
+                    AND (SELECT p.emancipated_on IS NULL FROM public.patients p WHERE p.tenant_id = l.tenant_id AND p.id = l.patient_id)))
+      FROM public.patient_guardians g
+     WHERE g.tenant_id = l.tenant_id AND g.id = l.guardian_link_id AND g.patient_id = l.patient_id AND g.guardian_id = l.guardian_id), false) END
+    FROM public.portal_links l
+   WHERE l.tenant_id = p_tenant AND l.id = p_link
+$$;
+REVOKE ALL ON FUNCTION app_portal_representation_ok(uuid, uuid) FROM PUBLIC;
+
+-- Convite: além da 0027, o de responsável exige o vínculo vigente da 0028 do MESMO paciente e pessoa e, fora
+-- a curatela, paciente não emancipado e fim da representação futuro. Colunas novas imutáveis.
+CREATE OR REPLACE FUNCTION portal_invites_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+  g      record;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF v_user IS NULL OR app_portal_patient() IS NOT NULL OR NEW.created_by IS DISTINCT FROM v_user THEN
+      RAISE EXCEPTION 'convite do portal é emitido pelo usuário da sessão da clínica' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.created_at IS DISTINCT FROM now() OR NEW.redeemed_at IS NOT NULL OR NEW.revoked_at IS NOT NULL OR NEW.link_id IS NOT NULL
+       OR NEW.expires_at <= now() THEN
+      RAISE EXCEPTION 'convite do portal nasce aberto e válido' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.acting_as = 'responsavel_legal' THEN
+      SELECT pg.kind, pg.ended_at, pg.valid_from, pg.valid_until INTO g FROM patient_guardians pg
+       WHERE pg.tenant_id = NEW.tenant_id AND pg.id = NEW.guardian_link_id
+         AND pg.patient_id = NEW.patient_id AND pg.guardian_id = NEW.guardian_id;
+      IF NOT FOUND OR g.ended_at IS NOT NULL OR g.valid_from > app_fiscal_today()
+         OR (g.valid_until IS NOT NULL AND g.valid_until <= app_fiscal_today()) THEN
+        RAISE EXCEPTION 'convite de responsável exige vínculo de responsável vigente do mesmo paciente' USING ERRCODE = 'check_violation';
+      END IF;
+      IF g.kind <> 'curador' THEN
+        IF NEW.represent_until IS NULL OR NEW.represent_until <= app_fiscal_today()
+           OR (g.valid_until IS NOT NULL AND NEW.represent_until > g.valid_until)
+           OR EXISTS (SELECT 1 FROM patients p WHERE p.tenant_id = NEW.tenant_id AND p.id = NEW.patient_id AND p.emancipated_on IS NOT NULL) THEN
+          RAISE EXCEPTION 'responsável no portal só para menor não emancipado (ou curatela)' USING ERRCODE = 'check_violation';
+        END IF;
+      ELSIF NEW.represent_until IS NOT NULL THEN
+        RAISE EXCEPTION 'curatela não tem data de maioridade' USING ERRCODE = 'check_violation';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.patient_id IS DISTINCT FROM OLD.patient_id
+     OR NEW.token_hash IS DISTINCT FROM OLD.token_hash OR NEW.acting_as IS DISTINCT FROM OLD.acting_as
+     OR NEW.expires_at IS DISTINCT FROM OLD.expires_at OR NEW.created_by IS DISTINCT FROM OLD.created_by
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at OR NEW.guardian_link_id IS DISTINCT FROM OLD.guardian_link_id
+     OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id OR NEW.represent_until IS DISTINCT FROM OLD.represent_until THEN
+    RAISE EXCEPTION 'identidade do convite é imutável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.redeemed_at IS NOT NULL OR OLD.revoked_at IS NOT NULL THEN
+    RAISE EXCEPTION 'convite resgatado ou revogado não muda' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF NEW.redeemed_at IS NOT NULL THEN
+    IF NOT app_running_as_owner(TG_RELID) OR NEW.revoked_at IS NOT NULL OR NEW.redeemed_at IS DISTINCT FROM now()
+       OR OLD.expires_at <= now() THEN
+      RAISE EXCEPTION 'convite só é resgatado pela função de resgate, dentro da validade' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.revoked_at IS NOT NULL THEN
+    IF v_user IS NULL OR app_portal_patient() IS NOT NULL OR NEW.revoked_by IS DISTINCT FROM v_user OR NEW.revoked_at IS DISTINCT FROM now() THEN
+      RAISE EXCEPTION 'convite é revogado pelo usuário da sessão da clínica' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'alteração de convite não permitida' USING ERRCODE = 'insufficient_privilege';
+END;
+$$;
+
+-- Vínculo: colunas novas imutáveis; além da clínica, o dono (job) revoga com os motivos da representação.
+CREATE OR REPLACE FUNCTION portal_links_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_user uuid := app_current_user();
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT app_running_as_owner(TG_RELID) THEN
+      RAISE EXCEPTION 'vínculo do portal nasce só do resgate do convite' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NEW.created_at IS DISTINCT FROM now() OR NEW.revoked_at IS NOT NULL THEN
+      RAISE EXCEPTION 'vínculo do portal nasce ativo' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.account_id IS DISTINCT FROM OLD.account_id
+     OR NEW.patient_id IS DISTINCT FROM OLD.patient_id OR NEW.invite_id IS DISTINCT FROM OLD.invite_id
+     OR NEW.acting_as IS DISTINCT FROM OLD.acting_as OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.guardian_link_id IS DISTINCT FROM OLD.guardian_link_id OR NEW.guardian_id IS DISTINCT FROM OLD.guardian_id
+     OR NEW.represent_until IS DISTINCT FROM OLD.represent_until THEN
+    RAISE EXCEPTION 'identidade do vínculo é imutável' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.revoked_at IS NOT NULL THEN
+    RAISE EXCEPTION 'vínculo revogado não muda' USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  IF NEW.revoke_reason IN ('maioridade_do_titular', 'fim_da_representacao') THEN
+    IF NOT app_running_as_owner(TG_RELID) OR NEW.revoked_by IS DISTINCT FROM '00000000-0000-0000-0000-000000000000'::uuid
+       OR NEW.revoked_at IS DISTINCT FROM now() OR OLD.acting_as <> 'responsavel_legal' THEN
+      RAISE EXCEPTION 'fim da representação é registrado só pelo job do sistema' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF v_user IS NULL OR app_portal_patient() IS NOT NULL OR NEW.revoked_by IS DISTINCT FROM v_user OR NEW.revoked_at IS DISTINCT FROM now() THEN
+    RAISE EXCEPTION 'vínculo é revogado pelo usuário da sessão da clínica' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- Consentimento: além da 0027, grava qual responsável agiu e até quando a representação valia (do vínculo).
+CREATE OR REPLACE FUNCTION portal_consents_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  l record;
+BEGIN
+  IF app_portal_patient() IS NULL OR NEW.patient_id IS DISTINCT FROM app_portal_patient()
+     OR NEW.link_id IS DISTINCT FROM app_portal_link() OR NEW.account_id IS DISTINCT FROM app_portal_account() THEN
+    RAISE EXCEPTION 'consentimento do portal é do titular da sessão do portal' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT pl.acting_as, pl.guardian_id, pl.represent_until INTO l FROM portal_links pl
+   WHERE pl.tenant_id = NEW.tenant_id AND pl.id = NEW.link_id AND pl.revoked_at IS NULL;
+  IF NOT FOUND OR NEW.created_at IS DISTINCT FROM now() OR NEW.acting_as IS DISTINCT FROM l.acting_as THEN
+    RAISE EXCEPTION 'consentimento fora do vínculo ativo' USING ERRCODE = 'check_violation';
+  END IF;
+  NEW.guardian_id := l.guardian_id;
+  NEW.represent_until := l.represent_until;
+  RETURN NEW;
+END;
+$$;
+
+-- Job (sistema): registra a revogação dos vínculos de responsável cuja representação acabou (o acesso já
+-- caiu no dia, pela sessão). Uma clínica por transação, que tem de começar aqui. Devolve quantos revogou.
+CREATE FUNCTION app_portal_close_ended_representations(p_tenant uuid) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  r     record;
+  v_n   integer := 0;
+  v_mot text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.tenant_context WHERE xid = txid_current_if_assigned()) THEN
+    RAISE EXCEPTION 'job de representação exige transação própria' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  PERFORM public.app_set_tenant(p_tenant);
+  PERFORM public.app_set_system_user();
+  FOR r IN
+    SELECT l.id, l.patient_id, l.guardian_id, l.represent_until FROM public.portal_links l
+     WHERE l.tenant_id = p_tenant AND l.acting_as = 'responsavel_legal' AND l.revoked_at IS NULL
+     ORDER BY l.id
+     FOR UPDATE
+  LOOP
+    CONTINUE WHEN public.app_portal_representation_ok(p_tenant, r.id);
+    v_mot := CASE WHEN r.represent_until IS NOT NULL AND r.represent_until <= public.app_fiscal_today()
+                  THEN 'maioridade_do_titular' ELSE 'fim_da_representacao' END;
+    UPDATE public.portal_links SET revoked_at = now(), revoked_by = '00000000-0000-0000-0000-000000000000'::uuid, revoke_reason = v_mot
+     WHERE tenant_id = p_tenant AND id = r.id;
+    INSERT INTO public.audit_log (tenant_id, actor_id, actor_kind, action, scope, metadata)
+      VALUES (p_tenant, '00000000-0000-0000-0000-000000000000'::uuid, 'sistema', 'update', 'portal_links',
+              jsonb_build_object('op', 'revoke', 'link_id', r.id, 'reason', v_mot, 'patient_id', r.patient_id, 'guardian_id', r.guardian_id));
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END;
+$$;
+-- Clínicas com vínculo de portal ativo (só ids), para o job percorrer.
+CREATE FUNCTION app_portal_tenants_with_links() RETURNS SETOF uuid
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT DISTINCT i.tenant_id FROM public.portal_link_index i WHERE i.revoked_at IS NULL ORDER BY 1
+$$;
+REVOKE ALL ON FUNCTION app_portal_close_ended_representations(uuid), app_portal_tenants_with_links() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_portal_close_ended_representations(uuid), app_portal_tenants_with_links() TO app_user;

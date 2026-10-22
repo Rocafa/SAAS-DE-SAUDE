@@ -45,6 +45,9 @@ import {
   portalInvites,
   portalLinks,
   portalRightsRequests,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
 } from '../src/db/schema';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -107,6 +110,9 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   portal_links: 'portal.links',
   portal_consents: 'portal.consents',
   portal_rights_requests: 'portal.rightsRequests',
+  guardians: 'guardians.guardians',
+  patient_guardians: 'guardians.patientGuardians',
+  patient_guardian_history: 'guardians.patientGuardianHistory',
   audit_log: 'auditEvents',
 };
 
@@ -140,7 +146,8 @@ const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
 const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
 const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
-const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7737';
+const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
+const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -376,6 +383,16 @@ beforeAll(async () => {
       detailEnc: await cifrarCampoPortal(cifra, tx, clinicaA, null, id, 'detail', PEDIDO_DETALHE),
     });
   });
+  // Responsáveis (0028): pessoa + vínculo pagador, troca do telefone (valor anterior no histórico) e encerramento.
+  const resp = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/responsaveis`)
+    .set(cab(admin))
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
+  expect(resp.status, JSON.stringify(resp.body)).toBe(201);
+  const vinculoId = (resp.body as { id: string }).id;
+  await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
+  await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
 
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
@@ -464,7 +481,10 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof portalInvites
           | typeof portalLinks
           | typeof portalConsents
-          | typeof portalRightsRequests,
+          | typeof portalRightsRequests
+          | typeof guardians
+          | typeof patientGuardians
+          | typeof patientGuardianHistory,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -501,6 +521,11 @@ describe('G2 — conteúdo do pacote', () => {
           receiptCounters: await n(receiptCounters),
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
+        },
+        guardians: {
+          guardians: await n(guardians),
+          patientGuardians: await n(patientGuardians),
+          patientGuardianHistory: await n(patientGuardianHistory),
         },
         clinicMembers: await n(clinicMembers),
         portal: {
@@ -547,6 +572,12 @@ describe('G2 — conteúdo do pacote', () => {
         receiptCounters: 1,
         receipts: 2,
         receiptCancellations: 1,
+      },
+      // 0028: 1 pessoa, 1 vínculo; histórico = criação da pessoa, do vínculo, troca do telefone e encerramento.
+      guardians: {
+        guardians: 1,
+        patientGuardians: 1,
+        patientGuardianHistory: 4,
       },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
@@ -621,6 +652,17 @@ describe('G2 — conteúdo do pacote', () => {
     expect(p.consents[0]).toMatchObject({ purpose: 'escriba_ia', response: 'nao', channel: 'portal' });
     expect(p.rightsRequests[0]).toMatchObject({ kind: 'acesso', status: 'aberta', detail: PEDIDO_DETALHE, answer: null });
     expect(pkg.auditJsonl).not.toContain(PEDIDO_DETALHE);
+  });
+
+  it('responsáveis (0028): pessoa decifrada, vínculo com vigência e histórico com o valor anterior; nada disso na trilha', () => {
+    const g = pkg.json.data.guardians;
+    expect(g.guardians[0]).toMatchObject({ name: RESP_NOME, cpf: cpfFicticio(10), phone: '11900000011' });
+    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: false, endReason: 'maioridade', clinicalInfoBasis: null, annulReason: null });
+    expect(g.patientGuardians[0]?.payerPatientAwareAt).toBeTruthy();
+    expect(g.patientGuardians[0]?.validUntil).toBe(g.patientGuardians[0]?.validFrom);
+    expect(g.patientGuardianHistory.map((h) => h.event)).toEqual(['responsavel_criado', 'vinculo_criado', 'responsavel_alterado', 'vinculo_encerrado']);
+    expect(g.patientGuardianHistory[2]).toMatchObject({ changedFields: 'phone', prevPhone: '11900000010', prevCpf: null });
+    for (const proibido of [cpfFicticio(10), 'QZX7737', '11900000010', '11900000011']) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
   it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {

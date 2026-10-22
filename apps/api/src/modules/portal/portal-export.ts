@@ -6,7 +6,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { decifrarCampoPortal } from './portal-fields';
 
 /**
- * Portal do paciente no pacote G2 (migração 0027, schemaVersion 1.14.0): convites (sem o hash do token,
+ * Portal do paciente no pacote G2 (migrações 0027 e 0033, schemaVersion 1.15.0): convites (sem o hash do token,
  * que é credencial), vínculos, o HISTÓRICO de consentimentos e os pedidos do titular com detalhe e
  * resposta DECIFRADOS (o pacote é da própria clínica, controladora, e é com ele que ela prova o
  * atendimento do art. 18 e o consentimento do art. 8º).
@@ -27,6 +27,10 @@ export interface ExportedPortal {
     linkId: string | null;
     revokedAt: string | null;
     revokedBy: string | null;
+    /** 0033 (V1): vínculo de responsável da 0028, a pessoa e o fim da representação. */
+    guardianLinkId: string | null;
+    guardianId: string | null;
+    representUntil: string | null;
   }[];
   readonly links: readonly {
     id: string;
@@ -38,6 +42,9 @@ export interface ExportedPortal {
     revokedAt: string | null;
     revokedBy: string | null;
     revokeReason: string | null;
+    guardianLinkId: string | null;
+    guardianId: string | null;
+    representUntil: string | null;
   }[];
   readonly consents: readonly {
     id: string;
@@ -51,6 +58,8 @@ export interface ExportedPortal {
     textHash: string;
     channel: string;
     createdAt: string;
+    guardianId: string | null;
+    representUntil: string | null;
   }[];
   readonly rightsRequests: readonly {
     id: string;
@@ -67,6 +76,7 @@ export interface ExportedPortal {
     handledBy: string | null;
     handledAt: string | null;
     answer: string | null;
+    guardianId: string | null;
   }[];
 }
 
@@ -132,6 +142,7 @@ export async function exportarPortal(
       handledBy: p.handledBy,
       handledAt: iso(p.handledAt),
       answer: await dec(p.id, 'answer', p.answerEnc),
+      guardianId: p.guardianId,
     });
   }
   const data: ExportedPortal = {
@@ -147,6 +158,9 @@ export async function exportarPortal(
       linkId: c.linkId,
       revokedAt: iso(c.revokedAt),
       revokedBy: c.revokedBy,
+      guardianLinkId: c.guardianLinkId,
+      guardianId: c.guardianId,
+      representUntil: c.representUntil,
     })),
     links: vinculos.map((l) => ({
       id: l.id,
@@ -158,6 +172,9 @@ export async function exportarPortal(
       revokedAt: iso(l.revokedAt),
       revokedBy: l.revokedBy,
       revokeReason: l.revokeReason,
+      guardianLinkId: l.guardianLinkId,
+      guardianId: l.guardianId,
+      representUntil: l.representUntil,
     })),
     consents: consentimentos.map((c) => ({
       id: c.id,
@@ -171,6 +188,8 @@ export async function exportarPortal(
       textHash: c.textHash,
       channel: c.channel,
       createdAt: c.createdAt.toISOString(),
+      guardianId: c.guardianId,
+      representUntil: c.representUntil,
     })),
     rightsRequests,
   };

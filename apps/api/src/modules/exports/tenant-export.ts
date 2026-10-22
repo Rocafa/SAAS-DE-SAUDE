@@ -34,6 +34,7 @@ import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
 import { exportarPortal, type ExportedPortal, type PortalCounts } from '../portal/portal-export';
+import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -80,12 +81,17 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        controle de acesso (LGPD arts. 37 e 46).
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
- * 1.14.0: portal do paciente (migração 0027): convites (sem o hash do token), vínculos conta↔paciente,
- *        histórico de consentimentos e pedidos do titular (detalhe e resposta decifrados), em `data.portal`
- *        e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`. (1.13.0 fica para a 0026,
- *        do importador, que corre em paralelo.)
+ * 1.13.0: responsáveis do paciente (migração 0028): pessoas (nome, CPF e telefone decifrados), vínculos
+ *        com vigência, pagador e informação clínica, e o histórico (valores anteriores decifrados), em
+ *        `data.guardians` e `manifest.counts.guardians`.
+ * 1.14.0: correções do parecer #67 (migração 0031): `patients[].emancipation*`, `payments[].guardianPayer*`
+ *        (pagador congelado no recebimento, decifrado), decisão clínica, curatela, ciência do paciente e
+ *        anulação nos vínculos (decifrados) e `guardians[].discardedAt`. Contém CPF de terceiros (responsáveis).
+ * 1.15.0: portal do paciente (migrações 0027 e 0033): convites (sem o hash do token), vínculos conta↔paciente
+ *        (com o responsável que agiu), histórico de consentimentos e pedidos do titular (detalhe e resposta
+ *        decifrados), em `data.portal` e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.14.0';
+export const EXPORT_SCHEMA_VERSION = '1.15.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -135,6 +141,10 @@ export const EXPORTED_TABLES = [
   'portal_links',
   'portal_consents',
   'portal_rights_requests',
+  // Responsáveis do paciente (0028): em data.guardians.
+  'guardians',
+  'patient_guardians',
+  'patient_guardian_history',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
@@ -185,6 +195,8 @@ export interface ExportManifest {
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
+    /** Responsáveis do paciente (0028), por tabela. */
+    readonly guardians: GuardiansCounts;
     readonly clinicMembers: number;
     /** Portal do paciente (0027), por tabela. */
     readonly portal: PortalCounts;
@@ -215,6 +227,11 @@ export interface ExportedPatient {
   readonly updatedAt: string;
   /** Retenção legal desde (0015); null se não houver. */
   readonly legalHoldSince: string | null;
+  /** Emancipação (0031): data, documento decifrado, quem e quando registrou. */
+  readonly emancipatedOn: string | null;
+  readonly emancipationRef: string | null;
+  readonly emancipationRecordedBy: string | null;
+  readonly emancipationRecordedAt: string | null;
 }
 
 export interface ExportedProfessional {
@@ -484,6 +501,8 @@ export interface TenantExportDocument {
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
+    /** Responsáveis do paciente (0028). */
+    readonly guardians: ExportedGuardians;
     readonly clinicMembers: readonly ExportedClinicMember[];
     /** Portal do paciente (0027). */
     readonly portal: ExportedPortal;
@@ -723,6 +742,10 @@ export async function exportInTransaction(
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
+  const responsaveis = await exportarResponsaveis(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
 
   const portal = await exportarPortal(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
@@ -749,6 +772,10 @@ export async function exportInTransaction(
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       legalHoldSince: iso(r.legalHoldSince),
+      emancipatedOn: r.emancipatedOn,
+      emancipationRef: await decrypt(r.id, 'emancipation_ref', r.emancipationRefEnc),
+      emancipationRecordedBy: r.emancipationRecordedBy,
+      emancipationRecordedAt: iso(r.emancipationRecordedAt),
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({
@@ -1025,6 +1052,7 @@ export async function exportInTransaction(
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
+      guardians: responsaveis.counts,
       clinicMembers: exportedMembers.length,
       portal: portal.counts,
       auditEvents: auditEvents.length,
@@ -1108,6 +1136,7 @@ export async function exportInTransaction(
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
+        guardians: responsaveis.data,
         clinicMembers: exportedMembers,
         portal: portal.data,
       },

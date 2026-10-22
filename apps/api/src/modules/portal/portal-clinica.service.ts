@@ -5,6 +5,7 @@ import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
+  patientGuardians,
   patients,
   portalConsents,
   portalInvites,
@@ -21,13 +22,20 @@ import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
+import { hojeNaClinica } from '../insurance/guias-regras';
+import { patientFieldRef } from '../patients/patient-fields';
+import { aniversarioDe, idadeEm, menorEm, vigenteEm } from '../patients/responsaveis-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
 import {
   CONSENTIMENTOS,
   consentimentoIa,
   estadoDoConsentimento,
+  eventoVale,
   exigeResposta,
+  fimDaRepresentacao,
+  IDADE_MINIMA_TITULAR,
   MODELO_RESPOSTA_ELIMINACAO,
   novoTokenDeConvite,
   type RespostaConsentimento,
@@ -65,17 +73,49 @@ export class PortalClinicaService {
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
   ) {}
 
+  /**
+   * Convite (V1 do #68): `titular` só de 18 anos (ou idade desconhecida); `responsavel_legal` só com
+   * `responsavelId` = vínculo VIGENTE da 0028 do mesmo paciente e, fora a curatela, paciente menor não
+   * emancipado, com o fim da representação calculado aqui (o banco confere o mesmo, sem ver a data de
+   * nascimento, que é cifrada).
+   */
   emitirConvite(
     ctx: RequestContext,
-    dados: { pacienteId: string; agindoComo: PortalActingAs; validadeHoras: number },
+    dados: { pacienteId: string; agindoComo: PortalActingAs; validadeHoras: number; responsavelId?: string },
   ): Promise<{ id: string; token: string; expiraEm: string }> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       const [p] = await tx
-        .select({ ativo: patients.active })
+        .select({ ativo: patients.active, nascEnc: patients.birthDateEnc, emancipadoEm: patients.emancipatedOn })
         .from(patients)
         .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, dados.pacienteId)));
       if (!p) throw new NaoEncontradoError();
       if (!p.ativo) throw new ConflitoError('paciente_inativo');
+      const nasc = p.nascEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, dados.pacienteId, 'birth_date'), p.nascEnc) : null;
+      const hoje = hojeNaClinica();
+      const menor = menorEm(nasc, hoje, p.emancipadoEm);
+      let representacao: { guardianLinkId: string; guardianId: string; representUntil: string | null } | null = null;
+      if (dados.agindoComo === 'titular') {
+        if (dados.responsavelId !== undefined) throw new EntradaInvalidaError(['responsavelId']);
+        if (menor === true) {
+          throw new ConflitoError((idadeEm(nasc, hoje) ?? 0) < IDADE_MINIMA_TITULAR ? 'titular_menor_de_12' : 'titular_adolescente_requer_decisao');
+        }
+      } else {
+        if (dados.responsavelId === undefined) throw new EntradaInvalidaError(['responsavelId']);
+        const [g] = await tx
+          .select()
+          .from(patientGuardians)
+          .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, dados.responsavelId), eq(patientGuardians.patientId, dados.pacienteId)));
+        if (!g) throw new NaoEncontradoError();
+        if (g.endedAt !== null || !vigenteEm({ desde: g.validFrom, ate: g.validUntil }, hoje)) throw new ConflitoError('responsavel_nao_vigente');
+        if (g.kind === 'curador') {
+          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: null };
+        } else {
+          if (menor === null) throw new ConflitoError('nascimento_nao_informado');
+          if (!menor) throw new ConflitoError('responsavel_so_para_menor');
+          const ate = fimDaRepresentacao(aniversarioDe(nasc as string, IDADE_MAIORIDADE), g.validUntil);
+          representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: ate };
+        }
+      }
       const { token, hash } = novoTokenDeConvite();
       const [c] = await tx
         .insert(portalInvites)
@@ -86,13 +126,21 @@ export class PortalClinicaService {
           actingAs: dados.agindoComo,
           expiresAt: sql`now() + make_interval(hours => ${dados.validadeHoras}::int)`,
           createdBy: ctx.userId,
+          ...(representacao ?? {}),
         })
         .returning({ id: portalInvites.id, expiresAt: portalInvites.expiresAt });
       if (!c) throw new Error('convite não gravado');
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: 'portal_invites',
-        metadata: { invite_id: c.id, patient_id: dados.pacienteId, acting_as: dados.agindoComo, ttl_h: dados.validadeHoras },
+        metadata: {
+          invite_id: c.id,
+          patient_id: dados.pacienteId,
+          acting_as: dados.agindoComo,
+          ttl_h: dados.validadeHoras,
+          guardian_id: representacao?.guardianId ?? null,
+          guardian_link_id: representacao?.guardianLinkId ?? null,
+        },
       });
       return { id: c.id, token, expiraEm: c.expiresAt.toISOString() };
     });
@@ -119,7 +167,18 @@ export class PortalClinicaService {
   vinculosDoPaciente(
     ctx: RequestContext,
     pacienteId: string,
-  ): Promise<{ id: string; contaId: string; agindoComo: PortalActingAs; criadoEm: string; revogadoEm: string | null; motivo: string | null }[]> {
+  ): Promise<
+    {
+      id: string;
+      contaId: string;
+      agindoComo: PortalActingAs;
+      responsavelId: string | null;
+      representaAte: string | null;
+      criadoEm: string;
+      revogadoEm: string | null;
+      motivo: string | null;
+    }[]
+  > {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const linhas = await tx
         .select()
@@ -131,11 +190,32 @@ export class PortalClinicaService {
         id: l.id,
         contaId: l.accountId,
         agindoComo: l.actingAs,
+        responsavelId: l.guardianLinkId,
+        representaAte: l.representUntil,
         criadoEm: l.createdAt.toISOString(),
         revogadoEm: l.revokedAt?.toISOString() ?? null,
         motivo: l.revokeReason,
       }));
     });
+  }
+
+  /**
+   * JOB do sistema (V1 do #68): em cada clínica com vínculo de portal ativo, registra a revogação dos vínculos
+   * de responsável cuja representação acabou (18 anos, emancipação, fim do vínculo da 0028). O acesso já cai
+   * no dia pela sessão; isto deixa o fato na lista da clínica e na trilha. Uma transação por clínica.
+   */
+  async encerrarRepresentacoesVencidas(): Promise<number> {
+    const clinicas = await this.db.semContextoDoPortal(async (tx) =>
+      (await tx.execute<{ t: string }>(sql`select t from app_portal_tenants_with_links() as t`)).map((r) => r.t),
+    );
+    let total = 0;
+    for (const t of clinicas) {
+      total += await this.db.semContextoDoPortal(async (tx) => {
+        const [r] = await tx.execute<{ n: number }>(sql`select app_portal_close_ended_representations(${t}::uuid) as n`);
+        return r?.n ?? 0;
+      });
+    }
+    return total;
   }
 
   revogarVinculo(ctx: RequestContext, id: string, motivo: PortalLinkRevokeReason): Promise<{ revogado: true }> {
@@ -228,8 +308,10 @@ export class PortalClinicaService {
         .where(and(eq(portalConsents.tenantId, ctx.tenantId), eq(portalConsents.patientId, pacienteId)))
         .orderBy(asc(portalConsents.createdAt), asc(portalConsents.id));
       await recordAudit(tx, ctx, { action: AuditAction.Read, scope: 'portal_consents', metadata: { patient_id: pacienteId, count: eventos.length } });
+      const hoje = hojeNaClinica();
       return (Object.keys(CONSENTIMENTOS) as PortalConsentPurpose[]).map((f) => {
-        const ultimo = eventos.filter((e) => e.purpose === f).at(-1);
+        // V1 do #68: o evento do responsável só vale enquanto a representação valia.
+        const ultimo = eventos.filter((e) => e.purpose === f && eventoVale(e, hoje)).at(-1);
         const resposta = estadoDoConsentimento(ultimo?.response);
         return { finalidade: f, resposta, ...(f === 'escriba_ia' ? { estadoIa: consentimentoIa(resposta) } : {}), atualizadoEm: ultimo?.createdAt.toISOString() ?? null };
       });

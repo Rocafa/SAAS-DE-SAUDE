@@ -168,6 +168,49 @@ export const JANELA_CONSULTAS = { passadoMs: 2 * 3_600_000, futuroDias: 180, max
  * anos, a conta que age como o PRÓPRIO titular não responde consentimento; o responsável legal sim.
  */
 export const IDADE_CONSENTIMENTO_PROPRIO = 18;
+
+/**
+ * V1 do parecer do #68 — responsável legal no portal.
+ * - Convite `titular` abaixo de 12 anos: recusado. De 12 a 17: recusado até haver decisão registrada (A1;
+ *   parecer D8 ⚖️ pendente). Sem data de nascimento o titular entra, mas não consente (falha fechada).
+ * - Convite `responsavel_legal`: só com um vínculo VIGENTE da 0028 do mesmo paciente e, fora a curatela,
+ *   paciente MENOR não emancipado. A representação acaba no dia dos 18 anos ou no fim da vigência do
+ *   vínculo da 0028, o que vier antes (`fimDaRepresentacao`); a curatela segue a vigência do vínculo.
+ */
+export const IDADE_MINIMA_TITULAR = 12;
+
+export function fimDaRepresentacao(dezoitoAnos: string, fimDaVigencia: string | null): string {
+  return fimDaVigencia !== null && fimDaVigencia < dezoitoAnos ? fimDaVigencia : dezoitoAnos;
+}
+
+/**
+ * Evento de consentimento ainda vale HOJE? O do titular, sempre. O do responsável, só enquanto a
+ * representação valia (`representUntil` exclusivo; null = curatela, segue enquanto o vínculo existir).
+ * Depois da maioridade o estado volta a "não respondido" até o titular responder (V1.3 do #68).
+ */
+export function eventoVale(e: { actingAs: PortalActingAsRegra; representUntil: string | null }, hoje: string): boolean {
+  return e.actingAs === 'titular' || e.representUntil === null || hoje < e.representUntil;
+}
+type PortalActingAsRegra = 'titular' | 'responsavel_legal';
+
+/**
+ * Sigilo do adolescente no portal (A1 do #68; C3 da re-revisão do #67): o responsável vê agenda, financeiro e
+ * cadastro, NADA clínico — nem com a marca de informação clínica da 0031 ligada (o portal não a consulta).
+ * Na agenda, consulta de área sensível (psicologia/psiquiatria) de paciente com 12 anos ou mais (ou idade
+ * desconhecida) fica OCULTA ao responsável por padrão.
+ */
+export function especialidadeSensivel(especialidade: string): boolean {
+  const e = especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  return /psic|psiq/.test(e);
+}
+
+export function consultaOcultaAoResponsavel(
+  agindoComo: PortalActingAsRegra,
+  faixa: 'crianca' | 'adolescente' | 'adulto' | null,
+  especialidade: string,
+): boolean {
+  return agindoComo === 'responsavel_legal' && faixa !== 'crianca' && especialidadeSensivel(especialidade);
+}
 export function idadeEm(nascimento: string, hoje: string): number {
   const [an, mn, dn] = nascimento.split('-').map(Number) as [number, number, number];
   const [ah, mh, dh] = hoje.split('-').map(Number) as [number, number, number];

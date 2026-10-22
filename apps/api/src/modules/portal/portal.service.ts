@@ -32,7 +32,9 @@ import { loadTenantSubscription } from '../exports/tenant-subscription';
 import { CAMPO_RECIBO, decifrarCampoFinanceiro } from '../finance/finance-fields';
 import type { ConteudoDoRecibo } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
+import { guardianFieldRef } from '../patients/guardian-fields';
 import { patientFieldRef } from '../patients/patient-fields';
+import { faixaEtariaEm } from '../patients/responsaveis-regras';
 import { avisarAdminsDoPedidoDoTitular } from '../records/avisos';
 import { noFusoDaClinica, statusParaFront, type StatusFront } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -52,6 +54,8 @@ import {
   novoProtocolo,
   primeiroNome,
   situacaoParaOTitular,
+  consultaOcultaAoResponsavel,
+  eventoVale,
   TETO_DIARIO_PEDIDOS,
   TOKEN_CONVITE_RE,
   transicaoDoPortal,
@@ -68,6 +72,8 @@ export interface ContextoPortal {
   readonly contaId: string;
   readonly vinculoId: string;
   readonly agindoComo: PortalActingAs;
+  /** V1 do #68: a PESSOA responsável (guardians da 0028) que age por este vínculo; null para o titular. */
+  readonly responsavelId: string | null;
 }
 
 export const ANTECEDENCIA_CANCELAMENTO = Symbol('ANTECEDENCIA_CANCELAMENTO');
@@ -211,17 +217,23 @@ export class PortalService {
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
     const codigo = novoCodigoOtp();
     const telefone = await this.db.semContextoDoPortal(async (tx) => {
-      const [d] = await tx.execute<{ tenant_id: string; patient_id: string; invite_id: string; phone_enc: string }>(
+      const [d] = await tx.execute<{ tenant_id: string; patient_id: string; invite_id: string; phone_enc: string; phone_guardian_id: string | null }>(
         sql`select * from app_portal_invite_challenge(${sessao.contaId}::uuid, ${hashDoToken(token)}, ${hashDoCodigo(token, codigo)})`,
       );
       if (!d) return null;
       // A função abriu o contexto da clínica do convite (sistema) nesta transação: decifra o telefone e audita.
+      // Convite de responsável (V1): o telefone é o do cadastro DO RESPONSÁVEL (0028), não o do paciente.
       const tenantId = d.tenant_id as TenantId;
-      const tel = await this.cipher.decryptString(tx, patientFieldRef(tenantId, d.patient_id, 'phone'), d.phone_enc);
+      const ref = d.phone_guardian_id ? guardianFieldRef(tenantId, d.phone_guardian_id, 'phone') : patientFieldRef(tenantId, d.patient_id, 'phone');
+      const tel = await this.cipher.decryptString(tx, ref, d.phone_enc);
       await insertAudit(
         tx,
         { tenantId, actorId: sessao.contaId, actorKind: 'paciente_portal' },
-        { action: AuditAction.Create, scope: 'portal_invites', metadata: { op: 'redeem_code_sent', invite_id: d.invite_id, patient_id: d.patient_id, channel: 'sms' } },
+        {
+          action: AuditAction.Create,
+          scope: 'portal_invites',
+          metadata: { op: 'redeem_code_sent', invite_id: d.invite_id, patient_id: d.patient_id, guardian_id: d.phone_guardian_id, channel: 'sms' },
+        },
       );
       return tel.replace(/\D/g, '');
     });
@@ -257,7 +269,7 @@ export class PortalService {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const agora = Date.now();
       const linhas = await tx
-        .select({ a: appointments, profissional: professionals.displayName })
+        .select({ a: appointments, profissional: professionals.displayName, especialidade: professionals.specialty })
         .from(appointments)
         .innerJoin(professionals, and(eq(professionals.tenantId, appointments.tenantId), eq(professionals.id, appointments.professionalId)))
         .where(
@@ -270,7 +282,11 @@ export class PortalService {
         )
         .orderBy(asc(appointments.startsAt), asc(appointments.id))
         .limit(JANELA_CONSULTAS.maximo);
-      const itens = linhas.map(({ a, profissional }): ConsultaPortalDto => {
+      // Sigilo do adolescente (A1 do #68; C3 do #67): responsável não vê consulta de área sensível do paciente
+      // com 12 anos ou mais (nem com a marca de informação clínica ligada: o portal não a consulta).
+      const faixa = ctx.agindoComo === 'responsavel_legal' ? await this.faixaEtaria(tx, ctx) : null;
+      const visiveis = linhas.filter((l) => !consultaOcultaAoResponsavel(ctx.agindoComo, faixa, l.especialidade));
+      const itens = visiveis.map(({ a, profissional }): ConsultaPortalDto => {
         const { data, hora } = noFusoDaClinica(a.startsAt);
         const futura = a.startsAt.getTime() > agora;
         return {
@@ -305,6 +321,14 @@ export class PortalService {
           .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id), eq(appointments.patientId, ctx.pacienteId)))
           .for('update');
         if (!a) throw new NaoEncontradoError();
+        if (ctx.agindoComo === 'responsavel_legal') {
+          const [prof] = await tx
+            .select({ especialidade: professionals.specialty })
+            .from(professionals)
+            .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, a.professionalId)));
+          // Oculta ao responsável = 404, igual a inexistente.
+          if (!prof || consultaOcultaAoResponsavel(ctx.agindoComo, await this.faixaEtaria(tx, ctx), prof.especialidade)) throw new NaoEncontradoError();
+        }
         const novo = transicaoDoPortal(acao, a.status);
         if (!novo) throw new ConflitoError('status_nao_permite');
         const agora = new Date();
@@ -511,8 +535,10 @@ export class PortalService {
   meusConsentimentos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<ConsentimentoPortalDto[]> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const eventos = await this.eventos(tx, ctx);
+      // V1 do #68: o evento do responsável só vale enquanto a representação valia.
+      const hoje = hojeNaClinica();
       const itens = (Object.keys(CONSENTIMENTOS) as PortalConsentPurpose[]).map((f): ConsentimentoPortalDto => {
-        const ultimo = eventos.filter((e) => e.purpose === f).at(-1);
+        const ultimo = eventos.filter((e) => e.purpose === f && eventoVale(e, hoje)).at(-1);
         const resposta = estadoDoConsentimento(ultimo?.response);
         return {
           finalidade: f,
@@ -549,7 +575,10 @@ export class PortalService {
         if (!nasc) throw new ConflitoError('nascimento_nao_informado');
         if (idadeEm(nasc, hojeNaClinica()) < IDADE_CONSENTIMENTO_PROPRIO) throw new ConflitoError('consentimento_pelo_responsavel');
       }
-      const atual = estadoDoConsentimento((await this.eventos(tx, ctx)).filter((e) => e.purpose === finalidade).at(-1)?.response);
+      const hoje = hojeNaClinica();
+      const atual = estadoDoConsentimento(
+        (await this.eventos(tx, ctx)).filter((e) => e.purpose === finalidade && eventoVale(e, hoje)).at(-1)?.response,
+      );
       if (resposta === 'desfeito' && atual === 'nao_respondido') throw new ConflitoError('nada_a_desfazer');
       if (resposta === atual) return { resposta: atual };
       await tx.insert(portalConsents).values({
@@ -635,17 +664,24 @@ export class PortalService {
     );
     if (!c?.tenant_id || !c.patient_id) throw new ProibidoError('vinculo_inativo');
     const [l] = await tx
-      .select({ actingAs: portalLinks.actingAs })
+      .select({ actingAs: portalLinks.actingAs, guardianId: portalLinks.guardianId })
       .from(portalLinks)
       .where(and(eq(portalLinks.tenantId, c.tenant_id), eq(portalLinks.id, vinculoId)));
     if (!l) throw new ProibidoError('vinculo_inativo');
-    return { tenantId: c.tenant_id as TenantId, pacienteId: c.patient_id, contaId, vinculoId, agindoComo: l.actingAs };
+    return { tenantId: c.tenant_id as TenantId, pacienteId: c.patient_id, contaId, vinculoId, agindoComo: l.actingAs, responsavelId: l.guardianId };
   }
 
   private async paciente(tx: TenantTx, ctx: ContextoPortal) {
     const [p] = await tx.select().from(patients).where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, ctx.pacienteId)));
     if (!p) throw new NaoEncontradoError();
     return p;
+  }
+
+  /** Faixa etária do paciente HOJE (regras da 0028/0031); null sem data de nascimento. */
+  private async faixaEtaria(tx: TenantTx, ctx: ContextoPortal) {
+    const p = await this.paciente(tx, ctx);
+    const nasc = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, 'birth_date'), p.birthDateEnc) : null;
+    return faixaEtariaEm(nasc, hojeNaClinica(), p.emancipatedOn);
   }
 
   private async dadosDaSaudacao(tx: TenantTx, ctx: ContextoPortal): Promise<{ clinica: string; primeiroNome: string }> {
@@ -689,7 +725,10 @@ export class PortalService {
     return insertAudit(
       tx,
       { tenantId: ctx.tenantId, actorId: ctx.contaId, actorKind: 'paciente_portal' },
-      { ...entry, metadata: { ...entry.metadata, patient_id: ctx.pacienteId, via: 'portal' } },
+      {
+        ...entry,
+        metadata: { ...entry.metadata, patient_id: ctx.pacienteId, via: 'portal', ...(ctx.responsavelId ? { guardian_id: ctx.responsavelId } : {}) },
+      },
     );
   }
 }

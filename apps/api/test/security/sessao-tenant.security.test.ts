@@ -163,6 +163,16 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.GET, '/clinica/portal/solicitacoes'],
       [RequestMethod.GET, `/clinica/portal/solicitacoes/${id}`],
       [RequestMethod.POST, `/clinica/portal/solicitacoes/${id}/situacao`],
+      // Responsáveis do paciente (0028).
+      [RequestMethod.GET, `/pacientes/${id}/responsaveis`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis`],
+      [RequestMethod.PATCH, `/pacientes/${id}/responsaveis/${id}`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/pagador`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/encerrar`],
+      [RequestMethod.GET, `/pacientes/${id}/responsaveis/${id}/historico`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/anular`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/emancipacao`],
+      [RequestMethod.POST, `/responsaveis/descarte`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));

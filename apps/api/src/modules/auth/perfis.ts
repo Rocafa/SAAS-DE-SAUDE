@@ -20,6 +20,22 @@ export const PERMISSOES = {
   'pacientes:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'pacientes:escrever': ['admin', 'profissional', 'recepcao'],
   'pacientes:inativar': ['admin', 'recepcao'],
+  /**
+   * Responsáveis do paciente (PAC-01.2, migração 0028). Ler: todos (o financeiro precisa do pagador).
+   * Cadastrar, alterar, marcar pagador e encerrar vigência: quem escreve o cadastro (a recepção também).
+   * LIGAR a informação clínica para o responsável é DECISÃO CLÍNICA: só o profissional, com vínculo de
+   * cuidado e justificativa (A2 do #67: admin sem perfil clínico não liga; desligar, qualquer um que
+   * escreva). Adolescente (12–17): decisão caso a caso, tomada já na adolescência — ver responsaveis-regras.ts.
+   */
+  'responsaveis:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'responsaveis:escrever': ['admin', 'profissional', 'recepcao'],
+  'responsaveis:liberar_informacao_clinica': ['profissional'],
+  /** A5 do #67: CPF do responsável completo só para quem precisa (recibo/cadastro fiscal); os demais, mascarado. */
+  'responsaveis:ver_cpf_completo': ['admin', 'financeiro'],
+  /** A3 do #67: referência da decisão judicial e escopo da curatela (cifrados): dono e profissional. */
+  'responsaveis:ver_curatela': ['admin', 'profissional'],
+  /** Emancipação do paciente (data + documento): cadastro (dono e recepção). */
+  'responsaveis:registrar_emancipacao': ['admin', 'recepcao'],
   'agenda:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */

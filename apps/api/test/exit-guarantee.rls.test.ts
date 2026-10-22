@@ -134,6 +134,7 @@ describe('G2 — exportação total do tenant', () => {
         receipts: 0,
         receiptCancellations: 0,
       },
+      guardians: { guardians: 0, patientGuardians: 0, patientGuardianHistory: 0 },
       clinicMembers: 0,
       portal: { invites: 0, links: 0, consents: 0, rightsRequests: 0 },
       auditEvents: pkg.auditEvents.length,
