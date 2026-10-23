@@ -45,9 +45,10 @@
 | Rodada 19.5: **#69** WhatsApp (0032) **VETADO** em 21/10 (opt-in sem número, menor sem nascimento, modelo sem lista fechada) — correção em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | PR #69 |
 | Rodada 19.3: ✅ integração **PR #73** (#66/#67/#68/#69 sobre #65, migrações 0024–0038, G2 1.17.0) — **APROVADO** pelo Guardião em 23/10; rls 517/517 local. **Entra no lugar dos 4 PRs** quando o CI voltar | Maestro @Rocafa | 23/10/2026 | PR #73 |
 
-| Rodada 20.1: ressalvas abertas do **#65** (R18/R19) e S1 do #73 — feitas **sobre a integração** (#73), migração **0041** | Maestro @Rocafa (agente engenharia) | 23/10/2026 | branch `eng/integracao-r19` |
-| Rodada 20.2: R17 do **#63** (runbook de confirmação do fundador) sobre a integração; migração **0042** se precisar | Maestro @Rocafa (agente engenharia) | 23/10/2026 | branch `eng/integracao-r19` |
-| Rodada 20.3: observações da R10 do **#58** (CREATE TRIGGER, REVOKE ROLE, DROP CASCADE; atributos de papéis na conferência) | Maestro @Rocafa (agente devops-ci) | 23/10/2026 | PR #58 |
+| Rodada 20.1: ✅ #65 R18–R21 (0041/0042) e S1 do #73 — **#65 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 20.2: ✅ #63 R17 (runbook + correção do fundador em dois passos, 0042) — **#63 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 20.3: ✅ observações da R10 do #58 — aprovado com ressalva (fmt corrigido) | Maestro @Rocafa | 23/10/2026 | PR #58 |
+| Rodada 20.4: **agendador real dos jobs** (BullMQ, por clínica, trilha, alarme JOB_ATRASADO) — migração 0043 se precisar | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
@@ -57,6 +58,7 @@
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
 | **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
 | **#73 S1 (opcional):** teste do destinatário tentando alterar outra coluna ou desmarcar a leitura de `clinical_notices` por SQL (N1/N2/N3/O1 ✅ em 0039/0040) | parecer #73, 23/10/2026 |
+| **#63 O-R17b (antes do GA):** login nominal por operador e recusa quando pedido e confirmação da correção do fundador forem da mesma pessoa; O-R17c: tabela de pedidos só do migrador | parecer #63, conferência 2 de 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
