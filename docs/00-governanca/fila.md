@@ -50,7 +50,7 @@
 | Rodada 20.1: ✅ #65 R18–R21 (0041/0042) e S1 do #73 — **#65 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 20.2: ✅ #63 R17 (runbook + correção do fundador em dois passos, 0042) — **#63 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 20.3: ✅ observações da R10 do #58 — aprovado com ressalva (fmt corrigido) | Maestro @Rocafa | 23/10/2026 | PR #58 |
-| Rodada 20.4: ✅ **agendador real dos jobs** (BullMQ, 7 jobs por clínica, trilha, `JOB_ATRASADO`, falha fechada sem Redis; migração 0043) — rls 534/534 local; revisão do Guardião em andamento | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 20.4: ✅ **agendador real dos jobs** (BullMQ, 7 jobs, 0043) — aprovado com ressalvas; R1/R2/R6 resolvidas. **Condição de merge do #73: os 3 testes com Redis real (`JOBS_REDIS_TESTE=1`) verdes no CI, saída anexada** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
@@ -61,6 +61,7 @@
 | **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
 | **#73 S1 (opcional):** teste do destinatário tentando alterar outra coluna ou desmarcar a leitura de `clinical_notices` por SQL (N1/N2/N3/O1 ✅ em 0039/0040) | parecer #73, 23/10/2026 |
 | **#63 O-R17b (antes do GA):** login nominal por operador e recusa quando pedido e confirmação da correção do fundador forem da mesma pessoa; O-R17c: tabela de pedidos só do migrador | parecer #63, conferência 2 de 23/10/2026 |
+| **Jobs R3/R4/R5/N1/N2:** Terraform exigir `REDIS_URL` e criar alarmes `JOB_ATRASADO`/`JOBS_DESLIGADOS` (contrato no infra-staging §4.4); teste de dois despachos simultâneos; deploy gradual não apagar agendamento de job novo | parecer de jobs, 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
