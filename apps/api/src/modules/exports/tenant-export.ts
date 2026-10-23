@@ -183,6 +183,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
   whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
   job_tenant_index: 'índice interno das clínicas para o agendador de jobs (0043): só o id da própria clínica, que já sai no pacote',
+  founder_fix_requests:
+    'pedido interno de correção do fundador sob incidente (0044): controle operacional do runbook (só ids e chamado), sem dado de paciente; o fato sai em audit_log (founder_fix_requested/founder_fixed) e em clinic_members',
   portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); apagada no mesmo COMMIT (só guarda, durante a transação, a cifra anterior e os valores de antes do recálculo: 0039)',
   whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
