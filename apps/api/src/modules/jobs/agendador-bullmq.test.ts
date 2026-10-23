@@ -118,7 +118,10 @@ describe('agendador BullMQ (dublê da fila)', () => {
     const segredo = 'valor de linha ficticio QZX-91';
     const falhaPg = Object.assign(new Error(segredo), { code: '23505' });
     await expect(processadorSeguro(() => Promise.reject(falhaPg))({ name: 'a' })).rejects.toThrow(/^pg_23505$/);
-    const err = await processadorSeguro(() => Promise.reject(new TypeError(segredo)))({ name: 'a' }).catch((e: unknown) => e as Error);
+    const err = (await processadorSeguro(() => Promise.reject(new TypeError(segredo)))({ name: 'a' }).then(
+      () => null,
+      (e: unknown) => e,
+    )) as Error;
     expect(err.message).toBe('TypeError');
     expect(String(err.stack)).not.toContain(segredo);
     const rodados: string[] = [];

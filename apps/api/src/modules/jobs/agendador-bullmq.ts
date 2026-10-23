@@ -62,6 +62,8 @@ export function processadorSeguro(processar: (job: { name: string }) => Promise<
     try {
       await processar({ name: job.name });
     } catch (err) {
+      // Sem `cause` DE PROPÓSITO (N1): a causa carregaria a mensagem original junto com o erro.
+      // eslint-disable-next-line preserve-caught-error
       throw new Error(codigoDoErro(err));
     }
   };
