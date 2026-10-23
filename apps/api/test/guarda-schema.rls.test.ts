@@ -382,6 +382,23 @@ describe('guarda de schema: portal do paciente (0027)', () => {
     expect(semPolicy, 'tabela com tenant_id sem decisão do portal: crie portal_fora (padrão) ou portal_titular').toEqual([]);
   });
 
+  /**
+   * R4 do #73: a `portal_fora` que o laço da 0033 criou em `whatsapp_routes` cegou o webhook. Tabela INTERNA
+   * (lista fechada: TABELAS_INTERNAS, espelhada no banco por `app_internal_tables()`, que os laços dinâmicos
+   * usam como exclusão) não pode ter NENHUMA policy do portal: a única permitida é `<tabela>_definer_only`
+   * (TO CURRENT_USER, só o dono).
+   */
+  it('tabela interna não tem policy do portal; a lista do banco é a mesma da guarda', async () => {
+    const [lista] = await sql<{ tabelas: string[] }[]>`SELECT app_internal_tables() AS tabelas`;
+    expect([...(lista?.tabelas ?? [])].sort()).toEqual(Object.keys(TABELAS_INTERNAS).sort());
+    const policies = await sql<{ tabela: string; policy: string; papeis: string[] }[]>`
+      SELECT tablename AS tabela, policyname AS policy, roles::text[] AS papeis FROM pg_policies
+       WHERE schemaname = 'public' AND tablename = ANY(${Object.keys(TABELAS_INTERNAS)})`;
+    const fora = policies.filter((p) => p.policy !== `${p.tabela}_definer_only`).map((p) => `${p.tabela}.${p.policy}`);
+    expect(fora, 'tabela interna com policy além de <tabela>_definer_only (ex.: portal_fora de um laço dinâmico): exclua app_internal_tables() do laço').toEqual([]);
+    for (const p of policies) expect(p.papeis, `${p.tabela}.${p.policy}`).not.toContain(RUNTIME_ROLE);
+  });
+
   it('funções do portal: SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
     for (const assinatura of [
       'public.app_set_portal_session(uuid,uuid)',

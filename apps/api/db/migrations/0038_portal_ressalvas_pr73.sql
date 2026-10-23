@@ -194,6 +194,37 @@ $$;
 -- app_portal_receipt_hidden (0037) delega a app_portal_payment_hidden e já devolve true para recibo
 -- inexistente: herda a regra acima sem mudança.
 
+-- ================================================================ (R4) lista fechada das tabelas internas
+-- Única lista de tabelas INTERNAS (zero privilégio para o runtime; só funções do dono). Laços dinâmicos
+-- futuros que criem policy em "toda tabela com tenant_id" (como os da 0027/0033) DEVEM excluir
+-- `app_internal_tables()`. A guarda de schema confere que esta lista é igual à TABELAS_INTERNAS do teste e que
+-- nenhuma tabela dela tem policy além da `<tabela>_definer_only` (TO CURRENT_USER), ou seja, nenhuma
+-- `portal_fora`/`portal_titular`/`portal_sigilo_*` (a `portal_fora` da 0033 em `whatsapp_routes` cegou o webhook).
+CREATE FUNCTION app_internal_tables() RETURNS text[]
+  LANGUAGE sql IMMUTABLE
+  SET search_path = pg_catalog
+AS $$
+  SELECT ARRAY['schema_migrations', 'tenant_context', 'portal_invite_lookup', 'portal_link_index', 'portal_invite_otp',
+               'fiscal_retention_policy', 'whatsapp_routes', 'portal_birth_date_changes']::text[]
+$$;
+REVOKE ALL ON FUNCTION app_internal_tables() FROM PUBLIC;
+-- Só nomes de tabelas (o catálogo já os mostra): a guarda de schema, que roda como runtime, confere a lista.
+GRANT EXECUTE ON FUNCTION app_internal_tables() TO app_user;
+
+DO $$
+DECLARE
+  v_ruins text;
+BEGIN
+  SELECT string_agg(tablename || '.' || policyname, ', ') INTO v_ruins
+    FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = ANY (app_internal_tables())
+     AND policyname <> tablename || '_definer_only';
+  IF v_ruins IS NOT NULL THEN
+    RAISE EXCEPTION 'tabela interna só pode ter a policy <tabela>_definer_only (nada de portal_*): %', v_ruins;
+  END IF;
+END;
+$$;
+
 -- ================================================================ conferência final
 
 -- Funções SECURITY DEFINER desta migração: dono sem superpoder e diferente do runtime.
