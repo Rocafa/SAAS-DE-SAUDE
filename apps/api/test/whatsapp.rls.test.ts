@@ -14,7 +14,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, patients, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
+import { appointments, auditLog, patients, tenants, whatsappInbound, whatsappOptIns, whatsappOutbox, whatsappPhoneKeys, whatsappSettings } from '../src/db/schema';
+import { SYSTEM_ACTOR_ID } from '../src/modules/audit/audit-log';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { AMOSTRAS_DE_TERMOS_SENSIVEIS, MODELO_PADRAO, MODELOS_DA_PLATAFORMA, RESPOSTA_FIXA_OUTRO, textoEhNeutro } from '../src/modules/messaging/lembretes-regras';
 import { MensageiroFalso } from '../src/modules/messaging/mensageiro-falso';
@@ -794,6 +795,78 @@ describe('horário, menor de idade e falha', () => {
     const itens = (lista.body as { itens: { agendamentoId: string; precisaFallback: boolean }[] }).itens;
     expect(itens.find((i) => i.agendamentoId === a.id)).toMatchObject({ precisaFallback: true });
     expect(JSON.stringify(lista.body)).not.toContain(tel);
+  });
+});
+
+describe('R1 do parecer dos jobs: clínica cancelada ou bloqueada não recebe lembrete do job', () => {
+  /** Clínica fictícia própria (o status muda), com canal configurado, profissional e tipo. */
+  async function clinicaComCanal(sufixo: string) {
+    const t = await api.novaClinica();
+    const admin = api.sessao(t, 'admin');
+    const prof = idDe(await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticio R1', especialidade: 'Clinica' }));
+    const tipo = idDe(await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Retorno', minutos: 30 }));
+    await api
+      .http()
+      .put('/whatsapp/configuracao')
+      .set(cab(admin))
+      .send({ ativo: true, nomeRemetente: 'Agendamentos', numeroDeNegocio: `8${String(Date.now()).slice(-10)}${sufixo}`, enviarDe: 0, enviarAte: 24, horasAntes: 24 })
+      .expect(200);
+    return { t, admin, prof, tipo };
+  }
+
+  async function mudarAssinatura(t: TenantId, status: 'cancelled' | 'past_due'): Promise<void> {
+    await withTenant(api.db.db, t, (tx) =>
+      tx.update(tenants).set({ subscriptionStatus: status, cancelledAt: status === 'cancelled' ? new Date() : null }).where(eq(tenants.id, t)),
+    );
+  }
+
+  it('cancelada: com opt-in e consulta D-1, nada sai; o agendado é cancelado (assinatura_bloqueada); a retenção roda', async () => {
+    const c = await clinicaComCanal('3');
+    const tel1 = telefoneNovo();
+    const tel2 = telefoneNovo();
+    const p1 = await paciente(c.admin, tel1);
+    const a1 = await consulta(c.admin, p1, 20, c.prof, c.tipo);
+    await optIn(c.admin, p1);
+    // Programa (sem despachar) enquanto a clínica está ativa, como o job faria numa passada interrompida.
+    const privado = svc as unknown as { programar(tx: TenantTx, ctx: { tenantId: TenantId; userId: string; roles: string[] }, agora: Date): Promise<{ programados: number }> };
+    const prog = await withTenant(api.db.db, c.t, (tx) => privado.programar(tx, { tenantId: c.t, userId: SYSTEM_ACTOR_ID, roles: ['sistema'] }, new Date()));
+    expect(prog.programados).toBe(1);
+    expect(await envioDoAgendamento(c.t, a1.id)).toMatchObject({ status: 'agendado' });
+    // Outra consulta D-1 com opt-in, ainda não programada.
+    const p2 = await paciente(c.admin, tel2);
+    const a2 = await consulta(c.admin, p2, 20, c.prof, c.tipo);
+    await optIn(c.admin, p2);
+
+    await mudarAssinatura(c.t, 'cancelled');
+    const r = await svc.executarLembretesComoSistema(c.t);
+    expect(r).toMatchObject({ motivo: 'assinatura_bloqueada', programados: 0, enviados: 0, cancelados: 1 });
+    expect(enviadasPara(tel1)).toHaveLength(0);
+    expect(enviadasPara(tel2)).toHaveLength(0);
+    expect(await envioDoAgendamento(c.t, a1.id)).toMatchObject({ status: 'cancelado', failureCode: 'assinatura_bloqueada' });
+    expect(await envioDoAgendamento(c.t, a2.id)).toBeUndefined();
+    // Idempotente: a segunda passada não cancela nada de novo nem envia.
+    expect(await svc.executarLembretesComoSistema(c.t)).toMatchObject({ motivo: 'assinatura_bloqueada', cancelados: 0 });
+    expect(enviadasPara(tel1)).toHaveLength(0);
+    // Trilha do cancelamento, do sistema, só com contagem.
+    const trilha = await withTenant(api.db.db, c.t, async (tx) =>
+      (await tx.select({ m: auditLog.metadata }).from(auditLog).where(eq(auditLog.tenantId, c.t))).map((x) => x.m as Record<string, unknown>),
+    );
+    expect(trilha.filter((m) => m.op === 'cancel_subscription_blocked')).toEqual([{ op: 'cancel_subscription_blocked', cancelled: 1 }]);
+    // A retenção (eliminação de dado vencido) continua rodando para a clínica cancelada.
+    await expect(svc.executarRetencaoComoSistema(c.t)).resolves.toMatchObject({ agendadosExpirados: expect.any(Number) });
+  });
+
+  it('escrita bloqueada (past_due): com opt-in e consulta D-1, nada é programado nem sai', async () => {
+    const c = await clinicaComCanal('4');
+    const tel = telefoneNovo();
+    const p = await paciente(c.admin, tel);
+    const a = await consulta(c.admin, p, 20, c.prof, c.tipo);
+    await optIn(c.admin, p);
+    await mudarAssinatura(c.t, 'past_due');
+    const r = await svc.executarLembretesComoSistema(c.t);
+    expect(r).toMatchObject({ motivo: 'assinatura_bloqueada', programados: 0, enviados: 0 });
+    expect(enviadasPara(tel)).toHaveLength(0);
+    expect(await envioDoAgendamento(c.t, a.id)).toBeUndefined();
   });
 });
 

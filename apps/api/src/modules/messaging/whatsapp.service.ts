@@ -18,6 +18,8 @@ import {
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
+import { canWrite } from '../exports/access-policy';
+import { loadTenantSubscription } from '../exports/tenant-subscription';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import type { FieldCipher } from '../crypto/field-cipher';
@@ -79,7 +81,11 @@ export interface ConfiguracaoDto {
 }
 
 export interface ResultadoDosLembretes {
-  readonly motivo: 'ok' | 'canal_desligado' | 'fora_do_horario';
+  /**
+   * `assinatura_bloqueada` (R1 do parecer dos jobs): clínica cancelada ou com escrita bloqueada não recebe
+   * lembrete do job; o que estava agendado é cancelado com o mesmo código.
+   */
+  readonly motivo: 'ok' | 'canal_desligado' | 'fora_do_horario' | 'assinatura_bloqueada';
   readonly programados: number;
   readonly semOptIn: number;
   readonly semDestinatario: number;
@@ -104,6 +110,14 @@ const ZERO: Omit<ResultadoDosLembretes, 'motivo'> = { programados: 0, semOptIn: 
 /** HMAC-SHA256 do número normalizado (DDI 55) com a chave da clínica: compara sem decifrar (V1). */
 function hashDoNumero(chave: Buffer, telefone: string): string {
   return createHmac('sha256', chave).update(telefone, 'utf8').digest('hex');
+}
+
+/** A assinatura da clínica deixou de permitir escrita no meio da passada do job (R1 do parecer dos jobs). */
+class LembreteBloqueadoPelaAssinatura extends Error {
+  constructor() {
+    super('assinatura_bloqueada');
+    this.name = 'LembreteBloqueadoPelaAssinatura';
+  }
 }
 
 const RANK: Readonly<Record<WhatsappOutboxStatus, number>> = { agendado: 0, enviando: 1, enviado: 2, entregue: 3, lido: 4, falhou: 9, cancelado: 9 };
@@ -389,13 +403,51 @@ export class WhatsappService implements OnApplicationBootstrap {
    */
   async executarLembretes(ctx: RequestContext, agora: Date = new Date(), sistema = false): Promise<ResultadoDosLembretes> {
     if (!this.mensageiro) return { motivo: 'canal_desligado', ...ZERO };
+    // R1 do parecer dos jobs: o job age em nome da clínica, então segue a política de assinatura. Clínica
+    // cancelada ou bloqueada não programa nem despacha, e o que estava agendado é cancelado. (A retenção,
+    // `executarRetencaoComoSistema`, continua rodando para todas: eliminar dado vencido não depende de pagar.)
+    if (sistema && !(await this.assinaturaPermiteEnvio(ctx.tenantId))) return this.bloqueadoPelaAssinatura(ctx);
     // N1 do 2º parecer do #69: conferência diária do modelo na Meta; divergente = nada sai.
     if (!(await this.reconferirModelos())) return { motivo: 'canal_desligado', ...ZERO };
-    const run = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> => (sistema ? this.db.run(ctx.tenantId, fn) : escreverNaClinica(this.db, ctx, fn));
-    const programacao = await run((tx) => this.programar(tx, ctx, agora));
-    if (programacao.motivo !== 'ok') return { ...ZERO, ...programacao };
-    const despacho = await this.despachar(ctx, run, agora);
-    return { ...programacao, ...despacho, numeroMudou: programacao.numeroMudou + despacho.numeroMudou, motivo: 'ok' };
+    // Programar e reservar conferem a assinatura DENTRO da transação (a clínica pode ser bloqueada no meio da
+    // passada). Gravar o resultado de um envio que já saiu não confere: o fato tem de ficar registrado.
+    const escrever = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> =>
+      sistema
+        ? this.db.run(ctx.tenantId, async (tx) => {
+            if (!canWrite((await loadTenantSubscription(tx, ctx.tenantId)).status)) throw new LembreteBloqueadoPelaAssinatura();
+            return fn(tx);
+          })
+        : escreverNaClinica(this.db, ctx, fn);
+    const registrar = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> => (sistema ? this.db.run(ctx.tenantId, fn) : escreverNaClinica(this.db, ctx, fn));
+    try {
+      const programacao = await escrever((tx) => this.programar(tx, ctx, agora));
+      if (programacao.motivo !== 'ok') return { ...ZERO, ...programacao };
+      const despacho = await this.despachar(ctx, escrever, registrar, agora);
+      return { ...programacao, ...despacho, numeroMudou: programacao.numeroMudou + despacho.numeroMudou, motivo: 'ok' };
+    } catch (err) {
+      if (err instanceof LembreteBloqueadoPelaAssinatura) return this.bloqueadoPelaAssinatura(ctx);
+      throw err;
+    }
+  }
+
+  private assinaturaPermiteEnvio(tenantId: TenantId): Promise<boolean> {
+    return this.db.run(tenantId, async (tx) => canWrite((await loadTenantSubscription(tx, tenantId)).status));
+  }
+
+  /** Cancela os envios ainda agendados da clínica bloqueada (código `assinatura_bloqueada`), com trilha. */
+  private async bloqueadoPelaAssinatura(ctx: RequestContext): Promise<ResultadoDosLembretes> {
+    const cancelados = await this.db.run(ctx.tenantId, async (tx) => {
+      const r = await tx
+        .update(whatsappOutbox)
+        .set({ status: 'cancelado', failureCode: 'assinatura_bloqueada' })
+        .where(and(eq(whatsappOutbox.tenantId, ctx.tenantId), eq(whatsappOutbox.status, 'agendado')))
+        .returning({ id: whatsappOutbox.id });
+      if (r.length > 0) {
+        await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'whatsapp_outbox', metadata: { op: 'cancel_subscription_blocked', cancelled: r.length } });
+      }
+      return r.length;
+    });
+    return { ...ZERO, cancelados, motivo: 'assinatura_bloqueada' };
   }
 
   private async programar(
@@ -497,6 +549,7 @@ export class WhatsappService implements OnApplicationBootstrap {
   private async despachar(
     ctx: RequestContext,
     run: <T>(fn: (tx: TenantTx) => Promise<T>) => Promise<T>,
+    registrar: <T>(fn: (tx: TenantTx) => Promise<T>) => Promise<T>,
     agora: Date,
   ): Promise<Pick<ResultadoDosLembretes, 'enviados' | 'falharam' | 'cancelados' | 'numeroMudou'>> {
     const mensageiro = this.mensageiro;
@@ -578,7 +631,7 @@ export class WhatsappService implements OnApplicationBootstrap {
       resultados.push({ id: p.id, r });
     }
 
-    return run(async (tx) => {
+    return registrar(async (tx) => {
       let enviados = 0;
       let falharam = 0;
       for (const { id, r } of resultados) {
