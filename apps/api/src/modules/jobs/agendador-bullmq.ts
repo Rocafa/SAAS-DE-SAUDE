@@ -41,8 +41,21 @@ export interface FabricasBullMQ {
   trabalhador(processar: (job: { name: string }) => Promise<void>): TrabalhadorDeJobs;
 }
 
+/**
+ * Onde a fila mora no Redis. Produção usa o padrão (`bull:plataforma-jobs:*`). O teste com Redis real usa
+ * prefixo e nome ALEATÓRIOS, para nunca tocar (nem apagar, na remoção de agendamentos fora do registro) a
+ * fila de um ambiente de verdade (R5 b do parecer dos jobs).
+ */
+export interface LocalDaFila {
+  readonly nome?: string;
+  /** Prefixo das chaves do BullMQ (padrão do BullMQ: `bull`). */
+  readonly prefixo?: string;
+}
+
 /** Fábricas reais: conexão ioredis com `maxRetriesPerRequest: null` (exigência do BullMQ para o trabalhador). */
-export function fabricasReais(redisUrl: string): FabricasBullMQ & { fechar(): Promise<void> } {
+export function fabricasReais(redisUrl: string, local: LocalDaFila = {}): FabricasBullMQ & { fechar(): Promise<void> } {
+  const nome = local.nome ?? FILA_DE_JOBS;
+  const prefixo = local.prefixo !== undefined ? { prefix: local.prefixo } : {};
   const logger = new Logger('jobs');
   const conexoes: Redis[] = [];
   const conectar = (): Redis => {
@@ -52,9 +65,9 @@ export function fabricasReais(redisUrl: string): FabricasBullMQ & { fechar(): Pr
     return r;
   };
   return {
-    fila: () => new Queue(FILA_DE_JOBS, { connection: conectar() }),
+    fila: () => new Queue(nome, { connection: conectar(), ...prefixo }),
     trabalhador: (processar) =>
-      new Worker(FILA_DE_JOBS, async (job) => processar({ name: job.name }), { connection: conectar(), concurrency: 1 }),
+      new Worker(nome, async (job) => processar({ name: job.name }), { connection: conectar(), concurrency: 1, ...prefixo }),
     async fechar() {
       await Promise.all(conexoes.map((c) => c.quit().catch(() => c.disconnect())));
     },
@@ -116,15 +129,19 @@ export class AgendadorBullMQ implements AgendadorPort {
   }
 }
 
-const PREFIXO = 'plataforma:jobs';
+export const PREFIXO_DAS_CHAVES = 'plataforma:jobs';
 
 /** Trava distribuída: SET NX PX; solta só se o token ainda for o dono (Lua, atômico). */
 export class TravaRedis implements TravaDeJob {
-  constructor(private readonly redis: Redis) {}
+  /** `prefixo`: só o teste com Redis real troca (aleatório), para não tocar chaves de um ambiente real. */
+  constructor(
+    private readonly redis: Redis,
+    private readonly prefixo: string = PREFIXO_DAS_CHAVES,
+  ) {}
 
   async adquirir(nome: string, validadeMs: number): Promise<string | null> {
     const token = randomUUID();
-    const ok = await this.redis.set(`${PREFIXO}:trava:${nome}`, token, 'PX', validadeMs, 'NX');
+    const ok = await this.redis.set(`${this.prefixo}:trava:${nome}`, token, 'PX', validadeMs, 'NX');
     return ok === 'OK' ? token : null;
   }
 
@@ -132,7 +149,7 @@ export class TravaRedis implements TravaDeJob {
     await this.redis.eval(
       "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
       1,
-      `${PREFIXO}:trava:${nome}`,
+      `${this.prefixo}:trava:${nome}`,
       token,
     );
   }
@@ -140,14 +157,17 @@ export class TravaRedis implements TravaDeJob {
 
 /** Último sucesso de cada job no Redis: sobrevive a reinício e é o mesmo para todas as instâncias. */
 export class RegistroRedis implements RegistroDeExecucoes {
-  constructor(private readonly redis: Redis) {}
+  constructor(
+    private readonly redis: Redis,
+    private readonly prefixo: string = PREFIXO_DAS_CHAVES,
+  ) {}
 
   async marcarSucesso(nome: string, quandoMs: number): Promise<void> {
-    await this.redis.set(`${PREFIXO}:sucesso:${nome}`, String(quandoMs));
+    await this.redis.set(`${this.prefixo}:sucesso:${nome}`, String(quandoMs));
   }
 
   async ultimoSucesso(nome: string): Promise<number | null> {
-    const v = await this.redis.get(`${PREFIXO}:sucesso:${nome}`);
+    const v = await this.redis.get(`${this.prefixo}:sucesso:${nome}`);
     const n = v === null ? NaN : Number(v);
     return Number.isFinite(n) ? n : null;
   }
