@@ -74,7 +74,7 @@ jobs:
         run: |
           padroes='rejectunauthoriz[e]d[^,;}]{0,60}(false|!1)'      # Node/pg: opção literal
           padroes="$padroes|node_tls_reject_unauthoriz[e]d"         # variável global do Node (só serve para desligar)
-          padroes="$padroes|validar_certificad[o][^,;}]{0,60}false" # a exceção do canary
+          padroes="$padroes|validar_certificad[o].{0,40}false" # a exceção do canary
           padroes="$padroes|sslmode=no-verif[y]"                    # pg: TLS sem conferir certificado
           padroes="$padroes|checkserveridentit[y]"                  # troca a conferência do nome
           padroes="$padroes|--insecur[e]([^a-z-]|$)|--no-check-certificat[e]|strict-ss[l][^a-z]{0,5}false"
