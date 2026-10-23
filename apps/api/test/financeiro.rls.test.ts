@@ -982,3 +982,63 @@ describe('R9 e R10 do #65: o banco garante paid_cents e a numeração', () => {
     ).toContain('23514');
   });
 });
+
+describe('N2 da conferência do #67: via oficial do recibo (IR) e via de conferência da recepção', () => {
+  it('a recepção entrega a via de conferência ("não vale para IR"); a oficial, completa e auditada, só admin e financeiro', async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302) }).expect(200);
+    const c = await cobranca(recepA, {
+      agendamentoId: await agendamento({ prof: profissionalPfA }),
+      valorCentavos: 15000,
+      atendimentoPor: 'pf',
+      pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+    });
+    const p = await receber(recepA, c.id, { forma: 'dinheiro' });
+    const r = await post(recepA, `/financeiro/recebimentos/${p.id}/recibo`);
+    expect(r.status).toBe(200);
+    // Via de conferência: CPF mascarado e o aviso explícito de que não vale para o IR.
+    expect(r.body).toMatchObject({ via: 'conferencia', cpfMascarado: true, pagador: { cpf: mascararCpf(cpfFicticio(303)) } });
+    expect((r.body as { aviso: string }).aviso).toMatch(/via de conferência, não vale para IR/i);
+    expect((await get(recepA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ via: 'conferencia', cpfMascarado: true });
+    // A leitura do financeiro também é conferência (a via oficial é um ato próprio, auditado).
+    expect((await get(finA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ via: 'conferencia', cpfMascarado: false });
+
+    // Recepção e profissional não emitem a via oficial (403, sem CPF na resposta).
+    for (const s of [recepA, profA]) {
+      const neg = await post(s, `/financeiro/recibos/${id(r)}/via-oficial`);
+      expect(neg.status).toBe(403);
+      expect(JSON.stringify(neg.body)).not.toContain(cpfFicticio(303));
+    }
+    // Admin e financeiro: CPFs completos (pagador, beneficiário, emitente PF), sem o aviso de conferência.
+    for (const s of [finA, adminA]) {
+      const of = await post(s, `/financeiro/recibos/${id(r)}/via-oficial`);
+      expect(of.status, JSON.stringify(of.body)).toBe(200);
+      expect(of.body).toMatchObject({
+        via: 'oficial',
+        cpfMascarado: false,
+        numero: (r.body as { numero: number }).numero,
+        emitente: { tipo: 'pf', documento: cpfFicticio(302) },
+        pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+        beneficiario: { cpf: cpfFicticio(301) },
+      });
+      expect((of.body as { aviso: string }).aviso).not.toMatch(/não vale/i);
+    }
+    // Corpo com campo: 400; recibo de outra clínica: 404.
+    expect((await post(finA, `/financeiro/recibos/${id(r)}/via-oficial`, { cpf: cpfFicticio(303) })).status).toBe(400);
+    expect((await post(adminB, `/financeiro/recibos/${id(r)}/via-oficial`)).status).toBe(404);
+
+    // Trilha: uma exportação por via oficial emitida, só ids e número (sem CPF, nome ou valor).
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.tenantId, clinicaA)));
+    const oficiais = trilha.filter(
+      (l) => l.scope === 'receipts' && (l.metadata as { op?: string }).op === 'official_copy' && (l.metadata as { receipt_id?: string }).receipt_id === id(r),
+    );
+    expect(oficiais).toHaveLength(2);
+    expect(oficiais.map((l) => l.action)).toEqual(['export', 'export']);
+    expect(new Set(oficiais.map((l) => l.actorId))).toEqual(new Set([finA.userId, adminA.userId]));
+    const serial = JSON.stringify(oficiais.map((l) => l.metadata));
+    for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR, '15000']) expect(serial).not.toContain(proibido);
+
+    // Recibo cancelado não tem via oficial.
+    await post(finA, `/financeiro/recibos/${id(r)}/cancelar`, { motivo: 'dados_incorretos' }).expect(200);
+    expect((await post(finA, `/financeiro/recibos/${id(r)}/via-oficial`)).body).toMatchObject({ codigo: 'recibo_cancelado' });
+  });
+});

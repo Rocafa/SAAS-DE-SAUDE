@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, eq, gte, inArray, isNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   charges,
@@ -72,7 +72,20 @@ export interface ReciboDto extends ConteudoDoRecibo {
   readonly cancelamento: { readonly motivo: ReceiptCancelReason; readonly em: string } | null;
   /** CPFs mascarados para quem não tem `recibos:ver_cpf_completo` (recepção). */
   readonly cpfMascarado: boolean;
+  /**
+   * N2 da conferência do #67: `conferencia` (emitir/ler; é a que a recepção entrega) NÃO vale para o IR;
+   * `oficial` sai só de `emitirViaOficial` (admin/financeiro), com os CPFs completos e trilha própria.
+   */
+  readonly via: 'conferencia' | 'oficial';
+  /** Texto que a via leva impresso. Na de conferência, diz que não vale para o IR. */
+  readonly aviso: string;
 }
+
+/** Texto obrigatório da via de conferência (N2 da conferência do #67). */
+export const AVISO_VIA_CONFERENCIA =
+  'Via de conferência, não vale para IR. A via oficial, com CPF completo, é emitida pelo financeiro da clínica.';
+/** Texto da via oficial. */
+export const AVISO_VIA_OFICIAL = 'Via oficial do recibo, válida para o Imposto de Renda.';
 
 /** CPFs do recibo mascarados (pagador, beneficiário e o documento do emitente PF, que é CPF; CNPJ fica). */
 export function mascararCpfsDoRecibo(c: ConteudoDoRecibo): ConteudoDoRecibo {
@@ -190,6 +203,25 @@ export class RecibosService {
         action: AuditAction.Read,
         scope: SCOPE_RECIBOS,
         metadata: { receipt_id: id, receipt_number: r.numero, full_cpf: !r.cpfMascarado },
+      });
+      return r;
+    });
+  }
+
+  /**
+   * Via OFICIAL (N2 da conferência do #67): o mesmo retrato gravado, com os CPFs completos, para o IR do
+   * pagador. Só admin e financeiro (`recibos:emitir_via_oficial`, conferido na rota e aqui). Recibo cancelado
+   * não tem via oficial (409 `recibo_cancelado`). Trilha própria (`op: official_copy`, só ids e número).
+   */
+  emitirViaOficial(ctx: RequestContext, id: string): Promise<ReciboDto> {
+    return lerNaClinica(this.db, ctx, async (tx) => {
+      if (!temPermissao(ctx.roles.filter(ehPerfil), 'recibos:emitir_via_oficial')) throw new ProibidoError();
+      const r = await this.lerRecibo(tx, ctx, id, 'oficial');
+      if (r.situacao === 'cancelado') throw new ConflitoError('recibo_cancelado');
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Export,
+        scope: SCOPE_RECIBOS,
+        metadata: { op: 'official_copy', receipt_id: id, receipt_number: r.numero, full_cpf: true },
       });
       return r;
     });
@@ -518,7 +550,7 @@ export class RecibosService {
     return menorDeIdadeEm(nascimento, data);
   }
 
-  private async lerRecibo(tx: TenantTx, ctx: RequestContext, id: string): Promise<ReciboDto> {
+  private async lerRecibo(tx: TenantTx, ctx: RequestContext, id: string, via: 'conferencia' | 'oficial' = 'conferencia'): Promise<ReciboDto> {
     const [l] = await tx
       .select({ r: receipts, motivo: receiptCancellations.reason, em: receiptCancellations.cancelledAt })
       .from(receipts)
@@ -530,11 +562,14 @@ export class RecibosService {
     const gravado = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
     // 2º parecer do #67: CPF completo no recibo só para admin e financeiro; a recepção (que emite e entrega)
     // vê pagador, beneficiário e emitente PF mascarados. O retrato gravado continua completo.
-    const completo = temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo');
+    // N2: a via oficial (só `emitirViaOficial`, que confere admin/financeiro) sai sempre completa.
+    const completo = via === 'oficial' || temPermissao(ctx.roles.filter(ehPerfil), 'recibos:ver_cpf_completo');
     const conteudo: ConteudoDoRecibo = completo ? gravado : mascararCpfsDoRecibo(gravado);
     return {
       ...conteudo,
       cpfMascarado: !completo,
+      via,
+      aviso: via === 'oficial' ? AVISO_VIA_OFICIAL : AVISO_VIA_CONFERENCIA,
       id: l.r.id,
       numero: l.r.number,
       recebimentoId: l.r.paymentId,

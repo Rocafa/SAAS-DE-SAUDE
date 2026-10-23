@@ -10,6 +10,7 @@ import {
   validarCancelamentoCobranca,
   validarCancelamentoRecibo,
   validarConfiguracao,
+  validarCorpoVazio,
   validarEmissaoRecibo,
   validarEstorno,
   validarFechamentoCaixa,
@@ -192,6 +193,21 @@ export class FinanceiroController {
     // Recibo traz nome e CPF: conta como ficha distinta aberta (alerta de anomalia, R5).
     await this.vigilancia.ficha(ctx, `recibo:${alvo}`);
     return this.recibos.obter(ctx, alvo);
+  }
+
+  /**
+   * Via OFICIAL do recibo (N2 da conferência do #67): CPFs completos, para o IR do pagador. Só admin e
+   * financeiro; a recepção entrega a via de conferência ("não vale para IR"). Conta como ficha aberta (R5).
+   */
+  @Post('recibos/:id/via-oficial')
+  @HttpCode(200)
+  @Permissao('recibos:emitir_via_oficial')
+  async viaOficialRecibo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ReciboDto> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazio(corpo);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.ficha(ctx, `recibo:${alvo}`);
+    return this.recibos.emitirViaOficial(ctx, alvo);
   }
 
   @Post('recibos/:id/cancelar')

@@ -77,6 +77,12 @@ export const PERMISSOES = {
    */
   'recibos:ver_cpf_completo': ['admin', 'financeiro'],
   /**
+   * Via OFICIAL do recibo (N2 da conferência do #67, 22/10/2026): a que vale para o IR do pagador (Lei
+   * 9.250/1995, art. 8º, §2º, III), com os CPFs completos, emitida por ato próprio e auditado. A via que a
+   * recepção emite e entrega é a de CONFERÊNCIA ("não vale para IR").
+   */
+  'recibos:emitir_via_oficial': ['admin', 'financeiro'],
+  /**
    * Saneamento do pagador de recebimento sem congelado (R2 do 2º parecer do #67): o financeiro aponta o
    * responsável vigente na data do pagamento, uma vez (o banco confere admin/financeiro ativo).
    */
