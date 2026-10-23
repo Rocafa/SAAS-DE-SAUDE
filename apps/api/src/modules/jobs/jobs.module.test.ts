@@ -25,6 +25,16 @@ describe('escolha do agendador pelo ambiente', () => {
     expect(infra.motivoDesligado).toBe('REDIS_URL ausente em produção');
   });
 
+  it('R2: lista fechada — sem Redis, qualquer NODE_ENV fora de development/test fica DESLIGADO (nunca memória)', () => {
+    for (const NODE_ENV of ['staging', 'prod', 'homologacao', 'Production', 'dev', 'TEST', '', ' ', undefined]) {
+      const infra = criarInfraDosJobs(NODE_ENV === undefined ? {} : { NODE_ENV });
+      expect(infra.agendador, `NODE_ENV=${String(NODE_ENV)}`).toBeNull();
+      // Texto fixo: o valor lido do ambiente nunca vai para o log.
+      expect(infra.motivoDesligado).toBe('REDIS_URL ausente fora de development/test');
+    }
+    expect(criarInfraDosJobs({ NODE_ENV: 'test' }).agendador?.modo).toBe('memoria');
+  });
+
   it('teste nunca sobe BullMQ por acaso, mesmo com REDIS_URL (o CI tem para o rate limit)', () => {
     expect(criarInfraDosJobs({ NODE_ENV: 'test', REDIS_URL: 'redis://127.0.0.1:1' }).agendador?.modo).toBe('memoria');
   });
@@ -52,6 +62,20 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
       expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente em produção": nenhum job agendado (7 no registro)']);
       // O registro existe (o disparo manual pelas rotas do admin continua), só não há agendamento.
       expect(s.jobs).toHaveLength(7);
+    } finally {
+      await s.onApplicationShutdown();
+    }
+  });
+
+  it('R2: NODE_ENV=staging sem Redis se comporta como produção (JOBS_DESLIGADOS e "desligado" no /health/ready)', async () => {
+    const erros: string[] = [];
+    vi.spyOn(Logger.prototype, 'error').mockImplementation((m: unknown) => void erros.push(String(m)));
+    const s = servico(criarInfraDosJobs({ NODE_ENV: 'staging' }));
+    await s.onApplicationBootstrap();
+    try {
+      expect(s.modo).toBe('desligado');
+      expect(modoDosJobs()).toBe('desligado');
+      expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente fora de development/test": nenhum job agendado (7 no registro)']);
     } finally {
       await s.onApplicationShutdown();
     }

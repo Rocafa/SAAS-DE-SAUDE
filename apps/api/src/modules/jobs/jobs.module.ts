@@ -3,10 +3,11 @@
  *
  * Escolha pelo ambiente (`criarInfraDosJobs`):
  * - REDIS_URL e NODE_ENV ≠ test → BullMQ + trava e último sucesso no Redis; sinal de vida a cada 10 min;
- * - sem REDIS_URL em produção → jobs DESLIGADOS, com log de erro `JOBS_DESLIGADOS` na subida e a cada
- *   verificação, e `jobs: "desligado"` no /health/ready (nunca falha silenciosa). A API sobe: o atendimento
- *   não para por falta do agendador, mas o monitoramento vê;
- * - dev/test (ou sem Redis fora de produção) → em memória: nada dispara sozinho, `disparar(nome)` roda na hora;
+ * - sem REDIS_URL com qualquer NODE_ENV fora de development/test (produção, staging, vazio…) → jobs
+ *   DESLIGADOS, com log de erro `JOBS_DESLIGADOS` na subida e a cada verificação, e `jobs: "desligado"` no
+ *   /health/ready (nunca falha silenciosa). A API sobe: o atendimento não para por falta do agendador, mas o
+ *   monitoramento vê;
+ * - development/test sem Redis (ou test com Redis) → em memória: nada dispara sozinho, `disparar(nome)` roda na hora;
  * - `JOBS_HABILITADOS=false` → desligado por opção explícita (ex.: instância só de HTTP), também logado.
  */
 import { type DynamicModule, Inject, Injectable, Logger, Module, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
@@ -32,6 +33,8 @@ import { verificarAtrasos, type JobAtrasado } from './sinal-de-vida';
 export const SCOPE_JOBS = 'jobs';
 export const INFRA_DOS_JOBS = Symbol('INFRA_DOS_JOBS');
 const VERIFICACAO_MS = 10 * 60_000;
+/** Únicos ambientes em que, sem Redis, o agendador cai em memória (R2 do parecer dos jobs). */
+const AMBIENTES_COM_MEMORIA: ReadonlySet<string> = new Set(['development', 'test']);
 
 export interface InfraDosJobs {
   /** `null` = desligado (o motivo vai para o log). */
@@ -64,8 +67,11 @@ export function criarInfraDosJobs(env: NodeJS.ProcessEnv = process.env): InfraDo
       },
     };
   }
-  if (env.NODE_ENV === 'production') {
-    return { agendador: null, ...memoria, motivoDesligado: 'REDIS_URL ausente em produção' };
+  // R2 do parecer dos jobs: LISTA FECHADA. Memória (que fica calada: nada dispara, sem sinal de vida) só em
+  // development/test. Qualquer outro NODE_ENV (staging, prod, vazio, digitado errado) sem Redis = desligado,
+  // com JOBS_DESLIGADOS no log e no /health/ready, igual à produção. O motivo é texto fixo (nunca o valor lido).
+  if (!AMBIENTES_COM_MEMORIA.has(env.NODE_ENV ?? '')) {
+    return { agendador: null, ...memoria, motivoDesligado: env.NODE_ENV === 'production' ? 'REDIS_URL ausente em produção' : 'REDIS_URL ausente fora de development/test' };
   }
   return { agendador: new AgendadorEmMemoria(), ...memoria };
 }
