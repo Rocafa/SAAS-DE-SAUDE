@@ -195,7 +195,8 @@ data "aws_iam_policy_document" "alertas_seguranca" {
       values   = [aws_cloudwatch_event_rule.papeis_de_excecao.arn]
     }
   }
-  # Alarme de DDL sensível no banco (auditoria-banco.tf, R11 do PR #61).
+  # Alarme de DDL sensível no banco (auditoria-banco.tf, R11 do PR #61) e alarmes do
+  # agendador de jobs da API (jobs.tf, R3 do parecer de jobs).
   statement {
     sid       = "CloudWatchAlarmePublica"
     actions   = ["sns:Publish"]
@@ -207,7 +208,7 @@ data "aws_iam_policy_document" "alertas_seguranca" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_metric_alarm.ddl_sensivel.arn]
+      values   = concat([aws_cloudwatch_metric_alarm.ddl_sensivel.arn], [for a in aws_cloudwatch_metric_alarm.jobs : a.arn])
     }
   }
 }

@@ -150,7 +150,7 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
 2. **Estado:**
    - rodar `terraform -chdir=infra/terraform/bootstrap-state init && terraform apply -var conta_aws_id=<id>`, com estado local, uma única vez;
    - guardar o output `backend_hcl` em `infra/terraform/staging/backend.hcl`, que fica fora do git (`.gitignore`).
-3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`. Quando houver o responsável, `alerta_seguranca_email` (assinatura do alerta de break-glass).
+3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`. Quando houver o responsável, `alerta_seguranca_email` (assinatura do alerta de break-glass e dos alarmes de jobs) e `alerta_dpo_email` (encarregado: alarmes `JOB_ATRASADO` e `JOBS_DESLIGADOS`, §4.4).
 4. **Plano:** `terraform init -backend-config=backend.hcl`, depois `terraform plan -var-file=staging.tfvars -out=plano`.
    - Revisar o plano com um sócio, olhando com atenção a criação de `aws_s3_bucket_object_lock_configuration` (COMPLIANCE não se desfaz).
    - Conferir que nada sai de sa-east-1.
@@ -216,3 +216,5 @@ A API passou a ter um agendador real (BullMQ) para os jobs de retenção, revoga
 - **Exigir `REDIS_URL`** (TLS + AUTH, o mesmo Redis do rate limit) em toda tarefa da API fora de dev/test. Sem ele a API sobe **sem jobs** e loga `JOBS_DESLIGADOS` — o deploy deve falhar antes disso.
 - **Filtros de métrica e alarmes** no log group da API para `JOB_ATRASADO` (job crítico fora do prazo) e `JOBS_DESLIGADOS` (agendador sem Redis), com aviso ao canal de operação e ao encarregado (DPO). Os logs não levam dado pessoal (só nome do job, código de erro e contagens).
 - **Não** definir `JOBS_HABILITADOS=false` em staging/produção, salvo incidente registrado.
+
+**Estado no Terraform (staging):** `REDIS_URL` vem do segredo `redis` e a task definition da API tem precondições (REDIS_URL presente, Redis com TLS, nenhum `JOBS_HABILITADOS`) que fazem o plano falhar (`app.tf`). Filtros de termo exato e alarmes `job-atrasado` e `jobs-desligados` no log group da API publicam em `alertas-seguranca` (operação) e no tópico novo `alertas-dpo` (`jobs.tf`, assinatura por `alerta_dpo_email`). O CI (`infra.yml`, Travas do projeto) confere tudo isso. **Ainda falta (R3):** filtros de `JOBS_NAO_AGENDADOS`, `JOB_ALARME` e `JOB_CLINICA_FALHOU`, e o alarme de `jobs` ≠ `bullmq` no `/health/ready` por mais de 15 min.

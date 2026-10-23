@@ -114,6 +114,12 @@ variable "alerta_seguranca_email" {
   default     = null
 }
 
+variable "alerta_dpo_email" {
+  description = "E-mail do encarregado (DPO) que recebe os alarmes JOB_ATRASADO e JOBS_DESLIGADOS (jobs.tf). null = só o tópico SNS (assinar quando houver o endereço). Fica no tfvars, fora do git."
+  type        = string
+  default     = null
+}
+
 variable "tls_ate_a_tarefa" {
   description = "TLS também no trecho ALB -> tarefa da API (R6 do PR #58). Exige a API escutando HTTPS (API_TLS=autoassinado, ENG). Proposta: true em prod."
   type        = bool
