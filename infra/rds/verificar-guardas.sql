@@ -13,6 +13,11 @@
 --   regra       rules fora das views (CREATE RULE ... DO INSTEAD) e o estado ev_enabled;
 --   esquema     dono e ACL (GRANT CREATE ON SCHEMA);
 --   privpadrao  ALTER DEFAULT PRIVILEGES (papel, esquema, tipo de objeto, ACL);
+--   papel       atributos de app_user e app_migrator (rolsuper, rolbypassrls, rolcreaterole,
+--               rolcreatedb, rolreplication, rolinherit, rolcanlogin) e rolconfig (ALTER ROLE SET);
+--   vinculo     pg_auth_members em que app_user/app_migrator é MEMBRO (GRANT <papel> TO app_*),
+--               com admin/inherit/set. O vínculo do master com os papéis da aplicação fica de fora:
+--               o nome do master muda entre a referência e o RDS; GRANT ROLE já alerta;
 --   contagem    número de objetos de cada tipo (some/aparece objeto => muda).
 -- Objetos de extensão (pgaudit, pg_stat_statements) ficam de fora: não vêm das migrações.
 --
@@ -118,6 +123,29 @@ privilegios_padrao AS (
          md5(coalesce(d.defaclacl::text, '-'))
     FROM pg_default_acl d
 ),
+papeis_app AS (
+  SELECT oid, rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication,
+         rolinherit, rolcanlogin, rolconfig
+    FROM pg_roles
+   WHERE rolname IN ('app_user', 'app_migrator')
+),
+papeis AS (
+  SELECT 'papel',
+         format('%I', r.rolname),
+         md5(concat_ws(E'\n', 'super=' || r.rolsuper, 'bypassrls=' || r.rolbypassrls,
+               'createrole=' || r.rolcreaterole, 'createdb=' || r.rolcreatedb,
+               'replication=' || r.rolreplication, 'inherit=' || r.rolinherit,
+               'login=' || r.rolcanlogin, 'config=' || coalesce(r.rolconfig::text, '-')))
+    FROM papeis_app r
+),
+vinculos AS (
+  SELECT 'vinculo',
+         format('%I/%I', pg_get_userbyid(m.roleid), r.rolname),
+         md5(concat_ws(E'\n', 'admin=' || m.admin_option, 'inherit=' || m.inherit_option,
+               'set=' || m.set_option))
+    FROM pg_auth_members m
+    JOIN papeis_app r ON r.oid = m.member
+),
 guardas AS (
   SELECT * FROM funcoes
   UNION ALL SELECT * FROM policies
@@ -128,6 +156,8 @@ guardas AS (
   UNION ALL SELECT * FROM regras
   UNION ALL SELECT * FROM esquemas_acl
   UNION ALL SELECT * FROM privilegios_padrao
+  UNION ALL SELECT * FROM papeis
+  UNION ALL SELECT * FROM vinculos
 )
 SELECT tipo, objeto, hash FROM (
   SELECT tipo, objeto, hash FROM guardas

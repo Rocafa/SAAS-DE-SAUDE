@@ -84,6 +84,11 @@ autoteste() {
     -c 'GRANT DELETE ON public.audit_log TO app_user' \
     -c 'GRANT UPDATE (subscription_status) ON public.tenants TO app_user' \
     -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT TRUNCATE ON TABLES TO app_user'
+  # Papéis (O2 da conferência da R10): atributo e vínculo só o master muda (CREATEROLE + ADMIN
+  # sobre o que criou, PG16). CREATEDB porque o master local não tem BYPASSRLS para repassar.
+  PGUSER=rds_master PGPASSWORD="$MASTER_PW" psql --no-psqlrc -X -q -v ON_ERROR_STOP=1 \
+    -c 'ALTER ROLE app_user CREATEDB' \
+    -c 'GRANT app_migrator TO app_user'
   impressao > "$WORK/depois.tsv"
   # Objeto alterado aparece dos dois lados do diff; removido só em "<"; criado só em ">".
   esperadas="$(LC_ALL=C sort <<'FIM'
@@ -103,11 +108,14 @@ trigger	public.audit_log/audit_log_no_truncate
 tabela	public.audit_log
 tabela	public.tenants
 privpadrao	app_migrator/public/r
+papel	app_user
+vinculo	app_migrator/app_user
+contagem	vinculo
 FIM
 )"
   achadas="$(diff "$WORK/antes.tsv" "$WORK/depois.tsv" | sed -n 's/^[<>] //p' | cut -f1,2 | LC_ALL=C sort -u)"
   if [ "$achadas" = "$esperadas" ]; then
-    echo "autoteste ok: $(grep -c . "$WORK/antes.tsv") linhas; as 13 adulterações apareceram."
+    echo "autoteste ok: $(grep -c . "$WORK/antes.tsv") linhas; as 15 adulterações apareceram."
   else
     printf 'FALHA no autoteste. Esperado:\n%s\nVeio:\n%s\n' "$esperadas" "$achadas" >&2; exit 1
   fi

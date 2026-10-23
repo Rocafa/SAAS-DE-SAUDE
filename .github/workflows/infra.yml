@@ -173,7 +173,8 @@ jobs:
     # bootstrap + migrações do repositório e prova que CREATE OR REPLACE FUNCTION, ALTER FUNCTION,
     # ALTER POLICY e NO FORCE RLS aparecem na comparação, e também (R10 do #58) DROP CONSTRAINT,
     # DROP NOT NULL, DROP INDEX, CREATE RULE, ENABLE REPLICA/ALWAYS TRIGGER, GRANT de tabela e de
-    # coluna e ALTER DEFAULT PRIVILEGES.
+    # coluna e ALTER DEFAULT PRIVILEGES; e (O2 da conferência da R10) atributo de papel e vínculo
+    # em pg_auth_members.
     name: conferência das guardas do banco (autoteste)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
