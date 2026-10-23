@@ -115,7 +115,7 @@ variable "alerta_seguranca_email" {
 }
 
 variable "alerta_dpo_email" {
-  description = "E-mail do encarregado (DPO) que recebe os alarmes JOB_ATRASADO e JOBS_DESLIGADOS (jobs.tf). null = só o tópico SNS (assinar quando houver o endereço). Fica no tfvars, fora do git."
+  description = "E-mail do encarregado (DPO) que recebe os alarmes de falha de retenção/revogação: JOBS_DESLIGADOS e JOB_ATRASADO/JOB_ALARME dos jobs de retenção (jobs.tf). null = só o tópico SNS (assinar quando houver o endereço). Fica no tfvars, fora do git."
   type        = string
   default     = null
 }

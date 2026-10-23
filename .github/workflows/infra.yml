@@ -146,21 +146,34 @@ jobs:
           n=$(grep -Ec '^\s*[a-z-]+\s*=\s*"%' staging/auditoria-banco.tf)
           [ "$n" -le 5 ] || { echo "$n filtros com regex (máximo 5 por log group)"; exit 1; }
           # R3 do parecer de jobs (infra-staging.md §4.4): REDIS_URL obrigatório na tarefa da API,
-          # sem JOBS_HABILITADOS, e alarmes JOB_ATRASADO/JOBS_DESLIGADOS no log group da API,
-          # avisando a operação e o DPO.
+          # sem JOBS_HABILITADOS, alarme (termo exato) para cada marcador de falha dos jobs no log
+          # group da API, todos para a operação; DPO só para falha de retenção/revogação.
           grep -q '{ name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app\["redis"\].arn}:url::" }' staging/app.tf
           grep -Eq 'secrets +=\s*local.api_segredos' staging/app.tf
           grep -q 'contains(\[for s in local.api_segredos : s.name\], "REDIS_URL")' staging/app.tf
           if grep -rEn --include='*.tf' 'name *= *"JOBS_HABILITADOS"' .; then
             echo "JOBS_HABILITADOS definido no IaC (§4.4: só com incidente registrado)."; exit 1
           fi
-          for t in JOB_ATRASADO JOBS_DESLIGADOS; do
+          for t in JOB_ATRASADO JOBS_DESLIGADOS JOBS_NAO_AGENDADOS JOB_ALARME JOB_CLINICA_FALHOU \
+                   JOB_TRILHA_FALHOU JOBS_DESLIGADOS_POR_OPCAO JOB_TRABALHADOR_ERRO JOB_FALHOU JOB_DESCONHECIDO; do
             grep -Eq "termo +=\s*\"$t\"" staging/jobs.tf || { echo "filtro $t ausente"; exit 1; }
           done
+          # JOBS_DESLIGADOS não casa com JOBS_DESLIGADOS_POR_OPCAO (N2) e é o único marcador geral com DPO.
+          grep -A3 '^\s*jobs-desligados = {' staging/jobs.tf | grep -q 'excluir *= *\["JOBS_DESLIGADOS_POR_OPCAO"\]'
+          grep -A8 '^\s*jobs-desligados = {' staging/jobs.tf | grep -Eq 'dpo +=\s*true'
+          [ "$(grep -Ec 'dpo +=\s*true' staging/jobs.tf)" -eq 1 ] || { echo "DPO só em JOBS_DESLIGADOS entre os gerais"; exit 1; }
+          # DPO: JOB_ATRASADO/JOB_ALARME dos 6 jobs de retenção/revogação, alarme só no tópico do DPO.
+          for j in whatsapp-retencao importador-expurgo notas-privadas-ciclo retencao-fiscal \
+                   responsaveis-descarte portal-representacoes; do
+            grep -q "^\s*\"$j\",$" staging/jobs.tf || { echo "job de retenção $j fora do alarme do DPO"; exit 1; }
+          done
+          grep -q 'setproduct(\["JOB_ATRASADO", "JOB_ALARME"\], local.jobs_de_retencao)' staging/jobs.tf
+          grep -q 'alarm_actions = \[aws_sns_topic.alertas_dpo.arn\]' staging/jobs.tf
           grep -q 'log_group_name *= *aws_cloudwatch_log_group.api.name' staging/jobs.tf
-          grep -q 'pattern *= *"\\"${each.value.termo}\\""' staging/jobs.tf
+          grep -q 'pattern *= *join(" ", concat(\["\\"${each.value.termo}\\""\]' staging/jobs.tf
+          ! grep -q '"%' staging/jobs.tf || { echo "jobs.tf usa regex; só termo exato"; exit 1; }
           grep -q 'resource "aws_cloudwatch_metric_alarm" "jobs"' staging/jobs.tf
-          grep -q 'alarm_actions = \[aws_sns_topic.alertas_seguranca.arn, aws_sns_topic.alertas_dpo.arn\]' staging/jobs.tf
+          grep -q 'aws_sns_topic.alertas_seguranca.arn, aws_sns_topic.alertas_dpo.arn\] : \[aws_sns_topic.alertas_seguranca.arn\]' staging/jobs.tf
           grep -q 'resource "aws_sns_topic" "alertas_dpo"' staging/jobs.tf
           grep -q 'aws_cloudwatch_metric_alarm.jobs' staging/acesso-humano.tf
           # Cota de 5 filtros com regex no log group da API (os de jobs são termos exatos).
