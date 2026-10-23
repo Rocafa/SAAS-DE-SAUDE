@@ -1187,8 +1187,15 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const profId = randomUUID();
     await withTenant(api.db.db, clinicaA, (tx) => tx.insert(professionals).values({ id: profId, tenantId: clinicaA, userId: profUser, displayName: 'Dra Ficticia Aviso', specialty: 'Fisioterapia' }), adminA.userId);
     const fundador = api.fundador(clinicaA);
+    // O1 (0040): cada destinatário só lê o próprio aviso; o teste junta a caixa de cada um.
     const avisos = async (pac: string) =>
-      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), adminA.userId);
+      (
+        await Promise.all(
+          [fundador, profUser].map((u) =>
+            withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), u),
+          ),
+        )
+      ).flat();
     const alertas = async (transicao: string) =>
       (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'rule' = 'portal_sigilo_transicao'`, sql`${auditLog.metadata}->>'transition' = ${transicao}`)), adminA.userId)).length;
     const alertasAntes = { sigilo: await alertas('sigilo_desligado'), repr: await alertas('representacao_estendida') };
@@ -1199,11 +1206,15 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Caco Ficticio Pai Aviso') });
     expect(await avisos(teen)).toEqual([]);
     await api.http().patch(`/pacientes/${teen}`).set(cab(adminA)).send({ nascimento: nascidoHa(11) }).expect(200);
+    // A representação também se estende (o dia dos 18 vai 3 anos para frente, valendo): N2 (0040) avisa as duas.
     const a1 = await avisos(teen);
-    expect(a1.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
-    expect(a1.every((a) => a.portalTransition === 'sigilo_desligado' && a.createdBy === adminA.userId && a.readAt === null)).toBe(true);
+    const desl = a1.filter((a) => a.portalTransition === 'sigilo_desligado');
+    expect(desl.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
+    expect(a1.filter((a) => a.portalTransition === 'representacao_estendida').map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
+    expect(a1).toHaveLength(4);
+    expect(a1.every((a) => a.createdBy === adminA.userId && a.readAt === null)).toBe(true);
     expect(await alertas('sigilo_desligado')).toBe(alertasAntes.sigilo + 1);
-    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr);
+    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 1);
 
     // Representação estendida: 17 anos -> "corrigido" para 19 (representação acaba) -> volta para 16 (reabre).
     const quase = await criarPaciente(adminA, 'Duda Ficticia Aviso Maioridade', { nascimento: nascidoHa(17) });
@@ -1215,11 +1226,93 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const a2 = await avisos(quase);
     expect(a2.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
     expect(a2.every((a) => a.portalTransition === 'representacao_estendida')).toBe(true);
-    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 1);
+    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 2);
     // O alerta não leva id de paciente (contrato dos alertas do #61): só regra, transição e contagens.
     const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)), adminA.userId);
     expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
     expect(ultimo?.actorId).toBe(adminA.userId);
+  });
+
+  it('N2/N3/O1 do #73 (0040): extensão com a representação valendo alerta; aviso do banco não se forja; só o destinatário lê', async () => {
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ appointment_type_id: string }>(
+      sql`select appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const profUser = randomUUID();
+    const profId = randomUUID();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(professionals).values({ id: profId, tenantId: clinicaA, userId: profUser, displayName: 'Dra Ficticia Aviso N2', specialty: 'Fisioterapia' }), adminA.userId);
+    const fundador = api.fundador(clinicaA);
+    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const avisosDe = async (pac: string, userId: string) =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), userId);
+    const alertas = async (transicao: string) =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'rule' = 'portal_sigilo_transicao'`, sql`${auditLog.metadata}->>'transition' = ${transicao}`)), adminA.userId)).length;
+    const codigo = async (userId: string, q: ReturnType<typeof sql>) => {
+      try {
+        await withTenant(api.db.db, clinicaA, (tx) => tx.execute(q), userId);
+        return 'ok';
+      } catch (e) {
+        return (e as { cause?: { code?: string }; code?: string }).cause?.code ?? (e as { code?: string }).code;
+      }
+    };
+    const antes = { sigilo: await alertas('sigilo_desligado'), repr: await alertas('representacao_estendida') };
+
+    // N2: 17 anos "corrigido" para 13. O sigilo segue ligado e a representação (que ainda valia) se estende:
+    // aviso aos admins e ao profissional da agenda, e anomaly_alert ao DPO.
+    const pac = await criarPaciente(adminA, 'Gabi Ficticia Aviso N2', { nascimento: nascidoHa(17) });
+    await agendar(adminA, pac, profId, base?.appointment_type_id as string, '2027-04-07', '09:00');
+    const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(pac, 'Hugo Ficticio Pai N2') });
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
+    const [vinc] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId);
+    expect(vinc).toMatchObject({ confidentialFrom: nascidoHa(1), representUntil: nascidoHa(-5) });
+    const doFundador = await avisosDe(pac, fundador);
+    const doProf = await avisosDe(pac, profUser);
+    expect(doFundador.map((a) => a.portalTransition)).toEqual(['representacao_estendida']);
+    expect(doProf.map((a) => a.portalTransition)).toEqual(['representacao_estendida']);
+    expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
+    expect(await alertas('sigilo_desligado')).toBe(antes.sigilo);
+    // Encurtar a representação (13 -> 15) não alerta.
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+    expect(await avisosDe(pac, fundador)).toHaveLength(1);
+    expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
+
+    // O1: só o destinatário lê e marca como lido, inclusive por SQL arbitrário.
+    for (const outro of [adminA.userId, recepcao.userId]) {
+      expect(await avisosDe(pac, outro)).toEqual([]);
+      const [{ n } = { n: -1 }] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from clinical_notices where patient_id = ${pac}::uuid or recipient_user_id = ${fundador}::uuid`), outro);
+      expect(n).toBe(0);
+      await withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`update clinical_notices set read_at = now() where patient_id = ${pac}::uuid`), outro);
+    }
+    expect((await avisosDe(pac, fundador))[0]?.readAt).toBeNull();
+    // Sessão de sistema da clínica (sem usuário) não lê aviso nenhum.
+    const sistema = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from clinical_notices`));
+    expect(sistema[0]?.n).toBe(0);
+    // A caixa da API continua funcionando para o destinatário (sem nome nem data: só id, transição e ator).
+    const tok = api.sessoes.criarSessao({ tenantId: clinicaA, userId: fundador, perfis: ['admin'] });
+    const caixa = (await api.http().get('/avisos').set({ Authorization: `Bearer ${tok}` }).expect(200)).body as Record<string, unknown>[];
+    const meu = caixa.find((a) => a.tipo === 'portal_sigilo_transicao' && a.pacienteId === pac);
+    expect(Object.keys(meu as object).sort()).toEqual(['criadoEm', 'criadoPor', 'id', 'lidoEm', 'pacienteId', 'tipo', 'transicao']);
+    await api.http().post(`/avisos/${String(meu?.id)}/lido`).set({ Authorization: `Bearer ${tok}` }).send({}).expect(200);
+    await api.http().post(`/avisos/${String(meu?.id)}/lido`).set(cab(adminA)).send({}).expect(404);
+
+    // N3: o runtime não forja o aviso do banco (nem com a GUC da função, nem com created_by = sessão), nem
+    // chama a função interna.
+    for (const userId of [adminA.userId, recepcao.userId, fundador]) {
+      const forja = sql`insert into clinical_notices (tenant_id, recipient_user_id, kind, patient_id, portal_transition, created_by)
+        values (${clinicaA}::uuid, ${fundador}::uuid, 'portal_sigilo_transicao', ${pac}::uuid, 'sigilo_desligado', ${userId}::uuid)`;
+      expect(await codigo(userId, forja)).toBe('42501');
+      expect(await codigo(userId, sql`select set_config('app.portal_alerta', 'on', true), set_config('app.portal_recalc', 'on', true)`)).toBe('ok');
+      const comGuc = await withTenant(api.db.db, clinicaA, async (tx) => {
+        await tx.execute(sql`select set_config('app.portal_alerta', 'on', true)`);
+        await tx.execute(forja);
+        return 'ok';
+      }, userId).catch((e: { cause?: { code?: string } }) => e.cause?.code);
+      expect(comGuc).toBe('42501');
+      expect(await codigo(userId, sql`select app_portal_sigilo_alertar(${clinicaA}::uuid, ${pac}::uuid, 'sigilo_desligado', 1)`)).toBe('42501');
+    }
+    expect(await avisosDe(pac, fundador)).toHaveLength(1);
+    // Os demais tipos continuam com a regra de antes (criados pela API como o usuário da sessão).
+    expect(await codigo(adminA.userId, sql`insert into clinical_notices (tenant_id, recipient_user_id, kind, legal_hold_id, created_by)
+      values (${clinicaA}::uuid, ${fundador}::uuid, 'retencao_retirada_pedida', ${randomUUID()}::uuid, ${recepcao.userId}::uuid)`)).toBe('42501');
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {

@@ -455,8 +455,11 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     const caixaOutro = await api.http().get('/avisos').set(cab(outroA));
     expect((caixaOutro.body as { id: string }[]).map((a) => a.id)).not.toContain(aviso?.id);
     await api.http().post('/avisos/' + String(aviso?.id) + '/lido').set(cab(outroA)).send({}).expect(404);
-    const lerDireto = withTenant(api.db.db, clinicaA, (tx) => tx.update(clinicalNotices).set({ readAt: new Date() }).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId);
-    expect(await sqlstates(lerDireto)).toContain('42501');
+    // O1 do #73 (0040): a RLS é por destinatário; por SQL, quem não é o destinatário nem enxerga o aviso
+    // (lê zero linhas e o UPDATE não alcança nada).
+    expect(await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId)).toEqual([]);
+    await withTenant(api.db.db, clinicaA, (tx) => tx.update(clinicalNotices).set({ readAt: new Date() }).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId);
+    expect(((await api.http().get('/avisos').set(cab(psiA))).body as { id: string; lidoEm: string | null }[]).find((a) => a.id === aviso?.id)?.lidoEm).toBeNull();
     const lido = await api.http().post('/avisos/' + String(aviso?.id) + '/lido').set(cab(psiA)).send({});
     expect(lido.status).toBe(200);
     expect(((await api.http().get('/avisos').set(cab(psiA))).body as { lidoEm: string | null }[])[0]?.lidoEm).not.toBeNull();
