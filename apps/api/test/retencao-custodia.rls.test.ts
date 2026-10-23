@@ -537,6 +537,78 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     expect(trilha.every((l) => l.actorKind === 'sistema')).toBe(true);
   });
 
+  it('O-R17c do #63 (0044): o runtime não forja o pedido de correção do fundador, nem por INSERT nem pela trilha', async () => {
+    const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+    if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
+    const antiga = randomUUID() as TenantId;
+    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Forja' }));
+    const errado = randomUUID();
+    const correto = randomUUID();
+    const forjado = randomUUID();
+    const sentinela = '00000000-0000-0000-0000-000000000000';
+    const linhaDaTrilha = (op: string, pedido: string) => ({
+      tenantId: antiga,
+      actorId: sentinela,
+      actorKind: 'sistema' as const,
+      action: 'permission_change' as const,
+      scope: 'tenants.founder',
+      metadata: { op, pedido, user_id_anterior: errado, user_id: correto, via: 'runbook_correcao', chamado: 'INC-20' },
+    });
+    const op = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
+    try {
+      await op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${errado}::uuid, 'OPS-20')`);
+
+      // 1) Tabela do pedido: o runtime não lê, não grava e não altera (zero privilégio), com ou sem contexto de clínica.
+      for (const stmt of [
+        sql`select * from founder_fix_requests`,
+        sql`insert into founder_fix_requests (id, tenant_id, user_id_anterior, user_id, chamado, requested_xid)
+            values (${forjado}::uuid, ${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-20', 1)`,
+        sql`update founder_fix_requests set confirmed_at = null`,
+        sql`delete from founder_fix_requests`,
+      ]) {
+        expect(await sqlstates(withTenant(api.db.db, antiga, (tx) => tx.execute(stmt), errado))).toContain('42501');
+        expect(await sqlstates(api.db.db.execute(stmt))).toContain('42501');
+      }
+
+      // 2) Pela trilha: o runtime consegue gravar um `founder_fix_requested` forjado na audit_log da clínica,
+      //    mas a confirmação lê só founder_fix_requests: o id forjado não existe (55000) e nada muda.
+      await withTenant(api.db.db, antiga, (tx) => tx.insert(auditLog).values(linhaDaTrilha('founder_fix_requested', forjado)), errado);
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${forjado}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
+      const [t0] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
+      expect(t0?.founderUserId).toBe(errado);
+
+      // 3) Negação de serviço pela trilha: um `founder_fixed` forjado para um pedido legítimo não bloqueia a confirmação.
+      const [pedido] = await op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-20') as id`);
+      const pedidoId = pedido!.id as string;
+      await withTenant(api.db.db, antiga, (tx) => tx.insert(auditLog).values(linhaDaTrilha('founder_fixed', pedidoId)), errado);
+      await op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`);
+      // O pedido fica marcado como confirmado na tabela interna e vale uma vez.
+      const [linha] = await op.begin((t) => t`select confirmed_at is not null as confirmado from founder_fix_requests where id = ${pedidoId}::uuid`);
+      expect(linha?.confirmado).toBe(true);
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
+
+      // 4) Lista branca de papel: só membro de app_migrator liga a exceção dos guardas; o runtime, nunca.
+      const [comMigrator] = await op.begin(async (t) => {
+        await t`select set_config('app.correcao_fundador', ${antiga}, true)`;
+        return t`select app_runbook_corrigindo_fundador(${antiga}::uuid) as ok`;
+      });
+      expect(comMigrator?.ok).toBe(true);
+      const [peloRuntime] = await withTenant(api.db.db, antiga, async (tx) => {
+        await tx.execute(sql`select set_config('app.correcao_fundador', ${antiga}, true)`);
+        const r = await tx.execute(sql`select app_runbook_corrigindo_fundador(${antiga}::uuid) as ok`);
+        return [...r] as { ok: boolean }[];
+      }, correto);
+      expect(peloRuntime?.ok).toBe(false);
+      const [def] = await op`select pg_get_functiondef('app_runbook_corrigindo_fundador(uuid)'::regprocedure) as d`;
+      expect(def?.d as string).toMatch(/pg_has_role\(current_user, 'app_migrator', 'MEMBER'\)/);
+      expect(def?.d as string).not.toMatch(/<>\s*'app_user'/);
+    } finally {
+      await op.end({ timeout: 5 });
+    }
+    const [t] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
+    expect(t?.founderUserId).toBe(correto);
+  });
+
   it('R15: perfil concedido ou revogado direto no banco, sem o evento na trilha, é recusado no COMMIT', async () => {
     const alvo = randomUUID();
     const semTrilha = withTenant(api.db.db, clinica, (tx) =>

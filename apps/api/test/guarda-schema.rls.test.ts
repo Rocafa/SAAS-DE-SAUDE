@@ -122,6 +122,7 @@ const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   whatsapp_routes: 'número de negócio -> clínica para o webhook sem sessão (0032); só app_whatsapp_tenant_for_number (SECURITY DEFINER) lê e o trigger da configuração grava',
   portal_birth_date_changes: 'marca "a data de nascimento mudou nesta transação" (0038, R1 do #73); só os gatilhos de patients e o recálculo do sigilo (SECURITY DEFINER) gravam/consomem',
   job_tenant_index: 'ids das clínicas para o agendador de jobs (0043); só o gatilho de tenants grava e app_job_tenants (SECURITY DEFINER, fora de contexto) lê',
+  founder_fix_requests: 'pedido de correção do fundador (0044, O-R17c do #63); só as funções do runbook, com o papel app_migrator, gravam e leem: o runtime não forja o pedido',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
