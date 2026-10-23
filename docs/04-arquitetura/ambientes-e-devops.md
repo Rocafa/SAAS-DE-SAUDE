@@ -13,6 +13,7 @@ Princípios:
 - **Build uma vez, promove a mesma imagem** (tag por SHA do commit) de staging para prod.
 - Configuração por variável de ambiente; segredos injetados do Secrets Manager (nunca no repo).
 - Infra como código (Terraform) em `infra/` (a criar), com plano revisado em PR.
+- **Agendador de jobs (R3 do parecer dos jobs, 23/10/2026; condição do piloto):** o IaC de staging e produção tem de **exigir `REDIS_URL`** (`rediss://`, sem padrão; o plano falha sem ela) e **criar os alarmes `JOB_ATRASADO` e `JOBS_DESLIGADOS`** (filtros de métrica no CloudWatch Logs + SNS de on-call; retenção também para o DPO), além do alarme de `jobs` ≠ `bullmq` no `/health/ready` por mais de 15 min. Detalhe em [api-dominio.md §14](api-dominio.md), "Monitoramento e IaC". O `infra-staging.md` vive na branch do Terraform (`devops/terraform-staging-b`) e recebe este item quando ela for retomada.
 - Feature flags para liberar funcionalidades por tenant (ex.: IA, TISS).
 
 ## 2. Fluxo Git
