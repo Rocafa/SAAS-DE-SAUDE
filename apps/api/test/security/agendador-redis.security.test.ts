@@ -5,15 +5,17 @@
  * R5 b do parecer dos jobs — o teste NUNCA toca um Redis de verdade:
  * - só roda com Redis LOCAL (localhost, 127.0.0.1 ou ::1) E com a variável explícita `JOBS_REDIS_TESTE=1`;
  *   fora disso, recusa (não conecta). No CI a recusa é erro: teste pulado é verde falso;
- * - fila com PREFIXO e NOME aleatórios (o `agendar` remove agendamentos fora do registro: na fila padrão,
+ * - fila com PREFIXO e NOME aleatórios (o `agendar` remove agendamentos aposentados: na fila padrão,
  *   apagaria os agendamentos reais), e chaves de trava/sucesso com prefixo aleatório;
  * - a limpeza apaga só o que este teste criou (a fila aleatória e as chaves com o prefixo aleatório).
  */
+import type { TenantId } from '@plataforma/shared';
 import Redis from 'ioredis';
 import { randomBytes } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
 import { AgendadorBullMQ, fabricasReais, FILA_DE_JOBS, PREFIXO_DAS_CHAVES, RegistroRedis, TravaRedis } from '../../src/modules/jobs/agendador-bullmq';
-import type { DefinicaoDeJob } from '../../src/modules/jobs/agendador.port';
+import type { DefinicaoDeJob, JobAposentado } from '../../src/modules/jobs/agendador.port';
+import { ExecutorDeJobs } from '../../src/modules/jobs/executor-de-jobs';
 
 const HOSTS_LOCAIS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -100,6 +102,72 @@ describe.skipIf(recusa !== null)('agendador com Redis real', () => {
     expect(depois).not.toBeNull();
     await b.liberar(NOME, depois as string);
   });
+
+  it('R4: dois despachos SIMULTÂNEOS do mesmo job em duas "instâncias" (conexões distintas): só um roda', async () => {
+    let soltar: () => void = () => undefined;
+    const pendente = new Promise<void>((r) => (soltar = r));
+    let rodou = 0;
+    const job: DefinicaoDeJob = {
+      nome: NOME,
+      periodicidade: { aCadaMs: 300_000, descricao: 'teste' },
+      prazoMaximoMs: 1_800_000,
+      travaMs: 600_000,
+      critico: false,
+      trilha: 'com_efeito',
+      porClinica: async () => (rodou++, await pendente, {}),
+    };
+    const silencioso = { log: () => undefined, warn: () => undefined, error: () => undefined };
+    const instancia = () =>
+      new ExecutorDeJobs({
+        jobs: [job],
+        trava: new TravaRedis(redis(), PREFIXO_CHAVES),
+        registro: new RegistroRedis(redis(), PREFIXO_CHAVES),
+        listarClinicas: () => Promise.resolve(['00000000-0000-4000-8000-0000000000aa' as TenantId]),
+        registrarTrilha: () => Promise.resolve(),
+        logger: silencioso,
+      });
+    const despachos = Promise.all([instancia().executar(NOME), instancia().executar(NOME)]);
+    await new Promise((r) => setTimeout(r, 200));
+    soltar();
+    expect((await despachos).map((r) => r.situacao).sort()).toEqual(['em_andamento', 'ok']);
+    expect(rodou).toBe(1);
+    // A trava foi solta no fim (a chave não ficou).
+    expect(await redis().exists(`${PREFIXO_CHAVES}:trava:${NOME}`)).toBe(0);
+  });
+
+  it('R5: deploy gradual — a instância velha não apaga o agendamento do job novo; só o aposentado sai (fila aleatória)', async () => {
+    const diario = (nome: string): DefinicaoDeJob => ({
+      nome,
+      periodicidade: { cron: '0 4 1 1 *', descricao: 'teste' }, // longe: não dispara durante o teste
+      prazoMaximoMs: 60_000,
+      travaMs: 5_000,
+      critico: false,
+      trilha: 'sempre',
+      porClinica: () => Promise.resolve({}),
+    });
+    const NOVO = `${NOME}-novo`;
+    const subir = async (jobs: DefinicaoDeJob[], aposentados: JobAposentado[] = []) => {
+      const f = fabricasReais(REDIS_URL, { nome: NOME_FILA, prefixo: PREFIXO_FILA });
+      const ag = new AgendadorBullMQ(f, () => f.fechar());
+      await ag.agendar(jobs, () => Promise.resolve(), aposentados);
+      await ag.parar();
+    };
+    const agendados = async () => {
+      const f = fabricasReais(REDIS_URL, { nome: NOME_FILA, prefixo: PREFIXO_FILA });
+      const fila = f.fila();
+      try {
+        return (await fila.getJobSchedulers(0, -1)).map((s) => s.id ?? s.key).sort();
+      } finally {
+        await fila.close();
+        await f.fechar();
+      }
+    };
+    await subir([diario(NOME), diario(NOVO)]); // versão nova
+    await subir([diario(NOME)]); // versão velha reinicia no meio do rollout
+    expect(await agendados()).toEqual([NOME, NOVO].sort());
+    await subir([diario(NOME)], [{ nome: NOVO, desde: '2026-10-23', motivo: 'teste' }]);
+    expect(await agendados()).toEqual([NOME]);
+  }, 30_000);
 
   it('último sucesso fica no Redis e é o mesmo para outra conexão (sinal de vida entre instâncias)', async () => {
     await new RegistroRedis(redis(), PREFIXO_CHAVES).marcarSucesso(NOME, 1_234);
