@@ -9,6 +9,9 @@
  * 0022 (R13/R15 do #63): os DEMAIS admins ativos da clínica também são avisados quando um perfil é
  * concedido ou revogado e quando a retirada de uma retenção legal é pedida ou aprovada. O aviso leva só
  * ids da equipe, o perfil e o id da retenção (nada de paciente); o fato completo está na trilha.
+ *
+ * 0040 (O1 do #73): a RLS também filtra pelo destinatário (`recipient_user_id = app_current_user()`):
+ * ler e marcar como lido só o próprio aviso. Criar continua por tenant (INSERT sem RETURNING).
  */
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
