@@ -1,4 +1,4 @@
-# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63; correção na 0042)
+# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63; correção na 0042 e 0044)
 
 **Quando usar:** uma vez, antes de abrir o acesso ao piloto, depois de aplicar a migração 0022. Também
 serve, depois disso, para qualquer clínica antiga que apareça sem admin no banco.
@@ -79,7 +79,7 @@ custódia nem conceder perfil nelas até este runbook rodar.
 4. **Registrar** no chamado: clínica, data, quem executou e quem conferiu. O fundador então concede os
    demais perfis pela API (`POST /clinica/membros`), e cada concessão avisa os outros admins.
 
-## Correção do fundador errado (R17 do #63, migração 0042)
+## Correção do fundador errado (R17 do #63, migrações 0042 e 0044)
 
 Use quando o passo 3 mostrar que o admin gravado não é o responsável do contrato. Até a correção, o
 admin indevido tem acesso de admin à clínica: trate como **incidente**.
@@ -99,8 +99,11 @@ admin indevido tem acesso de admin à clínica: trate como **incidente**.
    ```
 
    Devolve o **id do pedido** (vai para o chamado). Recusa com 55000 se o `userId-errado` não for o
-   fundador atual, e com 22023 se o chamado for inválido ou o correto for igual ao errado. Grava
-   `founder_fix_requested` na trilha (só ids e chamado).
+   fundador atual, e com 22023 se o chamado for inválido ou o correto for igual ao errado. Grava o
+   pedido na tabela interna `founder_fix_requests` (0044: só `app_migrator` lê e grava) e registra
+   `founder_fix_requested` na trilha (só ids e chamado). A confirmação lê o pedido **da tabela
+   interna**, nunca da trilha: uma linha `founder_fix_requested` na trilha sem pedido na tabela é
+   forjada e deve ser tratada no incidente.
 4. **O conferente confirma** em até 24 h, em **outra** transação, redigitando o `userId` correto a
    partir do provedor de identidade (não copia de quem executa):
 
@@ -116,14 +119,26 @@ admin indevido tem acesso de admin à clínica: trate como **incidente**.
    clínica (`member_revoke`, um evento por perfil) e grava `founder_fixed` com o pedido e o chamado.
    Recusa com 42501 se rodar na mesma transação do pedido; com 22023 se o `userId` ou o chamado não
    baterem com o pedido; com 55000 se o pedido não existir nessa clínica, já tiver sido confirmado,
-   tiver expirado (> 24 h) ou se o fundador tiver mudado desde o pedido.
+   tiver expirado (> 24 h) ou se o fundador tiver mudado desde o pedido. O pedido é travado na
+   confirmação e marcado como confirmado (`confirmed_at`): duas confirmações simultâneas viram uma
+   confirmação e uma recusa. Para conferir o pedido antes de confirmar (papel `app_migrator`):
+
+   ```sql
+   SELECT id, tenant_id, user_id_anterior, user_id, chamado, created_at, confirmed_at
+     FROM founder_fix_requests WHERE id = '<id-do-pedido>'::uuid;
+   ```
 5. **Conferir** como no passo 3: `GET /clinica/membros` (sessão do admin correto) mostra só ele como
    admin; a trilha tem `founder_fix_requested`, `member_found`, `member_revoke` e `founder_fixed` com o
    mesmo chamado. Encerrar o incidente com o registro de quem pediu e de quem confirmou.
 
-O banco garante: o runtime (`app_user`) não executa nenhuma das duas funções (42501), nem ligando a
-configuração da correção por conta própria; a exceção nos guardas de `tenants` e `clinic_members` só
-vale dentro da confirmação. As duas pessoas usam o mesmo papel de banco, então a separação entre quem
+O banco garante: só membros de `app_migrator` executam as duas funções e ligam a exceção dos guardas
+(lista branca, `pg_has_role(current_user, 'app_migrator', 'MEMBER')`, 0044). O runtime (`app_user`) e
+qualquer papel novo (BI, leitura) recebem 42501, mesmo ligando por conta própria a configuração da
+correção; a exceção nos guardas de `tenants` e `clinic_members` só vale dentro da confirmação. O
+runtime (e o portal, que usa o mesmo papel) não tem nenhum privilégio em `founder_fix_requests`: não
+forja um pedido por INSERT, e uma linha forjada na trilha (`founder_fix_requested` ou `founder_fixed`)
+não cria nem bloqueia pedido. A tabela é interna (`app_internal_tables()`) e fica fora da exportação
+da clínica. As duas pessoas usam o mesmo papel de banco, então a separação entre quem
 pede e quem confirma também depende do chamado: **quem pede não confirma**.
 
 ## Lista de verificação (marcar no chamado, por clínica)
