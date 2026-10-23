@@ -52,6 +52,10 @@
 | Rodada 20.3: ✅ observações da R10 do #58 — aprovado com ressalva (fmt corrigido) | Maestro @Rocafa | 23/10/2026 | PR #58 |
 | Rodada 20.4: ✅ **agendador real dos jobs** (BullMQ, 7 jobs, 0043) — aprovado com ressalvas; R1/R2/R6 resolvidas. **Condição de merge do #73: os 3 testes com Redis real (`JOBS_REDIS_TESTE=1`) verdes no CI, saída anexada** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 
+| Rodada 21.1: jobs R3 (resto) — alarmes `JOBS_NAO_AGENDADOS`/`JOB_ALARME`/`JOB_CLINICA_FALHOU` e estado do agendador | Maestro @Rocafa (agente devops-ci) | 23/10/2026 | PR #58 |
+| Rodada 21.2: #63 O-R17c — pedido de correção do fundador em tabela só do migrador (0044) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 21.3: #67 N1–N3 — guarda de 20 anos completa, via oficial do recibo para IR, corrida recebimento × anulação (0045) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
