@@ -294,6 +294,33 @@ describe('opt-in: sem ele, nada sai', () => {
   });
 });
 
+describe('R4 do parecer dos jobs: despachos simultâneos não enviam em dobro (reserva no banco)', () => {
+  it('duas passadas de lembretes AO MESMO TEMPO na mesma clínica (trava de job vencida/ausente): cada consulta recebe uma mensagem só', async () => {
+    // Segunda camada além da trava do job: a reserva agendado -> enviando (FOR UPDATE SKIP LOCKED) e o índice
+    // único por consulta. Sem trava nenhuma, duas passadas concorrentes não podem mandar a mesma mensagem.
+    const casos: Array<{ tel: string; consulta: string }> = [];
+    for (let i = 0; i < 3; i++) {
+      const tel = telefoneNovo();
+      const p = await paciente(adminA, tel);
+      const c = await consulta(adminA, p, 20);
+      await optIn(recepA, p);
+      casos.push({ tel, consulta: c.id });
+    }
+    const antes = falso.enviadas.length;
+    const [um, dois] = await Promise.all([svc.executarLembretesComoSistema(clinicaA), svc.executarLembretesComoSistema(clinicaA)]);
+    // As duas terminam sem erro; somadas, programam e enviam cada consulta UMA vez (nenhuma pega a mesma linha).
+    expect(um.enviados + dois.enviados).toBe(casos.length);
+    expect(um.programados + dois.programados).toBe(casos.length);
+    expect(falso.enviadas.length - antes).toBe(casos.length);
+    // E a passada seguinte não repete nada.
+    expect((await svc.executarLembretesComoSistema(clinicaA)).enviados).toBe(0);
+    for (const c of casos) {
+      expect(enviadasPara(c.tel), 'uma mensagem por consulta').toHaveLength(1);
+      expect(await envioDoAgendamento(clinicaA, c.consulta)).toMatchObject({ status: 'enviado', attempts: 1 });
+    }
+  });
+});
+
 describe('V1: o opt-in vale só para o número que consentiu', () => {
   it('opt-in grava o número que consentiu, cifrado e com o HMAC', async () => {
     const tel = telefoneNovo();
