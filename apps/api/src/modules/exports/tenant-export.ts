@@ -182,6 +182,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
   whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
+  portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); consumida no mesmo COMMIT, sem dado do titular',
   whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
     'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
