@@ -105,7 +105,8 @@ beforeAll(async () => {
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
   adminA = api.sessao(clinicaA, 'admin');
-  recepA = api.sessao(clinicaA, 'recepcao');
+  // R19 do #65 (0041): estornar sessão de pacote exige o perfil registrado no banco.
+  recepA = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
   finA = api.sessao(clinicaA, 'financeiro');
   profA = api.sessao(clinicaA, 'profissional');
   adminB = api.sessao(clinicaB, 'admin');

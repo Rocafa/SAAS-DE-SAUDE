@@ -111,7 +111,8 @@ beforeAll(async () => {
   clinicaB = await api.novaClinica();
   adminA = api.sessao(clinicaA, 'admin');
   recepA = api.sessao(clinicaA, 'recepcao');
-  finA = api.sessao(clinicaA, 'financeiro');
+  // R19 do #65 (0041): estornar sessão de pacote exige o perfil registrado no banco.
+  finA = await api.membro(clinicaA, api.sessao(clinicaA, 'financeiro'), 'financeiro');
   profA = api.sessao(clinicaA, 'profissional');
   adminB = api.sessao(clinicaB, 'admin');
 
@@ -757,7 +758,6 @@ describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente;
   });
 
   it('R18: o estorno grava a hora do banco, não a enviada pelo cliente (0029)', async () => {
-    await api.membro(clinicaA, finA, 'financeiro');
     const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R18', total: 4 }));
     await consumir(pacoteId, await agendamento({ prof: profissionalA }));
     const [sessao] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
@@ -774,6 +774,35 @@ describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente;
     // Hora do banco: recente (folga de relógio entre o processo do teste e o Postgres local).
     expect(gravada!.reversedAt!.getTime()).toBeGreaterThan(antes - 60_000);
     expect(gravada!.reversedAt!.getTime()).toBeLessThan(Date.now() + 60_000);
+  });
+
+  it('R19: estornar em nome próprio por SQL exige perfil autorizado registrado no banco (0041)', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R19', total: 6 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    const [viva] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const estornoDireto = (quem: string) =>
+      withTenant(
+        api.db.db,
+        clinicaA,
+        (tx) => tx.update(packageSessions).set({ reversedAt: new Date(), reversedBy: quem, reversalReason: 'lancamento_errado' }).where(eq(packageSessions.id, viva!.id)),
+        quem,
+      );
+    // Perfil só no token (sem clinic_members), perfil fora da lista (psicólogo) e usuário de outra clínica: 42501.
+    const soToken = api.sessao(clinicaA, 'financeiro');
+    const psicologo = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'psicologo');
+    const deOutraClinica = await api.membro(clinicaB, api.sessao(clinicaB, 'financeiro'), 'financeiro');
+    for (const s of [soToken, psicologo, deOutraClinica]) expect(await sqlstate(estornoDireto(s.userId))).toContain('42501');
+    // Pela API, o perfil do token sem registro no banco vira 403 explicável, sem estornar.
+    const api403 = await post(soToken, `/pacotes/${pacoteId}/consumos/${viva!.id}/estornar`, { motivo: 'lancamento_errado' });
+    expect(api403.status).toBe(403);
+    expect(api403.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
+    const [intacta] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, viva!.id)));
+    expect(intacta).toMatchObject({ reversedAt: null, reversedBy: null });
+    // Perfil autorizado registrado (recepção) estorna em nome próprio.
+    const recepRegistrada = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    await estornoDireto(recepRegistrada.userId);
+    const [estornada] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, viva!.id)));
+    expect(estornada).toMatchObject({ reversedBy: recepRegistrada.userId, reversalReason: 'lancamento_errado' });
   });
 });
 
