@@ -67,7 +67,7 @@ locals {
 
     # --- termos exatos (etiqueta de comando do pgaudit) ---
     create-trigger           = "\"AUDIT: SESSION\" \",CREATE TRIGGER,\""
-    drop-trigger             ="\"AUDIT: SESSION\" \",DROP TRIGGER,\""
+    drop-trigger             = "\"AUDIT: SESSION\" \",DROP TRIGGER,\""
     alter-role               = "\"AUDIT: SESSION\" \",ALTER ROLE,\""
     create-function          = "\"AUDIT: SESSION\" \",CREATE FUNCTION,\""
     alter-function           = "\"AUDIT: SESSION\" \",ALTER FUNCTION,\""
