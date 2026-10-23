@@ -160,6 +160,51 @@ describe('agendador em memória', () => {
     await expect(ag.disparar('teste')).rejects.toThrow('nenhum job');
   });
 
+  it('R4: dois despachos SIMULTÂNEOS do mesmo job (duas "instâncias", mesma trava): só um roda, o outro pula', async () => {
+    // O job de lembretes do registro, com a trava de verdade (2× o intervalo); o trabalho fica pendurado até
+    // os dois despachos terem disputado a trava.
+    let soltar: () => void = () => undefined;
+    const pendente = new Promise<void>((r) => (soltar = r));
+    const vistas: TenantId[] = [];
+    const lembretes = job(async (t) => (vistas.push(t), await pendente, { enviados: 1 }), {
+      nome: 'whatsapp-lembretes',
+      periodicidade: { aCadaMs: 300_000, descricao: 'a cada 5 min' },
+      prazoMaximoMs: 1_800_000,
+      travaMs: 600_000,
+      trilha: 'com_efeito',
+    });
+    validarDefinicoes([lembretes]);
+    const trava = new TravaEmMemoria(); // o "Redis" compartilhado pelas duas instâncias
+    const instancia = () => {
+      const logs: string[] = [];
+      const executor = new ExecutorDeJobs({
+        jobs: [lembretes],
+        trava,
+        registro: new RegistroEmMemoria(),
+        listarClinicas: () => Promise.resolve([A, B]),
+        registrarTrilha: () => Promise.resolve(),
+        logger: { log: (m) => logs.push(m), warn: (m) => logs.push(m), error: (m) => logs.push(m) },
+      });
+      const resumos: string[] = [];
+      const ag = new AgendadorEmMemoria();
+      return { ag, logs, resumos, executar: async (n: string) => void resumos.push((await executor.executar(n)).situacao) };
+    };
+    const um = instancia();
+    const dois = instancia();
+    await um.ag.agendar([lembretes], um.executar);
+    await dois.ag.agendar([lembretes], dois.executar);
+    const despachos = Promise.all([um.ag.disparar('whatsapp-lembretes'), dois.ag.disparar('whatsapp-lembretes')]);
+    await new Promise((r) => setTimeout(r, 10));
+    soltar();
+    await despachos;
+    expect([...um.resumos, ...dois.resumos].sort()).toEqual(['em_andamento', 'ok']);
+    expect(vistas).toEqual([A, B]); // cada clínica uma vez só: nada em dobro
+    expect([...um.logs, ...dois.logs].filter((m) => m.startsWith('JOB_EM_ANDAMENTO'))).toHaveLength(1);
+    // Terminou e soltou: o disparo seguinte roda normalmente.
+    await um.ag.disparar('whatsapp-lembretes');
+    expect(um.resumos.at(-1)).toBe('ok');
+  });
+
   it('a trava em memória vence sozinha', async () => {
     let agora = 0;
     const trava = new TravaEmMemoria(() => agora);
