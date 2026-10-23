@@ -7,7 +7,7 @@
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 15/10/2026 (rodada 15: §6 revisada com o prontuário e o financeiro). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 23/10/2026 (rodadas 16–20: importador, responsáveis, portal, WhatsApp e a integração #73). Último relatório: [rodadas 17–19](docs/relatorios/2026-10-22-rodadas-17-a-19.md). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -67,8 +67,9 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
   - **guias de convênio e pacotes** (#62);
   - **prontuário** por nicho: cifrado, versionado, só com vínculo de cuidado, notas privadas da psicologia (#63);
   - **financeiro**: cobranças, caixa, recibos sem buraco, insumo do Receita Saúde (#65);
+  - **integração #73** (substitui #66–#69): **importador** dos concorrentes (desligado em produção até a R3), **responsáveis** do paciente (pagador congelado no recibo; informação clínica só por decisão do profissional), **backend do portal do paciente** (sessão própria; responsável só para menor/curatela, sem nada clínico; sigilo do adolescente até no banco), **lembretes por WhatsApp** (opt-in amarrado ao número, modelos em lista fechada, canal desligado por padrão). Guardião: aprovado; 527 testes de isolamento locais;
   - **telas ligadas à API real** (#60).
-- **Ainda não há:** login real (depende da **D4**, o gargalo), importador de dados dos concorrentes, backend do portal do paciente, WhatsApp, nem ambiente aplicado na AWS.
+- **Ainda não há:** login real (depende da **D4**, o gargalo), conta da Meta/BSP para o WhatsApp real, agendador real dos jobs (em andamento), telas do portal no contrato novo, nem ambiente aplicado na AWS.
 - **Infra em PR:** Terraform do staging (#58, aprovado com ressalvas, nada aplicado na AWS) e imagem Docker distroless com scan (#59).
 - ⚠️ **O GitHub Actions parou por falta de pagamento da conta:** hoje nenhum CI roda, e sem CI verde não se faz merge de código ([fila.md](docs/00-governanca/fila.md)).
 - **O que falta para produção** (infra, regulação, custos e checklist de go-live): [rodada 7](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
