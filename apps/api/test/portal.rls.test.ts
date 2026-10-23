@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   appointments,
   auditLog,
+  clinicalNotices,
   encounters,
   patientGuardians,
   patients,
@@ -21,6 +22,7 @@ import {
   portalInvites,
   portalLinks,
   portalRightsRequests,
+  professionals,
 } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
@@ -1132,6 +1134,92 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     );
     expect(fecho.map((t) => t.actorId)).toEqual([recepcao.userId]);
     expect(fecho[0]?.metadata).toMatchObject({ kind: 'link', closed: true, representing_was_on: true, representing_now_on: false });
+  });
+
+  it('N1 do #73 (a): trocar a cifra, recalcular e devolver a original na mesma transação não vale; o sigilo fecha e a representação volta', async () => {
+    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const doador = await criarPaciente(adminA, 'Teo Ficticio Doador Volta', { nascimento: nascidoHa(30) });
+    const cifraDe = async (id: string) =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ enc: patients.birthDateEnc }).from(patients).where(eq(patients.id, id)), adminA.userId))[0]?.enc as string;
+    const troca = sql`update patients set birth_date_enc = (select birth_date_enc from patients where id = ${doador}::uuid) where id = `;
+    // Duas variantes: devolve sem recalcular de novo; devolve e recalcula de novo (as duas com datas "coerentes"
+    // de quem só faz 12 anos em 2093: sigilo desligado e representação estendida).
+    for (const [idade, recalcDepois] of [[14, false], [10, true]] as const) {
+      const pac = await criarPaciente(adminA, `Uma Ficticia Volta ${idade}`, { nascimento: nascidoHa(idade) });
+      const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(pac, `Vito Ficticio Pai Volta ${idade}`) });
+      const vinculo = async () =>
+        (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId))[0];
+      const original = { confidentialFrom: nascidoHa(idade - 12), representUntil: nascidoHa(idade - 18) };
+      expect(await vinculo()).toMatchObject(original);
+      const enc0 = await cifraDe(pac);
+      await withTenant(
+        api.db.db,
+        clinicaA,
+        async (tx) => {
+          await tx.execute(sql`${troca}${pac}::uuid`);
+          await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
+          await tx.execute(sql`update patients set birth_date_enc = ${enc0} where id = ${pac}::uuid`);
+          if (recalcDepois) await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
+        },
+        recepcao.userId,
+      );
+      expect(await cifraDe(pac)).toBe(enc0);
+      const depois = await vinculo();
+      // Sigilo fechado (valendo hoje) e representação de volta ao fim de antes (dia dos 18 da data real).
+      const hoje = hojeNaClinica();
+      expect(depois?.confidentialFrom).toBe(original.confidentialFrom <= hoje ? original.confidentialFrom : hoje);
+      expect(depois?.representUntil).toBe(original.representUntil);
+      const volta = await withTenant(
+        api.db.db,
+        clinicaA,
+        (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_reverted'`)),
+        adminA.userId,
+      );
+      expect(volta.map((t) => t.actorId)).toEqual([recepcao.userId]);
+      expect(volta[0]?.metadata).toMatchObject({ kind: 'link', target_id: conta.vinculoId, closed: true, confidential_now_on: true, representing_now_on: true });
+    }
+  });
+
+  it('N1 do #73 (b): o recálculo que desliga o sigilo ou estende a representação além dos 18 avisa admin e profissional e alerta o DPO', async () => {
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ appointment_type_id: string }>(
+      sql`select appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const profUser = randomUUID();
+    const profId = randomUUID();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(professionals).values({ id: profId, tenantId: clinicaA, userId: profUser, displayName: 'Dra Ficticia Aviso', specialty: 'Fisioterapia' }), adminA.userId);
+    const fundador = api.fundador(clinicaA);
+    const avisos = async (pac: string) =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), adminA.userId);
+    const alertas = async (transicao: string) =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'rule' = 'portal_sigilo_transicao'`, sql`${auditLog.metadata}->>'transition' = ${transicao}`)), adminA.userId)).length;
+    const alertasAntes = { sigilo: await alertas('sigilo_desligado'), repr: await alertas('representacao_estendida') };
+
+    // Sigilo desligado: adolescente de 14 "corrigido" para 11 (o dia dos 12 vai para o futuro).
+    const teen = await criarPaciente(adminA, 'Bia Ficticia Aviso Sigilo', { nascimento: nascidoHa(14) });
+    await agendar(adminA, teen, profId, base?.appointment_type_id as string, '2027-04-06', '09:00');
+    await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Caco Ficticio Pai Aviso') });
+    expect(await avisos(teen)).toEqual([]);
+    await api.http().patch(`/pacientes/${teen}`).set(cab(adminA)).send({ nascimento: nascidoHa(11) }).expect(200);
+    const a1 = await avisos(teen);
+    expect(a1.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
+    expect(a1.every((a) => a.portalTransition === 'sigilo_desligado' && a.createdBy === adminA.userId && a.readAt === null)).toBe(true);
+    expect(await alertas('sigilo_desligado')).toBe(alertasAntes.sigilo + 1);
+    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr);
+
+    // Representação estendida: 17 anos -> "corrigido" para 19 (representação acaba) -> volta para 16 (reabre).
+    const quase = await criarPaciente(adminA, 'Duda Ficticia Aviso Maioridade', { nascimento: nascidoHa(17) });
+    await agendar(adminA, quase, profId, base?.appointment_type_id as string, '2027-04-06', '10:00');
+    await contaDe(adminA, quase, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(quase, 'Edu Ficticio Pai Aviso') });
+    await api.http().patch(`/pacientes/${quase}`).set(cab(adminA)).send({ nascimento: nascidoHa(19) }).expect(200);
+    expect(await avisos(quase)).toEqual([]); // encerrar a representação não é transição perigosa
+    await api.http().patch(`/pacientes/${quase}`).set(cab(adminA)).send({ nascimento: nascidoHa(16) }).expect(200);
+    const a2 = await avisos(quase);
+    expect(a2.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
+    expect(a2.every((a) => a.portalTransition === 'representacao_estendida')).toBe(true);
+    expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 1);
+    // O alerta não leva id de paciente (contrato dos alertas do #61): só regra, transição e contagens.
+    const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)), adminA.userId);
+    expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
+    expect(ultimo?.actorId).toBe(adminA.userId);
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {
