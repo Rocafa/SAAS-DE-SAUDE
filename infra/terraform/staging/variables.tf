@@ -120,6 +120,16 @@ variable "alerta_dpo_email" {
   default     = null
 }
 
+variable "canary_runtime" {
+  description = "Runtime do CloudWatch Synthetics do canary jobs-ready (jobs-ready.tf). Conferir na AWS se a versão segue suportada antes do apply."
+  type        = string
+  default     = "syn-nodejs-puppeteer-10.0"
+  validation {
+    condition     = startswith(var.canary_runtime, "syn-nodejs-")
+    error_message = "O script do canary é Node.js: use um runtime syn-nodejs-*."
+  }
+}
+
 variable "tls_ate_a_tarefa" {
   description = "TLS também no trecho ALB -> tarefa da API (R6 do PR #58). Exige a API escutando HTTPS (API_TLS=autoassinado, ENG). Proposta: true em prod."
   type        = bool

@@ -176,6 +176,19 @@ jobs:
           grep -q 'aws_sns_topic.alertas_seguranca.arn, aws_sns_topic.alertas_dpo.arn\] : \[aws_sns_topic.alertas_seguranca.arn\]' staging/jobs.tf
           grep -q 'resource "aws_sns_topic" "alertas_dpo"' staging/jobs.tf
           grep -q 'aws_cloudwatch_metric_alarm.jobs' staging/acesso-humano.tf
+          # jobs != bullmq no /health/ready: canary do Synthetics em sa-east-1 (jobs-ready.tf).
+          unzip -p staging/canary/jobs-ready.zip nodejs/node_modules/index.js | cmp - staging/canary/index.js \
+            || { echo "canary/jobs-ready.zip diferente de canary/index.js: refazer o zip"; exit 1; }
+          grep -q "jobs !== 'bullmq'" staging/canary/index.js
+          grep -q 'URL_READY = "https://${aws_lb.this.dns_name}/health/ready"' staging/jobs-ready.tf
+          grep -q 'expression = "rate(5 minutes)"' staging/jobs-ready.tf
+          grep -A30 'resource "aws_cloudwatch_metric_alarm" "jobs_ready"' staging/jobs-ready.tf > /tmp/alarme-ready
+          grep -q 'metric_name = "SuccessPercent"' /tmp/alarme-ready
+          grep -Eq 'evaluation_periods += 6' /tmp/alarme-ready
+          grep -Eq 'datapoints_to_alarm += 3' /tmp/alarme-ready
+          grep -q 'treat_missing_data = "breaching"' /tmp/alarme-ready
+          grep -q 'alarm_actions = \[aws_sns_topic.alertas_seguranca.arn\]' /tmp/alarme-ready
+          grep -q 'aws_cloudwatch_metric_alarm.jobs_ready.arn' staging/acesso-humano.tf
           # Cota de 5 filtros com regex no log group da API (os de jobs são termos exatos).
           n=$(grep -rlE --include='*.tf' 'log_group_name *= *aws_cloudwatch_log_group.api.name' staging | xargs grep -Ec '"%' | awk -F: '{s+=$NF} END {print s+0}')
           [ "$n" -le 5 ] || { echo "$n filtros com regex no log group da API (máximo 5)"; exit 1; }

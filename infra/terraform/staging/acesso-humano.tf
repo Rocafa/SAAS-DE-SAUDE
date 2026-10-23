@@ -208,7 +208,10 @@ data "aws_iam_policy_document" "alertas_seguranca" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = concat([aws_cloudwatch_metric_alarm.ddl_sensivel.arn], [for a in aws_cloudwatch_metric_alarm.jobs : a.arn])
+      values = concat(
+        [aws_cloudwatch_metric_alarm.ddl_sensivel.arn, aws_cloudwatch_metric_alarm.jobs_ready.arn],
+        [for a in aws_cloudwatch_metric_alarm.jobs : a.arn],
+      )
     }
   }
 }
