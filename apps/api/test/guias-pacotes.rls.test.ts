@@ -11,6 +11,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  appointments,
   auditLog,
   guideSessions,
   guideSessionSignatures,
@@ -21,6 +22,7 @@ import {
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { hashDaConfirmacao, hojeNaClinica, somarDias } from '../src/modules/insurance/guias-regras';
+import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -671,6 +673,52 @@ describe('R20 do #65: consumo de guia só aceita o estorno (0042)', () => {
     // Perfil autorizado registrado (recepção) estorna em nome próprio.
     await estornoDireto(recepA.userId);
     expect(await linha(c)).toMatchObject({ reversedBy: recepA.userId, reversalReason: 'lancamento_errado' });
+  });
+});
+
+describe('R21 do #65: correção atendido -> faltou sem perfil registrado', () => {
+  const status = (s: Sessao, ag: string, novo: string) => post(s, `/agendamentos/${ag}/status`, { status: novo });
+
+  it('o passo que estorna devolve 403 perfil_nao_registrado (não 500) e nada é gravado; com o perfil, a correção chega a faltou', async () => {
+    // Sessão de agora (dentro da janela de atendimento), atendida pelo profissional e consumida na guia.
+    const { data, hora } = noFusoDaClinica(new Date());
+    const r = await post(recepA, '/agendamentos', { pacienteId: pacienteA, profissionalId: profissionalA, tipoId: tipoA, data, hora, encaixe: true });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const ag = id(r);
+    expect((await post(recepA, `/agendamentos/${ag}/check-in`)).status).toBe(200);
+    expect((await status(profA, ag, 'atendido')).status).toBe(200);
+    const g = await novaGuia(recepA);
+    const c = await post(recepA, `/guias/${g.id}/consumos`, { agendamentoId: ag });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const consumoId = (c.body as { consumoId: string }).consumoId;
+
+    // Correção atendido -> faltou: atendido -> em atendimento -> chegou -> agendado (estorna) -> faltou.
+    expect((await status(profA, ag, 'em_atendimento')).status).toBe(200);
+    expect((await status(profA, ag, 'chegou')).status).toBe(200);
+    const auditoriaAntes = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'appointment_id' = ${ag}`));
+    // Recepção só no token (sem linha em clinic_members): o passo que estorna é recusado com 403 explicável.
+    const recepSoToken = api.sessao(clinicaA, 'recepcao');
+    const recusa = await status(recepSoToken, ag, 'agendado');
+    expect(recusa.status, JSON.stringify(recusa.body)).toBe(403);
+    expect(recusa.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
+    expect(JSON.stringify(recusa.body)).not.toMatch(/42501|guide_sessions|SQL/i);
+    // Nada gravado: status, consumo, saldo e trilha iguais.
+    const [agLinha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, ag)));
+    expect(agLinha?.status).toBe('checked_in');
+    const [consumo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
+    expect(consumo).toMatchObject({ reversedAt: null, reversedBy: null });
+    expect((await api.http().get(`/guias/${g.id}`).set(cab(recepA))).body).toMatchObject({ sessoesUsadas: 1, saldo: 9 });
+    const auditoriaDepois = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'appointment_id' = ${ag}`));
+    expect(auditoriaDepois.length).toBe(auditoriaAntes.length);
+
+    // Com o perfil registrado (recepA), a mesma correção estorna e chega a faltou.
+    expect((await status(recepA, ag, 'agendado')).status).toBe(200);
+    expect((await status(recepA, ag, 'faltou')).status).toBe(200);
+    expect((await api.http().get(`/guias/${g.id}`).set(cab(recepA))).body).toMatchObject({ sessoesUsadas: 0, saldo: 10 });
+    const [estornado] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
+    expect(estornado).toMatchObject({ reversedBy: recepA.userId, reversalReason: 'status_corrigido' });
   });
 });
 
