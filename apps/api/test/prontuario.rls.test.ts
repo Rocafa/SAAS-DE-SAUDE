@@ -460,9 +460,34 @@ describe('sigilo da psicologia (configurável enquanto a 1.11 está com o advoga
     expect(await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId)).toEqual([]);
     await withTenant(api.db.db, clinicaA, (tx) => tx.update(clinicalNotices).set({ readAt: new Date() }).where(eq(clinicalNotices.id, aviso!.id)), outroA.userId);
     expect(((await api.http().get('/avisos').set(cab(psiA))).body as { id: string; lidoEm: string | null }[]).find((a) => a.id === aviso?.id)?.lidoEm).toBeNull();
+    // S1 do #73: o PRÓPRIO destinatário, por SQL, só marca como lido; não muda outra coluna junto
+    // (gatilho, 42501) nem repassa o aviso a outra pessoa (gatilho/WITH CHECK, 42501).
+    const updPsi = (set: Partial<typeof clinicalNotices.$inferInsert>) =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(clinicalNotices).set(set).where(eq(clinicalNotices.id, aviso!.id)), psiA.userId);
+    const [original] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(eq(clinicalNotices.id, aviso!.id)), psiA.userId);
+    const agora = new Date();
+    for (const set of [
+      { readAt: agora, recipientUserId: outroA.userId },
+      { readAt: agora, kind: 'perfil_alterado' as const },
+      { readAt: agora, patientId: pacienteA },
+      { readAt: agora, createdBy: psiA.userId },
+      { readAt: agora, toMode: 'restrito_ao_autor' as const },
+      { recipientUserId: outroA.userId },
+      { patientId: pacienteA },
+    ]) {
+      expect(await sqlstates(updPsi(set)), JSON.stringify(Object.keys(set))).toContain('42501');
+    }
+    const [depoisDasTentativas] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(eq(clinicalNotices.id, aviso!.id)), psiA.userId);
+    expect(depoisDasTentativas).toEqual(original);
     const lido = await api.http().post('/avisos/' + String(aviso?.id) + '/lido').set(cab(psiA)).send({});
     expect(lido.status).toBe(200);
     expect(((await api.http().get('/avisos').set(cab(psiA))).body as { lidoEm: string | null }[])[0]?.lidoEm).not.toBeNull();
+    // S1: lido não volta a "não lido" nem tem a data trocada, nem pelo destinatário.
+    expect(await sqlstates(updPsi({ readAt: null }))).toContain('42501');
+    expect(await sqlstates(updPsi({ readAt: new Date(0) }))).toContain('42501');
+    const [aposLido] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(eq(clinicalNotices.id, aviso!.id)), psiA.userId);
+    expect(aposLido?.readAt).not.toBeNull();
+    expect(aposLido?.readAt?.getTime()).not.toBe(0);
     // O registro escrito sob "só o autor lê" continua só do autor, depois da troca.
     const antigo = await api.http().get(`/atendimentos/${atPsi}`).set(cab(outroA));
     expect(antigo.body).toMatchObject({ conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null, sigilo: 'restrito_ao_autor' });
