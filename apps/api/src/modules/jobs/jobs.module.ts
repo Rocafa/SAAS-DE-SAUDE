@@ -44,8 +44,9 @@ export interface InfraDosJobs {
 
 export function criarInfraDosJobs(env: NodeJS.ProcessEnv = process.env): InfraDosJobs {
   const memoria = { trava: new TravaEmMemoria(), registro: new RegistroEmMemoria() };
-  if (env.JOBS_HABILITADOS === 'false') return { agendador: null, ...memoria, motivoDesligado: 'JOBS_HABILITADOS=false' };
-  if (env.JOBS_HABILITADOS !== undefined && env.JOBS_HABILITADOS !== 'true') throw new Error('JOBS_HABILITADOS inválida: true ou false');
+  const flag = env.JOBS_HABILITADOS?.trim();
+  if (flag === 'false') return { agendador: null, ...memoria, motivoDesligado: 'JOBS_HABILITADOS=false' };
+  if (flag && flag !== 'true') throw new Error('JOBS_HABILITADOS inválida: true ou false');
   const url = env.REDIS_URL?.trim();
   // Em teste, nunca BullMQ por acaso (o CI tem REDIS_URL para o rate limit): jobs de verdade rodando no meio da
   // suíte gravariam trilha nas clínicas de teste. O teste do adaptador real monta o BullMQ explicitamente.
