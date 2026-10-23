@@ -973,6 +973,53 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     ).rejects.toThrow();
   });
 
+  it('R1 do #73: SQL arbitrário na sessão da clínica não suspende o sigilo pela função de recálculo; a trilha sai do banco', async () => {
+    const pac = await criarPaciente(adminA, 'Olga Ficticia Sigilo', { nascimento: nascidoHa(14) });
+    const resp = await responsavelDe(pac, 'Rui Ficticio Pai Sigilo');
+    const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    const vinculo = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId))[0];
+    const original = { confidentialFrom: nascidoHa(14 - 12), representUntil: nascidoHa(14 - 18) };
+    expect(await vinculo()).toMatchObject(original);
+    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const codigo = async (userId: string, q: ReturnType<typeof sql>) => {
+      try {
+        await withTenant(api.db.db, clinicaA, (tx) => tx.execute(q), userId);
+        return 'ok';
+      } catch (e) {
+        return (e as { cause?: { code?: string }; code?: string }).cause?.code ?? (e as { code?: string }).code;
+      }
+    };
+    for (const userId of [adminA.userId, recepcao.userId]) {
+      // Datas coerentes (dia dos 12 e dos 18), mas sem a data de nascimento ter mudado: recusado.
+      expect(await codigo(userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
+      // Datas que não vêm de uma data de nascimento: recusado.
+      expect(await codigo(userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2099-01-01'::date, '2099-01-01'::date)`)).toBe('22023');
+      // A marca não é forjável: a tabela é interna (zero privilégio) e GUC não conta.
+      expect(await codigo(userId, sql`insert into portal_birth_date_changes (tenant_id, patient_id, xact) values (${clinicaA}::uuid, ${pac}::uuid, txid_current())`)).toBe('42501');
+      expect(await codigo(userId, sql`select set_config('app.portal_nascimento_mudou', ${pac}, true), set_config('app.portal_recalc', 'on', true), app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
+    }
+    // Sem a sessão de usuário (só o tenant), nem fechar.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, null, null)`))).rejects.toHaveProperty('cause.code', '42501');
+    expect(await vinculo()).toMatchObject(original);
+
+    // Pela API (a data muda de verdade): a trilha é gravada pelo BANCO, com os valores antigos e novos.
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
+    const novo = { confidentialFrom: nascidoHa(13 - 12), representUntil: nascidoHa(13 - 18) };
+    expect(await vinculo()).toMatchObject(novo);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`)), adminA.userId);
+    expect(trilha.map((t) => t.metadata)).toEqual([
+      expect.objectContaining({
+        op: 'confidentiality_recalculated', count: 1, closed: false, reason: 'birth_date_changed',
+        changes: [{ kind: 'link', id: conta.vinculoId, confidential_from: [original.confidentialFrom, novo.confidentialFrom], represent_until: [original.representUntil, novo.representUntil] }],
+      }),
+    ]);
+    expect(trilha[0]?.actorId).toBe(adminA.userId);
+    // A marca é consumida: na transação seguinte, reabrir de novo é recusado.
+    expect(await codigo(adminA.userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
+    expect(await vinculo()).toMatchObject(novo);
+  });
+
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {
     // "Terapeuta" não é pego por texto: a clínica marca. "Saúde Mental" sem a marca: o banco liga sozinho.
     const terapeuta = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Tera Ficticia', especialidade: 'Terapeuta', areaSensivel: true }).expect(201))

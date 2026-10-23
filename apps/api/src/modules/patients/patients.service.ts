@@ -165,30 +165,22 @@ export class PatientsService {
         scope: SCOPE,
         metadata: { patient_id: id, changed: campos.join(',') },
       });
-      if (dados.nascimento !== undefined) await this.recalcularSigiloDoPortal(tx, ctx, id, dados.nascimento ?? null);
+      if (dados.nascimento !== undefined) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null);
       return this.paraDto(tx, ctx.tenantId, linha);
     });
   }
 
   /**
-   * N3 do #68 (conferência de 22/10): a data de nascimento mudou. O banco já FECHOU os vínculos/convites de
-   * responsável do portal (gatilho da 0037: sigilo valendo e representação encerrada hoje); aqui o serviço
-   * recalcula pelo dia dos 12 (sigilo do adolescente) e dos 18 (fim da representação) da data nova. Sem data
-   * válida, fica fechado. Trilha só com a contagem.
+   * N3 do #68 (conferência de 22/10) e R1 do #73: a data de nascimento mudou. O gatilho da 0038 marcou a
+   * mudança nesta transação; aqui o serviço recalcula pelo dia dos 12 (sigilo do adolescente) e dos 18 (fim
+   * da representação) da data nova. Sem data válida, fecha. O banco só reabre com a marca desta transação
+   * (que consome) e grava a trilha com os valores antigos e novos; se ninguém recalcular, o COMMIT fecha.
    */
-  private async recalcularSigiloDoPortal(tx: TenantTx, ctx: RequestContext, id: string, nascimento: string | null): Promise<void> {
+  private async recalcularSigiloDoPortal(tx: TenantTx, id: string, nascimento: string | null): Promise<void> {
     const valida = nascimento !== null && /^\d{4}-\d{2}-\d{2}$/.test(nascimento);
     const sigilo = valida ? aniversarioDe(nascimento, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia) : null;
     const maioridade = valida ? aniversarioDe(nascimento, IDADE_MAIORIDADE) : null;
-    const [r] = await tx.execute<{ n: number }>(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date) as n`);
-    const n = Number(r?.n ?? 0);
-    if (n > 0) {
-      await recordAudit(tx, ctx, {
-        action: AuditAction.Update,
-        scope: 'portal_links',
-        metadata: { op: 'confidentiality_recalculated', patient_id: id, count: n, closed: !valida },
-      });
-    }
+    await tx.execute(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date)`);
   }
 
   /** Inativar, nunca apagar (retenção por conselho; front-r8 R4). Idempotente. */

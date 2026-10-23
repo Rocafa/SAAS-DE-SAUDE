@@ -120,6 +120,7 @@ const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   portal_invite_otp: 'hash do código de resgate do convite (0033, A2 do #68); só as funções SECURITY DEFINER do portal leem/gravam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
   whatsapp_routes: 'número de negócio -> clínica para o webhook sem sessão (0032); só app_whatsapp_tenant_for_number (SECURITY DEFINER) lê e o trigger da configuração grava',
+  portal_birth_date_changes: 'marca "a data de nascimento mudou nesta transação" (0038, R1 do #73); só os gatilhos de patients e o recálculo do sigilo (SECURITY DEFINER) gravam/consomem',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
