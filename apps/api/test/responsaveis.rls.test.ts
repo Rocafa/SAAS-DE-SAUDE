@@ -12,7 +12,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
+import { appointments, auditLog, cashSessions, charges, guardians, patientGuardianHistory, patientGuardians, payments } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { mascararCpf } from '../src/modules/patients/responsaveis.service';
@@ -637,7 +637,8 @@ async function envelhecer(pacienteId: string): Promise<void> {
       await t`update patient_guardian_history h set occurred_at = h.occurred_at - interval '21 years'
                 from patient_guardians v where v.tenant_id = h.tenant_id and v.id = h.link_id and v.patient_id = ${pacienteId}::uuid`;
       await t`alter table patient_guardian_history enable trigger patient_guardian_history_no_update_delete`;
-      await t`update patients set created_at = created_at - interval '21 years' where id = ${pacienteId}::uuid`;
+      // N1 do #67 (0045): a guarda conta também `updated_at`.
+      await t`update patients set created_at = created_at - interval '21 years', updated_at = updated_at - interval '21 years' where id = ${pacienteId}::uuid`;
     });
   } finally {
     await op.end({ timeout: 5 });
@@ -697,6 +698,202 @@ describe('A4 do 2º parecer do #67: responsáveis na guarda de 20 anos do prontu
     );
     expect(trilha).toContain(pac);
     for (const proibido of ['QZE4', 'QZE5', cpfFicticio(850), cpfFicticio(851)]) expect(trilha).not.toContain(proibido);
+  });
+});
+
+/** Comandos como dono (papel de migração), numa transação, no contexto da clínica A: simula o tempo passado. */
+async function comoDono(fn: (t: postgres.TransactionSql) => Promise<unknown>): Promise<void> {
+  const url = process.env.DATABASE_MIGRATOR_URL;
+  if (!url) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para simular a guarda vencida');
+  const op = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await op.begin(async (t) => {
+      await t`select app_set_tenant(${clinicaA}::uuid)`;
+      await fn(t);
+    });
+  } finally {
+    await op.end({ timeout: 5 });
+  }
+}
+
+/** A guarda do paciente vai até hoje + 20 anos (true), já venceu (false) ou outra data (a própria data). */
+async function guardaDe(pacienteId: string): Promise<'hoje+20' | 'vencida' | string> {
+  const [l] = await withTenant(
+    api.db.db,
+    clinicaA,
+    (tx) =>
+      tx.execute<{ ate: string; hoje20: string; hoje: string }>(sql`select app_patient_record_retention_until(${clinicaA}::uuid, ${pacienteId}::uuid)::text as ate,
+        (app_fiscal_today() + make_interval(years => 20))::date::text as hoje20, app_fiscal_today()::text as hoje`),
+    recepA.userId,
+  );
+  if (!l) throw new Error('sem resposta');
+  if (l.ate === l.hoje20) return 'hoje+20';
+  if (l.ate <= l.hoje) return 'vencida';
+  return l.ate;
+}
+
+/** Agendamento do profissional de profA, com check-in (sessão realizada), para consumir pacote ou guia. */
+async function sessaoRealizada(pacienteId: string): Promise<string> {
+  horaSeq++;
+  const ag = await post(recepA, '/agendamentos', {
+    pacienteId,
+    profissionalId: profissionalDoProfA,
+    tipoId: tipoA,
+    data: `2031-06-${String(1 + (horaSeq % 28)).padStart(2, '0')}`,
+    hora: `${String(6 + Math.floor(horaSeq / 28)).padStart(2, '0')}:00`,
+    encaixe: true,
+  });
+  expect(ag.status, JSON.stringify(ag.body)).toBe(201);
+  expect((await post(recepA, `/agendamentos/${id(ag)}/check-in`)).status).toBe(200);
+  return id(ag);
+}
+
+describe('N1 da conferência do #67: a guarda de 20 anos conta cadastro alterado, sessões de pacote e de guia e assinaturas', () => {
+  it('patients.updated_at, package_sessions, guide_sessions e guide_session_signatures alongam a guarda (0045)', async () => {
+    const envelhecerCadastro = (pac: string, ambos: boolean) =>
+      comoDono((t) =>
+        ambos
+          ? t`update patients set created_at = created_at - interval '21 years', updated_at = updated_at - interval '21 years' where id = ${pac}::uuid`
+          : t`update patients set created_at = created_at - interval '21 years' where id = ${pac}::uuid`,
+      );
+
+    // (1) Cadastro criado há 21 anos mas ALTERADO hoje: a guarda conta da alteração.
+    const pCad = await paciente(recepA, { nome: 'Paciente Ficticio Guarda Cadastro', nascimento: nascidoHa(40) });
+    await envelhecerCadastro(pCad, false);
+    expect(await guardaDe(pCad)).toBe('hoje+20');
+    await comoDono((t) => t`update patients set updated_at = updated_at - interval '21 years' where id = ${pCad}::uuid`);
+    expect(await guardaDe(pCad)).toBe('vencida');
+
+    // (2) Sessão de pacote consumida hoje (cadastro antigo).
+    const pPac = await paciente(recepA, { nome: 'Paciente Ficticio Guarda Pacote', nascimento: nascidoHa(40) });
+    await envelhecerCadastro(pPac, true);
+    expect(await guardaDe(pPac)).toBe('vencida');
+    const pacote = await post(recepA, '/pacotes', { pacienteId: pPac, nome: 'Pacote Ficticio Guarda', total: 5 });
+    expect(pacote.status, JSON.stringify(pacote.body)).toBe(201);
+    const consumo = await post(recepA, `/pacotes/${id(pacote)}/consumos`, { agendamentoId: await sessaoRealizada(pPac) });
+    expect(consumo.status, JSON.stringify(consumo.body)).toBe(201);
+    expect(await guardaDe(pPac)).toBe('hoje+20');
+
+    // (3) Sessão de guia consumida hoje; depois, com a sessão envelhecida, a ASSINATURA de hoje ainda segura.
+    const pGuia = await paciente(recepA, { nome: 'Paciente Ficticio Guarda Guia', nascimento: nascidoHa(40) });
+    await envelhecerCadastro(pGuia, true);
+    expect(await guardaDe(pGuia)).toBe('vencida');
+    const conv = await post(adminA, '/convenios', { nome: `Operadora Ficticia Guarda ${randomUUID().slice(0, 6)}`, exigeAssinatura: true });
+    expect(conv.status, JSON.stringify(conv.body)).toBe(201);
+    const validade = `${Number(hoje().slice(0, 4)) + 1}${hoje().slice(4)}`;
+    const guia = await post(recepA, '/guias', { pacienteId: pGuia, convenioId: id(conv), numero: `FIC-G-${randomUUID().slice(0, 8)}`, sessoesAutorizadas: 5, validade });
+    expect(guia.status, JSON.stringify(guia.body)).toBe(201);
+    const cg = await post(recepA, `/guias/${id(guia)}/consumos`, { agendamentoId: await sessaoRealizada(pGuia) });
+    expect(cg.status, JSON.stringify(cg.body)).toBe(201);
+    const consumoId = (cg.body as { consumoId: string }).consumoId;
+    expect(await guardaDe(pGuia)).toBe('hoje+20');
+    const ass = await post(profA, `/guias/${id(guia)}/consumos/${consumoId}/assinatura`, { meio: 'papel' });
+    expect(ass.status, JSON.stringify(ass.body)).toBe(201);
+    await comoDono(async (t) => {
+      await t`alter table guide_sessions disable trigger guide_sessions_so_estorno`;
+      await t`update guide_sessions set consumed_at = consumed_at - interval '21 years' where id = ${consumoId}::uuid`;
+      await t`alter table guide_sessions enable trigger guide_sessions_so_estorno`;
+    });
+    expect(await guardaDe(pGuia)).toBe('hoje+20');
+    // Sem a assinatura recente (envelhecida também), a guarda vence: prova que era ela que segurava.
+    await comoDono((t) => t`update guide_session_signatures set signed_at = signed_at - interval '21 years' where guide_session_id = ${consumoId}::uuid`);
+    expect(await guardaDe(pGuia)).toBe('vencida');
+  });
+});
+
+/** Portão para coordenar duas transações concorrentes. */
+function portao(): { aberto: Promise<void>; abrir: () => void } {
+  let abrir!: () => void;
+  const aberto = new Promise<void>((r) => (abrir = r));
+  return { aberto, abrir };
+}
+const esperar = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+describe('N3 da conferência do #67: corrida entre recebimento e anulação do pagador (0045)', () => {
+  /** Paciente menor com responsável pagador e uma cobrança PF aberta, sem pagador próprio. */
+  async function cenario(sufixo: string) {
+    const pac = await paciente(recepA, { nome: `Paciente Ficticio Corrida ${sufixo}`, nascimento: nascidoHa(8) });
+    const v = await responsavel(recepA, pac, { nome: `Resp Ficticio Corrida QZN3${sufixo}`, tipo: 'pai_mae', pagador: true });
+    horaSeq++;
+    const ag = await post(recepA, '/agendamentos', {
+      pacienteId: pac,
+      profissionalId: profissionalPfA,
+      tipoId: tipoA,
+      data: `2031-07-${String(1 + (horaSeq % 28)).padStart(2, '0')}`,
+      hora: `${String(6 + Math.floor(horaSeq / 28)).padStart(2, '0')}:00`,
+      encaixe: true,
+    });
+    expect(ag.status, JSON.stringify(ag.body)).toBe(201);
+    const c = await post(recepA, '/financeiro/cobrancas', { agendamentoId: id(ag), valorCentavos: 6000, atendimentoPor: 'pf' });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const [caixa] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(cashSessions).where(eq(cashSessions.status, 'open')).limit(1), recepA.userId);
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, v.responsavelId)), recepA.userId);
+    return { v, chargeId: id(c), cashSessionId: caixa!.id, selo: g!.nameEnc! };
+  }
+
+  /** Recebimento direto no banco congelando o vínculo (como o serviço faz), com o paid_cents coerente. */
+  const receber = (tx: TenantTx, s: Awaited<ReturnType<typeof cenario>>) =>
+    tx
+      .insert(payments)
+      .values({ tenantId: clinicaA, chargeId: s.chargeId, cashSessionId: s.cashSessionId, method: 'dinheiro', amountCents: 6000, receivedBy: recepA.userId, guardianPayerLinkId: s.v.id, guardianPayerEnc: s.selo })
+      .then(() => tx.update(charges).set({ paidCents: 6000 }).where(eq(charges.id, s.chargeId)));
+  /** Anulação (cadastro errado) pelo profissional, que não opera o financeiro. */
+  const anular = (tx: TenantTx, s: Awaited<ReturnType<typeof cenario>>) =>
+    tx
+      .update(patientGuardians)
+      .set({ validUntil: s.v.vigencia.desde, endReason: 'cadastro_errado', annulReasonEnc: s.selo, discardAfter: '2099-01-01', endedAt: new Date(), endedBy: profA.userId, updatedBy: profA.userId })
+      .where(eq(patientGuardians.id, s.v.id));
+  const recebimentosDo = async (vinculo: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: payments.id }).from(payments).where(eq(payments.guardianPayerLinkId, vinculo)), recepA.userId)).length;
+  const situacao = async (vinculo: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, vinculo)), recepA.userId))[0]?.endReason ?? null;
+
+  it('anulação primeiro (sem COMMIT): o recebimento espera e, confirmada a anulação, é recusado — nada congela o anulado', async () => {
+    const s = await cenario('A');
+    const anulou = portao();
+    const segurar = portao();
+    const t1 = withTenant(api.db.db, clinicaA, async (tx) => {
+      await anular(tx, s);
+      anulou.abrir();
+      await segurar.aberto;
+    }, profA.userId);
+    await anulou.aberto;
+    let t2Terminou = false;
+    const t2 = withTenant(api.db.db, clinicaA, (tx) => receber(tx, s), recepA.userId).finally(() => {
+      t2Terminou = true;
+    });
+    await esperar(700);
+    // Trava de linha (FOR SHARE no gatilho): o recebimento está esperando a anulação.
+    expect(t2Terminou).toBe(false);
+    segurar.abrir();
+    await t1;
+    expect(await sqlstate(t2)).toContain('23514');
+    expect(await situacao(s.v.id)).toBe('cadastro_errado');
+    expect(await recebimentosDo(s.v.id)).toBe(0);
+  });
+
+  it('recebimento primeiro (sem COMMIT): a anulação espera e, confirmado o recebimento, exige quem opera o financeiro', async () => {
+    const s = await cenario('B');
+    const recebeu = portao();
+    const segurar = portao();
+    const t2 = withTenant(api.db.db, clinicaA, async (tx) => {
+      await receber(tx, s);
+      recebeu.abrir();
+      await segurar.aberto;
+    }, recepA.userId);
+    await recebeu.aberto;
+    let t1Terminou = false;
+    const t1 = withTenant(api.db.db, clinicaA, (tx) => anular(tx, s), profA.userId).finally(() => {
+      t1Terminou = true;
+    });
+    await esperar(700);
+    expect(t1Terminou).toBe(false);
+    segurar.abrir();
+    await t2;
+    // A anulação enxerga o recebimento confirmado: o profissional não anula pagador com recebimento (R1).
+    expect(await sqlstate(t1)).toContain('42501');
+    expect(await situacao(s.v.id)).toBeNull();
+    expect(await recebimentosDo(s.v.id)).toBe(1);
   });
 });
 

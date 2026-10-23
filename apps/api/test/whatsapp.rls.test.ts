@@ -1276,7 +1276,8 @@ describe('2º parecer do #69: N1 (modelo reconferido), N3 + R3 (eliminação do 
     // Guarda vencida (papel de migração envelhece o cadastro: o runtime não consegue).
     await owner.begin(async (t) => {
       await t`select app_set_tenant(${clinicaA}::uuid)`;
-      await t`update patients set created_at = created_at - interval '21 years' where id = ${p}::uuid`;
+      // N1 do #67 (0045): a guarda conta também `updated_at`.
+      await t`update patients set created_at = created_at - interval '21 years', updated_at = updated_at - interval '21 years' where id = ${p}::uuid`;
     });
     const r = await api.http().post(rota).set(cab(adminA)).send({});
     expect(r.status, JSON.stringify(r.body)).toBe(200);
