@@ -5,6 +5,8 @@
 
 > ⚠️ **12/10/2026 (noite): o GitHub Actions parou** ("recent account payments have failed or your spending limit needs to be increased"). Nenhum CI roda até ajustar o billing da conta Rocafa. **Não fazer merge de PR de código sem CI verde.** PRs só de documentação podem entrar (processo-de-trabalho.md §5). Também parados: os PRs do Dependabot #49–#53 (#49 sobe o ioredis para a versão principal 6 e precisa de teste); com o #54, as actions passam a vir num PR agrupado.
 
+
+> 🔴 **23/10/2026: `next@16.4.0` (apps/web) tem 2 vulnerabilidades críticas e 1 alta** (`pnpm audit`). O Dependabot **#72** sobe para 16.4.2 — **primeiro merge quando o CI voltar**, antes da ordem habitual.
 ## Em andamento
 
 | Item | Quem pegou | Desde | Onde |
@@ -48,7 +50,7 @@
 | Rodada 20.1: ✅ #65 R18–R21 (0041/0042) e S1 do #73 — **#65 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 20.2: ✅ #63 R17 (runbook + correção do fundador em dois passos, 0042) — **#63 APROVADO** em 23/10 | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 20.3: ✅ observações da R10 do #58 — aprovado com ressalva (fmt corrigido) | Maestro @Rocafa | 23/10/2026 | PR #58 |
-| Rodada 20.4: **agendador real dos jobs** (BullMQ, por clínica, trilha, alarme JOB_ATRASADO) — migração 0043 se precisar | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 20.4: ✅ **agendador real dos jobs** (BullMQ, 7 jobs por clínica, trilha, `JOB_ATRASADO`, falha fechada sem Redis; migração 0043) — rls 534/534 local; revisão do Guardião em andamento | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
