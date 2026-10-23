@@ -15,7 +15,7 @@ import {
   type GuardianKind,
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
@@ -538,12 +538,24 @@ export class ResponsaveisService {
 
   /** Executa o descarte das pessoas de cadastros anulados com o prazo vencido (rota do admin). Só contagens na trilha. */
   descartarAnulados(ctx: RequestContext): Promise<{ readonly descartados: number }> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
-      const [r] = await tx.execute<{ n: number }>(sql`select app_guardians_discard_run() as n`);
-      const descartados = Number(r?.n ?? 0);
-      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE_RESPONSAVEIS, metadata: { op: 'discard_run', discarded: descartados } });
-      return { descartados };
-    });
+    return escreverNaClinica(this.db, ctx, (tx) => this.descarteNaTransacao(tx, ctx));
+  }
+
+  /**
+   * Job do sistema (agendador, api-dominio §14): o mesmo descarte, sem usuário (slot travado com o sentinela
+   * da 0019; o gatilho da 0031 aceita o descarte do sistema). Sem a política de assinatura: o descarte de dado
+   * vencido vale também para clínica cancelada. Idempotente.
+   */
+  descartarAnuladosComoSistema(tenantId: TenantId): Promise<{ readonly descartados: number }> {
+    const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
+    return this.db.run(tenantId, (tx) => this.descarteNaTransacao(tx, ctx));
+  }
+
+  private async descarteNaTransacao(tx: TenantTx, ctx: RequestContext): Promise<{ readonly descartados: number }> {
+    const [r] = await tx.execute<{ n: number }>(sql`select app_guardians_discard_run() as n`);
+    const descartados = Number(r?.n ?? 0);
+    await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE_RESPONSAVEIS, metadata: { op: 'discard_run', discarded: descartados } });
+    return { descartados };
   }
 
   /**

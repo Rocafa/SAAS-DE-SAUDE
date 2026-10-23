@@ -70,6 +70,21 @@ export class RotaDoWhatsapp {
   }
 }
 
+/**
+ * Lista de clínicas do agendador de jobs (0043): só ids, por `app_job_tenants()` (SECURITY DEFINER), FORA de
+ * contexto de clínica (dentro de withTenant o banco recusa). Provider estreito, como RotaDoWhatsapp: o domínio
+ * continua sem o handle cru; o job de cada clínica roda depois em withTenant (TenantDatabase.run).
+ */
+@Injectable()
+export class ClinicasDoAgendador {
+  constructor(@Inject(DATABASE_HANDLE) private readonly handle: DatabaseHandle) {}
+
+  async listar(): Promise<TenantId[]> {
+    const linhas = await this.handle.db.execute<{ t: string }>(sql`select t from app_job_tenants() as t`);
+    return linhas.map((r) => r.t).filter(isTenantId);
+  }
+}
+
 @Module({})
 export class TenancyModule {
   static forRoot(options: { databaseUrl: string; tuning?: Partial<DatabaseTuning> }): DynamicModule {
@@ -80,10 +95,11 @@ export class TenancyModule {
         { provide: DATABASE_HANDLE, useFactory: () => createDatabase(options.databaseUrl, options.tuning) },
         TenantDatabase,
         RotaDoWhatsapp,
+        ClinicasDoAgendador,
       ],
       // O handle cru NÃO sai (R8 do #69): tabela de clínica só por TenantDatabase.run; a rota do webhook do
       // WhatsApp, só por RotaDoWhatsapp.clinicaDoNumero.
-      exports: [TenantDatabase, RotaDoWhatsapp],
+      exports: [TenantDatabase, RotaDoWhatsapp, ClinicasDoAgendador],
     };
   }
 }

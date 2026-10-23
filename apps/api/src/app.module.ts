@@ -12,6 +12,7 @@ import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { ImportsModule } from './modules/imports/imports.module';
+import { criarInfraDosJobs, type InfraDosJobs, JobsModule } from './modules/jobs/jobs.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { criarMensageiro } from './modules/messaging/mensageiro.factory';
 import type { MensageiroWhatsApp } from './modules/messaging/mensageiro-whatsapp';
@@ -51,6 +52,8 @@ export interface AppAdapters {
   readonly mensageiro?: MensageiroWhatsApp | null;
   /** Telefone do responsável do paciente; padrão: pelo catálogo (tolera a ausência da 0028). */
   readonly responsaveis?: FonteDeResponsaveis;
+  /** Agendador de jobs (api-dominio §14); padrão: criarInfraDosJobs (BullMQ com REDIS_URL; memória em dev/test). */
+  readonly jobs?: InfraDosJobs;
 }
 
 @Module({})
@@ -103,6 +106,8 @@ export class AppModule {
         ImportsModule.forRoot(pacientes),
         // WhatsApp (rodada 18.3): lembretes D-1 e confirmação; desligado por padrão.
         MessagingModule.forRoot({ mensageiro, ...(adapters.responsaveis ? { responsaveis: adapters.responsaveis } : {}) }),
+        // Agendador (rodada 20): jobs por clínica; sem Redis em produção, desligado e logado (JOBS_DESLIGADOS).
+        JobsModule.forRoot(adapters.jobs ?? criarInfraDosJobs(process.env)),
       ],
     };
   }

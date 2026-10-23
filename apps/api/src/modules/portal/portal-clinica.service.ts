@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { AuditAction, type RequestContext } from '@plataforma/shared';
+import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -241,6 +241,23 @@ export class PortalClinicaService {
       });
     }
     return total;
+  }
+
+  /**
+   * Agendador (api-dominio §14): os dois jobs acima para UMA clínica. As funções da 0033 abrem o próprio
+   * contexto (`app_set_tenant` + sentinela de sistema) e exigem transação própria, por isso cada uma roda numa
+   * transação sem contexto prévio, travada na clínica pela própria função. Idempotente.
+   */
+  async encerrarRepresentacoesDaClinica(tenantId: TenantId): Promise<{ vinculosRevogados: number; consentimentosEncerrados: number }> {
+    const vinculosRevogados = await this.db.semContextoDoPortal(async (tx) => {
+      const [r] = await tx.execute<{ n: number }>(sql`select app_portal_close_ended_representations(${tenantId}::uuid) as n`);
+      return Number(r?.n ?? 0);
+    });
+    const consentimentosEncerrados = await this.db.semContextoDoPortal(async (tx) => {
+      const [r] = await tx.execute<{ n: number }>(sql`select app_portal_expire_guardian_consents(${tenantId}::uuid) as n`);
+      return Number(r?.n ?? 0);
+    });
+    return { vinculosRevogados, consentimentosEncerrados };
   }
 
   revogarVinculo(ctx: RequestContext, id: string, motivo: PortalLinkRevokeReason): Promise<{ revogado: true }> {
