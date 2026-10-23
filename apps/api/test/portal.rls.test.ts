@@ -1130,9 +1130,8 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
       (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_changed_not_recalculated'`)),
       adminA.userId,
     );
-    expect(fecho).toEqual([
-      expect.objectContaining({ actorId: recepcao.userId, metadata: expect.objectContaining({ kind: 'link', closed: true, representing_was_on: true, representing_now_on: false }) }),
-    ]);
+    expect(fecho.map((t) => t.actorId)).toEqual([recepcao.userId]);
+    expect(fecho[0]?.metadata).toMatchObject({ kind: 'link', closed: true, representing_was_on: true, representing_now_on: false });
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {
