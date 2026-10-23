@@ -45,6 +45,10 @@
 | Rodada 19.5: **#69** WhatsApp (0032) **VETADO** em 21/10 (opt-in sem número, menor sem nascimento, modelo sem lista fechada) — correção em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | PR #69 |
 | Rodada 19.3: ✅ integração **PR #73** (#66/#67/#68/#69 sobre #65, migrações 0024–0038, G2 1.17.0) — **APROVADO** pelo Guardião em 23/10; rls 517/517 local. **Entra no lugar dos 4 PRs** quando o CI voltar | Maestro @Rocafa | 23/10/2026 | PR #73 |
 
+| Rodada 20.1: ressalvas abertas do **#65** (R18/R19) e S1 do #73 — feitas **sobre a integração** (#73), migração **0041** | Maestro @Rocafa (agente engenharia) | 23/10/2026 | branch `eng/integracao-r19` |
+| Rodada 20.2: R17 do **#63** (runbook de confirmação do fundador) sobre a integração; migração **0042** se precisar | Maestro @Rocafa (agente engenharia) | 23/10/2026 | branch `eng/integracao-r19` |
+| Rodada 20.3: observações da R10 do **#58** (CREATE TRIGGER, REVOKE ROLE, DROP CASCADE; atributos de papéis na conferência) | Maestro @Rocafa (agente devops-ci) | 23/10/2026 | PR #58 |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
