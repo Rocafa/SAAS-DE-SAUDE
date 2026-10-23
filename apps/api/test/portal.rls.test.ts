@@ -22,7 +22,10 @@ import {
   portalLinks,
   portalRightsRequests,
 } from '../src/db/schema';
-import { withTenant } from '../src/db/tenant-transaction';
+import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
+import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
+import type { FieldCipher } from '../src/modules/crypto/field-cipher';
+import { patientFieldRef } from '../src/modules/patients/patient-fields';
 import { verifyAuditChain } from '../src/modules/audit/audit-chain';
 import { hojeNaClinica } from '../src/modules/insurance/guias-regras';
 import { PortalClinicaService } from '../src/modules/portal/portal-clinica.service';
@@ -940,6 +943,48 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(criancaNoBanco).toEqual([recPsiCrianca]);
     const naClinica = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ id: string }>(sql`select id from receipts where id = ${recPsi}::uuid`), adminA.userId);
     expect(naClinica.map((x) => x.id)).toEqual([recPsi]);
+  });
+
+  it('R3 do #73: reescrever birth_date_enc com a MESMA data (pela API ou numa recifração/rotação de chave) não encerra a representação', async () => {
+    const pac = await criarPaciente(adminA, 'Tito Ficticio Recifra', { nascimento: nascidoHa(14) });
+    const resp = await responsavelDe(pac, 'Vera Ficticia Mae Recifra');
+    const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    const vinculo = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId))[0];
+    const recalculos = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)), adminA.userId)).length;
+    const original = { confidentialFrom: nascidoHa(14 - 12), representUntil: nascidoHa(14 - 18), revokedAt: null };
+    const cifraAntes = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ enc: patients.birthDateEnc }).from(patients).where(eq(patients.id, pac)), adminA.userId))[0]?.enc;
+    const enc0 = await cifraAntes();
+    // Pela API, a mesma data: o serviço compara com a data decifrada e NÃO reescreve a coluna (nem recalcula).
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(14) }).expect(200);
+    expect(await cifraAntes()).toBe(enc0);
+    expect(await vinculo()).toMatchObject(original);
+    expect(await recalculos()).toBe(0);
+    // Recifração (como faria um job de rotação de chave): cifra NOVA da mesma data + recálculo com as mesmas
+    // datas na mesma transação. Nada muda, nada fecha no COMMIT, nenhuma trilha de recálculo.
+    const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    await withTenant(
+      api.db.db,
+      clinicaA,
+      async (tx) => {
+        const ref = patientFieldRef(clinicaA, pac, 'birth_date');
+        const data = await cifra.decryptString(tx, ref, enc0 as string);
+        const nova = await cifra.encrypt(tx, ref, data);
+        expect(nova).not.toBe(enc0);
+        await tx.update(patients).set({ birthDateEnc: nova }).where(eq(patients.id, pac));
+        const [r] = await tx.execute<{ n: number }>(sql`select app_portal_recalc_sigilo(${pac}::uuid, ${original.confidentialFrom}::date, ${original.representUntil}::date) as n`);
+        expect(Number(r?.n)).toBe(0);
+      },
+      adminA.userId,
+    );
+    expect(await cifraAntes()).not.toBe(enc0);
+    expect(await vinculo()).toMatchObject(original);
+    expect(await recalculos()).toBe(0);
+    // O paciente continua legível pela API com a cifra nova.
+    const lido = (await api.http().get(`/pacientes/${pac}`).set(cab(adminA)).expect(200)).body as { nascimento: string };
+    expect(lido.nascimento).toBe(nascidoHa(14));
   });
 
   it('R2 do #73: as funções *_hidden respondem igual para "não existe", "é de outro paciente" e "existe, mas oculta"', async () => {
