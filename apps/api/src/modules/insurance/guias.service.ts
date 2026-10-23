@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, gte, isNull, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { EntradaInvalidaError } from '../../common/validacao';
 import {
@@ -16,6 +16,7 @@ import {
   type GuideReversalReason,
   type SignatureMethod,
 } from '../../db/schema';
+import { dbErrorCode } from '../../db/db-errors';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
@@ -539,10 +540,16 @@ export class GuiasService {
       if (!travado) throw new NaoEncontradoError();
       if (travado.reversedAt) throw new ConflitoError('consumo_ja_estornado');
       const agora = new Date();
-      await tx
-        .update(guideSessions)
-        .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: motivo })
-        .where(and(eq(guideSessions.tenantId, ctx.tenantId), eq(guideSessions.id, consumoId)));
+      try {
+        await tx
+          .update(guideSessions)
+          .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: motivo })
+          .where(and(eq(guideSessions.tenantId, ctx.tenantId), eq(guideSessions.id, consumoId)));
+      } catch (e) {
+        // R20 do #65 (0042): o banco exige perfil ativo em clinic_members para estornar o consumo da guia.
+        if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_nao_registrado');
+        throw e;
+      }
       const [atualizada] = await tx
         .update(insuranceGuides)
         .set({ usedSessions: sql`${insuranceGuides.usedSessions} - 1`, updatedAt: agora })
