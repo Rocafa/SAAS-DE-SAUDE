@@ -52,7 +52,7 @@
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
 | **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
-| **#73 N2/N3/O1 (antes do portal em produção):** alertar sempre que a representação for estendida; impedir forjar `portal_sigilo_transicao` por INSERT; RLS de `clinical_notices` por destinatário (N1 ✅ em 0039) | parecer #73, conferência da N1 23/10/2026 |
+| **#73 S1 (opcional):** teste do destinatário tentando alterar outra coluna ou desmarcar a leitura de `clinical_notices` por SQL (N1/N2/N3/O1 ✅ em 0039/0040) | parecer #73, 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
