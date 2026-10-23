@@ -9,7 +9,7 @@
  */
 import type { TenantId } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   appointments,
@@ -1228,7 +1228,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(a2.every((a) => a.portalTransition === 'representacao_estendida')).toBe(true);
     expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 2);
     // O alerta não leva id de paciente (contrato dos alertas do #61): só regra, transição e contagens.
-    const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)), adminA.userId);
+    const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)).orderBy(desc(auditLog.createdAt)).limit(1), adminA.userId);
     expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
     expect(ultimo?.actorId).toBe(adminA.userId);
   });
