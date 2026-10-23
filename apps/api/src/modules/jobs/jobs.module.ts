@@ -8,7 +8,8 @@
  *   /health/ready (nunca falha silenciosa). A API sobe: o atendimento não para por falta do agendador, mas o
  *   monitoramento vê;
  * - development/test sem Redis (ou test com Redis) → em memória: nada dispara sozinho, `disparar(nome)` roda na hora;
- * - `JOBS_HABILITADOS=false` → desligado por opção explícita (ex.: instância só de HTTP), também logado.
+ * - `JOBS_HABILITADOS=false` → desligado por opção explícita (ex.: instância só de HTTP): aviso
+ *   `JOBS_DESLIGADOS_POR_OPCAO` na subida (N2: não aciona o alarme de JOBS_DESLIGADOS), "desligado" no /health/ready.
  */
 import { type DynamicModule, Inject, Injectable, Logger, Module, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -27,7 +28,7 @@ import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendad
 import { codigoDoErro, type AgendadorPort, type DefinicaoDeJob, type ModoDoAgendador, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
 import { registrarModoDosJobs } from './estado-dos-jobs';
 import { type DependenciasDoExecutor, ExecutorDeJobs, type LinhaDeTrilhaDoJob, type ResumoDaExecucao } from './executor-de-jobs';
-import { criarRegistroDeJobs } from './registro-de-jobs';
+import { criarRegistroDeJobs, JOBS_APOSENTADOS } from './registro-de-jobs';
 import { verificarAtrasos, type JobAtrasado } from './sinal-de-vida';
 
 export const SCOPE_JOBS = 'jobs';
@@ -42,13 +43,15 @@ export interface InfraDosJobs {
   readonly trava: TravaDeJob;
   readonly registro: RegistroDeExecucoes;
   readonly motivoDesligado?: string;
+  /** N2: `JOBS_HABILITADOS=false` (instância só de HTTP): aviso `JOBS_DESLIGADOS_POR_OPCAO`, não erro. */
+  readonly desligadoPorOpcao?: boolean;
   readonly fechar?: () => Promise<void>;
 }
 
 export function criarInfraDosJobs(env: NodeJS.ProcessEnv = process.env): InfraDosJobs {
   const memoria = { trava: new TravaEmMemoria(), registro: new RegistroEmMemoria() };
   const flag = env.JOBS_HABILITADOS?.trim();
-  if (flag === 'false') return { agendador: null, ...memoria, motivoDesligado: 'JOBS_HABILITADOS=false' };
+  if (flag === 'false') return { agendador: null, ...memoria, motivoDesligado: 'JOBS_HABILITADOS=false', desligadoPorOpcao: true };
   if (flag && flag !== 'true') throw new Error('JOBS_HABILITADOS inválida: true ou false');
   const url = env.REDIS_URL?.trim();
   // Em teste, nunca BullMQ por acaso (o CI tem REDIS_URL para o rate limit): jobs de verdade rodando no meio da
@@ -111,6 +114,12 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
     });
     this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;
+    if (!agendador && this.infra.desligadoPorOpcao) {
+      // N2 do parecer dos jobs: instância só de HTTP, de propósito. Aviso (não erro) com marcador próprio, para
+      // não acionar o alarme de JOBS_DESLIGADOS; o IaC garante ao menos um serviço com jobs ligados (R3).
+      this.logger.warn(`JOBS_DESLIGADOS_POR_OPCAO: JOBS_HABILITADOS=false nesta instância (${jobs.length} no registro, nenhum agendado aqui)`);
+      return;
+    }
     if (!agendador) {
       // Nunca silencioso: erro na subida e a cada verificação, e "desligado" no /health/ready.
       this.logger.error(`JOBS_DESLIGADOS motivo="${this.infra.motivoDesligado ?? 'desconhecido'}": nenhum job agendado (${jobs.length} no registro)`);
@@ -132,7 +141,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
     // falhar, erro no log. O sinal de vida roda desde já: Redis fora também vira JOB_ATRASADO.
     this.timer = setInterval(() => void this.verificarAtrasos(), VERIFICACAO_MS);
     this.timer.unref();
-    agendador.agendar(jobs, executar).then(
+    agendador.agendar(jobs, executar, JOBS_APOSENTADOS).then(
       () => registrarModoDosJobs('bullmq'),
       (err: unknown) => this.logger.error(`JOBS_NAO_AGENDADOS erro=${codigoDoErro(err)}: nenhum job agendado nesta instância`),
     );

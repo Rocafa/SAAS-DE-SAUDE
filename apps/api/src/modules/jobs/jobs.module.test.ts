@@ -81,6 +81,23 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
     }
   });
 
+  it('N2: JOBS_HABILITADOS=false é aviso JOBS_DESLIGADOS_POR_OPCAO (sem log de erro, não aciona o alarme); /health/ready "desligado"', async () => {
+    const erros: string[] = [];
+    const avisos: string[] = [];
+    vi.spyOn(Logger.prototype, 'error').mockImplementation((m: unknown) => void erros.push(String(m)));
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void avisos.push(String(m)));
+    const s = servico(criarInfraDosJobs({ NODE_ENV: 'production', JOBS_HABILITADOS: 'false' }));
+    await s.onApplicationBootstrap();
+    try {
+      expect(s.modo).toBe('desligado');
+      expect(modoDosJobs()).toBe('desligado');
+      expect(erros).toEqual([]);
+      expect(avisos).toEqual(['JOBS_DESLIGADOS_POR_OPCAO: JOBS_HABILITADOS=false nesta instância (7 no registro, nenhum agendado aqui)']);
+    } finally {
+      await s.onApplicationShutdown();
+    }
+  });
+
   it('em memória: registra os jobs, nada dispara sozinho, executar roda pelo executor', async () => {
     vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     const ag = new AgendadorEmMemoria();
