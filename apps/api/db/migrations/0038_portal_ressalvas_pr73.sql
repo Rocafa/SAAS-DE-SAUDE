@@ -157,6 +157,43 @@ CREATE CONSTRAINT TRIGGER patients_birth_date_portal_close AFTER UPDATE OF birth
   FOR EACH ROW WHEN (NEW.birth_date_enc IS DISTINCT FROM OLD.birth_date_enc)
   EXECUTE FUNCTION patients_birth_date_portal_close();
 
+-- ================================================================ (R2) funções *_hidden sem oráculo
+-- As funções precisam de EXECUTE para o runtime (estão nas policies). Na sessão do portal, respondem IGUAL
+-- (true = esconder) para "não existe", "é de outro paciente" e "existe, mas oculta": só dizem false para a
+-- linha do PRÓPRIO paciente da sessão que ele pode ver. Fora do portal, a regra da 0037 fica igual.
+
+CREATE OR REPLACE FUNCTION app_portal_charge_hidden(p_charge uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT COALESCE((
+    SELECT (public.app_portal_patient() IS NOT NULL AND c.patient_id IS DISTINCT FROM public.app_portal_patient())
+           OR (public.app_portal_charge_sensitive(c.id)
+               AND NOT EXISTS (
+                 SELECT 1 FROM public.payments p
+                  WHERE p.tenant_id = c.tenant_id AND p.charge_id = c.id
+                    AND p.guardian_payer_link_id IS NOT NULL
+                    AND p.guardian_payer_link_id = public.app_portal_session_guardian_link()))
+      FROM public.charges c
+     WHERE c.tenant_id = public.app_current_tenant() AND c.id = p_charge), true)
+$$;
+
+CREATE OR REPLACE FUNCTION app_portal_payment_hidden(p_payment uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT COALESCE((
+    SELECT (public.app_portal_patient() IS NOT NULL AND c.patient_id IS DISTINCT FROM public.app_portal_patient())
+           OR (public.app_portal_charge_sensitive(p.charge_id)
+               AND (p.guardian_payer_link_id IS NULL OR p.guardian_payer_link_id IS DISTINCT FROM public.app_portal_session_guardian_link()))
+      FROM public.payments p
+      JOIN public.charges c ON c.tenant_id = p.tenant_id AND c.id = p.charge_id
+     WHERE p.tenant_id = public.app_current_tenant() AND p.id = p_payment), true)
+$$;
+
+-- app_portal_receipt_hidden (0037) delega a app_portal_payment_hidden e já devolve true para recibo
+-- inexistente: herda a regra acima sem mudança.
+
 -- ================================================================ conferência final
 
 -- Funções SECURITY DEFINER desta migração: dono sem superpoder e diferente do runtime.

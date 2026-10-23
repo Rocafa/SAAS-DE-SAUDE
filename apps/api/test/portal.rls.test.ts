@@ -942,6 +942,39 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(naClinica.map((x) => x.id)).toEqual([recPsi]);
   });
 
+  it('R2 do #73: as funções *_hidden respondem igual para "não existe", "é de outro paciente" e "existe, mas oculta"', async () => {
+    const teen = await criarPaciente(adminA, 'Ivo Ficticio Adolescente Oraculo', { nascimento: nascidoHa(15) });
+    const vizinho = await criarPaciente(adminA, 'Lia Ficticia Vizinha Oraculo', { nascimento: nascidoHa(30) });
+    const psi = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Dra Psi Oraculo Ficticia', especialidade: 'Clinica', areaSensivel: true }).expect(201)).body as { id: string };
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ professional_id: string; appointment_type_id: string }>(
+      sql`select professional_id, appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const tipo = base?.appointment_type_id as string;
+    const pai = await responsavelDe(teen, 'Juca Ficticio Pai Oraculo');
+    const recPsi = await recibo(adminA, await agendar(adminA, teen, psi.id, tipo, '2027-03-09', '09:00'));
+    const recFisio = await recibo(adminA, await agendar(adminA, teen, base?.professional_id as string, tipo, '2027-03-09', '11:00'));
+    const recVizinho = await recibo(adminA, await agendar(adminA, vizinho, base?.professional_id as string, tipo, '2027-03-09', '14:00'));
+    const conta = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: pai });
+    const ids = async (receipt: string) => {
+      const [r] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ payment: string; charge: string }>(
+        sql`select r.payment_id as payment, p.charge_id as charge from receipts r join payments p on p.id = r.payment_id where r.id = ${receipt}::uuid`), adminA.userId);
+      return { receipt, payment: r?.payment as string, charge: r?.charge as string };
+    };
+    const [psiIds, fisioIds, vizinhoIds] = [await ids(recPsi), await ids(recFisio), await ids(recVizinho)];
+    const inexistente = { receipt: randomUUID(), payment: randomUUID(), charge: randomUUID() };
+    const oculta = (alvo: typeof psiIds) =>
+      api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${conta.contaId}::uuid, ${conta.vinculoId}::uuid)`);
+        const [r] = await tx.execute<{ c: boolean; p: boolean; r: boolean }>(
+          sql`select app_portal_charge_hidden(${alvo.charge}::uuid) as c, app_portal_payment_hidden(${alvo.payment}::uuid) as p, app_portal_receipt_hidden(${alvo.receipt}::uuid) as r`);
+        return r;
+      });
+    const escondido = { c: true, p: true, r: true };
+    expect(await oculta(inexistente)).toEqual(escondido);
+    expect(await oculta(vizinhoIds)).toEqual(escondido); // não sensível, mas de OUTRO paciente: igual a "não existe"
+    expect(await oculta(psiIds)).toEqual(escondido); // do próprio paciente, oculto pelo sigilo
+    expect(await oculta(fisioIds)).toEqual({ c: false, p: false, r: false }); // só o que a sessão vê
+  });
+
   it('N3: mudar a data de nascimento recalcula o sigilo (dia dos 12) e o fim da representação; o banco fecha se o serviço não recalcular', async () => {
     const pac = await criarPaciente(adminA, 'Nina Ficticia Recalculo', { nascimento: nascidoHa(9) });
     const resp = await responsavelDe(pac, 'Otto Ficticio Pai Recalculo');
