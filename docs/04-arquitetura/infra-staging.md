@@ -150,7 +150,7 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
 2. **Estado:**
    - rodar `terraform -chdir=infra/terraform/bootstrap-state init && terraform apply -var conta_aws_id=<id>`, com estado local, uma única vez;
    - guardar o output `backend_hcl` em `infra/terraform/staging/backend.hcl`, que fica fora do git (`.gitignore`).
-3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`. Quando houver o responsável, `alerta_seguranca_email` (assinatura do alerta de break-glass e dos alarmes de jobs) e `alerta_dpo_email` (encarregado: alarmes `JOB_ATRASADO` e `JOBS_DESLIGADOS`, §4.4).
+3. **Variáveis:** criar `staging.tfvars`, também fora do git, com `conta_aws_id`, `certificado_arn` e `api_imagem_tag` (SHA de 40 caracteres). Para a âncora em conta separada, adicionar `conta_auditoria_id` e `papel_auditoria_arn`. Quando houver o responsável, `alerta_seguranca_email` (assinatura do alerta de break-glass e dos alarmes de jobs) e `alerta_dpo_email` (encarregado: falha de retenção/revogação dos jobs, §4.4).
 4. **Plano:** `terraform init -backend-config=backend.hcl`, depois `terraform plan -var-file=staging.tfvars -out=plano`.
    - Revisar o plano com um sócio, olhando com atenção a criação de `aws_s3_bucket_object_lock_configuration` (COMPLIANCE não se desfaz).
    - Conferir que nada sai de sa-east-1.
@@ -214,7 +214,41 @@ Rodada 13.3 (14/10/2026): resolvido no Terraform tudo o que não depende de deci
 ### 4.4 Contrato com a API: agendador de jobs (PR #73, parecer `2026-10-23-jobs.md`, R3)
 A API passou a ter um agendador real (BullMQ) para os jobs de retenção, revogação e lembretes (api-dominio §14). O IaC precisa, **antes do piloto**:
 - **Exigir `REDIS_URL`** (TLS + AUTH, o mesmo Redis do rate limit) em toda tarefa da API fora de dev/test. Sem ele a API sobe **sem jobs** e loga `JOBS_DESLIGADOS` — o deploy deve falhar antes disso.
-- **Filtros de métrica e alarmes** no log group da API para `JOB_ATRASADO` (job crítico fora do prazo) e `JOBS_DESLIGADOS` (agendador sem Redis), com aviso ao canal de operação e ao encarregado (DPO). Os logs não levam dado pessoal (só nome do job, código de erro e contagens).
+- **Filtros de métrica e alarmes** no log group da API para todos os marcadores de falha dos jobs (tabela abaixo), com aviso ao canal de operação e, nos que indicam falha de retenção ou revogação, ao encarregado (DPO); e alarme de `jobs` ≠ `bullmq` no `/health/ready` por mais de 15 min. Os logs não levam dado pessoal (só nome do job, código de erro e contagens).
 - **Não** definir `JOBS_HABILITADOS=false` em staging/produção, salvo incidente registrado.
 
-**Estado no Terraform (staging):** `REDIS_URL` vem do segredo `redis` e a task definition da API tem precondições (REDIS_URL presente, Redis com TLS, nenhum `JOBS_HABILITADOS`) que fazem o plano falhar (`app.tf`). Filtros de termo exato e alarmes `job-atrasado` e `jobs-desligados` no log group da API publicam em `alertas-seguranca` (operação) e no tópico novo `alertas-dpo` (`jobs.tf`, assinatura por `alerta_dpo_email`). O CI (`infra.yml`, Travas do projeto) confere tudo isso. **Ainda falta (R3):** filtros de `JOBS_NAO_AGENDADOS`, `JOB_ALARME` e `JOB_CLINICA_FALHOU`, e o alarme de `jobs` ≠ `bullmq` no `/health/ready` por mais de 15 min.
+**Estado no Terraform (staging), R3 completa no código (rodada 21):** `REDIS_URL` vem do segredo `redis` e a task definition da API tem precondições (REDIS_URL presente, Redis com TLS, nenhum `JOBS_HABILITADOS`) que fazem o plano falhar (`app.tf`). O CI (`infra.yml`, Travas do projeto) confere tudo o que está abaixo.
+
+**Alarmes por marcador de log (`jobs.tf`).** Nomes conferidos em `apps/api/src/modules/jobs/` (branch `eng/integracao-r19`). Um filtro de **termo exato** por marcador no log group da API (sem regex, então a cota de 5 regex do log group segue intacta: hoje 0 nesse grupo). Todo alarme vai para `alertas-seguranca` (operação, o único tópico de operação hoje); a severidade está no nome do alarme (`plataforma-saude-staging-<severidade>-<marcador>`), no início da descrição e na tag `severidade`.
+
+| Marcador | Severidade | Dispara com | DPO |
+|---|---|---|---|
+| `JOBS_DESLIGADOS` (exclui `JOBS_DESLIGADOS_POR_OPCAO`) | crítica | ≥ 1 em 5 min | **sim**: nenhum job de retenção roda e, nesse modo, nem o sinal de vida |
+| `JOBS_NAO_AGENDADOS` | crítica | ≥ 1 em 5 min | não (se nenhuma instância agenda, o `JOB_ATRASADO` dos jobs de retenção chega ao DPO) |
+| `JOB_ATRASADO` | alta | ≥ 1 em 5 min | só os jobs de retenção/revogação (abaixo) |
+| `JOB_ALARME` | alta | ≥ 1 em 5 min | só os jobs de retenção/revogação (abaixo) |
+| `JOB_CLINICA_FALHOU` | alta | ≥ 1 em 5 min | não: o job não marca sucesso, e a falha persistente vira `JOB_ATRASADO` |
+| `JOB_TRILHA_FALHOU` | alta | ≥ 1 em 5 min | não |
+| `JOBS_DESLIGADOS_POR_OPCAO` | média | ≥ 1 em 5 min | não (o IaC proíbe `JOBS_HABILITADOS`; aparecer é incidente) |
+| `JOB_TRABALHADOR_ERRO` | média | ≥ 3 em 15 min | não |
+| `JOB_FALHOU` (cada tentativa no BullMQ) | média | ≥ 3 em 15 min | não |
+| `JOB_DESCONHECIDO` | baixa | ≥ 1 em 1 h | não |
+
+Sem alarme (informativos): `JOB_OK`, `JOB_EM_ANDAMENTO`, `JOB_REMOVIDO` e `JOB_TRAVA_NAO_LIBERADA`.
+
+**DPO (`alertas-dpo`, assinatura por `alerta_dpo_email`).** Recebe só falha de retenção ou revogação: o alarme `jobs-desligados` e o alarme `alta-jobs-retencao-dpo`. Este último soma 12 filtros `"<marcador>" "job=<nome>"` (dois termos exatos = E lógico) para `JOB_ATRASADO` e `JOB_ALARME` × `whatsapp-retencao`, `importador-expurgo`, `notas-privadas-ciclo`, `retencao-fiscal`, `responsaveis-descarte` e `portal-representacoes` (lista `jobs_de_retencao`; job novo de retenção entra lá). `JOB_ATRASADO` de `whatsapp-lembretes` fica só com a operação.
+
+**`jobs` ≠ `bullmq` no `/health/ready` (`jobs-ready.tf`).** Opção escolhida: **canary do CloudWatch Synthetics em sa-east-1**, a mais simples que funciona sem mudar a API nem sair da região:
+- *Métrica a partir de log* não serve: a API não loga o modo; `nao_iniciado` (o `agendar()` do BullMQ pendurado) não gera log nenhum. Exigiria uma linha periódica na API (ENG).
+- *Health check do ALB* só olha o status HTTP, não o corpo.
+- *Health check do Route53* (`HTTPS_STR_MATCH`) lê o corpo, mas a métrica só existe em us-east-1: alarme e tópico SNS ficariam fora de sa-east-1 (trava de região).
+
+O canary `jobs-ready-stg` lê `https://<DNS do ALB>/health/ready` a cada 5 min (Node, `canary/index.js`, empacotado em `canary/jobs-ready.zip`; o CI compara os dois) e falha se `jobs` não for `bullmq` (vale para 200 e 503; a mensagem de erro é só o rótulo, `jobs=<modo>`). Alarme `alta-jobs-nao-bullmq` em `SuccessPercent`: **3 leituras com falha em 6** (tudo fora = alarme em 15 min; com várias tarefas, uma presa derruba parte das leituras e o "3 em 6" pega). Canary parado conta como falha (`treat_missing_data = breaching`). Só operação. Artefatos no prefixo `synthetics/` do bucket `logs` (SSE-S3, lifecycle do bucket). O papel do canary não tem permissão de CloudWatch Logs, de propósito, para não nascer um grupo `/aws/lambda/cwsyn-*` sem retenção nem KMS; o log de cada execução vai para o S3.
+
+**Limites e pendências:**
+- **Nada disto foi validado com Terraform** (a máquina desta rodada não tem `terraform`): sem `fmt`, `validate`, `tflint` nem `checkov` locais. Rodaram só as travas de grep do CI (localmente) e um teste do script do canary com `https` simulado (`bullmq` passa; `nao_iniciado`, rótulo desconhecido e corpo inválido falham). O `infra.yml` roda o resto no PR.
+- **Runtime do canary** (`canary_runtime`, padrão `syn-nodejs-puppeteer-10.0`): conferir na AWS se segue suportado antes do apply.
+- **TLS do canary:** sem domínio (I10), a URL usa o DNS do ALB e o script não valida o certificado (`rejectUnauthorized: false`; o corpo só tem rótulos fixos). Com o domínio, trocar `URL_READY` para ele e tirar a opção.
+- **Uma tarefa presa entre muitas** pode não fechar 3 em 6; se os jobs pararem de fato, o `JOB_ATRASADO` cobre.
+- **Sintaxe de exclusão** (`"JOBS_DESLIGADOS" -"JOBS_DESLIGADOS_POR_OPCAO"`): conferir no 1º deploy com `aws logs test-metric-filter` contra as duas linhas reais; idem os filtros `"JOB_ATRASADO" "job=<nome>"`.
+- Conferência do Guardião antes do piloto (api-dominio §14: até lá, os marcadores não acordam ninguém com dado real).
