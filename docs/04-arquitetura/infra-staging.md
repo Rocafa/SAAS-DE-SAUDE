@@ -210,3 +210,9 @@ Rodada 13.3 (14/10/2026): resolvido no Terraform tudo o que não depende de deci
 - **Metadados do objeto:** nenhum `x-amz-meta-*` com dado pessoal.
 - **Vida do objeto:** a API apaga o objeto quando o link de 24 h vence; o lifecycle (`exportacao_expiracao_dias`) é a rede de segurança.
 - **Rotação automática de segredos** (Lambda, I4) e **orçamento com alerta** (AWS Budgets), que fica para quando houver o e-mail do responsável.
+
+### 4.4 Contrato com a API: agendador de jobs (PR #73, parecer `2026-10-23-jobs.md`, R3)
+A API passou a ter um agendador real (BullMQ) para os jobs de retenção, revogação e lembretes (api-dominio §14). O IaC precisa, **antes do piloto**:
+- **Exigir `REDIS_URL`** (TLS + AUTH, o mesmo Redis do rate limit) em toda tarefa da API fora de dev/test. Sem ele a API sobe **sem jobs** e loga `JOBS_DESLIGADOS` — o deploy deve falhar antes disso.
+- **Filtros de métrica e alarmes** no log group da API para `JOB_ATRASADO` (job crítico fora do prazo) e `JOBS_DESLIGADOS` (agendador sem Redis), com aviso ao canal de operação e ao encarregado (DPO). Os logs não levam dado pessoal (só nome do job, código de erro e contagens).
+- **Não** definir `JOBS_HABILITADOS=false` em staging/produção, salvo incidente registrado.
