@@ -207,6 +207,27 @@ resource "aws_iam_role" "api_tarefa" {
   assume_role_policy = data.aws_iam_policy_document.ecs_confianca.json
 }
 
+# Contrato da tarefa da API (infra-staging.md §4.4, R3 do parecer 2026-10-23-jobs.md).
+# REDIS_URL é obrigatório: sem ele a API sobe SEM o agendador de jobs (retenção, revogação,
+# lembretes) e só loga JOBS_DESLIGADOS. As precondições da task definition fazem o plano falhar
+# antes disso. JOBS_HABILITADOS=false nunca entra aqui (desligar jobs só com incidente registrado).
+locals {
+  api_ambiente = concat([
+    { name = "NODE_ENV", value = "production" },
+    { name = "API_PORT", value = tostring(local.api_porta) },
+    # CA do RDS para sslmode=verify-full; o arquivo precisa estar na imagem (item 1, Dockerfile).
+    { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-sa-east-1-bundle.pem" },
+    ],
+    # R6: a API sobe HTTPS com certificado autoassinado gerado em memória (contrato com a ENG).
+    var.tls_ate_a_tarefa ? [{ name = "API_TLS", value = "autoassinado" }] : [],
+  )
+
+  api_segredos = [
+    { name = "DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.app["banco-app-user"].arn}:url::" },
+    { name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app["redis"].arn}:url::" },
+  ]
+}
+
 resource "aws_ecs_task_definition" "api" {
   family                   = "${local.nome}-api"
   requires_compatibilities = ["FARGATE"]
@@ -236,19 +257,8 @@ resource "aws_ecs_task_definition" "api" {
     linuxParameters        = { initProcessEnabled = true }
     portMappings           = [{ containerPort = local.api_porta, protocol = "tcp" }]
     mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
-    environment = concat([
-      { name = "NODE_ENV", value = "production" },
-      { name = "API_PORT", value = tostring(local.api_porta) },
-      # CA do RDS para sslmode=verify-full; o arquivo precisa estar na imagem (item 1, Dockerfile).
-      { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-sa-east-1-bundle.pem" },
-      ],
-      # R6: a API sobe HTTPS com certificado autoassinado gerado em memória (contrato com a ENG).
-      var.tls_ate_a_tarefa ? [{ name = "API_TLS", value = "autoassinado" }] : [],
-    )
-    secrets = [
-      { name = "DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.app["banco-app-user"].arn}:url::" },
-      { name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app["redis"].arn}:url::" },
-    ]
+    environment            = local.api_ambiente
+    secrets                = local.api_segredos
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -258,6 +268,21 @@ resource "aws_ecs_task_definition" "api" {
       }
     }
   }])
+
+  lifecycle {
+    precondition {
+      condition     = contains([for s in local.api_segredos : s.name], "REDIS_URL") && contains(keys(local.segredos_app), "redis")
+      error_message = "REDIS_URL é obrigatório na tarefa da API, vindo do segredo \"redis\" do Secrets Manager. Sem ele os jobs de retenção ficam desligados (JOBS_DESLIGADOS). Ver infra-staging.md §4.4."
+    }
+    precondition {
+      condition     = aws_elasticache_replication_group.this.transit_encryption_enabled == true
+      error_message = "O Redis do REDIS_URL precisa de TLS (rediss://) e AUTH; transit_encryption_enabled está desligado."
+    }
+    precondition {
+      condition     = !contains(concat([for v in local.api_ambiente : v.name], [for s in local.api_segredos : s.name]), "JOBS_HABILITADOS")
+      error_message = "Não defina JOBS_HABILITADOS na tarefa da API em staging/produção (infra-staging.md §4.4). Desligar os jobs só com incidente registrado."
+    }
+  }
 }
 
 resource "aws_ecs_service" "api" {
