@@ -755,6 +755,26 @@ describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente;
     expect((await post(finA, `/pacotes/${pacoteId}/consumos/${deX!.id}/estornar`, { motivo: 'status_corrigido' })).status).toBeLessThan(300);
     expect(await sqlstate(upd(deX!.id, { reversedAt: new Date(), reversedBy: finA.userId, reversalReason: 'pacote_errado' }, finA.userId))).toContain('42501');
   });
+
+  it('R18: o estorno grava a hora do banco, não a enviada pelo cliente (0029)', async () => {
+    await api.membro(clinicaA, finA, 'financeiro');
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R18', total: 4 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    const [sessao] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const antes = Date.now();
+    // Estorno válido (usuário da sessão, motivo da lista), mas com data antiga vinda do cliente.
+    await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) => tx.update(packageSessions).set({ reversedAt: new Date(0), reversedBy: finA.userId, reversalReason: 'lancamento_errado' }).where(eq(packageSessions.id, sessao!.id)),
+      finA.userId,
+    );
+    const [gravada] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, sessao!.id)));
+    expect(gravada).toMatchObject({ reversedBy: finA.userId, reversalReason: 'lancamento_errado' });
+    // Hora do banco: recente (folga de relógio entre o processo do teste e o Postgres local).
+    expect(gravada!.reversedAt!.getTime()).toBeGreaterThan(antes - 60_000);
+    expect(gravada!.reversedAt!.getTime()).toBeLessThan(Date.now() + 60_000);
+  });
 });
 
 describe('R2 do #65: registro no conselho escolhido por recibo', () => {
