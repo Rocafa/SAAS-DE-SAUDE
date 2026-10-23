@@ -716,8 +716,8 @@ async function comoDono(fn: (t: postgres.TransactionSql) => Promise<unknown>): P
   }
 }
 
-/** A guarda do paciente vai até hoje + 20 anos (true), já venceu (false) ou outra data (a própria data). */
-async function guardaDe(pacienteId: string): Promise<'hoje+20' | 'vencida' | string> {
+/** A guarda do paciente vai até hoje + 20 anos ('hoje+20'), já venceu ('vencida') ou outra data (a própria data). */
+async function guardaDe(pacienteId: string): Promise<string> {
   const [l] = await withTenant(
     api.db.db,
     clinicaA,
