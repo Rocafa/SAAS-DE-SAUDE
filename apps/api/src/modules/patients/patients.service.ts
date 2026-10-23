@@ -149,7 +149,11 @@ export class PatientsService {
         mudancas.phoneEnc = await this.cifrar(tx, ctx, id, 'phone', dados.telefone);
         campos.push('phone');
       }
-      if (dados.nascimento !== undefined) {
+      // R1/R3 do #73: só reescreve a data cifrada (e recalcula o sigilo do portal) quando a data MUDOU de fato.
+      const nascimentoMudou =
+        dados.nascimento !== undefined &&
+        (dados.nascimento ?? null) !== (await this.decifrar(tx, ctx.tenantId, id, 'birth_date', atual.birthDateEnc));
+      if (nascimentoMudou) {
         mudancas.birthDateEnc = await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento ?? undefined);
         campos.push('birth_date');
       }
@@ -165,7 +169,7 @@ export class PatientsService {
         scope: SCOPE,
         metadata: { patient_id: id, changed: campos.join(',') },
       });
-      if (dados.nascimento !== undefined) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null);
+      if (nascimentoMudou) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null);
       return this.paraDto(tx, ctx.tenantId, linha);
     });
   }

@@ -953,8 +953,9 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(14) }).expect(200);
     expect(await vinculo()).toMatchObject({ confidentialFrom: nascidoHa(14 - 12), representUntil: nascidoHa(14 - 18) });
     const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)), adminA.userId);
-    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ patient_id: pac, count: 1, closed: false })]));
-    // Direto no banco (sem o serviço): a data cifrada muda e o gatilho FECHA na hora (sigilo e representação hoje).
+    expect(trilha.map((t) => t.metadata)).toEqual(expect.arrayContaining([expect.objectContaining({ patient_id: pac, kind: 'link', target_id: conta.vinculoId, closed: false })]));
+    // Direto no banco (sem o serviço): a data cifrada muda e, sem recálculo, o gatilho adiado da 0038 FECHA no
+    // COMMIT (sigilo e representação hoje).
     const hoje = hojeNaClinica();
     // Troca pelo valor cifrado de OUTRO paciente da mesma clínica (selado, data diferente): o banco não lê a data.
     const outro = await criarPaciente(adminA, 'Pedro Ficticio Doador', { nascimento: nascidoHa(5) });
@@ -995,6 +996,8 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
       expect(await codigo(userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
       // Datas que não vêm de uma data de nascimento: recusado.
       expect(await codigo(userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2099-01-01'::date, '2099-01-01'::date)`)).toBe('22023');
+      // Fechar sem a data ter mudado também é recusado (encerraria a representação legítima).
+      expect(await codigo(userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, null, null)`)).toBe('42501');
       // A marca não é forjável: a tabela é interna (zero privilégio) e GUC não conta.
       expect(await codigo(userId, sql`insert into portal_birth_date_changes (tenant_id, patient_id, xact) values (${clinicaA}::uuid, ${pac}::uuid, txid_current())`)).toBe('42501');
       expect(await codigo(userId, sql`select set_config('app.portal_nascimento_mudou', ${pac}, true), set_config('app.portal_recalc', 'on', true), app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
@@ -1007,17 +1010,51 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
     const novo = { confidentialFrom: nascidoHa(13 - 12), representUntil: nascidoHa(13 - 18) };
     expect(await vinculo()).toMatchObject(novo);
-    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`)), adminA.userId);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)), adminA.userId);
+    // O contrato da trilha (0005) proíbe datas: vão o deslocamento em dias e o estado antes/depois.
+    const dias = (de: string, ate: string) => Math.round((Date.parse(ate) - Date.parse(de)) / 86_400_000);
     expect(trilha.map((t) => t.metadata)).toEqual([
-      expect.objectContaining({
-        op: 'confidentiality_recalculated', count: 1, closed: false, reason: 'birth_date_changed',
-        changes: [{ kind: 'link', id: conta.vinculoId, confidential_from: [original.confidentialFrom, novo.confidentialFrom], represent_until: [original.representUntil, novo.representUntil] }],
-      }),
+      {
+        op: 'confidentiality_recalculated', patient_id: pac, kind: 'link', target_id: conta.vinculoId, closed: false, reason: 'birth_date_changed',
+        confidential_shift_days: dias(original.confidentialFrom, novo.confidentialFrom),
+        represent_shift_days: dias(original.representUntil, novo.representUntil),
+        confidential_was_on: true, confidential_now_on: true, representing_was_on: true, representing_now_on: true,
+      },
     ]);
     expect(trilha[0]?.actorId).toBe(adminA.userId);
-    // A marca é consumida: na transação seguinte, reabrir de novo é recusado.
+    // A marca é consumida: na transação seguinte, reabrir de novo (ou fechar) é recusado.
     expect(await codigo(adminA.userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`)).toBe('42501');
+    expect(await codigo(recepcao.userId, sql`select app_portal_recalc_sigilo(${pac}::uuid, null, null)`)).toBe('42501');
     expect(await vinculo()).toMatchObject(novo);
+
+    // SQL arbitrário que "reescreve" a coluna com a MESMA cifra não gera marca: o recálculo segue recusado.
+    await expect(
+      withTenant(
+        api.db.db,
+        clinicaA,
+        async (tx) => {
+          await tx.execute(sql`update patients set birth_date_enc = birth_date_enc where id = ${pac}::uuid`);
+          await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
+        },
+        recepcao.userId,
+      ),
+    ).rejects.toHaveProperty('cause.code', '42501');
+    expect(await vinculo()).toMatchObject(novo);
+    // SQL arbitrário que troca a cifra e não recalcula: o COMMIT fecha (falha fechada), e a trilha do banco
+    // registra o ator e o estado (representação deixou de valer).
+    const outro = await criarPaciente(adminA, 'Saulo Ficticio Doador Sigilo', { nascimento: nascidoHa(30) });
+    expect(await codigo(recepcao.userId, sql`update patients set birth_date_enc = (select birth_date_enc from patients where id = ${outro}::uuid) where id = ${pac}::uuid`)).toBe('ok');
+    const fechado = await vinculo();
+    expect(fechado?.representUntil && fechado.representUntil <= hojeNaClinica()).toBe(true);
+    const fecho = await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_changed_not_recalculated'`)),
+      adminA.userId,
+    );
+    expect(fecho).toEqual([
+      expect.objectContaining({ actorId: recepcao.userId, metadata: expect.objectContaining({ kind: 'link', closed: true, representing_was_on: true, representing_now_on: false }) }),
+    ]);
   });
 
   it('R2: a área sensível vem da marca ESTRUTURADA do profissional; texto livre só reforça; o portal não altera a marca', async () => {

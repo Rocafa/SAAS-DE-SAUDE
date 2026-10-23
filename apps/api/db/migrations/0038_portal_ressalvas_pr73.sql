@@ -1,12 +1,15 @@
 -- 0038 — Ressalvas do parecer do PR #73 (integração da rodada 19, 22/10). Executar com o papel de MIGRAÇÃO
 -- (app_migrator). Ver docs/04-arquitetura/api-dominio.md §10c.
 --
--- (R1) `app_portal_recalc_sigilo` deixa de aceitar datas arbitrárias. REABRIR (datas não nulas) só vale na
---      MESMA transação que mudou `patients.birth_date_enc` daquele paciente: o gatilho grava a marca numa
---      tabela INTERNA (`portal_birth_date_changes`, zero privilégio para o runtime; uma GUC poderia ser
---      forjada por `set_config`), e a função exige e consome a marca. FECHAR (NULL) continua livre. A trilha
---      é gravada DENTRO da função, com os valores antigos e novos de cada vínculo/convite. Se a transação
---      mudou a data e não recalculou, um gatilho ADIADO (no COMMIT) fecha (falha fechada), com trilha.
+-- (R1) `app_portal_recalc_sigilo` deixa de aceitar chamadas arbitrárias: reabrir OU fechar só vale na MESMA
+--      transação que mudou `patients.birth_date_enc` daquele paciente. O gatilho grava a marca numa tabela
+--      INTERNA (`portal_birth_date_changes`, zero privilégio para o runtime; uma GUC poderia ser forjada por
+--      `set_config`), e a função exige e consome a marca. O serviço só reescreve a coluna quando a data
+--      decifrada mudou de fato. A trilha é gravada DENTRO da função, com os valores antigos e novos de cada
+--      vínculo/convite alterado. Se a transação mudou a coluna e não recalculou, um gatilho ADIADO (no
+--      COMMIT) fecha (falha fechada), com trilha.
+-- (R3) Reescrever `birth_date_enc` com a MESMA data (recifração, rotação de chave) e recalcular com as mesmas
+--      datas não muda nada nem grava trilha: vínculo/convite só é tocado quando o valor novo difere.
 
 -- ================================================================ (R1) marca da mudança da data
 
@@ -23,7 +26,10 @@ ALTER TABLE portal_birth_date_changes FORCE ROW LEVEL SECURITY;
 CREATE POLICY portal_birth_date_changes_definer_only ON portal_birth_date_changes TO CURRENT_USER USING (true) WITH CHECK (true);
 
 -- Aplica (ou fecha) o sigilo e o fim da representação dos vínculos e convites ABERTOS de responsável (fora a
--- curatela) e grava a trilha com os valores antigos e novos. Interna: só as funções/gatilhos abaixo chamam.
+-- curatela) e grava a trilha de CADA vínculo/convite alterado. O contrato da trilha (0005) proíbe datas e
+-- "antes/depois" literais (a data dos 12/18 revela a data de nascimento): o antigo e o novo vão como o ESTADO
+-- (sigilo valendo? representação valendo?) antes e depois e o deslocamento em dias de cada coluna.
+-- Interna: só as funções/gatilhos abaixo chamam.
 CREATE FUNCTION app_portal_sigilo_aplicar(p_tenant uuid, p_patient uuid, p_cf date, p_ru date, p_motivo text) RETURNS integer
   LANGUAGE plpgsql
   SECURITY DEFINER
@@ -31,7 +37,6 @@ CREATE FUNCTION app_portal_sigilo_aplicar(p_tenant uuid, p_patient uuid, p_cf da
 AS $$
 DECLARE
   v_hoje date := app_fiscal_today();
-  v_mud  jsonb := '[]'::jsonb;
   v_n    integer := 0;
   v_cf   date;
   v_ru   date;
@@ -51,29 +56,28 @@ BEGIN
   LOOP
     v_cf := COALESCE(p_cf, LEAST(r.cf, v_hoje));
     v_ru := CASE WHEN p_ru IS NULL THEN LEAST(r.ru, v_hoje) ELSE LEAST(p_ru, COALESCE(r.valid_until, p_ru)) END;
+    CONTINUE WHEN v_cf IS NOT DISTINCT FROM r.cf AND v_ru IS NOT DISTINCT FROM r.ru;  -- (R3) nada mudou
     IF r.tipo = 'link' THEN
       UPDATE portal_links SET confidential_from = v_cf, represent_until = v_ru WHERE tenant_id = p_tenant AND id = r.id;
     ELSE
       UPDATE portal_invites SET confidential_from = v_cf, represent_until = v_ru WHERE tenant_id = p_tenant AND id = r.id;
     END IF;
-    v_mud := v_mud || jsonb_build_object('kind', r.tipo, 'id', r.id,
-                                         'confidential_from', jsonb_build_array(r.cf, v_cf),
-                                         'represent_until', jsonb_build_array(r.ru, v_ru));
+    INSERT INTO audit_log (tenant_id, actor_id, action, scope, metadata)
+      VALUES (p_tenant, COALESCE(app_current_user(), '00000000-0000-0000-0000-000000000000'::uuid), 'update', 'portal_links',
+              jsonb_build_object('op', 'confidentiality_recalculated', 'patient_id', p_patient,
+                                 'kind', r.tipo, 'target_id', r.id, 'closed', p_cf IS NULL, 'reason', p_motivo,
+                                 'confidential_shift_days', v_cf - r.cf, 'represent_shift_days', v_ru - r.ru,
+                                 'confidential_was_on', r.cf <= v_hoje, 'confidential_now_on', v_cf <= v_hoje,
+                                 'representing_was_on', r.ru > v_hoje, 'representing_now_on', v_ru > v_hoje));
     v_n := v_n + 1;
   END LOOP;
   PERFORM set_config('app.portal_recalc', 'off', true);
-  IF v_n > 0 THEN
-    INSERT INTO audit_log (tenant_id, actor_id, action, scope, metadata)
-      VALUES (p_tenant, COALESCE(app_current_user(), '00000000-0000-0000-0000-000000000000'::uuid), 'update', 'portal_links',
-              jsonb_build_object('op', 'confidentiality_recalculated', 'patient_id', p_patient, 'count', v_n,
-                                 'closed', p_cf IS NULL, 'reason', p_motivo, 'changes', v_mud));
-  END IF;
   RETURN v_n;
 END;
 $$;
 REVOKE ALL ON FUNCTION app_portal_sigilo_aplicar(uuid, uuid, date, date, text) FROM PUBLIC;
 
--- Pública (serviço da clínica): fechar é livre; reabrir exige a marca desta transação (e a consome).
+-- Pública (serviço da clínica): reabrir OU fechar exige a marca desta transação (e a consome).
 CREATE OR REPLACE FUNCTION app_portal_recalc_sigilo(p_patient uuid, p_confidential_from date, p_represent_until date) RETURNS integer
   LANGUAGE plpgsql
   SECURITY DEFINER
@@ -98,8 +102,8 @@ BEGIN
   END IF;
   DELETE FROM portal_birth_date_changes
    WHERE tenant_id = v_tenant AND patient_id = p_patient AND xact = txid_current();
-  IF NOT FOUND AND p_confidential_from IS NOT NULL THEN
-    RAISE EXCEPTION 'reabrir o sigilo/representação só na transação que mudou a data de nascimento' USING ERRCODE = 'insufficient_privilege';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'recálculo do sigilo/representação só na transação que mudou a data de nascimento' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN app_portal_sigilo_aplicar(v_tenant, p_patient, p_confidential_from, p_represent_until,
                                    CASE WHEN p_confidential_from IS NULL THEN 'birth_date_cleared' ELSE 'birth_date_changed' END);
