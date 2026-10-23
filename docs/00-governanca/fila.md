@@ -56,16 +56,16 @@
 | Rodada 21.2: ✅ #63 O-R17c (0044) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 21.3: ✅ #67 N1–N3 (0045) + R4 (teste da corrida discriminante, vermelho sem a trava e verde com ela) | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 
+| Rodada 22.1: **#66 R3/R9** — crypto-shredding por lote e índice cego HMAC no KMS (0046) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 22.2: **#63 O-R17b** — operador nominal na correção do fundador (`session_user` nos dois passos; recusa se for a mesma pessoa) (0047) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 22.3: **importador R5** — colunas do responsável no mapeamento de pacientes (0048 se precisar) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
-| **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
-| **#73 S1 (opcional):** teste do destinatário tentando alterar outra coluna ou desmarcar a leitura de `clinical_notices` por SQL (N1/N2/N3/O1 ✅ em 0039/0040) | parecer #73, 23/10/2026 |
-| **#63 O-R17b (antes do GA):** login nominal por operador e recusa quando pedido e confirmação da correção do fundador forem da mesma pessoa; O-R17c: tabela de pedidos só do migrador | parecer #63, conferência 2 de 23/10/2026 |
-| **Jobs R3 (resto):** filtros `JOBS_NAO_AGENDADOS`, `JOB_ALARME`, `JOB_CLINICA_FALHOU` e alarme de `jobs` ≠ `bullmq` no `/health/ready` (REDIS_URL obrigatório e alarmes JOB_ATRASADO/JOBS_DESLIGADOS ✅ no #58; R4/R5/N1/N2 ✅ no #73) | parecer de jobs, 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
