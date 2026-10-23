@@ -11,7 +11,7 @@ import { Logger } from '@nestjs/common';
 import { Queue, Worker } from 'bullmq';
 import Redis from 'ioredis';
 import { randomUUID } from 'node:crypto';
-import { codigoDoErro, type AgendadorPort, type DefinicaoDeJob, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
+import { codigoDoErro, nomeParaLog, type AgendadorPort, type DefinicaoDeJob, type JobAposentado, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
 
 export const FILA_DE_JOBS = 'plataforma-jobs';
 export const FUSO_DOS_JOBS = 'America/Sao_Paulo';
@@ -43,13 +43,28 @@ export interface FabricasBullMQ {
 
 /**
  * Onde a fila mora no Redis. Produção usa o padrão (`bull:plataforma-jobs:*`). O teste com Redis real usa
- * prefixo e nome ALEATÓRIOS, para nunca tocar (nem apagar, na remoção de agendamentos fora do registro) a
+ * prefixo e nome ALEATÓRIOS, para nunca tocar (nem apagar, na remoção de agendamentos aposentados) a
  * fila de um ambiente de verdade (R5 b do parecer dos jobs).
  */
 export interface LocalDaFila {
   readonly nome?: string;
   /** Prefixo das chaves do BullMQ (padrão do BullMQ: `bull`). */
   readonly prefixo?: string;
+}
+
+/**
+ * N1 do parecer dos jobs: o BullMQ grava `failedReason` (a mensagem) e o `stacktrace` da falha no Redis. O
+ * processador relança só um erro novo com o CÓDIGO (`codigoDoErro`), nunca a mensagem original, que poderia
+ * repetir valor de banco. O retry com backoff continua (qualquer exceção conta como falha).
+ */
+export function processadorSeguro(processar: (job: { name: string }) => Promise<void>): (job: { name: string }) => Promise<void> {
+  return async (job) => {
+    try {
+      await processar({ name: job.name });
+    } catch (err) {
+      throw new Error(codigoDoErro(err));
+    }
+  };
 }
 
 /** Fábricas reais: conexão ioredis com `maxRetriesPerRequest: null` (exigência do BullMQ para o trabalhador). */
@@ -66,8 +81,7 @@ export function fabricasReais(redisUrl: string, local: LocalDaFila = {}): Fabric
   };
   return {
     fila: () => new Queue(nome, { connection: conectar(), ...prefixo }),
-    trabalhador: (processar) =>
-      new Worker(nome, async (job) => processar({ name: job.name }), { connection: conectar(), concurrency: 1, ...prefixo }),
+    trabalhador: (processar) => new Worker(nome, processadorSeguro(processar), { connection: conectar(), concurrency: 1, ...prefixo }),
     async fechar() {
       await Promise.all(conexoes.map((c) => c.quit().catch(() => c.disconnect())));
     },
@@ -85,7 +99,7 @@ export class AgendadorBullMQ implements AgendadorPort {
     private readonly aoFechar: () => Promise<void> = () => Promise.resolve(),
   ) {}
 
-  async agendar(jobs: readonly DefinicaoDeJob[], executar: (nome: string) => Promise<void>): Promise<void> {
+  async agendar(jobs: readonly DefinicaoDeJob[], executar: (nome: string) => Promise<void>, aposentados: readonly JobAposentado[] = []): Promise<void> {
     const fila = this.fabricas.fila();
     this.fila = fila;
     for (const j of jobs) {
@@ -102,13 +116,18 @@ export class AgendadorBullMQ implements AgendadorPort {
         },
       });
     }
-    // Agendamento que saiu do registro (job removido/renomeado) não pode continuar disparando.
+    // R5 do parecer dos jobs: só sai o agendamento de job APOSENTADO (lista versionada do registro). Fora do
+    // registro e fora da lista = provavelmente de uma versão mais nova (deploy gradual): fica, com aviso.
     const ativos = new Set(jobs.map((j) => j.nome));
+    const aposentadosPorNome = new Set(aposentados.map((a) => a.nome));
     for (const s of await fila.getJobSchedulers(0, -1)) {
       const id = s.id ?? s.key;
-      if (!ativos.has(id)) {
+      if (ativos.has(id)) continue;
+      if (aposentadosPorNome.has(id)) {
         await fila.removeJobScheduler(id);
-        this.logger.warn(`JOB_REMOVIDO job=${id}: agendamento fora do registro`);
+        this.logger.warn(`JOB_REMOVIDO job=${id}: aposentado no registro`);
+      } else {
+        this.logger.warn(`JOB_DESCONHECIDO job=${nomeParaLog(id)}: fora do registro desta versão; mantido (só sai se aposentado)`);
       }
     }
     const trabalhador = this.fabricas.trabalhador((job) => executar(job.name));

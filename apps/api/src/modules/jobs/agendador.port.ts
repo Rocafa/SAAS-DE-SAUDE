@@ -43,12 +43,27 @@ export interface DefinicaoDeJob {
   readonly porClinica: (tenantId: TenantId) => Promise<ResultadoDeJob>;
 }
 
+/**
+ * Job aposentado (R5 do parecer dos jobs): a ÚNICA forma de um agendamento sair do BullMQ. Fica na lista
+ * versionada do registro (`JOBS_APOSENTADOS`) e o nome nunca volta a ser usado (a validação recusa).
+ */
+export interface JobAposentado {
+  readonly nome: string;
+  /** AAAA-MM-DD: quando saiu do registro (histórico; nada vence sozinho). */
+  readonly desde: string;
+  readonly motivo: string;
+}
+
 export type ModoDoAgendador = 'bullmq' | 'memoria' | 'desligado';
 
 export interface AgendadorPort {
   readonly modo: Exclude<ModoDoAgendador, 'desligado'>;
-  /** Registra os jobs (idempotente: o BullMQ faz upsert e remove agendamentos que saíram do registro). */
-  agendar(jobs: readonly DefinicaoDeJob[], executar: (nome: string) => Promise<void>): Promise<void>;
+  /**
+   * Registra os jobs (idempotente: o BullMQ faz upsert). R5 do parecer dos jobs: só remove o agendamento de
+   * job EXPLICITAMENTE aposentado (`aposentados`, lista versionada no registro). Agendamento desconhecido
+   * fica: em deploy gradual, pode ser de um job novo da versão mais recente.
+   */
+  agendar(jobs: readonly DefinicaoDeJob[], executar: (nome: string) => Promise<void>, aposentados?: readonly JobAposentado[]): Promise<void>;
   parar(): Promise<void>;
 }
 
@@ -95,6 +110,24 @@ export function validarDefinicoes(jobs: readonly DefinicaoDeJob[]): void {
     if (aCadaMs !== undefined && j.travaMs < 2 * aCadaMs) throw new Error(`job ${j.nome}: trava menor que 2× o intervalo`);
     if (aCadaMs !== undefined && j.travaMs >= j.prazoMaximoMs) throw new Error(`job ${j.nome}: trava maior que o prazo do sinal de vida`);
   }
+}
+
+/** R5: aposentado tem nome válido, data AAAA-MM-DD e motivo, não se repete e não está mais no registro. */
+export function validarAposentados(jobs: readonly DefinicaoDeJob[], aposentados: readonly JobAposentado[]): void {
+  const ativos = new Set(jobs.map((j) => j.nome));
+  const vistos = new Set<string>();
+  for (const a of aposentados) {
+    if (!NOME_RE.test(a.nome)) throw new Error(`job aposentado com nome inválido: ${a.nome}`);
+    if (vistos.has(a.nome)) throw new Error(`job aposentado duplicado: ${a.nome}`);
+    vistos.add(a.nome);
+    if (ativos.has(a.nome)) throw new Error(`job ${a.nome}: aposentado e ainda no registro (nome aposentado não volta)`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(a.desde) || !a.motivo.trim()) throw new Error(`job aposentado ${a.nome}: data AAAA-MM-DD e motivo obrigatórios`);
+  }
+}
+
+/** Nome de job para log: só se tiver o formato do registro (o id vem do Redis; nunca ecoa valor estranho). */
+export function nomeParaLog(nome: string): string {
+  return NOME_RE.test(nome) ? nome : 'nome_invalido';
 }
 
 /**

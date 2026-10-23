@@ -13,7 +13,7 @@ import type { WhatsappService } from '../messaging/whatsapp.service';
 import type { ResponsaveisService } from '../patients/responsaveis.service';
 import type { PortalClinicaService } from '../portal/portal-clinica.service';
 import type { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
-import { validarDefinicoes, type DefinicaoDeJob } from './agendador.port';
+import { validarAposentados, validarDefinicoes, type DefinicaoDeJob, type JobAposentado } from './agendador.port';
 
 const MIN = 60_000;
 const HORA = 60 * MIN;
@@ -99,5 +99,14 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
     },
   ];
   validarDefinicoes(jobs);
+  validarAposentados(jobs, JOBS_APOSENTADOS);
   return jobs;
 }
+
+/**
+ * R5 do parecer dos jobs: LISTA VERSIONADA dos jobs aposentados. É a única coisa que remove um agendamento do
+ * BullMQ. Para tirar (ou renomear) um job: apague-o do registro acima E acrescente o nome aqui, no mesmo PR.
+ * Um agendamento que não está no registro nem aqui é mantido (em deploy gradual, a instância antiga não
+ * conhece o job novo da versão que está subindo). O nome aposentado não volta a ser usado.
+ */
+export const JOBS_APOSENTADOS: readonly JobAposentado[] = [];
