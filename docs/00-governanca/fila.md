@@ -43,7 +43,7 @@
 | Rodada 19.2: ✅ correção do veto do **#68** (portal, 0033) — **APROVADO COM RESSALVAS** em 22/10; ressalvas R1–R4/R7 em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | branch `eng/portal-paciente` |
 | Rodada 19.4: ✅ ressalvas do #67 (R1, R2, A4, recibo mascarado) — migração **0034**, G2 1.15.0 | Maestro @Rocafa (agente engenharia) | 22/10/2026 | branch `eng/responsaveis` |
 | Rodada 19.5: **#69** WhatsApp (0032) **VETADO** em 21/10 (opt-in sem número, menor sem nascimento, modelo sem lista fechada) — correção em andamento | Maestro @Rocafa (agente engenharia) | 22/10/2026 | PR #69 |
-| Rodada 19.3: integração #66/#67/#68/WhatsApp sobre #65 (ordem das migrações, versão do G2, guarda de schema), depois dos vetos corrigidos | Maestro @Rocafa | 21/10/2026 | a fazer |
+| Rodada 19.3: ✅ integração **PR #73** (#66/#67/#68/#69 sobre #65, migrações 0024–0038, G2 1.17.0) — **APROVADO** pelo Guardião em 23/10; rls 517/517 local. **Entra no lugar dos 4 PRs** quando o CI voltar | Maestro @Rocafa | 23/10/2026 | PR #73 |
 
 ## Livre (pegue colocando seu nome)
 
@@ -52,6 +52,7 @@
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
 | **#67 N1–N3:** guarda de 20 anos considerar `patients.updated_at`, sessões e assinaturas de guia; via oficial do recibo (IR) pelo financeiro; corrida recebimento × anulação | parecer #67, conferência 22/10/2026 |
+| **#73 N1 (antes do portal em produção):** fechar sigilo no COMMIT quando a cifra final = anterior; avisar admin/profissional/DPO quando sigilo desligar ou representação passar dos 18 | parecer #73, conferência 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
