@@ -5,12 +5,10 @@ name: Infra (Terraform)
 # exige aprovação dos sócios (docs/04-arquitetura/infra-staging.md §3).
 
 on:
-  # Economia de minutos do Actions (billing): só roda quando o PR mexe na infra.
+  # Todo PR dispara, porque a trava de TLS (job tls, segundos) vale para o repositório inteiro.
+  # Economia de minutos do Actions (billing): os jobs pesados só rodam quando o PR mexe na infra
+  # (job mudancas).
   pull_request:
-    paths:
-      - 'infra/**'
-      - 'apps/api/db/migrations/**' # referência da conferência das guardas (R12 do #61)
-      - '.github/workflows/infra.yml'
   schedule:
     - cron: '23 6 * * 1' # semanal: pega regra nova do checkov/tflint e provider com problema
   workflow_dispatch:
@@ -34,8 +32,77 @@ env:
   CHECKOV_IMAGE: bridgecrew/checkov@sha256:d3e96adafdb315ca82e792ca8708c01adae85292800fb064c8b309b3d0cb7b80
 
 jobs:
+  mudancas:
+    # Filtro por mudança sem ação de terceiros: diff entre a base do PR e o merge do PR.
+    # Fora de PR (schedule, dispatch), roda tudo.
+    name: o PR mexe na infra?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      infra: ${{ steps.filtro.outputs.infra }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+      - id: filtro
+        env:
+          EVENTO: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENTO" != pull_request ]; then echo infra=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --name-only "$BASE" HEAD \
+               | grep -Eq '^(infra/|apps/api/db/migrations/|\.github/workflows/infra\.yml$)'; then
+            echo infra=true >> "$GITHUB_OUTPUT"
+          else
+            echo infra=false >> "$GITHUB_OUTPUT"
+          fi
+
+  tls:
+    # Condição (a) da conferência da rodada 21 (revisoes/2026-10-23-jobs.md): desligar a validação
+    # de certificado é proibido fora de infra/terraform/staging/ (o canary do staging fica lá, com a
+    # exceção ligada em jobs-ready.tf até existir domínio). Roda em todo PR, sem depender da infra.
+    # docs/ fica de fora (texto, não executa). Cada padrão tem uma letra entre colchetes para o
+    # próprio workflow não casar consigo.
+    # Limite: grep pega a forma literal; desligar por variável indireta passa (revisão humana).
+    name: trava de TLS (validação de certificado)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: validação de certificado só desligada em staging
+        run: |
+          padroes='rejectunauthoriz[e]d[^,;}]{0,60}(false|!1)'      # Node/pg: opção literal
+          padroes="$padroes|node_tls_reject_unauthoriz[e]d"         # variável global do Node (só serve para desligar)
+          padroes="$padroes|validar_certificad[o][^,;}]{0,60}false" # a exceção do canary
+          padroes="$padroes|sslmode=no-verif[y]"                    # pg: TLS sem conferir certificado
+          padroes="$padroes|checkserveridentit[y]"                  # troca a conferência do nome
+          padroes="$padroes|--insecur[e]([^a-z-]|$)|--no-check-certificat[e]|strict-ss[l][^a-z]{0,5}false"
+          if git grep -nIiE "$padroes" -- . ':!infra/terraform/staging/' ':!docs/'; then
+            echo "::error::Validação de TLS desligada fora de infra/terraform/staging/ (proibido em produção; infra-staging.md §4.4)."
+            exit 1
+          fi
+          # IaC fora do staging não aponta canary/health check para o DNS do ALB (sem certificado válido).
+          if git grep -nE 'dns_name\}/health' -- '*.tf' ':!infra/terraform/staging/'; then
+            echo "::error::Canary fora do staging usando o DNS do ALB; use o domínio."; exit 1
+          fi
+          # Canary do staging: valida por padrão; só a variável do canary com o valor "false" desliga.
+          c=infra/terraform/staging/canary/index.js
+          grep -q "^const VALIDAR_CERTIFICAD[O] = process.env.VALIDAR_CERTIFICAD[O] !== 'false';$" "$c" \
+            || { echo "::error::$c deve validar o certificado por padrão"; exit 1; }
+          [ "$(grep -c 'rejectUnauthorized' "$c")" -eq 1 ] && grep -q 'rejectUnauthorized: VALIDAR_CERTIFICADO,' "$c" \
+            || { echo "::error::$c: a opção de TLS deve vir só de VALIDAR_CERTIFICADO"; exit 1; }
+          # A exceção do staging é explícita e tem prazo no comentário.
+          t=infra/terraform/staging/jobs-ready.tf
+          if grep -q 'VALIDAR_CERTIFICADO' "$t"; then
+            grep -B3 'VALIDAR_CERTIFICAD[O] *= *"false"' "$t" | grep -q 'remover quando houver domínio' \
+              || { echo "::error::$t: exceção de TLS sem o comentário 'remover quando houver domínio'"; exit 1; }
+          fi
+
   terraform:
     name: fmt, validate, tflint e checkov
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -223,6 +290,8 @@ jobs:
     # coluna e ALTER DEFAULT PRIVILEGES; e (O2 da conferência da R10) atributo de papel e vínculo
     # em pg_auth_members.
     name: conferência das guardas do banco (autoteste)
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

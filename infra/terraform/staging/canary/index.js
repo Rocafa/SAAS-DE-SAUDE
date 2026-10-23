@@ -9,13 +9,16 @@ const https = require('https');
 // Rótulos conhecidos do modo do agendador (apps/api/src/modules/jobs/estado-dos-jobs.ts).
 const ROTULOS = ['bullmq', 'nao_iniciado', 'desligado', 'memoria'];
 
+// Valida o certificado por padrão; só VALIDAR_CERTIFICADO=false desliga. O staging liga a exceção
+// em jobs-ready.tf enquanto não houver domínio (I10): o certificado do ALB é do domínio e a URL usa
+// o DNS do ALB. O CI (infra.yml, job tls) reprova a exceção fora de infra/terraform/staging/.
+const VALIDAR_CERTIFICADO = process.env.VALIDAR_CERTIFICADO !== 'false';
+
 function lerCorpo(url) {
   return new Promise((ok, falha) => {
-    // rejectUnauthorized: false só enquanto não houver domínio (I10): o certificado do ALB é do
-    // domínio e a URL usa o DNS do ALB. Com o domínio, trocar URL_READY e tirar esta opção.
     const req = https.get(
       url,
-      { rejectUnauthorized: false, timeout: 10000, headers: { 'user-agent': 'canary-jobs-ready' } },
+      { rejectUnauthorized: VALIDAR_CERTIFICADO, timeout: 10000, headers: { 'user-agent': 'canary-jobs-ready' } },
       (res) => {
         let corpo = '';
         res.setEncoding('utf8');

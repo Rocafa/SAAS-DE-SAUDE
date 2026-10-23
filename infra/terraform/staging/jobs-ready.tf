@@ -34,6 +34,9 @@ resource "aws_synthetics_canary" "jobs_ready" {
     active_tracing     = false
     environment_variables = {
       URL_READY = "https://${aws_lb.this.dns_name}/health/ready"
+      # Exceção de TLS só do staging: remover quando houver domínio (I10). Prazo: antes do piloto
+      # e antes de qualquer dado real em staging. Sem esta linha o canary valida o certificado.
+      VALIDAR_CERTIFICADO = "false"
     }
   }
 
