@@ -89,6 +89,11 @@ export function validarDefinicoes(jobs: readonly DefinicaoDeJob[]): void {
     if (aCadaMs !== undefined && (!Number.isInteger(aCadaMs) || aCadaMs < 60_000)) throw new Error(`job ${j.nome}: intervalo mínimo de 1 min`);
     if (aCadaMs !== undefined && j.prazoMaximoMs <= aCadaMs) throw new Error(`job ${j.nome}: prazo do sinal de vida menor que o intervalo`);
     if (!(j.travaMs > 0) || !(j.prazoMaximoMs > 0)) throw new Error(`job ${j.nome}: trava e prazo positivos`);
+    // R4 do parecer dos jobs: a trava de job por intervalo não pode vencer antes do próximo disparo, senão uma
+    // passada lenta roda junto com a seguinte (em outra instância). Folga de 2× o intervalo; abaixo do prazo do
+    // sinal de vida, para que uma trava órfã (processo morto) apareça como JOB_ATRASADO e não esconda nada.
+    if (aCadaMs !== undefined && j.travaMs < 2 * aCadaMs) throw new Error(`job ${j.nome}: trava menor que 2× o intervalo`);
+    if (aCadaMs !== undefined && j.travaMs >= j.prazoMaximoMs) throw new Error(`job ${j.nome}: trava maior que o prazo do sinal de vida`);
   }
 }
 

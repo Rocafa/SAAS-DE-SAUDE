@@ -44,6 +44,11 @@ describe('registro central dos jobs', () => {
     expect(naTabela).toEqual(jobs.map((j) => ({ nome: j.nome, periodicidade: j.periodicidade.descricao })));
   });
 
+  it('R4: a trava dos lembretes (10 min) não vence antes do próximo disparo (5 min) e fica abaixo do prazo (30 min)', () => {
+    const j = criarRegistroDeJobs(servicos([])).find((x) => x.nome === 'whatsapp-lembretes');
+    expect(j).toMatchObject({ periodicidade: { aCadaMs: 300_000 }, travaMs: 600_000, prazoMaximoMs: 1_800_000 });
+  });
+
   it('todo job do registro é crítico (entra no sinal de vida)', () => {
     expect(criarRegistroDeJobs(servicos([])).filter((j) => !j.critico)).toEqual([]);
   });

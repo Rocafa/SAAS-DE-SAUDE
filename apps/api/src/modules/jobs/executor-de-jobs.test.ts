@@ -137,6 +137,14 @@ describe('contrato da trilha e do erro', () => {
     expect(() => validarDefinicoes([{ ...base, periodicidade: { aCadaMs: 600_000, descricao: '' }, prazoMaximoMs: 300_000 }])).toThrow('prazo');
     expect(() => validarDefinicoes([{ ...base, periodicidade: { aCadaMs: 1_000, descricao: '' } }])).toThrow('mínimo');
   });
+
+  it('R4: trava de job por intervalo não vence antes do próximo disparo (≥ 2× o intervalo) e fica abaixo do prazo', () => {
+    const base = job(() => Promise.resolve({}), { periodicidade: { aCadaMs: 300_000, descricao: '' }, prazoMaximoMs: 1_800_000 });
+    expect(() => validarDefinicoes([{ ...base, travaMs: 240_000 }])).toThrow('2× o intervalo');
+    expect(() => validarDefinicoes([{ ...base, travaMs: 599_999 }])).toThrow('2× o intervalo');
+    expect(() => validarDefinicoes([{ ...base, travaMs: 1_800_000 }])).toThrow('prazo do sinal de vida');
+    expect(() => validarDefinicoes([{ ...base, travaMs: 600_000 }])).not.toThrow();
+  });
 });
 
 describe('agendador em memória', () => {

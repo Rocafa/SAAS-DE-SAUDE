@@ -20,6 +20,7 @@ const HORA = 60 * MIN;
 /** Rotina diária: alarma se passar de 26 h sem sucesso (24 h + folga para o retry com backoff). */
 const PRAZO_DIARIO = 26 * HORA;
 const TRAVA_DIARIA = 30 * MIN;
+const LEMBRETES_A_CADA = 5 * MIN;
 
 export interface ServicosDosJobs {
   readonly whatsapp: Pick<WhatsappService, 'executarLembretesComoSistema' | 'executarRetencaoComoSistema'>;
@@ -37,9 +38,12 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       // HU-COM-003/004 (§13): programa e despacha os lembretes. Reconfere os modelos na Meta (N1 do #69) no
       // máximo a cada 24 h ANTES de despachar; divergente = nada sai. Trilha só com efeito (o próprio envio audita).
       nome: 'whatsapp-lembretes',
-      periodicidade: { aCadaMs: 5 * MIN, descricao: 'a cada 5 min' },
+      periodicidade: { aCadaMs: LEMBRETES_A_CADA, descricao: 'a cada 5 min' },
       prazoMaximoMs: 30 * MIN,
-      travaMs: 4 * MIN,
+      // R4 do parecer dos jobs: a trava (10 min = 2× o intervalo) não vence antes do próximo disparo; uma
+      // passada lenta faz o disparo seguinte pular (JOB_EM_ANDAMENTO) em vez de rodar junto. A trava é
+      // liberada ao terminar; só uma trava órfã (processo morto) segura até 10 min, abaixo do prazo de 30 min.
+      travaMs: 2 * LEMBRETES_A_CADA,
       critico: true,
       trilha: 'com_efeito',
       porClinica: async (t: TenantId) => {
