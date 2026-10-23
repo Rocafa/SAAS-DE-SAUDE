@@ -1,4 +1,4 @@
-# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63)
+# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63; correção na 0042)
 
 **Quando usar:** uma vez, antes de abrir o acesso ao piloto, depois de aplicar a migração 0022. Também
 serve, depois disso, para qualquer clínica antiga que apareça sem admin no banco.
@@ -73,12 +73,58 @@ custódia nem conceder perfil nelas até este runbook rodar.
    identidade, que o `userId` que aparece como admin é o mesmo conferido antes do passo 2 e pertence
    ao responsável do contrato daquela clínica (R17), e registra isso no chamado.
 
-   **Se o `userId` estiver errado:** o runbook não desfaz o erro, porque o fundador é gravado uma vez só.
-   Abra incidente pelo [plano de resposta](../03-seguranca-lgpd/plano-resposta-incidentes.md), revogue
-   o perfil indevido assim que houver um admin legítimo e avise o `guardiao-lgpd`.
+   **Se o `userId` estiver errado:** siga a seção "Correção do fundador errado", mais abaixo.
+   Não tente rodar o passo 2 de novo: ele recusa com 55000, porque a clínica já tem membro.
 
 4. **Registrar** no chamado: clínica, data, quem executou e quem conferiu. O fundador então concede os
    demais perfis pela API (`POST /clinica/membros`), e cada concessão avisa os outros admins.
+
+## Correção do fundador errado (R17 do #63, migração 0042)
+
+Use quando o passo 3 mostrar que o admin gravado não é o responsável do contrato. Até a correção, o
+admin indevido tem acesso de admin à clínica: trate como **incidente**.
+
+1. **Abrir incidente** pelo [plano de resposta](../03-seguranca-lgpd/plano-resposta-incidentes.md),
+   com chamado próprio (ex.: `INC-45`), e avisar o `guardiao-lgpd`. Avaliar no incidente o que o
+   admin indevido acessou nesse intervalo (trilha da clínica filtrada pelo `actor_id` dele, só ids).
+2. **Conferente confirma o `userId` correto** no provedor de identidade, como na dupla checagem do
+   passo 1 (ativo, do responsável do contrato, sem vínculo indevido), e registra no chamado.
+3. **Quem executa pede a correção** (papel `app_migrator`, numa transação):
+
+   ```sql
+   BEGIN;
+   SELECT app_runbook_pedir_correcao_fundador('<id-da-clinica>'::uuid, '<userId-errado>'::uuid,
+                                              '<userId-correto>'::uuid, 'INC-45');
+   COMMIT;
+   ```
+
+   Devolve o **id do pedido** (vai para o chamado). Recusa com 55000 se o `userId-errado` não for o
+   fundador atual, e com 22023 se o chamado for inválido ou o correto for igual ao errado. Grava
+   `founder_fix_requested` na trilha (só ids e chamado).
+4. **O conferente confirma** em até 24 h, em **outra** transação, redigitando o `userId` correto a
+   partir do provedor de identidade (não copia de quem executa):
+
+   ```sql
+   BEGIN;
+   SELECT app_runbook_confirmar_correcao_fundador('<id-da-clinica>'::uuid, '<id-do-pedido>'::uuid,
+                                                  '<userId-correto>'::uuid, 'INC-45');
+   COMMIT;
+   ```
+
+   Na mesma transação, a função: troca `tenants.founder_user_id` para o correto, registra o correto
+   como admin (`member_found`, `via=runbook_correcao`), **revoga todos os perfis ativos** do errado na
+   clínica (`member_revoke`, um evento por perfil) e grava `founder_fixed` com o pedido e o chamado.
+   Recusa com 42501 se rodar na mesma transação do pedido; com 22023 se o `userId` ou o chamado não
+   baterem com o pedido; com 55000 se o pedido não existir nessa clínica, já tiver sido confirmado,
+   tiver expirado (> 24 h) ou se o fundador tiver mudado desde o pedido.
+5. **Conferir** como no passo 3: `GET /clinica/membros` (sessão do admin correto) mostra só ele como
+   admin; a trilha tem `founder_fix_requested`, `member_found`, `member_revoke` e `founder_fixed` com o
+   mesmo chamado. Encerrar o incidente com o registro de quem pediu e de quem confirmou.
+
+O banco garante: o runtime (`app_user`) não executa nenhuma das duas funções (42501), nem ligando a
+configuração da correção por conta própria; a exceção nos guardas de `tenants` e `clinic_members` só
+vale dentro da confirmação. As duas pessoas usam o mesmo papel de banco, então a separação entre quem
+pede e quem confirma também depende do chamado: **quem pede não confirma**.
 
 ## Lista de verificação (marcar no chamado, por clínica)
 
@@ -87,8 +133,11 @@ custódia nem conceder perfil nelas até este runbook rodar.
 - [ ] `userId` conferido pelo **conferente** no provedor de identidade: ativo, do responsável do
       contrato e sem vínculo indevido com outra clínica (R17).
 - [ ] Conferência registrada no chamado **antes** do passo 2.
-- [ ] Passo 2 executado pela outra pessoa, com `app_migrator`, numa transação só.
+- [ ] Passo 2 executado por **quem executa** (a pessoa que não é o conferente), com `app_migrator`,
+      numa transação só.
 - [ ] Passo 3: `GET /clinica/membros` e `member_found` conferidos, e `userId` reconfirmado (R17).
+- [ ] Se o `userId` estava errado: incidente aberto, pedido por quem executa e confirmação pelo
+      conferente (seção "Correção do fundador errado"), com os quatro eventos na trilha.
 - [ ] Chamado fechado com clínica, data, quem executou e quem conferiu.
 
 ## O que o banco garante mesmo se o runbook for mal usado

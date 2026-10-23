@@ -466,6 +466,77 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     expect(trilha.map((l) => l.metadata)).toEqual([expect.objectContaining({ op: 'member_found', user_id: fundadorId, via: 'runbook', chamado: 'OPS-1' })]);
   });
 
+  it('R17 do #63 (0042): fundador errado se corrige em dois passos (pedido + confirmação do conferente), só pelo papel de operação, com trilha', async () => {
+    const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+    if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
+    const antiga = randomUUID() as TenantId;
+    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Correcao' }));
+    const errado = randomUUID();
+    const correto = randomUUID();
+    const op = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
+    try {
+      await op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${errado}::uuid, 'OPS-10')`);
+      // O runtime não pede nem confirma, nem com a GUC da correção ligada.
+      const pedirRuntime = withTenant(api.db.db, antiga, (tx) =>
+        tx.execute(sql`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10')`), errado);
+      expect(await sqlstates(pedirRuntime)).toContain('42501');
+      const confirmarRuntime = withTenant(api.db.db, antiga, (tx) =>
+        tx.execute(sql`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${randomUUID()}::uuid, ${correto}::uuid, 'INC-10')`), errado);
+      expect(await sqlstates(confirmarRuntime)).toContain('42501');
+      const gucRuntime = withTenant(api.db.db, antiga, async (tx) => {
+        await tx.execute(sql`select set_config('app.correcao_fundador', ${antiga}, true)`);
+        await tx.update(tenants).set({ founderUserId: correto }).where(eq(tenants.id, antiga));
+      }, correto);
+      expect(await sqlstates(gucRuntime)).toContain('42501');
+
+      // Pedido: chamado inválido, "errado" que não é o fundador e correto igual ao errado são recusados.
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'x')`))).toContain('22023');
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${correto}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('55000');
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('22023');
+      // Pedir e confirmar na MESMA transação: recusado (a confirmação é do conferente).
+      const mesmaTx = op.begin(async (t) => {
+        const [p] = await t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10') as id`;
+        await t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${p!.id as string}::uuid, ${correto}::uuid, 'INC-10')`;
+      });
+      expect(await sqlstates(mesmaTx)).toContain('42501');
+
+      const [pedido] = await op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10') as id`);
+      const pedidoId = pedido!.id as string;
+      // Conferente com userId ou chamado diferentes do pedido: recusado, nada muda.
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${randomUUID()}::uuid, 'INC-10')`))).toContain('22023');
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-11')`))).toContain('22023');
+      // Pedido de outra clínica não vale aqui.
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${clinica}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
+      const [t0] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
+      expect(t0?.founderUserId).toBe(errado);
+
+      // Confirmação válida, em outra transação.
+      await op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`);
+      // O pedido vale uma vez.
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
+    } finally {
+      await op.end({ timeout: 5 });
+    }
+    const [t] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
+    expect(t?.founderUserId).toBe(correto);
+    const membros = await withTenant(api.db.db, antiga, (tx) => tx.select().from(clinicMembers));
+    expect(membros.filter((m) => m.revokedAt === null).map((m) => [m.userId, m.role])).toEqual([[correto, 'admin']]);
+    expect(membros.find((m) => m.userId === errado)).toMatchObject({ role: 'admin', revokedBy: correto });
+    const trilha = await withTenant(api.db.db, antiga, (tx) =>
+      tx.select().from(auditLog).where(sql`${auditLog.scope} in ('clinic_members', 'tenants.founder')`).orderBy(auditLog.createdAt));
+    const ops = trilha.map((l) => l.metadata as Record<string, unknown>);
+    expect(ops).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ op: 'founder_fix_requested', user_id_anterior: errado, user_id: correto, chamado: 'INC-10' }),
+        expect.objectContaining({ op: 'member_found', user_id: correto, via: 'runbook_correcao', chamado: 'INC-10' }),
+        expect.objectContaining({ op: 'member_revoke', user_id: errado, role: 'admin', via: 'runbook_correcao', chamado: 'INC-10' }),
+        expect.objectContaining({ op: 'founder_fixed', user_id_anterior: errado, user_id: correto, chamado: 'INC-10' }),
+      ]),
+    );
+    // Trilha só com ids e códigos.
+    expect(trilha.every((l) => l.actorKind === 'sistema')).toBe(true);
+  });
+
   it('R15: perfil concedido ou revogado direto no banco, sem o evento na trilha, é recusado no COMMIT', async () => {
     const alvo = randomUUID();
     const semTrilha = withTenant(api.db.db, clinica, (tx) =>
