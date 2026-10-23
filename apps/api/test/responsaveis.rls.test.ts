@@ -848,47 +848,139 @@ describe('N3 da conferência do #67: corrida entre recebimento e anulação do p
   const situacao = async (vinculo: string) =>
     (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, vinculo)), recepA.userId))[0]?.endReason ?? null;
 
-  it('anulação primeiro (sem COMMIT): o recebimento espera e, confirmada a anulação, é recusado — nada congela o anulado', async () => {
+  /** pid e xid da transação corrente (para identificar quem espera e quem segura). */
+  const quemSou = async (tx: TenantTx) => {
+    const [r] = (await tx.execute(sql`select pg_backend_pid() as pid, pg_current_xact_id()::text as xid`)) as unknown as { pid: number; xid: string }[];
+    return r!;
+  };
+  /**
+   * R4 da conferência da rodada 21: COMO `pid` está esperando. Lê pg_stat_activity e pg_locks numa
+   * conexão própria (o pool da API de teste tem 2 vagas, ambas presas na corrida), com o mesmo papel
+   * app_user — por isso enxerga as duas sessões. Só lê catálogo de travas; nenhum dado de paciente.
+   * Devolve evento de espera, travas NÃO concedidas, travas de tupla concedidas e quem bloqueia
+   * (pg_blocking_pids). Repete por até ~1 s porque a espera começa de forma assíncrona.
+   */
+  async function esperaDe(pid: number) {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error('DATABASE_URL é obrigatória');
+    const sonda = postgres(url, { max: 1, onnotice: () => undefined });
+    try {
+      for (let i = 0; ; i++) {
+        const [e] = await sonda<
+          {
+            tipoEspera: string | null;
+            evento: string | null;
+            pendentes: { locktype: string; relacao: string | null; xid: string | null; modo: string }[] | null;
+            tuplasSeguradas: string[];
+            bloqueadores: number[];
+          }[]
+        >`
+          select a.wait_event_type as "tipoEspera", a.wait_event as "evento",
+                 (select json_agg(json_build_object('locktype', l.locktype, 'relacao', l.relation::regclass::text,
+                                  'xid', l.transactionid::text, 'modo', l.mode))
+                    from pg_locks l where l.pid = a.pid and not l.granted) as "pendentes",
+                 (select coalesce(json_agg(l.relation::regclass::text), '[]'::json)
+                    from pg_locks l where l.pid = a.pid and l.granted and l.locktype = 'tuple') as "tuplasSeguradas",
+                 pg_blocking_pids(a.pid) as "bloqueadores"
+            from pg_stat_activity a where a.pid = ${pid}`;
+        if (e!.tipoEspera === 'Lock' || i >= 20) return e!;
+        await esperar(50);
+      }
+    } finally {
+      await sonda.end({ timeout: 5 });
+    }
+  }
+  /**
+   * Prova discriminante do FOR SHARE (R4): quem espera, espera pela trava de LINHA de patient_guardians
+   * (trava de tupla do vínculo concedida + espera no xid de quem segura), e não pela consultiva da trilha
+   * (`audit_chain:<tenant>`, 0033). As duas transações daqui gravam direto no banco e não escrevem trilha,
+   * então a consultiva não serializa nada. A suspeita da rodada 21 ("recebimento primeiro passa sem o
+   * FOR SHARE") era artefato do pool de 2 vagas da API de teste: o teste anterior, ao falhar, deixava a
+   * transação aberta e a anulação "esperava" uma vaga do pool, não uma trava do banco. Agora a conexão
+   * presa é liberada no `finally` e a espera é lida em pg_locks. Sem o FOR SHARE, as duas ordens ficam
+   * vermelhas (§10a do api-dominio).
+   */
+  function exigirEsperaPorLinhaDoVinculo(e: Awaited<ReturnType<typeof esperaDe>>, quemSegura: { pid: number; xid: string }) {
+    const diag = JSON.stringify(e);
+    expect(e.tipoEspera, diag).toBe('Lock');
+    expect(e.evento, diag).toBe('transactionid');
+    expect(e.pendentes, diag).toEqual([expect.objectContaining({ locktype: 'transactionid', xid: quemSegura.xid })]);
+    expect(e.tuplasSeguradas, diag).toEqual(['patient_guardians']);
+    expect(e.bloqueadores, diag).toEqual([quemSegura.pid]);
+  }
+
+  it('anulação primeiro (sem COMMIT): o recebimento espera pela linha do vínculo e, confirmada a anulação, é recusado', async () => {
     const s = await cenario('A');
     const anulou = portao();
     const segurar = portao();
+    let anulacao!: { pid: number; xid: string };
+    let recebimento!: { pid: number; xid: string };
     const t1 = withTenant(api.db.db, clinicaA, async (tx) => {
       await anular(tx, s);
+      anulacao = await quemSou(tx);
       anulou.abrir();
       await segurar.aberto;
     }, profA.userId);
     await anulou.aberto;
+    const pidPronto = portao();
     let t2Terminou = false;
-    const t2 = withTenant(api.db.db, clinicaA, (tx) => receber(tx, s), recepA.userId).finally(() => {
+    const t2 = withTenant(api.db.db, clinicaA, async (tx) => {
+      recebimento = await quemSou(tx);
+      pidPronto.abrir();
+      await receber(tx, s);
+    }, recepA.userId).finally(() => {
       t2Terminou = true;
+      pidPronto.abrir();
     });
-    await esperar(700);
-    // Trava de linha (FOR SHARE no gatilho): o recebimento está esperando a anulação.
-    expect(t2Terminou).toBe(false);
-    segurar.abrir();
+    try {
+      await pidPronto.aberto;
+      const espera = await esperaDe(recebimento.pid);
+      // Sem o FOR SHARE, o gatilho lê a versão antiga do vínculo (ainda vigente), o recebimento passa sem
+      // esperar e congela o pagador anulado: as asserções abaixo ficam vermelhas.
+      expect(t2Terminou, 'o recebimento não pode terminar enquanto a anulação está aberta').toBe(false);
+      exigirEsperaPorLinhaDoVinculo(espera, anulacao);
+    } finally {
+      segurar.abrir();
+      await Promise.allSettled([t1, t2]);
+    }
     await t1;
     expect(await sqlstate(t2)).toContain('23514');
     expect(await situacao(s.v.id)).toBe('cadastro_errado');
     expect(await recebimentosDo(s.v.id)).toBe(0);
   });
 
-  it('recebimento primeiro (sem COMMIT): a anulação espera e, confirmado o recebimento, exige quem opera o financeiro', async () => {
+  it('recebimento primeiro (sem COMMIT): a anulação espera pela linha do vínculo e, confirmado o recebimento, exige quem opera o financeiro', async () => {
     const s = await cenario('B');
     const recebeu = portao();
     const segurar = portao();
+    let recebimento!: { pid: number; xid: string };
+    let anulacao!: { pid: number; xid: string };
     const t2 = withTenant(api.db.db, clinicaA, async (tx) => {
       await receber(tx, s);
+      recebimento = await quemSou(tx);
       recebeu.abrir();
       await segurar.aberto;
     }, recepA.userId);
     await recebeu.aberto;
+    const pidPronto = portao();
     let t1Terminou = false;
-    const t1 = withTenant(api.db.db, clinicaA, (tx) => anular(tx, s), profA.userId).finally(() => {
+    const t1 = withTenant(api.db.db, clinicaA, async (tx) => {
+      anulacao = await quemSou(tx);
+      pidPronto.abrir();
+      await anular(tx, s);
+    }, profA.userId).finally(() => {
       t1Terminou = true;
+      pidPronto.abrir();
     });
-    await esperar(700);
-    expect(t1Terminou).toBe(false);
-    segurar.abrir();
+    try {
+      await pidPronto.aberto;
+      const espera = await esperaDe(anulacao.pid);
+      expect(t1Terminou, 'a anulação não pode terminar enquanto o recebimento está aberto').toBe(false);
+      exigirEsperaPorLinhaDoVinculo(espera, recebimento);
+    } finally {
+      segurar.abrir();
+      await Promise.allSettled([t1, t2]);
+    }
     await t2;
     // A anulação enxerga o recebimento confirmado: o profissional não anula pagador com recebimento (R1).
     expect(await sqlstate(t1)).toContain('42501');
