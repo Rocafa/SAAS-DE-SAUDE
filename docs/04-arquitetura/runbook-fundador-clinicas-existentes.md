@@ -1,4 +1,4 @@
-# Runbook: fundador das clínicas existentes sem membros (R15 do parecer #63)
+# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63)
 
 **Quando usar:** uma vez, antes de abrir o acesso ao piloto, depois de aplicar a migração 0022. Também
 serve, depois disso, para qualquer clínica antiga que apareça sem admin no banco.
@@ -33,6 +33,28 @@ custódia nem conceder perfil nelas até este runbook rodar.
    Para cada clínica do inventário, confirme no contrato quem é o responsável (o futuro admin) e o
    `userId` dele no provedor de identidade.
 
+   **Dupla checagem do `userId` (R17), antes do passo 2.** A função aceita qualquer UUID: o banco não
+   sabe se o `userId` é de outra clínica, de um ex-funcionário ou de uma conta de teste. Por isso o
+   **conferente** (a segunda pessoa, não quem executa) confirma por conta própria, direto no console do
+   provedor de identidade, sem copiar o valor de quem executa:
+   - o `userId` existe, está **ativo** e não está bloqueado nem marcado para exclusão;
+   - a conta pertence ao **responsável do contrato daquela clínica** (confere com o contrato, não com
+     um pedido por chat ou e-mail);
+   - a conta não é membro ativo nem fundador de **outra** clínica, salvo se o contrato disser que o
+     responsável é o mesmo (consulta só de ids, sem dado pessoal):
+
+     ```sql
+     -- Só leitura, com o papel administrativo do banco.
+     SELECT m.tenant_id, m.role FROM clinic_members m
+      WHERE m.user_id = '<userId-do-responsavel>'::uuid AND m.revoked_at IS NULL;
+     SELECT t.id FROM tenants t WHERE t.founder_user_id = '<userId-do-responsavel>'::uuid;
+     ```
+
+   O conferente registra no chamado: "userId conferido no provedor de identidade em AAAA-MM-DD por
+   <conferente>; pertence ao responsável do contrato <nº do contrato>". **Sem esse registro, o passo 2
+   não roda.** No chamado vão só ids, número do contrato e os nomes de quem executa e de quem confere.
+   Nada de documento, e-mail ou telefone do responsável.
+
 2. **Registrar o fundador** (uma transação por clínica):
 
    ```sql
@@ -47,10 +69,27 @@ custódia nem conceder perfil nelas até este runbook rodar.
    admin), e com 22023 se o chamado não tiver o formato `ABC-123`.
 
 3. **Conferir** (com a sessão do novo admin): `GET /clinica/membros` mostra só ele como admin; a trilha
-   da clínica tem o `member_found` com o chamado.
+   da clínica tem o `member_found` com o chamado. O conferente confirma de novo, pelo provedor de
+   identidade, que o `userId` que aparece como admin é o mesmo conferido antes do passo 2 e pertence
+   ao responsável do contrato daquela clínica (R17), e registra isso no chamado.
+
+   **Se o `userId` estiver errado:** o runbook não desfaz o erro, porque o fundador é gravado uma vez só.
+   Abra incidente pelo [plano de resposta](../03-seguranca-lgpd/plano-resposta-incidentes.md), revogue
+   o perfil indevido assim que houver um admin legítimo e avise o `guardiao-lgpd`.
 
 4. **Registrar** no chamado: clínica, data, quem executou e quem conferiu. O fundador então concede os
    demais perfis pela API (`POST /clinica/membros`), e cada concessão avisa os outros admins.
+
+## Lista de verificação (marcar no chamado, por clínica)
+
+- [ ] Clínica listada no inventário do passo 1 (sem fundador e sem membros).
+- [ ] Responsável tirado do contrato, com o número do contrato no chamado.
+- [ ] `userId` conferido pelo **conferente** no provedor de identidade: ativo, do responsável do
+      contrato e sem vínculo indevido com outra clínica (R17).
+- [ ] Conferência registrada no chamado **antes** do passo 2.
+- [ ] Passo 2 executado pela outra pessoa, com `app_migrator`, numa transação só.
+- [ ] Passo 3: `GET /clinica/membros` e `member_found` conferidos, e `userId` reconfirmado (R17).
+- [ ] Chamado fechado com clínica, data, quem executou e quem conferiu.
 
 ## O que o banco garante mesmo se o runbook for mal usado
 
