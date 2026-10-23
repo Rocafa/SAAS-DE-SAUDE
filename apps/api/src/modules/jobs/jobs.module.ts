@@ -25,7 +25,7 @@ import { AgendadorBullMQ, fabricasReais, RegistroRedis, TravaRedis } from './age
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
 import { codigoDoErro, type AgendadorPort, type DefinicaoDeJob, type ModoDoAgendador, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
 import { registrarModoDosJobs } from './estado-dos-jobs';
-import { ExecutorDeJobs, type LinhaDeTrilhaDoJob, type ResumoDaExecucao } from './executor-de-jobs';
+import { type DependenciasDoExecutor, ExecutorDeJobs, type LinhaDeTrilhaDoJob, type ResumoDaExecucao } from './executor-de-jobs';
 import { criarRegistroDeJobs } from './registro-de-jobs';
 import { verificarAtrasos, type JobAtrasado } from './sinal-de-vida';
 
@@ -102,14 +102,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
       retencaoFiscal: get(RetencaoFiscalService),
       responsaveis: get(ResponsaveisService),
     });
-    this.executor = new ExecutorDeJobs({
-      jobs,
-      trava: this.infra.trava,
-      registro: this.infra.registro,
-      listarClinicas: () => this.clinicas.listar(),
-      registrarTrilha: (t, linha) => this.registrarTrilha(t, linha),
-      logger: this.logger,
-    });
+    this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;
     if (!agendador) {
       // Nunca silencioso: erro na subida e a cada verificação, e "desligado" no /health/ready.
@@ -147,6 +140,21 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
   /** Sinal de vida dos jobs críticos (`JOB_ATRASADO`). */
   verificarAtrasos(agoraMs: number = Date.now()): Promise<JobAtrasado[]> {
     return verificarAtrasos(this.jobs, this.infra.registro, agoraMs, this.subiuEm, this.logger);
+  }
+
+  /**
+   * Executor com as peças desta instância (trava, registro, trilha, clínicas de app_job_tenants()). O teste de
+   * integração troca a lista de clínicas para não tocar as clínicas das outras suítes.
+   */
+  novoExecutor(sobrescrever: Partial<DependenciasDoExecutor> & Pick<DependenciasDoExecutor, 'jobs'>): ExecutorDeJobs {
+    return new ExecutorDeJobs({
+      trava: this.infra.trava,
+      registro: this.infra.registro,
+      listarClinicas: () => this.clinicas.listar(),
+      registrarTrilha: (t, linha) => this.registrarTrilha(t, linha),
+      logger: this.logger,
+      ...sobrescrever,
+    });
   }
 
   private async registrarTrilha(tenantId: TenantId, linha: LinhaDeTrilhaDoJob): Promise<void> {
