@@ -853,7 +853,8 @@ describe('R1 do parecer dos jobs: clínica cancelada ou bloqueada não recebe le
     );
     expect(trilha.filter((m) => m.op === 'cancel_subscription_blocked')).toEqual([{ op: 'cancel_subscription_blocked', cancelled: 1 }]);
     // A retenção (eliminação de dado vencido) continua rodando para a clínica cancelada.
-    await expect(svc.executarRetencaoComoSistema(c.t)).resolves.toMatchObject({ agendadosExpirados: expect.any(Number) });
+    const retencao = await svc.executarRetencaoComoSistema(c.t);
+    expect(typeof retencao.agendadosExpirados).toBe('number');
   });
 
   it('escrita bloqueada (past_due): com opt-in e consulta D-1, nada é programado nem sai', async () => {
