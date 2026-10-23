@@ -444,8 +444,12 @@ export const CLINICAL_NOTICE_KINDS = [
   'retencao_retirada_aprovada',
   // 0033 (A3b do #68): pedido do titular aberto no portal; leva só o id do pedido.
   'pedido_titular_aberto',
+  // 0039 (N1 do #73): o recálculo desligou o sigilo do adolescente ou estendeu a representação além dos 18.
+  'portal_sigilo_transicao',
 ] as const;
 export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
+export const PORTAL_SIGILO_TRANSICOES = ['sigilo_desligado', 'representacao_estendida'] as const;
+export type PortalSigiloTransicao = (typeof PORTAL_SIGILO_TRANSICOES)[number];
 export const clinicalNotices = pgTable('clinical_notices', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id')
@@ -460,6 +464,8 @@ export const clinicalNotices = pgTable('clinical_notices', {
   change: text('change', { enum: ['concedido', 'revogado'] as const }),
   legalHoldId: uuid('legal_hold_id'),
   rightsRequestId: uuid('rights_request_id'),
+  patientId: uuid('patient_id'),
+  portalTransition: text('portal_transition', { enum: PORTAL_SIGILO_TRANSICOES }),
   restrictedExisting: integer('restricted_existing').notNull().default(0),
   createdBy: uuid('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

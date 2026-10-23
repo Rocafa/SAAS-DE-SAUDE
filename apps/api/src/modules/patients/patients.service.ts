@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -61,6 +61,8 @@ function padraoContem(termo: string): string {
  */
 @Injectable()
 export class PatientsService {
+  private readonly logger = new Logger('PatientsService');
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
@@ -185,6 +187,14 @@ export class PatientsService {
     const sigilo = valida ? aniversarioDe(nascimento, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia) : null;
     const maioridade = valida ? aniversarioDe(nascimento, IDADE_MAIORIDADE) : null;
     await tx.execute(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date)`);
+    // N1 do #73 (0039): o banco já gravou aviso e anomaly_alert da transição perigosa; o log com marcador fixo
+    // (só a regra e a transição) alimenta o alarme de operação, como nos alertas do #61.
+    const alertas = await tx.execute<{ transicao: string }>(
+      sql`select metadata->>'transition' as transicao from audit_log
+           where tenant_id = app_current_tenant() and action = 'anomaly_alert' and created_at = now()
+             and metadata->>'rule' = 'portal_sigilo_transicao'`,
+    );
+    for (const a of alertas) this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=${a.transicao}`);
   }
 
   /** Inativar, nunca apagar (retenção por conselho; front-r8 R4). Idempotente. */

@@ -182,10 +182,10 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
   whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
-  portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); consumida no mesmo COMMIT, sem dado do titular',
+  portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); apagada no mesmo COMMIT (só guarda, durante a transação, a cifra anterior e os valores de antes do recálculo: 0039)',
   whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
-    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
+    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção, transição do sigilo do portal), sem dado de paciente além do id; o fato está em audit_log, clinic_members, legal_holds e portal_links, que saem no pacote',
   import_raw_files:
     'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
   import_issues:

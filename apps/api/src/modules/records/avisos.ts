@@ -15,7 +15,7 @@ import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PsychCompartmentMode } from '../../db/schema';
+import { clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PortalSigiloTransicao, type PsychCompartmentMode } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -52,6 +52,13 @@ export type AvisoDto =
       /** 0033 (A3b do #68): pedido do titular aberto no portal. Só o id do pedido; criado pelo sistema. */
       readonly tipo: 'pedido_titular_aberto';
       readonly pedidoId: string;
+    })
+  | (AvisoBase & {
+      /** 0039 (N1 do #73): o recálculo desligou o sigilo do adolescente ou estendeu a representação além dos 18. */
+      readonly tipo: 'portal_sigilo_transicao';
+      readonly pacienteId: string;
+      readonly transicao: PortalSigiloTransicao;
+      readonly criadoPor: string;
     });
 
 function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
@@ -71,6 +78,9 @@ function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
     };
   }
   if (tipo === 'pedido_titular_aberto') return { ...base, tipo, pedidoId: n.rightsRequestId as string };
+  if (tipo === 'portal_sigilo_transicao') {
+    return { ...base, tipo, pacienteId: n.patientId as string, transicao: n.portalTransition as PortalSigiloTransicao, criadoPor: n.createdBy };
+  }
   return { ...base, tipo, retencaoId: n.legalHoldId as string, criadoPor: n.createdBy };
 }
 
