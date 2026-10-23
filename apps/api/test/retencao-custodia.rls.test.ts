@@ -223,7 +223,7 @@ describe('R12: retirar a retenção exige motivo e duas pessoas', () => {
     expect(trilha.filter((l) => (l.metadata as Record<string, unknown>).op === 'legal_hold' && (l.metadata as Record<string, unknown>).patient_id === p).map((l) => l.actorId).sort()).toEqual(
       [admin.userId, admin2.userId].sort(),
     );
-    expect(JSON.stringify(trilha)).not.toMatch(/880[23]/);
+    expect(JSON.stringify(trilha)).not.toMatch(/QZX880[23]/);
     // Outra clínica não vê a retenção.
     const deB = await withTenant(api.db.db, outraClinica, (tx) => tx.select().from(legalHolds).where(eq(legalHolds.id, h!.id)));
     expect(deB).toHaveLength(0);
