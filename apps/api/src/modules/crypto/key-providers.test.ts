@@ -140,8 +140,34 @@ describe('KmsKeyProvider (contra KMS falso)', () => {
     const kms = fakeKms();
     const arn = await new KmsKeyProvider(kms).createMasterKey(tenantA);
     expect(arn).toMatch(/^arn:aws:kms:sa-east-1:/);
-    expect(kms.calls[0]?.input).toMatchObject({ Tags: [{ TagKey: 'tenant_id', TagValue: tenantA }] });
+    expect(kms.calls[0]?.input).toMatchObject({
+      Description: 'plataforma-saude: chave mestra de dados de uma clínica',
+      Tags: [
+        { TagKey: 'tenant_id', TagValue: tenantA },
+        { TagKey: 'purpose', TagValue: 'tenant_data' },
+      ],
+    });
     expect(kms.calls[1]).toEqual({ op: 'enableKeyRotation', input: { KeyId: arn } });
+  });
+
+  it('R3-b: a chave de lote nasce com purpose=import_batch, batch_id e descrição própria, sem rotação', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    const lote = randomUUID();
+    await p.createMasterKey(tenantA, { purpose: 'import_batch', batchId: lote });
+    await p.createMasterKey(tenantA);
+    const [doLote, daClinica] = kms.calls.filter((c) => c.op === 'createKey').map((c) => c.input as { Description: string; Tags: { TagKey: string; TagValue: string }[] });
+    expect(doLote?.Tags).toEqual([
+      { TagKey: 'tenant_id', TagValue: tenantA },
+      { TagKey: 'purpose', TagValue: 'import_batch' },
+      { TagKey: 'batch_id', TagValue: lote },
+    ]);
+    // Descrição e tag `purpose` diferentes das da chave da clínica: é o que o IAM usa para separar as duas.
+    expect(doLote?.Description).not.toBe(daClinica?.Description);
+    expect(daClinica?.Tags.find((t) => t.TagKey === 'purpose')?.TagValue).toBe('tenant_data');
+    expect(daClinica?.Tags.some((t) => t.TagKey === 'batch_id')).toBe(false);
+    // Rotação só na chave da clínica (a de lote vive ≤ 7 dias).
+    expect(kms.calls.filter((c) => c.op === 'enableKeyRotation')).toHaveLength(1);
   });
 
   it('amarra a DEK à clínica pelo EncryptionContext', async () => {
@@ -235,7 +261,15 @@ describe('DisposableKeys: chave descartável por escopo (R3 do importador, crypt
       await chaves.destroy(tenantA, key.masterKeyId);
       await expect(chaves.open(tenantA, backup.key, ref, backup.sealed)).rejects.toBeInstanceOf(KeyUnavailableError);
       if (kms) {
-        expect(kms.calls.find((c) => c.op === 'createKey')?.input).toMatchObject({ Tags: [{ TagKey: 'tenant_id', TagValue: tenantA }] });
+        // R3-b: a tag de finalidade vai NA CRIAÇÃO (o IAM condiciona CreateKey a aws:RequestTag/purpose).
+        expect(kms.calls.find((c) => c.op === 'createKey')?.input).toMatchObject({
+          Tags: [
+            { TagKey: 'tenant_id', TagValue: tenantA },
+            { TagKey: 'purpose', TagValue: 'import_batch' },
+            { TagKey: 'batch_id', TagValue: lote },
+          ],
+        });
+        expect(kms.calls.some((c) => c.op === 'enableKeyRotation')).toBe(false);
         expect(kms.calls.find((c) => c.op === 'generateDataKey')?.input).toMatchObject({ EncryptionContext: { tenant_id: tenantA } });
         expect(kms.calls.find((c) => c.op === 'scheduleKeyDeletion')).toEqual({
           op: 'scheduleKeyDeletion',

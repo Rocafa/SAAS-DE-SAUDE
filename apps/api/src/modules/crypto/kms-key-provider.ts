@@ -1,7 +1,7 @@
 import type { TenantId } from '@plataforma/shared';
 import { KeyUnavailableError } from './crypto-errors';
 import { DataKey } from './data-key';
-import type { GeneratedDataKey, KeyProvider, WrappedDataKey } from './key-provider';
+import { KEY_PURPOSE_IMPORT_BATCH, KEY_PURPOSE_TENANT_DATA, type GeneratedDataKey, type KeyProvider, type MasterKeyPurpose, type WrappedDataKey } from './key-provider';
 
 /**
  * Subconjunto da API do AWS KMS usado aqui, com os nomes e formatos do SDK v3
@@ -50,19 +50,32 @@ export const KMS_DELETION_WINDOW_DAYS = 7;
 export class KmsKeyProvider implements KeyProvider {
   constructor(private readonly kms: KmsApi) {}
 
-  async createMasterKey(tenantId: TenantId): Promise<string> {
+  /**
+   * R3-b: a chave do LOTE nasce com descrição própria e as tags `purpose=import_batch` e `batch_id` (só
+   * ids), diferente da chave da clínica (`purpose=tenant_data`). É o que permite ao IAM liberar
+   * `ScheduleKeyDeletion` só nas chaves de lote e negar `CancelKeyDeletion`/`EnableKey` nelas (§12d).
+   */
+  async createMasterKey(tenantId: TenantId, finalidade: MasterKeyPurpose = { purpose: KEY_PURPOSE_TENANT_DATA }): Promise<string> {
+    const lote = finalidade.purpose === KEY_PURPOSE_IMPORT_BATCH ? finalidade : null;
     const out = await guard(() =>
       this.kms.createKey({
-        Description: 'plataforma-saude: chave mestra de dados de uma clínica',
+        Description: lote
+          ? 'plataforma-saude: chave descartável de um lote de importação (crypto-shredding do arquivo bruto)'
+          : 'plataforma-saude: chave mestra de dados de uma clínica',
         KeyUsage: 'ENCRYPT_DECRYPT',
         KeySpec: 'SYMMETRIC_DEFAULT',
-        Tags: [{ TagKey: 'tenant_id', TagValue: tenantId }],
+        Tags: [
+          { TagKey: 'tenant_id', TagValue: tenantId },
+          { TagKey: 'purpose', TagValue: finalidade.purpose },
+          ...(lote ? [{ TagKey: 'batch_id', TagValue: lote.batchId }] : []),
+        ],
       }),
     );
     const arn = out.KeyMetadata?.Arn;
     if (!arn) throw new KeyUnavailableError();
-    // Rotação anual automática do material da chave (mesmo ARN; DEKs antigas continuam abrindo).
-    await guard(() => this.kms.enableKeyRotation({ KeyId: arn }));
+    // Rotação anual automática do material da chave da clínica (mesmo ARN; DEKs antigas continuam
+    // abrindo). A chave de lote vive no máximo 7 dias: rotação não faria nada (observação da rodada 22).
+    if (!lote) await guard(() => this.kms.enableKeyRotation({ KeyId: arn }));
     return arn;
   }
 

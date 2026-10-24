@@ -1,7 +1,7 @@
 import type { TenantId } from '@plataforma/shared';
 import { KeyUnavailableError } from './crypto-errors';
 import { openField, parseField, sealField, type FieldRef, assertFieldRef } from './field-format';
-import type { KeyProvider, WrappedDataKey } from './key-provider';
+import { KEY_PURPOSE_IMPORT_BATCH, type KeyProvider, type WrappedDataKey } from './key-provider';
 
 /**
  * Chave DESCARTÁVEL de um escopo curto (ex.: um lote de importação, R3 do parecer do importador).
@@ -32,7 +32,8 @@ export class DisposableKeys {
   async createAndSeal(tenantId: TenantId, scopeId: string, ref: FieldRef, plaintext: Uint8Array): Promise<{ key: DisposableKey; sealed: string }> {
     assertFieldRef(ref);
     if (ref.tenantId !== tenantId) throw new KeyUnavailableError();
-    const masterKeyId = await this.provider.createMasterKey(tenantId);
+    // R3-b: tag `purpose=import_batch` + `batch_id` e descrição própria (o IAM separa da chave da clínica).
+    const masterKeyId = await this.provider.createMasterKey(tenantId, { purpose: KEY_PURPOSE_IMPORT_BATCH, batchId: scopeId });
     try {
       const generated = await this.provider.generateDataKey(masterKeyId, tenantId);
       try {
