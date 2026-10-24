@@ -28,6 +28,7 @@ import {
   consentimentoParaPortal,
   consultaParaPortal,
   desafioDoConvite,
+  meusDadosParaPortal,
   pedidoParaPortal,
   reciboParaPortal,
   reciboResumoParaPortal,
@@ -124,6 +125,22 @@ describe('recibos', () => {
     const comExtra = { ...conteudoFicticio(), especialidade: 'Psicologia' } as ConteudoDoRecibo;
     expect(conferirRespostaPortal('GET /portal/recibos/:id', reciboParaPortal(comExtra, ID, 9, false))).toEqual([]);
   });
+
+  it('C3: o profissionalId do retrato (UUID interno) não sai pelo portal', () => {
+    const PROF = '22222222-2222-4222-8222-222222222222';
+    const r = reciboParaPortal(
+      conteudoFicticio({ emitente: { tipo: 'pf', nome: 'Prof Ficticia', documento: null, registroConselho: null, profissionalId: PROF } }),
+      ID,
+      10,
+      false,
+    );
+    expect(conferirRespostaPortal('GET /portal/recibos/:id', r)).toEqual([]);
+    expect('profissionalId' in r.emitente).toBe(false);
+    expect(JSON.stringify(r)).not.toContain(PROF);
+    expect(conferirRespostaPortal('GET /portal/recibos/:id', { ...r, emitente: { ...r.emitente, profissionalId: PROF } })).toEqual([
+      '$.emitente.profissionalId: campo fora do contrato',
+    ]);
+  });
 });
 
 describe('convite (fragmento + OTP)', () => {
@@ -182,9 +199,44 @@ describe('pedidos, dados e documentos', () => {
   });
 
   it('meus dados e documentos (vazio, indisponível)', () => {
-    expect(conferirRespostaPortal('GET /portal/meus-dados', { nome: 'Ana Ficticia', nomeSocial: null, telefone: null, cpfMascarado: null, nascimento: null })).toEqual([]);
+    expect(
+      conferirRespostaPortal('GET /portal/meus-dados', { rotulo: 'meus_dados', nome: 'Ana Ficticia', nomeSocial: null, telefone: null, cpfMascarado: null, nascimento: null }),
+    ).toEqual([]);
     expect(conferirRespostaPortal('GET /portal/documentos', { itens: [], disponivel: false })).toEqual([]);
     expect(conferirRespostaPortal('GET /portal/documentos', { itens: [{}], disponivel: false })).not.toEqual([]);
+  });
+
+  it('C1: nascimento completo AAAA-MM-DD para titular e responsável; rótulo "dados do paciente" para o responsável', () => {
+    const dados = { nome: 'Lia Ficticia', nomeSocial: null, telefone: null, cpf: '11122233396', nascimento: '2012-02-29' };
+    const titular = meusDadosParaPortal('titular', dados);
+    const resp = meusDadosParaPortal('responsavel_legal', dados);
+    for (const d of [titular, resp]) {
+      expect(conferirRespostaPortal('GET /portal/meus-dados', d)).toEqual([]);
+      expect(d.nascimento).toBe('2012-02-29');
+      expect(d.cpfMascarado).toBe('***.***.***-96');
+    }
+    expect(titular.rotulo).toBe('meus_dados');
+    expect(resp.rotulo).toBe('dados_do_paciente');
+    // Data guardada fora do formato não vira texto livre no contrato: sai null (falha fechada).
+    expect(meusDadosParaPortal('titular', { ...dados, nascimento: '29/02/2012' }).nascimento).toBeNull();
+  });
+
+  it('C1: o contrato tipa nascimento como data (texto livre, data inexistente e só ano quebram)', () => {
+    const base = { rotulo: 'dados_do_paciente', nome: 'Lia Ficticia', nomeSocial: null, telefone: null, cpfMascarado: null };
+    expect(conferirRespostaPortal('GET /portal/meus-dados', { ...base, nascimento: '2012-02-29' })).toEqual([]);
+    for (const n of ['29/02/2012', '2013-02-29', '2012', '2012-02-29T00:00:00Z', 20120229]) {
+      expect(conferirRespostaPortal('GET /portal/meus-dados', { ...base, nascimento: n }), String(n)).toEqual(['$.nascimento: esperada data AAAA-MM-DD']);
+    }
+    expect(conferirRespostaPortal('GET /portal/meus-dados', { ...base, rotulo: 'seus_dados', nascimento: null })).toEqual([
+      '$.rotulo: fora de [meus_dados, dados_do_paciente]',
+    ]);
+    // A correção leva a data proposta (opcional) no mesmo formato; o portal não tem rota que edite o cadastro.
+    const corpo = CONTRATO_PORTAL['POST /portal/meus-dados/correcao'].corpo;
+    expect(conferirForma(corpo, { detalhe: 'Data ficticia errada', nascimento: '2011-05-06' })).toEqual([]);
+    expect(conferirForma(corpo, { detalhe: 'Data ficticia errada', nascimento: '06/05/2011' })).toEqual(['$.nascimento: esperada data AAAA-MM-DD']);
+    for (const def of Object.values(CONTRATO_PORTAL)) {
+      if (def.metodo === 'POST' && def.caminho !== '/portal/meus-dados/correcao') expect(JSON.stringify(def.corpo), def.caminho).not.toContain('nascimento');
+    }
   });
 
   it('corpo de erro: só código estável', () => {
@@ -225,6 +277,11 @@ describe('tipos do contrato', () => {
     // @ts-expect-error corpo não aceita id de paciente
     const corpoErrado: CorpoPortal<'POST /portal/solicitacoes'> = { tipo: 'acesso', pacienteId: ID };
     const api: ApiPortal['GET /portal/sessao']['resposta']['agindoComo'] = 'responsavel_legal';
-    expect([recibo, errado, forma, st, corpo, corpoErrado, api]).toHaveLength(7);
+    const correcao: CorpoPortal<'POST /portal/meus-dados/correcao'> = { detalhe: 'x', nascimento: '2011-05-06' };
+    // @ts-expect-error C3: profissionalId não existe no emitente do portal
+    const prof: RespostaPortal<'GET /portal/recibos/:id'>['emitente']['profissionalId'] = null;
+    // @ts-expect-error rótulo fora do vocabulário
+    const rotulo: RespostaPortal<'GET /portal/meus-dados'>['rotulo'] = 'seus_dados';
+    expect([recibo, errado, forma, st, corpo, corpoErrado, api, correcao, prof, rotulo]).toHaveLength(10);
   });
 });

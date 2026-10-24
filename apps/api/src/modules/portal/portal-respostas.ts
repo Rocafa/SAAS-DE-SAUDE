@@ -6,22 +6,24 @@
  * As asserções de tipo no fim do arquivo amarram os enums do banco aos do contrato: se um lado mudar
  * sem o outro, o typecheck falha.
  */
-import type {
-  ConsentimentoPortal,
-  ConsultaPortal,
-  DesafioDoConvitePortal,
-  PedidoPortal,
-  PortalAgindoComo,
-  PortalEstadoIa,
-  PortalEventoConsentimento,
-  PortalFinalidade,
-  PortalFormaDePagamento,
-  PortalRespostaConsentimento,
-  PortalStatusConsulta,
-  PortalTipoDePedido,
-  ReciboPortal,
-  ReciboPortalResumo,
-  VinculoDaConta,
+import {
+  ehDataAAAAMMDD,
+  type ConsentimentoPortal,
+  type ConsultaPortal,
+  type DesafioDoConvitePortal,
+  type MeusDadosPortal,
+  type PedidoPortal,
+  type PortalAgindoComo,
+  type PortalEstadoIa,
+  type PortalEventoConsentimento,
+  type PortalFinalidade,
+  type PortalFormaDePagamento,
+  type PortalRespostaConsentimento,
+  type PortalStatusConsulta,
+  type PortalTipoDePedido,
+  type ReciboPortal,
+  type ReciboPortalResumo,
+  type VinculoDaConta,
 } from '@plataforma/shared';
 import type {
   AiConsentState,
@@ -107,7 +109,7 @@ export function reciboParaPortal(c: ConteudoDoRecibo, id: string, numero: number
       nome: c.emitente.nome,
       documento: c.emitente.documento,
       registroConselho: c.emitente.registroConselho,
-      profissionalId: c.emitente.profissionalId,
+      // C3: `profissionalId` (UUID interno) fica no retrato e não sai pelo portal.
     },
     pagador: { nome: c.pagador.nome, cpf: terceiro ? mascararCpf(c.pagador.cpf) : c.pagador.cpf },
     beneficiario: { nome: c.beneficiario.nome, cpf: c.beneficiario.cpf },
@@ -116,6 +118,25 @@ export function reciboParaPortal(c: ConteudoDoRecibo, id: string, numero: number
     dataPagamento: c.dataPagamento,
     descricao: c.descricao,
     pendencias: [...c.pendencias],
+  };
+}
+
+/**
+ * Cadastro do paciente ("meus dados"). Titular: `meus_dados`; responsável legal: `dados_do_paciente`.
+ * `nascimento` completo (`AAAA-MM-DD`, C1 da conferência de 24/10); data guardada fora do formato sai
+ * como null (falha fechada: o contrato não carrega texto livre nesse campo).
+ */
+export function meusDadosParaPortal(
+  agindoComo: PortalActingAs,
+  p: { readonly nome: string; readonly nomeSocial: string | null; readonly telefone: string | null; readonly cpf: string | null; readonly nascimento: string | null },
+): MeusDadosPortal {
+  return {
+    rotulo: agindoComo === 'responsavel_legal' ? 'dados_do_paciente' : 'meus_dados',
+    nome: p.nome,
+    nomeSocial: p.nomeSocial,
+    telefone: p.telefone,
+    cpfMascarado: mascararCpf(p.cpf),
+    nascimento: ehDataAAAAMMDD(p.nascimento) ? p.nascimento : null,
   };
 }
 
@@ -166,3 +187,5 @@ mesmoTipo<Igual<ReturnType<typeof situacaoParaOTitular>, PedidoPortal['situacao'
 /** O retrato emitido inteiro cabe no recibo do contrato (campo novo no retrato = decidir se vai ao portal). */
 mesmoTipo<Igual<keyof ConteudoDoRecibo | 'id' | 'numero' | 'situacao', keyof ReciboPortal>>();
 mesmoTipo<Igual<ConteudoDoRecibo['emitente']['tipo'], ReciboPortal['emitente']['tipo']>>();
+/** C3: o emitente do portal = o do retrato SEM o `profissionalId` (campo novo no emitente = decidir aqui). */
+mesmoTipo<Igual<Exclude<keyof ConteudoDoRecibo['emitente'], 'profissionalId'>, keyof ReciboPortal['emitente']>>();

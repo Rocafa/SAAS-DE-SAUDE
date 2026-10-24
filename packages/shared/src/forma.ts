@@ -9,6 +9,8 @@
 
 export type Forma =
   | { readonly t: 'texto' }
+  /** Data de calendário `AAAA-MM-DD` (sem hora e sem fuso); a conferência exige que a data exista. */
+  | { readonly t: 'data' }
   | { readonly t: 'inteiro' }
   | { readonly t: 'bool' }
   | { readonly t: 'nulo' }
@@ -36,7 +38,7 @@ type InferObj<C> = Simplificar<
 >;
 
 /** Tipo TypeScript descrito por uma `Forma`. */
-export type Infer<F> = F extends { t: 'texto' }
+export type Infer<F> = F extends { t: 'texto' | 'data' }
   ? string
   : F extends { t: 'inteiro' }
     ? number
@@ -62,6 +64,8 @@ export type Infer<F> = F extends { t: 'texto' }
 
 export const f = {
   texto: { t: 'texto' } as const,
+  /** Data `AAAA-MM-DD` (tipo `string`; formato e existência conferidos em tempo de execução). */
+  data: { t: 'data' } as const,
   inteiro: { t: 'inteiro' } as const,
   bool: { t: 'bool' } as const,
   nulo: { t: 'nulo' } as const,
@@ -84,6 +88,8 @@ export function conferirForma(forma: Forma, valor: unknown, caminho = '$'): stri
   switch (forma.t) {
     case 'texto':
       return typeof valor === 'string' ? [] : [`${caminho}: esperado texto`];
+    case 'data':
+      return ehDataAAAAMMDD(valor) ? [] : [`${caminho}: esperada data AAAA-MM-DD`];
     case 'inteiro':
       return typeof valor === 'number' && Number.isInteger(valor) ? [] : [`${caminho}: esperado inteiro`];
     case 'bool':
@@ -123,6 +129,13 @@ export function conferirForma(forma: Forma, valor: unknown, caminho = '$'): stri
       return erros;
     }
   }
+}
+
+/** Data de calendário `AAAA-MM-DD` que existe (ex.: `2027-02-30` não passa). */
+export function ehDataAAAAMMDD(valor: unknown): valor is string {
+  if (typeof valor !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(valor)) return false;
+  const d = new Date(`${valor}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === valor;
 }
 
 /** Todas as chaves de objeto que a forma pode produzir (em qualquer profundidade). */

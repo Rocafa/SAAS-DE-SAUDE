@@ -10,8 +10,8 @@
  * - Enums com os nomes EXATOS do backend (o front mapeia só na exibição).
  * - "De quem" é o acesso: `agindoComo` = `titular` ou `responsavel_legal` (responsável da 0028).
  * - Responsável e titular recebem os MESMOS formatos, e NENHUM é clínico: agenda, financeiro, cadastro,
- *   pedidos e consentimentos. Prontuário não sai pelo portal. `CAMPOS_CLINICOS_PROIBIDOS` + conferência
- *   estrita (`conferirForma`) garantem que um campo clínico novo quebre o teste de contrato.
+ *   pedidos e consentimentos. Prontuário não sai pelo portal. A conferência estrita (`conferirForma`)
+ *   faz um campo novo quebrar o teste de contrato; `CAMPOS_CLINICOS_PROIBIDOS` é só alarme por NOME.
  * - O que o backend já decide (sigilo do adolescente, prazo, botões, protocolo, texto do consentimento)
  *   vem pronto; o front não recalcula.
  */
@@ -75,6 +75,11 @@ export type PortalEstadoIa = (typeof PORTAL_ESTADOS_IA)[number];
  * Nomes de campo que NUNCA podem aparecer em resposta do portal (titular ou responsável): conteúdo ou
  * categoria clínica. A especialidade do profissional também é proibida (revelaria psicologia/psiquiatria
  * do adolescente ao responsável).
+ *
+ * LIMITE (C5 da conferência de 24/10): a lista compara NOMES, não VALORES. Um campo neutro (`descricao`,
+ * `profissional`, `emitente.nome`) pode carregar algo clínico no conteúdo. É um ALARME, não a barreira: quem
+ * protege de fato é a conferência ESTRITA (`conferirForma`: campo novo = mudar o contrato e passar pelo
+ * guardião) junto com o filtro no SERVIDOR (sigilo da 0037 + RLS) e a origem neutra dos valores.
  */
 export const CAMPOS_CLINICOS_PROIBIDOS = [
   'especialidade',
@@ -139,7 +144,7 @@ const Recibo = f.obj({
     nome: f.texto,
     documento: f.ouNulo(f.texto),
     registroConselho: f.ouNulo(f.texto),
-    profissionalId: f.ouNulo(f.texto),
+    // C3 (conferência de 24/10): o `profissionalId` do retrato (UUID interno) NÃO sai pelo portal.
   }),
   pagador: PessoaDoRecibo,
   beneficiario: PessoaDoRecibo,
@@ -155,13 +160,35 @@ const Recibo = f.obj({
 
 const Documentos = f.obj({ itens: f.vazia, disponivel: f.literal(false) });
 
+/**
+ * Rótulo da tela "meus dados": o titular vê `meus_dados`; o responsável legal vê `dados_do_paciente` (o
+ * front mostra "dados de <primeiro nome do paciente>", nunca "seus dados": o cadastro é do paciente).
+ */
+export const PORTAL_ROTULOS_DOS_DADOS = ['meus_dados', 'dados_do_paciente'] as const;
+export type PortalRotuloDosDados = (typeof PORTAL_ROTULOS_DOS_DADOS)[number];
+
+/**
+ * Cadastro do paciente. `nascimento` sai COMPLETO (`AAAA-MM-DD`) para o titular e para o responsável legal
+ * (decisão C1 da conferência de 24/10: a data decide sigilo do adolescente, consentimento e fim da
+ * representação; quem não a vê não pode pedir a correção). NÃO se edita pelo portal: muda só por
+ * `POST /portal/meus-dados/correcao` (campo `nascimento`), analisado pela clínica.
+ */
 const MeusDados = f.obj({
+  rotulo: f.enumDe(PORTAL_ROTULOS_DOS_DADOS),
   nome: f.texto,
   nomeSocial: f.ouNulo(f.texto),
   telefone: f.ouNulo(f.texto),
   cpfMascarado: f.ouNulo(f.texto),
-  nascimento: f.ouNulo(f.texto),
+  /** `AAAA-MM-DD`; null = a clínica não informou. */
+  nascimento: f.ouNulo(f.data),
 });
+
+/**
+ * Pedido de correção do cadastro. `nascimento` (opcional) é a data que o titular/responsável diz ser a
+ * certa: a clínica analisa. Se ela REDUZIR a idade de paciente com 12 anos ou mais (pode tirá-lo do sigilo
+ * do adolescente ou devolver a representação), a clínica só atende com conferência de documento.
+ */
+const CorrecaoDosDados = f.obj({ detalhe: f.texto, nascimento: f.opcional(f.data) });
 
 const Pedido = f.obj({
   id: f.texto,
@@ -323,7 +350,7 @@ export const CONTRATO_PORTAL = {
     resposta: MeusDados, erros: [],
   },
   'POST /portal/meus-dados/correcao': {
-    metodo: 'POST', caminho: '/portal/meus-dados/correcao', sucesso: 201, corpo: f.obj({ detalhe: f.texto }), noVinculo: true,
+    metodo: 'POST', caminho: '/portal/meus-dados/correcao', sucesso: 201, corpo: CorrecaoDosDados, noVinculo: true,
     resposta: Pedido, erros: ERROS_DO_PEDIDO,
   },
   'GET /portal/solicitacoes': {
