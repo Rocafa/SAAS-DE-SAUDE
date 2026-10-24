@@ -6,7 +6,7 @@
 > ⚠️ **12/10/2026 (noite): o GitHub Actions parou** ("recent account payments have failed or your spending limit needs to be increased"). Nenhum CI roda até ajustar o billing da conta Rocafa. **Não fazer merge de PR de código sem CI verde.** PRs só de documentação podem entrar (processo-de-trabalho.md §5). Também parados: os PRs do Dependabot #49–#53 (#49 sobe o ioredis para a versão principal 6 e precisa de teste); com o #54, as actions passam a vir num PR agrupado.
 
 
-> 🔴 **23/10/2026: `next@16.4.0` (apps/web) tem 2 vulnerabilidades críticas e 1 alta** (`pnpm audit`). O Dependabot **#72** sobe para 16.4.2 — **primeiro merge quando o CI voltar**, antes da ordem habitual.
+> 🔴 **Ordem dos Dependabot quando o CI voltar** ([teste local de 24/10](../relatorios/2026-10-24-dependabot-local.md)): **#72** (next 16.4.2, 2 críticas) → #70+#71 → #52/#51 → PR do multer (`pnpm.overrides`, 1 alta) → #49 (ioredis 6: testar BullMQ com Redis real e ElastiCache ≥ 6; pedir `@dependabot rebase` depois do #72).
 ## Em andamento
 
 | Item | Quem pegou | Desde | Onde |
