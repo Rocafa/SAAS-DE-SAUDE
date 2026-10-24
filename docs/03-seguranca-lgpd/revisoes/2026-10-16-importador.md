@@ -338,3 +338,27 @@ Conferido:
 - 1º ciclo do agendador com `alarme = false`;
 - R10 registrada;
 - registro do Guardião na fila.
+
+## Conferência (rodada 23)
+
+- **Revisado:** `6e3b54d..29e444d` (branch `eng/integracao-r19`, PR #73): migração 0049 (`import_batch_key_intents` e as funções `app_record_`/`app_close_import_batch_key_intent`), `importacao.service.ts`, `disposable-keys.ts`, `kms-key-provider.ts`, `crypto-errors.ts` e os testes novos em `importador.rls.test.ts` e `key-providers.test.ts`. Li o código sem executar. O Maestro informa, em `ee7ac86` e com o banco recriado do zero: turbo 12/12, `test:rls` 584/584 duas vezes e `test:security` 81 ok, com 7 pulados (Redis real).
+
+### Veredito: **APROVADO**, com uma correção sem bloqueio (C1).
+
+**Observação 1 (chave órfã): fechada no caminho principal.**
+- A intenção é registrada `pending` em commit próprio **antes** de `createMasterKey`. O ARN é gravado em commit próprio logo depois. A intenção fecha `committed` no **mesmo** commit da linha de `import_batch_keys`. O gatilho só aceita `committed` se a chave do lote existir com o mesmo ARN, e só aceita `destroyed` se essa linha **não** existir.
+- Na falha, `descartarChaveDoRecebimento` **relê** a situação antes de destruir. Um COMMIT ambíguo, que gravou mas a API não soube, não destrói a chave de um lote gravado. Se o KMS ou o banco falharem, a intenção fica `pending`, e o job a retoma depois de 60 min e alarma em 24 h.
+- A tabela tem RLS com FORCE e a policy `portal_fora`. O runtime só tem SELECT e INSERT. O INSERT exige admin da sessão e um id que ainda não é lote. Não se apaga. As funções filtram por `app_current_tenant()`, e há teste de B tentando fechar a intenção de A. Os dados são só ids e ARN, sem dado pessoal. A tabela fica fora da exportação, com justificativa.
+- `abandoned` acompanhado de `CHAVE_LOTE_ORFA` (só clínica e contagem) existe **no job**, com teste.
+
+**Observação 2 (NotFound): fechada.** `NotFoundException`, no agendamento ou no `describeKey`, conta como destruída. Os demais erros seguem lançando com o tipo. O teste usa um KMS falso cuja mensagem tem ARN, e o ARN não vaza.
+
+**Observação 3 (tipo do erro): fechada.** O tipo sai de uma lista fechada (`acesso_negado`, `indisponivel`, `estado_invalido`, `outro`), derivada só do `name`/`Code` do SDK e do código HTTP, nunca da mensagem. O log fica `tipos=acesso_negado:1`, e o teste confere que não aparecem nome, telefone, lote nem ARN.
+
+**C1 (sem bloqueio, antes do GA): `abandoned` silencioso no próprio `receber`.** Quando `createMasterKey` lança, `masterKeyId` fica `undefined`, e a API fecha a intenção como `abandoned` na hora, **sem** `CHAVE_LOTE_ORFA`. Esse é justamente o caso ambíguo que a 0049 descreve: um timeout ou erro de rede depois de o KMS ter criado a chave. A chave fica `Enabled` com `purpose=import_batch`, sem log, e só a varredura do IaC a acharia. Não há dado em risco, porque nada foi cifrado com ela. Correção: só fechar `abandoned` na hora quando a recusa for definitiva (`acesso_negado`/`estado_invalido`). Nos demais casos (`indisponivel`/`outro`), deixar a intenção `pending` para o job, que loga `CHAVE_LOTE_ORFA`, ou logar `CHAVE_LOTE_ORFA` na hora. Acrescentar um teste com `createMasterKey` rejeitando `indisponivel`.
+
+**Observações (aceitas):**
+- Uma corrida exige um `receber` com mais de 60 min. Nesse caso, o job pode agendar a exclusão da chave enquanto o lote ainda grava. Se o lote gravar `committed` depois disso, o bruto fica ilegível. Isso afeta disponibilidade, não sigilo. O teto da transação torna a corrida irreal.
+- `app_close_import_batch_key_intent` não confere o perfil admin, só a clínica. Só o runtime a chama, e o pior caso é uma chave sem dado ficar sem destruição.
+
+**Varredura de testes instáveis (`e281e88..6e3b54d`): nenhuma garantia ficou mais fraca.** Os detalhes estão na conferência da rodada 23 em `2026-10-22-pr73.md`.
