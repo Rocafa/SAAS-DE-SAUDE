@@ -476,8 +476,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await sqlCat?.end({ timeout: 5 });
-  await api?.fechar();
+  try {
+    await sqlCat?.end({ timeout: 5 });
+  } finally {
+    await api?.fechar();
+  }
 });
 
 describe('G2 — cobertura da exportação contra o catálogo', () => {

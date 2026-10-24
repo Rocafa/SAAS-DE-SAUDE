@@ -275,6 +275,9 @@ describe('ordem das travas: trilha de auditoria (0005) × chaves (0004)', () => 
       await new Promise((r) => setTimeout(r, 300));
       return cifraComContador.encrypt(tx, ref(tenantC), TEXTO);
     });
+    // Se A falhar antes de auditar, o portão abre mesmo assim: o teste falha com o erro de A, sem ficar
+    // pendurado até o timeout com a transação de B nunca iniciada.
+    void a.finally(() => auditou()).catch(() => undefined);
     // B: gira a DEK (trava as chaves e audita). Na ordem antiga travava a linha da DEK e esperava a
     // trilha, enquanto A segurava a trilha e esperava a linha: deadlock (40P01).
     await auditouPromise;

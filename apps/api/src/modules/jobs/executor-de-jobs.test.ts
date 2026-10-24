@@ -69,8 +69,12 @@ describe('executor de jobs', () => {
     let rodou = 0;
     const m = montar([job(async () => (rodou++, await pendente, {}))], [A]);
     const primeira = m.executor.executar('teste');
-    const segunda = await m.executor.executar('teste');
-    soltar();
+    let segunda: Awaited<typeof primeira>;
+    try {
+      segunda = await m.executor.executar('teste');
+    } finally {
+      soltar(); // a primeira execução (e sua trava) não fica presa se a segunda falhar
+    }
     expect(segunda.situacao).toBe('em_andamento');
     expect((await primeira).situacao).toBe('ok');
     expect(rodou).toBe(1);

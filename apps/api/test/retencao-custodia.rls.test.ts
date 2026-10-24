@@ -154,8 +154,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await api?.fechar();
-  for (const o of operadores) await o.conn.end({ timeout: 5 });
+  try {
+    await api?.fechar();
+  } finally {
+    // Conexões dos operadores encerradas mesmo se fechar a API falhar (senão o DROP ROLE abaixo esbarra nelas).
+    await Promise.allSettled(operadores.map((o) => o.conn.end({ timeout: 5 })));
+  }
   if (operadores.length > 0 && process.env.DATABASE_ADMIN_URL) {
     const adm = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => undefined });
     try {

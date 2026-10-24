@@ -220,8 +220,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await owner?.end();
-  await api?.fechar();
+  try {
+    await owner?.end({ timeout: 5 });
+  } finally {
+    await api?.fechar();
+  }
 });
 
 describe('opt-in: sem ele, nada sai', () => {
