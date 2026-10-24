@@ -21,6 +21,10 @@
   "pnpm": {
     "patchedDependencies": {
       "postgres@3.4.9": "patches/postgres@3.4.9.patch"
+    },
+    "overrides": {
+      "multer@>=2.0.0 <2.5.0": "2.5.0",
+      "body-parser@>=2.0.0 <2.4.0": "2.4.0"
     }
   }
 }
