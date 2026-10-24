@@ -1775,7 +1775,7 @@ describe('C1 (conferência de 24/10): nascimento não se edita pelo portal; corr
     const portal = <T>(fn: (tx: TenantTx) => Promise<T>) =>
       api.db.db.transaction(async (tx) => {
         await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
-        return fn(tx as unknown as TenantTx);
+        return fn(tx);
       });
     // O portal não marca a conferência.
     await expect(
