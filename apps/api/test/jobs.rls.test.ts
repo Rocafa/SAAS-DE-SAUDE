@@ -53,6 +53,7 @@ describe('agendador em teste', () => {
       'whatsapp-lembretes',
       'whatsapp-retencao',
       'portal-representacoes',
+      'portal-titular-menor',
       'importador-expurgo',
       'notas-privadas-ciclo',
       'retencao-fiscal',

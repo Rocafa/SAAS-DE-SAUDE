@@ -30,6 +30,7 @@ import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { patientFieldRef } from '../src/modules/patients/patient-fields';
 import { verifyAuditChain } from '../src/modules/audit/audit-chain';
 import { hojeNaClinica } from '../src/modules/insurance/guias-regras';
+import { JobsService } from '../src/modules/jobs/jobs.module';
 import { PortalClinicaService } from '../src/modules/portal/portal-clinica.service';
 import { consentimentoIaDoPaciente } from '../src/modules/portal/consentimento-ia';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
@@ -1396,5 +1397,150 @@ describe('auditoria e limite por conta', () => {
     } finally {
       await api2.fechar();
     }
+  });
+});
+
+describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', () => {
+  const SISTEMA = '00000000-0000-0000-0000-000000000000';
+  let profUser: string;
+  let profId: string;
+  let tipoId: string;
+
+  beforeAll(async () => {
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ appointment_type_id: string }>(
+      sql`select appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    tipoId = base?.appointment_type_id as string;
+    profUser = randomUUID();
+    profId = randomUUID();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(professionals).values({ id: profId, tenantId: clinicaA, userId: profUser, displayName: 'Dra Ficticia Titular Menor', specialty: 'Fisioterapia' }), adminA.userId);
+  });
+
+  const vinculo = async (id: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, id)), adminA.userId))[0];
+  const convite = async (id: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalInvites).where(eq(portalInvites.id, id)), adminA.userId))[0];
+  const avisos = async (pac: string) =>
+    (
+      await Promise.all(
+        [api.fundador(clinicaA), profUser].map((u) =>
+          withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), u),
+        ),
+      )
+    ).flat();
+  const alertas = async () =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'titular_menor_revogado'`)).orderBy(desc(auditLog.createdAt)), adminA.userId);
+  const trilha = async (pac: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'titular_menor_de_idade'`)), adminA.userId);
+
+  it('a correção da data revoga o titular e encerra o convite pendente na MESMA transação; trilha com o ator, aviso a admin e profissional, alerta sem id de paciente', async () => {
+    const pac = await criarPaciente(adminA, 'Gil Ficticio Titular Corrigido', { nascimento: nascidoHa(30) });
+    await agendar(adminA, pac, profId, tipoId, '2027-05-04', '09:00');
+    const conta = await contaDe(adminA, pac);
+    const pendente = await convidar(adminA, pac);
+    await api.http().get('/portal/consultas').set(cab(conta)).expect(200);
+    const alertasAntes = (await alertas()).length;
+
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+
+    expect(await vinculo(conta.vinculoId)).toMatchObject({ revokeReason: 'titular_menor_de_idade', revokedBy: adminA.userId });
+    expect(await convite(pendente.id)).toMatchObject({ revokedBy: adminA.userId, redeemedAt: null });
+    expect((await api.http().get('/portal/consultas').set(cab(conta))).body).toMatchObject({ statusCode: 403, codigo: 'vinculo_inativo' });
+    expect((await resgatar(api.sessaoPortal(), pendente.token)).status).toBe(409);
+    const t = await trilha(pac);
+    expect(t.map((l) => [l.scope, l.actorId, l.actorKind, (l.metadata as { origin: string }).origin]).sort()).toEqual([
+      ['portal_invites', adminA.userId, 'usuario_clinica', 'correcao_do_nascimento'],
+      ['portal_links', adminA.userId, 'usuario_clinica', 'correcao_do_nascimento'],
+    ]);
+    const a = await avisos(pac);
+    expect(a.map((x) => x.recipientUserId).sort()).toEqual([api.fundador(clinicaA), profUser].sort());
+    expect(a.every((x) => x.portalTransition === 'titular_menor_revogado' && x.createdBy === adminA.userId && x.readAt === null)).toBe(true);
+    const al = await alertas();
+    expect(al).toHaveLength(alertasAntes + 1);
+    expect(al[0]?.metadata).toEqual({ rule: 'portal_sigilo_transicao', transition: 'titular_menor_revogado', count: 2, notified: 2 });
+    expect(al[0]?.actorId).toBe(adminA.userId);
+    // O job depois não acha mais nada deste paciente.
+    await api.app.get(PortalClinicaService).revogarTitularesMenoresDaClinica(clinicaA);
+    expect((await trilha(pac)).length).toBe(2);
+  });
+
+  it('o job diário pega o caso que escapou da correção (data gravada sem a API); ator sistema; idempotente', async () => {
+    const pac = await criarPaciente(adminA, 'Hugo Ficticio Titular Escapou', { nascimento: nascidoHa(25) });
+    await agendar(adminA, pac, profId, tipoId, '2027-05-04', '10:00');
+    const conta = await contaDe(adminA, pac);
+    const pendente = await convidar(adminA, pac);
+    // Data trocada direto na coluna cifrada (importação, recifração, script): nenhuma revogação na hora.
+    const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    await withTenant(api.db.db, clinicaA, async (tx) => {
+      const nova = await cifra.encrypt(tx, patientFieldRef(clinicaA, pac, 'birth_date'), nascidoHa(16));
+      await tx.update(patients).set({ birthDateEnc: nova }).where(eq(patients.id, pac));
+    }, adminA.userId);
+    expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null });
+
+    const jobs = api.app.get(JobsService);
+    expect(await jobs.executar('portal-titular-menor')).toMatchObject({ job: 'portal-titular-menor', situacao: 'ok', clinicasComFalha: 0 });
+    expect(await vinculo(conta.vinculoId)).toMatchObject({ revokeReason: 'titular_menor_de_idade', revokedBy: SISTEMA });
+    expect(await convite(pendente.id)).toMatchObject({ revokedBy: SISTEMA });
+    expect((await api.http().get('/portal/consultas').set(cab(conta))).body).toMatchObject({ statusCode: 403, codigo: 'vinculo_inativo' });
+    const t = await trilha(pac);
+    expect(t.map((l) => [l.scope, l.actorKind, (l.metadata as { origin: string }).origin]).sort()).toEqual([
+      ['portal_invites', 'sistema', 'varredura_diaria'],
+      ['portal_links', 'sistema', 'varredura_diaria'],
+    ]);
+    const a = await avisos(pac);
+    expect(a.map((x) => x.recipientUserId).sort()).toEqual([api.fundador(clinicaA), profUser].sort());
+    expect(a.every((x) => x.portalTransition === 'titular_menor_revogado' && x.createdBy === SISTEMA)).toBe(true);
+    const [ultimo] = await alertas();
+    expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
+    expect(ultimo?.actorKind).toBe('sistema');
+    // Trilha do job na clínica, só contagens.
+    const run = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = 'portal-titular-menor'`)).orderBy(desc(auditLog.createdAt)).limit(1), adminA.userId);
+    expect(run[0]?.metadata).toMatchObject({ status: 'ok', titularesRevogados: 1, convitesEncerrados: 1, pacientes: 1, ilegiveis: 0, alarme: false });
+    expect(JSON.stringify(run[0]?.metadata)).not.toContain(pac);
+    // De novo: nada muda.
+    await jobs.executar('portal-titular-menor');
+    expect((await trilha(pac)).length).toBe(2);
+    expect(await avisos(pac)).toHaveLength(2);
+  });
+
+  it('adulto (e menor emancipado) não é afetado: nem pela correção, nem pelo job', async () => {
+    const adulto = await criarPaciente(adminA, 'Iara Ficticia Titular Adulta', { nascimento: nascidoHa(40) });
+    const contaAdulto = await contaDe(adminA, adulto);
+    const convAdulto = await convidar(adminA, adulto);
+    await api.http().patch(`/pacientes/${adulto}`).set(cab(adminA)).send({ nascimento: nascidoHa(18) }).expect(200);
+    // Emancipado aos 16 é titular; corrigir para 15 não o torna "menor não emancipado".
+    const emanc = await criarPaciente(adminA, 'Juca Ficticio Emancipado', { nascimento: nascidoHa(16) });
+    await api.http().post(`/pacientes/${emanc}/responsaveis/emancipacao`).set(cab(adminA)).send({ data: hojeNaClinica(), documento: 'Escritura ficticia 050' }).expect(200);
+    const contaEmanc = await contaDe(adminA, emanc);
+    await api.http().patch(`/pacientes/${emanc}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+    await api.app.get(JobsService).executar('portal-titular-menor');
+    for (const [pac, conta] of [[adulto, contaAdulto], [emanc, contaEmanc]] as const) {
+      expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null, revokeReason: null });
+      await api.http().get('/portal/consultas').set(cab(conta)).expect(200);
+      expect(await trilha(pac)).toEqual([]);
+      expect(await avisos(pac)).toEqual([]);
+    }
+    expect(await convite(convAdulto.id)).toMatchObject({ revokedAt: null });
+  });
+
+  it('o motivo não se forja: a clínica não revoga com ele (API e SQL) nem chama a função fora da correção do nascimento', async () => {
+    const pac = await criarPaciente(adminA, 'Lia Ficticia Titular Forja', { nascimento: nascidoHa(33) });
+    const conta = await contaDe(adminA, pac);
+    await api.http().post(`/clinica/portal/vinculos/${conta.vinculoId}/revogar`).set(cab(adminA)).send({ motivo: 'titular_menor_de_idade' }).expect(400);
+    const codigo = async (fn: (tx: TenantTx) => Promise<unknown>) =>
+      withTenant(api.db.db, clinicaA, fn, adminA.userId).then(
+        () => 'ok',
+        (e: { code?: string; cause?: { code?: string } }) => e.cause?.code ?? e.code,
+      );
+    const revogar = (tx: TenantTx) =>
+      tx.execute(sql`update portal_links set revoked_at = now(), revoked_by = ${adminA.userId}::uuid, revoke_reason = 'titular_menor_de_idade' where id = ${conta.vinculoId}::uuid`);
+    expect(await codigo(revogar)).toBe('42501');
+    // Nem com a GUC da função ligada pelo runtime (não é o dono).
+    expect(await codigo(async (tx) => {
+      await tx.execute(sql`select set_config('app.portal_titular_menor', 'on', true)`);
+      await revogar(tx);
+    })).toBe('42501');
+    // A função, sem mudar a data de nascimento na transação: recusada.
+    expect(await codigo((tx) => tx.execute(sql`select * from app_portal_revoke_minor_titular(${pac}::uuid)`))).toBe('42501');
+    expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null });
   });
 });
