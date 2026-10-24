@@ -620,6 +620,15 @@ Erros sem valor de campo (só códigos e nomes). Na URL só ids, o tipo e a vers
   3. `indiceCpf.descartarChavesAntigas(tx, ctx)`: a versão aposentada **sem nenhum paciente** vira `destroyed`, com `key_enc` apagada (`key_destroy`). O banco recusa destruir uma versão que ainda tenha paciente indexado.
 
   Pacientes anteriores à 0046 (sem índice) entram no mesmo passo 2 e, até lá, são decifrados na busca.
+- **Responsáveis (dedup da 0048): ainda NÃO usam o índice. O caso não é simples.** Levar `cpf_bidx` para `guardians` exige:
+  - reescrever `guardians_guard` (0031), porque o descarte só admite apagar nome, CPF e telefone e recusaria zerar o índice;
+  - um caminho de reindexação que não mexa em `updated_at`/`updated_by` nem gere histórico. Hoje toda UPDATE de pessoa exige o usuário da sessão, atualiza `updated_at` e passaria a contar como `alterado_depois` no desfazer do lote.
+
+  Até lá, `cpfsDeResponsaveisDaClinica` continua decifrando os CPFs dos responsáveis da própria clínica, só na transação, como a 0048 entregou. **Proposta para a próxima rodada:**
+  - mesma chave e mesma tabela de chaves, com domínio `guardians.cpf:v1:`;
+  - colunas `cpf_bidx`/`cpf_bidx_version` em `guardians`, com o mesmo gatilho de índice ausente;
+  - exceção no `guardians_guard` só para as colunas do índice, sem `updated_at` nem histórico;
+  - passo 2 da reindexação cobrindo as duas tabelas.
 - **Provas.**
   - `cpf-indice-cego.test.ts`: chaves diferentes dão índices diferentes.
   - `importador.rls.test.ts` "R9 do #66":
