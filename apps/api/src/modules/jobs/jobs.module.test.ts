@@ -59,9 +59,9 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
     try {
       expect(s.modo).toBe('desligado');
       expect(modoDosJobs()).toBe('desligado');
-      expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente em produção": nenhum job agendado (7 no registro)']);
+      expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente em produção": nenhum job agendado (8 no registro)']);
       // O registro existe (o disparo manual pelas rotas do admin continua), só não há agendamento.
-      expect(s.jobs).toHaveLength(7);
+      expect(s.jobs).toHaveLength(8);
     } finally {
       await s.onApplicationShutdown();
     }
@@ -75,7 +75,7 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
     try {
       expect(s.modo).toBe('desligado');
       expect(modoDosJobs()).toBe('desligado');
-      expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente fora de development/test": nenhum job agendado (7 no registro)']);
+      expect(erros).toEqual(['JOBS_DESLIGADOS motivo="REDIS_URL ausente fora de development/test": nenhum job agendado (8 no registro)']);
     } finally {
       await s.onApplicationShutdown();
     }
@@ -92,7 +92,7 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
       expect(s.modo).toBe('desligado');
       expect(modoDosJobs()).toBe('desligado');
       expect(erros).toEqual([]);
-      expect(avisos).toEqual(['JOBS_DESLIGADOS_POR_OPCAO: JOBS_HABILITADOS=false nesta instância (7 no registro, nenhum agendado aqui)']);
+      expect(avisos).toEqual(['JOBS_DESLIGADOS_POR_OPCAO: JOBS_HABILITADOS=false nesta instância (8 no registro, nenhum agendado aqui)']);
     } finally {
       await s.onApplicationShutdown();
     }
@@ -104,7 +104,7 @@ describe('produção sem Redis: nada de falha silenciosa', () => {
     const s = servico({ ...criarInfraDosJobs({ NODE_ENV: 'test' }), agendador: ag });
     await s.onApplicationBootstrap();
     expect(modoDosJobs()).toBe('memoria');
-    expect(ag.registrados).toHaveLength(7);
+    expect(ag.registrados).toHaveLength(8);
     // Sem clínicas, o job termina ok sem tocar nenhum serviço.
     expect(await s.executar('responsaveis-descarte')).toEqual({ job: 'responsaveis-descarte', situacao: 'ok', clinicas: 0, clinicasComFalha: 0 });
     await s.onApplicationShutdown();
