@@ -60,9 +60,9 @@
 | Rodada 22.2: ✅ #63 O-R17b/d/e (0047) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 22.3: ✅ importador R5, responsáveis (0048) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 22.4: ✅ IAM das chaves KMS no Terraform (b9eb6a5) | Maestro @Rocafa | 23/10/2026 | PR #58 |
-| Rodada 23.1: varredura de testes instáveis (marcadores curtos, consultas sem ORDER BY, pool) — test:rls 5× seguidas | Maestro @Rocafa (agente qa-testes) | 23/10/2026 | `eng/integracao-r19` |
-| Rodada 23.2: importador — chave órfã, NotFound após a janela, tipo do erro no log (0049) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
-| Rodada 23.3: portal — revogar titular que passa a constar como menor (na correção + job diário) (0050) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 23.1: ✅ varredura de testes instáveis (2 marcadores, 6+21 ordenações, 8 conexões) — rls 5× seguidas verde — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 23.2: ✅ importador — chave `pending` antes de criar, órfã com alarme, NotFound = destruída, tipo do erro, timeout ambíguo fica para o job (0049) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 23.3: ✅ portal — titular que passa a menor revogado na correção e pelo job diário (0050) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
