@@ -1,6 +1,7 @@
 /**
  * Regras puras do portal do paciente (rodada 18.1). Sem banco: testadas em portal-regras.test.ts.
  */
+import { PORTAL_APELIDOS_DE_PEDIDO, PORTAL_TIPOS_DE_PEDIDO_ACEITOS } from '@plataforma/shared';
 import { createHash, randomBytes } from 'node:crypto';
 import type {
   AiConsentState,
@@ -59,19 +60,12 @@ export function consentimentoIa(r: RespostaConsentimento): AiConsentState {
   return 'nao_informado';
 }
 
-/** Tipos de pedido aceitos (LGPD art. 18) e os apelidos do front (`apps/web/lib/portal.ts`). */
-const APELIDOS: Readonly<Record<string, RightsRequestKind>> = {
-  acesso: 'acesso',
-  ver_dados: 'acesso',
-  correcao: 'correcao',
-  corrigir: 'correcao',
-  portabilidade: 'portabilidade',
-  baixar: 'portabilidade',
-  eliminacao: 'eliminacao',
-  apagar: 'eliminacao',
-  compartilhamento: 'compartilhamento',
-};
-export const TIPOS_DE_PEDIDO_ACEITOS = Object.keys(APELIDOS);
+/**
+ * Tipos de pedido aceitos (LGPD art. 18) e os apelidos do front: FONTE ÚNICA no contrato `ApiPortal`
+ * (packages/shared). O backend grava e devolve sempre o canônico.
+ */
+const APELIDOS: Readonly<Record<string, RightsRequestKind>> = PORTAL_APELIDOS_DE_PEDIDO;
+export const TIPOS_DE_PEDIDO_ACEITOS = PORTAL_TIPOS_DE_PEDIDO_ACEITOS;
 
 export function tipoDePedido(valor: string): RightsRequestKind | undefined {
   return Object.prototype.hasOwnProperty.call(APELIDOS, valor) ? APELIDOS[valor] : undefined;

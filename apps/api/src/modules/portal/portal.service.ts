@@ -1,5 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { AuditAction, type TenantId } from '@plataforma/shared';
+import {
+  AuditAction,
+  type ConsentimentoPortal,
+  type ConsultaPortal,
+  type PedidoPortal,
+  type ReciboPortal,
+  type ReciboPortalResumo,
+  type RespostaPortal,
+  type TenantId,
+  type VinculoDaConta,
+} from '@plataforma/shared';
 import { and, asc, desc, eq, getTableColumns, gte, lt, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { comPoliticaDeAssinatura, ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
@@ -15,7 +25,6 @@ import {
   receiptCancellations,
   receipts,
   tenants,
-  type PaymentMethod,
   type PortalActingAs,
   type PortalConsentPurpose,
   type PortalConsentResponse,
@@ -36,14 +45,13 @@ import { guardianFieldRef } from '../patients/guardian-fields';
 import { patientFieldRef } from '../patients/patient-fields';
 import { faixaEtariaEm } from '../patients/responsaveis-regras';
 import { avisarAdminsDoPedidoDoTitular } from '../records/avisos';
-import { noFusoDaClinica, statusParaFront, type StatusFront } from '../scheduling/agenda-regras';
+import { statusParaFront } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { PORTAL_AUTH_PROVIDER, type PortalAuthProvider, type SessaoDoPortal } from './portal-auth';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
-import { hashDoCodigo, mascararTelefone, novoCodigoOtp, OTP_CODIGO_RE, PORTAL_OTP_SENDER, type PortalOtpSender } from './portal-otp';
+import { hashDoCodigo, novoCodigoOtp, OTP_CODIGO_RE, PORTAL_OTP_SENDER, type PortalOtpSender } from './portal-otp';
 import {
   CONSENTIMENTOS,
-  consentimentoIa,
   estadoDoConsentimento,
   hashDoTexto,
   hashDoToken,
@@ -62,8 +70,16 @@ import {
   transicaoDoPortal,
   VERSAO_TEXTOS_CONSENTIMENTO,
   type AcaoNaConsulta,
-  type RespostaConsentimento,
 } from './portal-regras';
+import {
+  consentimentoParaPortal,
+  consultaParaPortal,
+  desafioDoConvite,
+  pedidoParaPortal,
+  reciboParaPortal,
+  reciboResumoParaPortal,
+  vinculoParaPortal,
+} from './portal-respostas';
 import { PortalVigilanciaService } from './portal-vigilancia';
 
 /** Contexto do titular, resolvido NO SERVIDOR (sessão + banco). Nada daqui vem do cliente. */
@@ -81,63 +97,16 @@ export interface ContextoPortal {
 
 export const ANTECEDENCIA_CANCELAMENTO = Symbol('ANTECEDENCIA_CANCELAMENTO');
 
-export interface VinculoDaContaDto {
-  readonly vinculoId: string;
-  readonly clinica: string;
-  readonly primeiroNome: string;
-  readonly agindoComo: PortalActingAs;
-}
-
-export interface ConsultaPortalDto {
-  readonly id: string;
-  readonly data: string;
-  readonly hora: string;
-  readonly profissional: string;
-  readonly status: StatusFront;
-  readonly podeConfirmar: boolean;
-  readonly podeCancelar: boolean;
-}
-
 /**
- * Recibo na lista do portal. N1 do #68: o recibo de área sensível do adolescente não aparece para o
- * responsável que não é o pagador (nem como "restrito": a marca revelava a categoria do atendimento).
+ * DTOs do portal = contrato `ApiPortal` (packages/shared, fonte única). Os nomes antigos ficam como
+ * apelidos; as respostas são montadas em portal-respostas.ts.
  */
-export interface ReciboPortalResumoDto {
-  readonly id: string;
-  readonly numero: number;
-  readonly data: string;
-  readonly valorCentavos: number;
-  readonly forma: PaymentMethod;
-  readonly situacao: 'emitido' | 'cancelado';
-}
-
-/** Recibo no portal: o retrato emitido (o de área sensível do adolescente, só para o pagador; N1 do #68). */
-export type ReciboPortalDto = ConteudoDoRecibo & {
-  readonly id: string;
-  readonly numero: number;
-  readonly situacao: 'emitido' | 'cancelado';
-};
-
-export interface PedidoPortalDto {
-  readonly id: string;
-  readonly protocolo: string;
-  readonly tipo: RightsRequestKind;
-  readonly abertoEm: string;
-  readonly prazo: string;
-  readonly situacao: 'aberto' | 'respondido';
-  readonly resposta: string | null;
-}
-
-export interface ConsentimentoPortalDto {
-  readonly finalidade: PortalConsentPurpose;
-  readonly titulo: string;
-  readonly explicacao: string;
-  readonly resposta: RespostaConsentimento;
-  readonly versaoTexto: string;
-  readonly atualizadoEm: string | null;
-  /** Só para `escriba_ia`: o estado que o escriba usa (3 estados; não informado nega). */
-  readonly estadoIa?: string;
-}
+export type VinculoDaContaDto = VinculoDaConta;
+export type ConsultaPortalDto = ConsultaPortal;
+export type ReciboPortalResumoDto = ReciboPortalResumo;
+export type ReciboPortalDto = ReciboPortal;
+export type PedidoPortalDto = PedidoPortal;
+export type ConsentimentoPortalDto = ConsentimentoPortal;
 
 const PG_INSUFFICIENT_PRIVILEGE = '42501';
 const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
@@ -178,10 +147,10 @@ export class PortalService {
 
   // ------------------------------------------------------------ sessão e vínculos
 
-  async vinculos(sessao: SessaoDoPortal): Promise<VinculoDaContaDto[]> {
+  async vinculos(sessao: SessaoDoPortal): Promise<RespostaPortal<'GET /portal/vinculos'>> {
     await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
     const ids = await this.vinculosDaConta(sessao.contaId);
-    const itens: VinculoDaContaDto[] = [];
+    const itens: VinculoDaConta[] = [];
     for (const id of ids) {
       try {
         itens.push(
@@ -189,7 +158,7 @@ export class PortalService {
             const ctx = await this.contexto(tx, sessao.contaId, id);
             const d = await this.dadosDaSaudacao(tx, ctx);
             await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_links', metadata: { op: 'list_links', link_id: id } });
-            return { vinculoId: id, clinica: d.clinica, primeiroNome: d.primeiroNome, agindoComo: ctx.agindoComo };
+            return vinculoParaPortal(id, d.clinica, d.primeiroNome, ctx.agindoComo);
           }),
         );
       } catch (e) {
@@ -201,23 +170,23 @@ export class PortalService {
   }
 
   /** Escolha da clínica/paciente NA SESSÃO do servidor (nunca por cabeçalho). */
-  async escolherVinculo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, vinculoId: string): Promise<VinculoDaContaDto> {
+  async escolherVinculo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, vinculoId: string): Promise<RespostaPortal<'POST /portal/sessao/vinculo'>> {
     await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
     if (!(await this.vinculosDaConta(sessao.contaId)).includes(vinculoId)) throw new NaoEncontradoError();
     const dto = await this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
       const ctx = await this.contexto(tx, sessao.contaId, vinculoId);
       const d = await this.dadosDaSaudacao(tx, ctx);
       await this.auditar(tx, ctx, { action: AuditAction.Login, scope: 'portal_session', metadata: { op: 'select_link', link_id: vinculoId } });
-      return { vinculoId, clinica: d.clinica, primeiroNome: d.primeiroNome, agindoComo: ctx.agindoComo };
+      return vinculoParaPortal(vinculoId, d.clinica, d.primeiroNome, ctx.agindoComo);
     });
     await this.provider.escolherVinculo(req, vinculoId);
     return dto;
   }
 
-  sessaoAtual(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<VinculoDaContaDto> {
+  sessaoAtual(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/sessao'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const d = await this.dadosDaSaudacao(tx, ctx);
-      return { vinculoId: ctx.vinculoId, clinica: d.clinica, primeiroNome: d.primeiroNome, agindoComo: ctx.agindoComo };
+      return vinculoParaPortal(ctx.vinculoId, d.clinica, d.primeiroNome, ctx.agindoComo);
     });
   }
 
@@ -226,7 +195,7 @@ export class PortalService {
    * único ao telefone DO CADASTRO do paciente (destino nunca informado por quem resgata). Devolve só o canal
    * e o destino mascarado. Falha sempre igual (409 convite_invalido), inclusive paciente sem telefone.
    */
-  async iniciarResgate(sessao: SessaoDoPortal, token: string): Promise<{ canal: 'sms'; destino: string }> {
+  async iniciarResgate(sessao: SessaoDoPortal, token: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
     await this.vigilancia.resgate(sessao.contaId);
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
     const codigo = novoCodigoOtp();
@@ -256,11 +225,16 @@ export class PortalService {
       throw new ConflitoError('convite_invalido');
     }
     await this.otp.enviar({ canal: 'sms', valor: telefone }, codigo);
-    return { canal: 'sms', destino: mascararTelefone(telefone) };
+    return desafioDoConvite(telefone);
   }
 
   /** Resgate, passo 2: token + código da MESMA conta. Uso único, dentro da validade. Falha sempre igual. */
-  async resgatar(sessao: SessaoDoPortal, req: RequisicaoParaSessao, token: string, codigo: string): Promise<{ vinculoId: string }> {
+  async resgatar(
+    sessao: SessaoDoPortal,
+    req: RequisicaoParaSessao,
+    token: string,
+    codigo: string,
+  ): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
     await this.vigilancia.resgate(sessao.contaId);
     if (!TOKEN_CONVITE_RE.test(token) || !OTP_CODIGO_RE.test(codigo)) throw new ConflitoError('convite_invalido');
     const vinculo = await this.db.semContextoDoPortal(async (tx) => {
@@ -279,7 +253,7 @@ export class PortalService {
 
   // ------------------------------------------------------------ consultas
 
-  minhasConsultas(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<ConsultaPortalDto[]> {
+  minhasConsultas(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/consultas'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const agora = Date.now();
       const linhas = await tx
@@ -302,19 +276,7 @@ export class PortalService {
       const visiveis = linhas.filter(
         (l) => !consultaOcultaAoResponsavel(ctx.agindoComo, faixa, areaSensivelDoProfissional({ sensitiveArea: l.sensivel, specialty: l.especialidade })),
       );
-      const itens = visiveis.map(({ a, profissional }): ConsultaPortalDto => {
-        const { data, hora } = noFusoDaClinica(a.startsAt);
-        const futura = a.startsAt.getTime() > agora;
-        return {
-          id: a.id,
-          data,
-          hora,
-          profissional,
-          status: statusParaFront(a.status),
-          podeConfirmar: futura && a.status === 'scheduled',
-          podeCancelar: (a.status === 'scheduled' || a.status === 'confirmed') && a.startsAt.getTime() - agora >= this.antecedenciaH * 3_600_000,
-        };
-      });
+      const itens = visiveis.map(({ a, profissional }) => consultaParaPortal(a, profissional, agora, this.antecedenciaH));
       await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'appointments', metadata: { op: 'portal_list', count: itens.length } });
       return itens;
     });
@@ -325,7 +287,12 @@ export class PortalService {
    * genérica de status da clínica: só as três transições do portal, consulta futura, e o cancelamento
    * com antecedência mínima. Consulta de outro paciente (ou de outra clínica) = 404, igual a inexistente.
    */
-  agirNaConsulta(sessao: SessaoDoPortal, req: RequisicaoParaSessao, id: string, acao: AcaoNaConsulta): Promise<{ status: StatusFront }> {
+  agirNaConsulta(
+    sessao: SessaoDoPortal,
+    req: RequisicaoParaSessao,
+    id: string,
+    acao: AcaoNaConsulta,
+  ): Promise<RespostaPortal<'POST /portal/consultas/:id/confirmar'>> {
     return this.noVinculo(
       sessao,
       req,
@@ -368,7 +335,7 @@ export class PortalService {
 
   // ------------------------------------------------------------ recibos
 
-  meusRecibos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<ReciboPortalResumoDto[]> {
+  meusRecibos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/recibos'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const linhas = await tx
         .select({ r: receipts, p: payments, cancelado: receiptCancellations.id, sensivel: professionals.sensitiveArea, especialidade: professionals.specialty })
@@ -387,16 +354,7 @@ export class PortalService {
       // esconde (policy `portal_sigilo_adolescente` da 0037); aqui é a segunda barreira.
       const itens = linhas
         .filter((l) => !(sigilo && this.reciboRestrito(ctx, l.sensivel, l.especialidade, l.p.guardianPayerLinkId)))
-        .map(
-          (l): ReciboPortalResumoDto => ({
-            id: l.r.id,
-            numero: l.r.number,
-            data: noFusoDaClinica(l.p.receivedAt).data,
-            valorCentavos: l.p.amountCents,
-            forma: l.p.method,
-            situacao: l.cancelado ? 'cancelado' : 'emitido',
-          }),
-        );
+        .map((l) => reciboResumoParaPortal(l.r, l.p, l.cancelado !== null));
       await this.auditar(tx, ctx, {
         action: AuditAction.Read,
         scope: 'receipts',
@@ -410,7 +368,7 @@ export class PortalService {
    * Recibo do próprio paciente (retrato emitido). O CPF do PAGADOR terceiro (ex.: responsável) sai
    * mascarado: o recibo inteiro é do pagador; o titular vê o próprio CPF (beneficiário) inteiro.
    */
-  meuRecibo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, id: string): Promise<ReciboPortalDto> {
+  meuRecibo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, id: string): Promise<RespostaPortal<'GET /portal/recibos/:id'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const [l] = await tx
         .select({
@@ -435,24 +393,17 @@ export class PortalService {
       }
       if (l.r.contentEnc === null) throw new ConflitoError('recibo_eliminado_por_retencao_fiscal');
       const c = JSON.parse((await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, id, CAMPO_RECIBO, l.r.contentEnc)) ?? '{}') as ConteudoDoRecibo;
-      const terceiro = c.pagador.cpf !== null && c.pagador.cpf !== c.beneficiario.cpf;
       await this.auditar(tx, ctx, {
         action: AuditAction.Read,
         scope: 'receipts',
         metadata: { receipt_id: id, receipt_number: l.r.number, op: 'portal_read' },
       });
-      return {
-        ...c,
-        pagador: terceiro ? { nome: c.pagador.nome, cpf: mascararCpf(c.pagador.cpf) } : c.pagador,
-        id,
-        numero: l.r.number,
-        situacao: l.cancelado ? ('cancelado' as const) : ('emitido' as const),
-      };
+      return reciboParaPortal(c, id, l.r.number, l.cancelado !== null);
     });
   }
 
   /** Documentos (receitas, atestados) entram com a frente de documentos e o reforço do login (R14). */
-  meusDocumentos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<{ itens: never[]; disponivel: false }> {
+  meusDocumentos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/documentos'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_documents', metadata: { op: 'portal_list', count: 0 } });
       return { itens: [], disponivel: false };
@@ -461,15 +412,12 @@ export class PortalService {
 
   // ------------------------------------------------------------ meus dados e pedidos do titular
 
-  meusDados(
-    sessao: SessaoDoPortal,
-    req: RequisicaoParaSessao,
-  ): Promise<{ nome: string; nomeSocial: string | null; telefone: string | null; cpfMascarado: string | null; nascimento: string | null }> {
+  meusDados(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/meus-dados'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const p = await this.paciente(tx, ctx);
       const dec = (col: 'cpf' | 'phone' | 'birth_date', v: string | null) =>
         v === null ? Promise.resolve(null) : this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, col), v);
-      const dto = {
+      const dto: RespostaPortal<'GET /portal/meus-dados'> = {
         nome: p.displayName,
         nomeSocial: p.socialName,
         telefone: await dec('phone', p.phoneEnc),
@@ -485,7 +433,7 @@ export class PortalService {
    * Registra o pedido para a clínica atender (nada é executado automaticamente). Teto diário por vínculo
    * (429 + um anomaly_alert; o banco confere o mesmo teto) e aviso aos admins da clínica (A3 do #68).
    */
-  async abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<PedidoPortalDto> {
+  async abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<RespostaPortal<'POST /portal/solicitacoes'>> {
     let teto: { vinculoId: string } | null = null;
     let aberto: { dto: PedidoPortalDto; tenantId: TenantId } | null = null;
     try {
@@ -551,7 +499,7 @@ export class PortalService {
     });
   }
 
-  meusPedidos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<PedidoPortalDto[]> {
+  meusPedidos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/solicitacoes'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const linhas = await tx
         .select()
@@ -577,24 +525,14 @@ export class PortalService {
 
   // ------------------------------------------------------------ central de privacidade
 
-  meusConsentimentos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<ConsentimentoPortalDto[]> {
+  meusConsentimentos(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/privacidade/consentimentos'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const eventos = await this.eventos(tx, ctx);
       // V1 do #68: o evento do responsável só vale enquanto a representação valia.
       const hoje = hojeNaClinica();
-      const itens = (Object.keys(CONSENTIMENTOS) as PortalConsentPurpose[]).map((f): ConsentimentoPortalDto => {
-        const ultimo = eventos.filter((e) => e.purpose === f && eventoVale(e, hoje)).at(-1);
-        const resposta = estadoDoConsentimento(ultimo?.response);
-        return {
-          finalidade: f,
-          titulo: CONSENTIMENTOS[f].titulo,
-          explicacao: CONSENTIMENTOS[f].explicacao,
-          resposta,
-          versaoTexto: VERSAO_TEXTOS_CONSENTIMENTO,
-          atualizadoEm: ultimo?.createdAt.toISOString() ?? null,
-          ...(f === 'escriba_ia' ? { estadoIa: consentimentoIa(resposta) } : {}),
-        };
-      });
+      const itens = (Object.keys(CONSENTIMENTOS) as PortalConsentPurpose[]).map((f) =>
+        consentimentoParaPortal(f, eventos.filter((e) => e.purpose === f && eventoVale(e, hoje)).at(-1)),
+      );
       await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_consents', metadata: { op: 'portal_list', count: itens.length } });
       return itens;
     });
@@ -610,7 +548,7 @@ export class PortalService {
     req: RequisicaoParaSessao,
     finalidade: PortalConsentPurpose,
     resposta: PortalConsentResponse,
-  ): Promise<{ resposta: RespostaConsentimento }> {
+  ): Promise<RespostaPortal<'POST /portal/privacidade/consentimentos/:finalidade'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       if (ctx.agindoComo === 'titular') {
         const p = await this.paciente(tx, ctx);
@@ -650,7 +588,7 @@ export class PortalService {
     sessao: SessaoDoPortal,
     req: RequisicaoParaSessao,
     finalidade: PortalConsentPurpose,
-  ): Promise<{ resposta: PortalConsentResponse; em: string; canal: 'portal'; agindoComo: PortalActingAs; versaoTexto: string }[]> {
+  ): Promise<RespostaPortal<'GET /portal/privacidade/consentimentos/:finalidade/historico'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const itens = (await this.eventos(tx, ctx))
         .filter((e) => e.purpose === finalidade)
@@ -765,16 +703,8 @@ export class PortalService {
       .orderBy(asc(portalConsents.createdAt), asc(portalConsents.id));
   }
 
-  private pedidoDto(r: typeof portalRightsRequests.$inferSelect, resposta: string | null): PedidoPortalDto {
-    return {
-      id: r.id,
-      protocolo: r.protocol,
-      tipo: r.kind,
-      abertoEm: r.createdAt.toISOString(),
-      prazo: r.dueAt.toISOString(),
-      situacao: situacaoParaOTitular(r.status),
-      resposta,
-    };
+  private pedidoDto(r: typeof portalRightsRequests.$inferSelect, resposta: string | null): PedidoPortal {
+    return pedidoParaPortal(r, resposta);
   }
 
   /** O portal nunca provisiona chave (V2 do #68): clínica sem chave = 409, a clínica provisiona. */

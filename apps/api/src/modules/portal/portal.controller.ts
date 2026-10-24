@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import type { CorpoPortal, PortalTipoDePedidoAceito, RespostaPortal } from '@plataforma/shared';
 import { EntradaInvalidaError, exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
 import { PORTAL_CONSENT_PURPOSES, PORTAL_LINK_REVOKE_REASONS, PORTAL_ACTING_AS, type PortalConsentPurpose } from '../../db/schema';
 import type { RequisicaoParaSessao } from '../auth/auth-context';
@@ -30,20 +31,20 @@ export class PortalController {
   constructor(@Inject(PortalService) private readonly service: PortalService) {}
 
   @Get('vinculos')
-  vinculos(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown) {
+  vinculos(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/vinculos'>> {
     semQuery(q);
     return this.service.vinculos(s);
   }
 
   @Get('sessao')
-  sessao(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  sessao(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/sessao'>> {
     semQuery(q);
     return this.service.sessaoAtual(s, req);
   }
 
   @Post('sessao/vinculo')
   @HttpCode(200)
-  escolher(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown) {
+  escolher(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/sessao/vinculo'>> {
     const v = new Validador(exigirObjeto(corpo, ['vinculoId']));
     const vinculoId = v.uuid('vinculoId', true);
     v.concluir();
@@ -57,79 +58,81 @@ export class PortalController {
    */
   @Post('convites/resgate')
   @HttpCode(200)
-  iniciarResgate(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown, @Body() corpo: unknown) {
+  iniciarResgate(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
     semQuery(q);
     const v = new Validador(exigirObjeto(corpo, ['token']));
     const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
     v.concluir();
-    return this.service.iniciarResgate(s, token);
+    const pedido: CorpoPortal<'POST /portal/convites/resgate'> = { token };
+    return this.service.iniciarResgate(s, pedido.token);
   }
 
   @Post('convites/resgate/confirmar')
   @HttpCode(200)
-  resgatar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown, @Body() corpo: unknown) {
+  resgatar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
     semQuery(q);
     const v = new Validador(exigirObjeto(corpo, ['token', 'codigo']));
     const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
     const codigo = v.texto('codigo', { min: 1, max: 16, obrigatorio: true });
     v.concluir();
-    return this.service.resgatar(s, req, token, codigo);
+    const pedido: CorpoPortal<'POST /portal/convites/resgate/confirmar'> = { token, codigo };
+    return this.service.resgatar(s, req, pedido.token, pedido.codigo);
   }
 
   @Get('consultas')
-  consultas(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  consultas(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/consultas'>> {
     semQuery(q);
     return this.service.minhasConsultas(s, req);
   }
 
   @Post('consultas/:id/confirmar')
   @HttpCode(200)
-  confirmar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown) {
+  confirmar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/consultas/:id/confirmar'>> {
     exigirObjeto(corpo ?? {}, []);
     return this.service.agirNaConsulta(s, req, exigirUuid(id), 'confirmar');
   }
 
   @Post('consultas/:id/desfazer-confirmacao')
   @HttpCode(200)
-  desfazer(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown) {
+  desfazer(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/consultas/:id/desfazer-confirmacao'>> {
     exigirObjeto(corpo ?? {}, []);
     return this.service.agirNaConsulta(s, req, exigirUuid(id), 'desfazer_confirmacao');
   }
 
   @Post('consultas/:id/cancelar')
   @HttpCode(200)
-  cancelar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown) {
+  cancelar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/consultas/:id/cancelar'>> {
     exigirObjeto(corpo ?? {}, []);
     return this.service.agirNaConsulta(s, req, exigirUuid(id), 'cancelar');
   }
 
   @Get('recibos')
-  recibos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  recibos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/recibos'>> {
     semQuery(q);
     return this.service.meusRecibos(s, req);
   }
 
   @Get('recibos/:id')
-  recibo(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Query() q: unknown) {
+  recibo(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('id') id: string, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/recibos/:id'>> {
     semQuery(q);
     return this.service.meuRecibo(s, req, exigirUuid(id));
   }
 
   @Get('documentos')
-  documentos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  documentos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/documentos'>> {
     semQuery(q);
     return this.service.meusDocumentos(s, req);
   }
 
   @Get('meus-dados')
-  meusDados(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  meusDados(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/meus-dados'>> {
     semQuery(q);
     return this.service.meusDados(s, req);
   }
 
   /** "Solicitar correção" dos dados cadastrais: vira pedido `correcao` (art. 18, III) para a clínica. */
   @Post('meus-dados/correcao')
-  correcao(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown) {
+  correcao(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/meus-dados/correcao'>> {
     const v = new Validador(exigirObjeto(corpo, ['detalhe']));
     const detalhe = v.texto('detalhe', { min: 3, max: 500, obrigatorio: true });
     v.concluir();
@@ -137,24 +140,25 @@ export class PortalController {
   }
 
   @Get('solicitacoes')
-  pedidos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  pedidos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/solicitacoes'>> {
     semQuery(q);
     return this.service.meusPedidos(s, req);
   }
 
   @Post('solicitacoes')
-  abrir(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown) {
+  abrir(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/solicitacoes'>> {
     const v = new Validador(exigirObjeto(corpo, ['tipo', 'detalhe']));
     const bruto = v.umDe('tipo', TIPOS_DE_PEDIDO_ACEITOS, true);
     const detalhe = v.texto('detalhe', { min: 3, max: 500 });
     v.concluir();
-    const tipo = tipoDePedido(bruto as string);
+    const pedido: CorpoPortal<'POST /portal/solicitacoes'> = { tipo: bruto as PortalTipoDePedidoAceito, ...(detalhe ? { detalhe } : {}) };
+    const tipo = tipoDePedido(pedido.tipo);
     if (!tipo) throw new EntradaInvalidaError(['tipo']);
-    return this.service.abrirPedido(s, req, tipo, detalhe);
+    return this.service.abrirPedido(s, req, tipo, pedido.detalhe);
   }
 
   @Get('privacidade/consentimentos')
-  consentimentos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown) {
+  consentimentos(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/privacidade/consentimentos'>> {
     semQuery(q);
     return this.service.meusConsentimentos(s, req);
   }
@@ -166,11 +170,12 @@ export class PortalController {
     @RequisicaoPortal() req: RequisicaoParaSessao,
     @Param('finalidade') f: string,
     @Body() corpo: unknown,
-  ) {
+  ): Promise<RespostaPortal<'POST /portal/privacidade/consentimentos/:finalidade'>> {
     const v = new Validador(exigirObjeto(corpo, ['resposta']));
     const resposta = v.umDe('resposta', ['sim', 'nao'] as const, true);
     v.concluir();
-    return this.service.responderConsentimento(s, req, finalidade(f), resposta as 'sim' | 'nao');
+    const pedido: CorpoPortal<'POST /portal/privacidade/consentimentos/:finalidade'> = { resposta: resposta as 'sim' | 'nao' };
+    return this.service.responderConsentimento(s, req, finalidade(f), pedido.resposta);
   }
 
   @Post('privacidade/consentimentos/:finalidade/desfazer')
@@ -180,13 +185,13 @@ export class PortalController {
     @RequisicaoPortal() req: RequisicaoParaSessao,
     @Param('finalidade') f: string,
     @Body() corpo: unknown,
-  ) {
+  ): Promise<RespostaPortal<'POST /portal/privacidade/consentimentos/:finalidade/desfazer'>> {
     exigirObjeto(corpo ?? {}, []);
     return this.service.responderConsentimento(s, req, finalidade(f), 'desfeito');
   }
 
   @Get('privacidade/consentimentos/:finalidade/historico')
-  historico(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('finalidade') f: string, @Query() q: unknown) {
+  historico(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Param('finalidade') f: string, @Query() q: unknown): Promise<RespostaPortal<'GET /portal/privacidade/consentimentos/:finalidade/historico'>> {
     semQuery(q);
     return this.service.historicoConsentimento(s, req, finalidade(f));
   }
