@@ -165,7 +165,7 @@ describe('dry-run, aplicar e desfazer com responsáveis', () => {
     expect(pessoas).toHaveLength(2);
     expect(vinculos.every((v) => !v.receivesClinicalInfo && v.clinicalInfoDecidedBy === null && v.clinicalInfoBasisEnc === null)).toBe(true);
     // Irmãos: a mesma pessoa nos dois vínculos.
-    const [l2, l3, l4, l5] = await Promise.all([2, 3, 4, 5].map((l) => pacienteDaLinha(clinicaA, lote, l)));
+    const [l2, l3, l4, l5] = (await Promise.all([2, 3, 4, 5].map((l) => pacienteDaLinha(clinicaA, lote, l)))) as [string, string, string, string];
     const porPaciente = new Map(vinculos.map((v) => [v.patientId, v]));
     expect(porPaciente.get(l2)?.guardianId).toBe(porPaciente.get(l3)?.guardianId);
     expect(porPaciente.get(l2)).toMatchObject({ kind: 'pai_mae', isPayer: true });
