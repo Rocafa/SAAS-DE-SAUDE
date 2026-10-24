@@ -48,7 +48,7 @@ async function seedTenant(
 
 function exportAuditRows(t: FakeTenant) {
   return withTenant(h.db, t.ctx.tenantId, (tx) =>
-    tx.select().from(auditLog).where(eq(auditLog.action, 'export')),
+    tx.select().from(auditLog).where(eq(auditLog.action, 'export')).orderBy(sql`seq`),
   );
 }
 

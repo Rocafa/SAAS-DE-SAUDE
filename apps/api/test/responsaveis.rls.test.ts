@@ -415,7 +415,7 @@ describe('R1 do 2º parecer do #67: anular pagador que já tem recebimentos', ()
     for (const i of doPac) expect(i.pendencias).toContain('pagador_anulado');
     // Trilha: a anulação registra quantos recebimentos estavam atribuídos (só a contagem).
     const trilha = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select({ m: auditLog.metadata }).from(auditLog).where(and(eq(auditLog.scope, 'patient_guardians'), sql`${auditLog.metadata}->>'link_id' = ${errado.id}`, sql`${auditLog.metadata}->>'reason' = 'cadastro_errado'`)));
+      tx.select({ m: auditLog.metadata }).from(auditLog).where(and(eq(auditLog.scope, 'patient_guardians'), sql`${auditLog.metadata}->>'link_id' = ${errado.id}`, sql`${auditLog.metadata}->>'reason' = 'cadastro_errado'`)).orderBy(sql`seq`));
     expect(trilha.map((t) => (t.m as { payments_attributed?: number }).payments_attributed)).toEqual([2]);
     expect(JSON.stringify(trilha)).not.toContain('QZR1');
   });

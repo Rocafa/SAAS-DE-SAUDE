@@ -187,7 +187,7 @@ describe('dry-run, aplicar e desfazer com responsáveis', () => {
     const hist = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardianHistory).where(inArray(patientGuardianHistory.linkId, vinculos.map((v) => v.id))));
     expect(hist.map((h) => h.event)).toEqual(Array(4).fill('vinculo_criado'));
     // Trilha só com contagens (sem CPF nem nome).
-    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'patient_guardians')));
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'patient_guardians')).orderBy(sql`seq`));
     const doLote = trilha.filter((t) => (t.metadata as Record<string, unknown>).import_batch_id === lote);
     expect(doLote).toHaveLength(1);
     expect(doLote[0]?.metadata).toMatchObject({ op: 'import', links_created: 4, guardians_created: 2, existing_guardians: 1, payers: 1 });
@@ -225,7 +225,7 @@ describe('dry-run, aplicar e desfazer com responsáveis', () => {
     expect(hist).toHaveLength(historicoDoExistente);
     const pacientesDoLote = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patients).where(eq(patients.importBatchId, lote)));
     expect(pacientesDoLote).toHaveLength(0);
-    const [ev] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'import_batches'), sql`${auditLog.metadata}->>'op' = 'undo'`, sql`${auditLog.metadata}->>'import_batch_id' = ${lote}`)));
+    const [ev] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'import_batches'), sql`${auditLog.metadata}->>'op' = 'undo'`, sql`${auditLog.metadata}->>'import_batch_id' = ${lote}`)).orderBy(sql`seq`));
     expect(ev?.metadata).toMatchObject({ patients: 7, guardian_links: 4, guardians: 2 });
   });
 });

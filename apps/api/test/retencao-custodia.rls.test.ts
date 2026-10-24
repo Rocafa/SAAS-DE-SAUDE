@@ -580,7 +580,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     expect(membros.filter((m) => m.revokedAt === null).map((m) => [m.userId, m.role])).toEqual([[correto, 'admin']]);
     expect(membros.find((m) => m.userId === errado)).toMatchObject({ role: 'admin', revokedBy: correto });
     const trilha = await withTenant(api.db.db, antiga, (tx) =>
-      tx.select().from(auditLog).where(sql`${auditLog.scope} in ('clinic_members', 'tenants.founder')`).orderBy(auditLog.createdAt));
+      tx.select().from(auditLog).where(sql`${auditLog.scope} in ('clinic_members', 'tenants.founder')`).orderBy(sql`seq`));
     const ops = trilha.map((l) => l.metadata as Record<string, unknown>);
     expect(ops).toEqual(
       expect.arrayContaining([

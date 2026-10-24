@@ -110,7 +110,7 @@ async function alertasDe(tenantId: TenantId, ator: string): Promise<{ metadata: 
     tx
       .select({ metadata: auditLog.metadata })
       .from(auditLog)
-      .where(and(eq(auditLog.tenantId, tenantId), eq(auditLog.actorId, ator), eq(auditLog.action, 'anomaly_alert'))),
+      .where(and(eq(auditLog.tenantId, tenantId), eq(auditLog.actorId, ator), eq(auditLog.action, 'anomaly_alert'))).orderBy(sql`seq`),
   );
 }
 
@@ -710,7 +710,7 @@ describe('janela de continuidade por clínica (R1 do #61)', () => {
       tx
         .select({ metadata: auditLog.metadata })
         .from(auditLog)
-        .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'tenants'), eq(auditLog.actorId, admin.userId))),
+        .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'tenants'), eq(auditLog.actorId, admin.userId))).orderBy(sql`seq`),
     );
     expect(evento?.metadata).toEqual({ setting: 'care_link_days', from: 90, to: 30 });
     // O banco recusa acima do teto mesmo sem passar pela API.

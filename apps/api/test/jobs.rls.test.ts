@@ -30,7 +30,7 @@ async function trilhaDosJobs(t: TenantId, job: string) {
     tx
       .select()
       .from(auditLog)
-      .where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = ${job}`)),
+      .where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = ${job}`)).orderBy(sql`seq`),
   );
 }
 

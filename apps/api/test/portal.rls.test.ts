@@ -9,7 +9,7 @@
  */
 import type { TenantId } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   appointments,
@@ -525,7 +525,7 @@ describe('A3 do #68: resposta obrigatória, aviso à clínica e teto diário', (
       expect(r.body).toMatchObject({ codigo: 'limite_diario_de_pedidos' });
     }
     const alertas = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.actorId, p.contaId), eq(auditLog.action, 'anomaly_alert'))), adminA.userId);
+      tx.select().from(auditLog).where(and(eq(auditLog.actorId, p.contaId), eq(auditLog.action, 'anomaly_alert'))).orderBy(sql`seq`), adminA.userId);
     expect(alertas.map((a) => a.metadata)).toEqual([{ rule: 'portal_teto_diario_pedidos', window_s: 86_400, threshold: 5, count: 6 }]);
     await expect(api.db.db.transaction(async (tx) => {
       await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
@@ -750,7 +750,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
       link: (await tx.select().from(portalLinks).where(eq(portalLinks.id, vPai.vinculoId)))[0],
       consents: await tx.select().from(portalConsents).where(eq(portalConsents.patientId, menor)).orderBy(portalConsents.createdAt),
       pedidos: await tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.patientId, menor)),
-      trilha: await tx.select().from(auditLog).where(and(eq(auditLog.actorId, contaMae.contaId), eq(auditLog.scope, 'portal_consents'))),
+      trilha: await tx.select().from(auditLog).where(and(eq(auditLog.actorId, contaMae.contaId), eq(auditLog.scope, 'portal_consents'))).orderBy(sql`seq`),
     }), adminA.userId);
     expect(r.link).toMatchObject({ guardianLinkId: pai, guardianId: gPai?.guardianId, representUntil: nascidoHa(-8) });
     expect(r.consents.map((c) => [c.response, c.guardianId])).toEqual([['sim', gPai?.guardianId], ['nao', gMae?.guardianId]]);
@@ -1090,7 +1090,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
     const novo = { confidentialFrom: nascidoHa(13 - 12), representUntil: nascidoHa(13 - 18) };
     expect(await vinculo()).toMatchObject(novo);
-    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)), adminA.userId);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)).orderBy(sql`seq`), adminA.userId);
     // O contrato da trilha (0005) proíbe datas: vão o deslocamento em dias e o estado antes/depois.
     const dias = (de: string, ate: string) => Math.round((Date.parse(ate) - Date.parse(de)) / 86_400_000);
     expect(trilha.map((t) => t.metadata)).toEqual([
@@ -1129,7 +1129,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const fecho = await withTenant(
       api.db.db,
       clinicaA,
-      (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_changed_not_recalculated'`)),
+      (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_changed_not_recalculated'`)).orderBy(sql`seq`),
       adminA.userId,
     );
     expect(fecho.map((t) => t.actorId)).toEqual([recepcao.userId]);
@@ -1172,7 +1172,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
       const volta = await withTenant(
         api.db.db,
         clinicaA,
-        (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_reverted'`)),
+        (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_reverted'`)).orderBy(sql`seq`),
         adminA.userId,
       );
       expect(volta.map((t) => t.actorId)).toEqual([recepcao.userId]);
@@ -1228,7 +1228,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(a2.every((a) => a.portalTransition === 'representacao_estendida')).toBe(true);
     expect(await alertas('representacao_estendida')).toBe(alertasAntes.repr + 2);
     // O alerta não leva id de paciente (contrato dos alertas do #61): só regra, transição e contagens.
-    const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)).orderBy(desc(auditLog.createdAt)).limit(1), adminA.userId);
+    const [ultimo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'representacao_estendida'`)).orderBy(sql`seq desc`).limit(1), adminA.userId);
     expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
     expect(ultimo?.actorId).toBe(adminA.userId);
   });
@@ -1384,7 +1384,7 @@ describe('auditoria e limite por conta', () => {
       for (let i = 0; i < 5; i++) codigos.push((await api2.http().get('/portal/consultas').set(cab(p))).status);
       expect(codigos).toEqual([200, 200, 200, 429, 429]);
       const alertas = await withTenant(api2.db.db, clinicaA, (tx) =>
-        tx.select().from(auditLog).where(and(eq(auditLog.actorId, p.contaId), eq(auditLog.action, 'anomaly_alert'))),
+        tx.select().from(auditLog).where(and(eq(auditLog.actorId, p.contaId), eq(auditLog.action, 'anomaly_alert'))).orderBy(sql`seq`),
       );
       expect(alertas).toHaveLength(1);
       expect(alertas[0]?.metadata).toEqual({ rule: 'portal_limite_por_conta', window_s: 60, threshold: 3, count: 4 });

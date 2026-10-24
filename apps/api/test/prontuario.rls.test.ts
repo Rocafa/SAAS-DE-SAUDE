@@ -115,7 +115,7 @@ async function negacoes(tenantId: TenantId, s: Sessao) {
     tx
       .select()
       .from(auditLog)
-      .where(and(eq(auditLog.scope, 'clinical_access_denied'), eq(auditLog.actorId, s.userId))),
+      .where(and(eq(auditLog.scope, 'clinical_access_denied'), eq(auditLog.actorId, s.userId))).orderBy(sql`seq`),
   );
 }
 
@@ -215,7 +215,7 @@ describe('abertura do atendimento a partir do check-in', () => {
       tx
         .select()
         .from(auditLog)
-        .where(and(eq(auditLog.scope, 'encounters'), eq(auditLog.action, 'create'), sql`${auditLog.metadata}->>'appointment_id' = ${ag}`)),
+        .where(and(eq(auditLog.scope, 'encounters'), eq(auditLog.action, 'create'), sql`${auditLog.metadata}->>'appointment_id' = ${ag}`)).orderBy(sql`seq`),
     );
     expect(linha?.metadata).toMatchObject({ care_basis: 'autoagendamento' });
   });

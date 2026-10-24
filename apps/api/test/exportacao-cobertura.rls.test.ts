@@ -773,7 +773,7 @@ describe('G2 — conteúdo do pacote', () => {
 
   it('auditoria da exportação: 1 linha com contagens, sem conteúdo', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))).orderBy(sql`seq`),
     );
     expect(linhas).toHaveLength(1);
     // 3 pacientes (2 do cadastro + 1 do lote importado) e 4 agendamentos (3 + o do WhatsApp).
@@ -834,7 +834,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     expect(JSON.stringify(pkg)).not.toContain(ATENDENTE);
     // Na clínica B, o mesmo atendente tem outro pseudônimo: o id não liga as duas clínicas.
     const linhasB = await withTenant(api.db.db, clinicaB, (tx) =>
-      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')),
+      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')).orderBy(sql`seq`),
     );
     expect(linhasB.map((l) => l.actorId)).toEqual([supportActorPseudonym(CHAVE_SUPORTE, clinicaB, ATENDENTE)]);
     expect(linhasB[0]?.actorId).not.toBe(pseudoA);

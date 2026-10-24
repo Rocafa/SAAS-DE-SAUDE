@@ -581,7 +581,7 @@ describe('resposta 1/2: só a consulta daquele envio, pelas regras da agenda, de
     expect(await statusDoAgendamento(clinicaA, a.id)).toBe('confirmed');
     // A trilha da agenda marca a origem.
     const trilha = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'appointments'), sql`${auditLog.metadata}->>'appointment_id' = ${a.id}`, sql`${auditLog.metadata}->>'via' = 'whatsapp'`)),
+      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'appointments'), sql`${auditLog.metadata}->>'appointment_id' = ${a.id}`, sql`${auditLog.metadata}->>'via' = 'whatsapp'`)).orderBy(sql`seq`),
     );
     expect(trilha).toHaveLength(1);
     expect(trilha[0]?.actorKind).toBe('sistema');
@@ -876,7 +876,7 @@ describe('R1 do parecer dos jobs: clínica cancelada ou bloqueada não recebe le
     expect(enviadasPara(tel1)).toHaveLength(0);
     // Trilha do cancelamento, do sistema, só com contagem.
     const trilha = await withTenant(api.db.db, c.t, async (tx) =>
-      (await tx.select({ m: auditLog.metadata }).from(auditLog).where(eq(auditLog.tenantId, c.t))).map((x) => x.m as Record<string, unknown>),
+      (await tx.select({ m: auditLog.metadata }).from(auditLog).where(eq(auditLog.tenantId, c.t)).orderBy(sql`seq`)).map((x) => x.m as Record<string, unknown>),
     );
     expect(trilha.filter((m) => m.op === 'cancel_subscription_blocked')).toEqual([{ op: 'cancel_subscription_blocked', cancelled: 1 }]);
     // A retenção (eliminação de dado vencido) continua rodando para a clínica cancelada.
@@ -1004,7 +1004,7 @@ describe('limpeza (R2/R3): job chamável, 30 dias, nenhuma linha presa', () => {
     expect(await svc.executarRetencaoComoSistema(clinicaA)).toEqual({ agendadosExpirados: 0, enviosInterrompidos: 0, enviosLimpos: 0 });
     // Trilha do job: ator sistema, só contagens.
     const [t] = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'whatsapp_outbox'), sql`${auditLog.metadata}->>'op' = 'content_retention'`, sql`${auditLog.metadata}->>'outbox_purged' <> '0'`)),
+      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'whatsapp_outbox'), sql`${auditLog.metadata}->>'op' = 'content_retention'`, sql`${auditLog.metadata}->>'outbox_purged' <> '0'`)).orderBy(sql`seq`),
     );
     expect(t).toMatchObject({ actorKind: 'sistema' });
   });

@@ -4,7 +4,7 @@
  * 0010) e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
 import { AuditAction, type TenantId } from '@plataforma/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
@@ -25,7 +25,7 @@ async function alertas(tenantId: TenantId, userId: string) {
     tx
       .select({ actorId: auditLog.actorId, actorKind: auditLog.actorKind, scope: auditLog.scope, metadata: auditLog.metadata })
       .from(auditLog)
-      .where(and(eq(auditLog.action, AuditAction.AnomalyAlert), eq(auditLog.actorId, userId))),
+      .where(and(eq(auditLog.action, AuditAction.AnomalyAlert), eq(auditLog.actorId, userId))).orderBy(sql`seq`),
   );
 }
 

@@ -198,7 +198,7 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
     // A destruição (e o provisionamento) ficaram na trilha de auditoria, com o ator.
     const eventos = await withTenant(h.db, tenantA, (tx) =>
       tx.execute<{ action: string; scope: string; actor_id: string }>(
-        sql`select action, scope, actor_id from audit_log where scope like 'crypto.key.%' order by created_at`,
+        sql`select action, scope, actor_id from audit_log where scope like 'crypto.key.%' order by seq`,
       ),
     );
     // Ações próprias de chave (0006), não create/update genéricos.
