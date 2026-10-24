@@ -400,7 +400,7 @@ describe('R6 do #66: arquivo de outra clínica', () => {
     const eventos = await dryRuns();
     expect(eventos).toHaveLength(2);
     expect(eventos[1]).toStrictEqual(eventos[0]);
-    expect(Object.keys(eventos[0] as object).sort()).toEqual(['create', 'errors', 'import_batch_id', 'op', 'skip']);
+    expect(Object.keys(eventos[0] as object).sort()).toEqual(['create', 'errors', 'guardian_links', 'guardians_existing', 'guardians_new', 'import_batch_id', 'op', 'skip']);
 
     // A confirmação da clínica de origem (R6 a) continua, e o aplicar funciona com a coincidência.
     expect((await aplicar(adminA, a.id, semCoincidencia.resumoHash, 'Outra Clinica Qualquer')).body).toMatchObject({ codigo: 'clinica_nao_confirmada' });
