@@ -14,7 +14,7 @@ function servicos(chamadas: string[]): ServicosDosJobs {
       executarRetencaoComoSistema: marca('retencao', { agendadosExpirados: 0, enviosInterrompidos: 0, enviosLimpos: 2 }),
     } as unknown as ServicosDosJobs['whatsapp'],
     portal: { encerrarRepresentacoesDaClinica: marca('portal', { vinculosRevogados: 1, consentimentosEncerrados: 0 }) },
-    importacao: { expurgoDiario: marca('importador', { clinicas: 1, arquivosDescartados: 0, atrasados: 0, alarme: false, clinicasComAtraso: [] }) },
+    importacao: { expurgoDiario: marca('importador', { clinicas: 1, arquivosDescartados: 0, atrasados: 0, chavesPendentes: 0, alarme: false, clinicasComAtraso: [] }) },
     notas: { executarCicloComoSistema: marca('notas', { guardaClinica: 0, lacradas: 0, eliminadas: 0, suspensasPorRetencao: 0, expurgadas: 0 }) },
     retencaoFiscal: { executarComoSistema: marca('fiscal', { recibosEliminados: 0, cobrancasEliminadas: 0, pagadoresEliminados: 0, politica: { anos: 5 } }) } as unknown as ServicosDosJobs['retencaoFiscal'],
     responsaveis: { descartarAnuladosComoSistema: marca('responsaveis', { descartados: 0 }) },

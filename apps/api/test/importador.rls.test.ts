@@ -13,7 +13,9 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import type { KeyProvider } from '../src/modules/crypto/key-provider';
 import { appointments, auditLog, importBatches, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patientCpfIndexKeys, patients, tenants } from '../src/db/schema';
 import { PatientsService } from '../src/modules/patients/patients.service';
 import { KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
@@ -73,6 +75,47 @@ function aplicar(s: Sessao, id: string, resumoHash: string, clinicaConfirmada?: 
 async function nomeDaClinica(t: TenantId): Promise<string> {
   const [linha] = await withTenant(api.db.db, t, (tx) => tx.select({ nome: tenants.displayName }).from(tenants));
   return linha?.nome as string;
+}
+
+/** Lote de A com bruto já vencido, cifrado com a chave própria do lote (R3). */
+async function loteVencidoComChave(servico: ImportacaoService, csv: string): Promise<string> {
+  const id = randomUUID();
+  const conteudo = Buffer.from(csv);
+  await withTenant(
+    api.db.db,
+    clinicaA,
+    async (tx) => {
+      await tx.insert(importBatches).values({
+        id, tenantId: clinicaA, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termSha256: TERMO_MIGRACAO_SHA256, termAcceptedBy: adminA.userId,
+        termAcceptedAt: sql`now() - interval '3 days'`, byteSize: conteudo.length, rowCount: 1, columnCount: 2, createdBy: adminA.userId,
+        createdAt: sql`now() - interval '3 days'`, rawExpiresAt: sql`now() - interval '1 hour'`,
+      });
+      await tx.insert(importRawFiles).values({
+        batchId: id, tenantId: clinicaA, contentEnc: await servico.selarBrutoDoLote(tx, clinicaA, id, conteudo),
+        sha256: 'd'.repeat(64), createdAt: sql`now() - interval '3 days'`, expiresAt: sql`now() - interval '1 hour'`,
+      });
+    },
+    adminA.userId,
+  );
+  return id;
+}
+
+/**
+ * Adianta o relógio do descarte de UMA chave de lote (simula chave presa há `horas`). O runtime não
+ * consegue (guarda da 0046): usa o superusuário do container efêmero (DATABASE_ADMIN_URL), só no teste.
+ */
+async function envelhecerDescarte(batchId: string, horas: number): Promise<void> {
+  const url = process.env.DATABASE_ADMIN_URL;
+  if (!url) throw new Error('DATABASE_ADMIN_URL é obrigatória para o teste da R3-a (chave de lote presa)');
+  const adm = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await adm.begin(async (t) => {
+      await t`set local session_replication_role = replica`;
+      await t`update import_batch_keys set discarded_at = discarded_at - make_interval(hours => ${horas}) where batch_id = ${batchId}::uuid and status = 'destroying'`;
+    });
+  } finally {
+    await adm.end();
+  }
 }
 
 const contarPacientes = (t: TenantId) =>
@@ -495,8 +538,56 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     expect(depois?.destroyedAt).not.toBeNull();
     await expect(chaves.open(clinicaA, backup.key, ref, backup.sealed)).rejects.toBeInstanceOf(KeyUnavailableError);
     // Trilha do descarte só com contagens.
-    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'raw_discarded'`));
-    expect(trilha.some((l) => Number((l.metadata as { keys_destroyed?: number }).keys_destroyed) >= 1)).toBe(true);
+    // R3-a: a destruição no provedor sai da transação do expurgo e tem trilha própria (só contagem).
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'batch_keys_destroyed'`));
+    expect(trilha.some((l) => Number((l.metadata as { count?: number }).count) >= 1)).toBe(true);
+    expect(trilha.every((l) => Object.keys(l.metadata as object).sort().join(',') === 'count,op')).toBe(true);
+  });
+
+  it('R3-a: KMS fora do ar não desfaz o expurgo nem trava o importador; chave presa acende CHAVE_LOTE_PRESA e é retomada', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    const id = await loteVencidoComChave(servico, 'nome;telefone\nKms Ficticia;11900000304\n');
+    const erros: string[] = [];
+    const logErro = vi.spyOn(Logger.prototype, 'error').mockImplementation((m: unknown) => void erros.push(String(m)));
+    const kms = vi.spyOn(provedor, 'destroyMasterKey').mockRejectedValue(new KeyUnavailableError());
+    try {
+      // 1ª rodada com o KMS falhando: o bruto e a DEK saem mesmo assim; a chave fica `destroying`.
+      const r1 = await servico.expurgoDiario([clinicaA]);
+      expect(kms).toHaveBeenCalled();
+      expect(r1.arquivosDescartados).toBeGreaterThanOrEqual(1);
+      const brutos = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importRawFiles).where(eq(importRawFiles.batchId, id)));
+      expect(brutos).toHaveLength(0);
+      const [k1] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+      expect(k1).toMatchObject({ status: 'destroying', wrappedKey: null });
+      // Recém-presa (< 24 h): ainda sem alarme.
+      expect(r1.chavesPendentes).toBe(0);
+      // As outras operações do importador da clínica seguem funcionando com o KMS falhando.
+      const outro = await enviar(adminA, 'pacientes', 'nome;telefone\nSegue Ficticia;11900000305\n');
+      expect(outro.status, JSON.stringify(outro.body)).toBe(201);
+      expect((await api.http().get(`/importacoes/${(outro.body as { id: string }).id}`).set(cab(adminA))).status).toBe(200);
+
+      // Presa há mais de 24 h (relógio adiantado só nesta linha, pelo superusuário do container).
+      await envelhecerDescarte(id, 25);
+      const r2 = await servico.expurgoDiario([clinicaA]);
+      expect(r2.chavesPendentes).toBeGreaterThanOrEqual(1);
+      expect(r2.alarme).toBe(true);
+      expect(r2.clinicasComAtraso).toEqual([0]);
+      const presa = erros.find((m) => m.startsWith('CHAVE_LOTE_PRESA'));
+      expect(presa).toBeDefined();
+      // Sem dado pessoal: só clínica e contagem (nem lote, nem chave, nem CPF/telefone/nome).
+      expect(presa).not.toMatch(/Ficticia|11900000304|local:|arn:/);
+      expect(presa).not.toContain(id);
+    } finally {
+      kms.mockRestore();
+      logErro.mockRestore();
+    }
+    // KMS de volta: a próxima rodada fecha a chave como `destroyed` e o alarme apaga.
+    const r3 = await servico.expurgoDiario([clinicaA]);
+    const [k3] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    expect(k3).toMatchObject({ status: 'destroyed', wrappedKey: null });
+    expect(r3).toMatchObject({ chavesPendentes: 0, alarme: false });
   });
 
   it('expirado pelo TTL (rotina de expurgo): a chave do lote também é destruída e o lote não reabre', async () => {

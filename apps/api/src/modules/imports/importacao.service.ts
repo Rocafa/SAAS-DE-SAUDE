@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
@@ -122,9 +122,16 @@ export interface ResultadoExpurgoDiario {
   readonly clinicas: number;
   readonly arquivosDescartados: number;
   readonly atrasados: number;
+  /** R3-a: chaves de lote em `destroying` há mais de 24 h (o KMS falhou e a retomada ainda não fechou). */
+  readonly chavesPendentes: number;
   readonly alarme: boolean;
   readonly clinicasComAtraso: readonly number[];
 }
+
+/** R3-a: chave de lote presa em `destroying` além deste prazo acende o alarme `CHAVE_LOTE_PRESA`. */
+export const PRAZO_CHAVE_LOTE_PRESA_HORAS = 24;
+/** Teto de chaves que uma operação do usuário tenta destruir no KMS depois do commit (o job pega o resto). */
+const MAX_DESTRUICOES_POR_OPERACAO = 20;
 
 /** 409 do desfazer bloqueado, com os motivos SÓ em contagens (nenhum id nem dado de paciente). */
 export class ImportacaoEmUsoError extends ConflictException {
@@ -214,6 +221,8 @@ function resumoDeResponsaveis(plano: Plano): ResumoDeResponsaveis {
  */
 @Injectable()
 export class ImportacaoService {
+  private readonly logger = new Logger('importador');
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
@@ -233,7 +242,7 @@ export class ImportacaoService {
     // R3: chave mestra do lote criada no provedor; se a transação falhar, ela é destruída (sem órfã).
     const criadas: string[] = [];
     try {
-      return await escreverNaClinica(this.db, ctx, async (tx) => {
+      return await this.escrever(ctx, async (tx) => {
         await this.expurgarNaTransacao(tx, ctx);
         const id = randomUUID();
         const [lote] = await tx
@@ -303,7 +312,7 @@ export class ImportacaoService {
 
   /** Mapeamento campo -> índice de coluna. Volta o lote para "recebido" (é preciso validar de novo). */
   mapear(ctx: RequestContext, id: string, mapa: Mapeamento): Promise<LoteDto> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
+    return this.escrever(ctx, async (tx) => {
       await this.expurgarNaTransacao(tx, ctx);
       const lote = await this.carregarEditavel(tx, ctx, id);
       const erros = errosDoMapeamento(lote.kind, mapa, lote.columnCount);
@@ -333,7 +342,7 @@ export class ImportacaoService {
 
   /** Validação de formato (sem consultar cadastro): CPF, telefone, datas, obrigatórios, duplicados no arquivo. */
   validar(ctx: RequestContext, id: string): Promise<RelatorioDto> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
+    return this.escrever(ctx, async (tx) => {
       await this.expurgarNaTransacao(tx, ctx);
       const lote = await this.carregarEditavel(tx, ctx, id);
       const mapa = this.exigirMapeamento(lote);
@@ -372,7 +381,7 @@ export class ImportacaoService {
    * agendamento; grava só o estado do lote, o hash do plano e as divergências (códigos).
    */
   simular(ctx: RequestContext, id: string): Promise<RelatorioDto & { readonly resumoHash: string; readonly responsaveis: ResumoDeResponsaveis }> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
+    return this.escrever(ctx, async (tx) => {
       await this.expurgarNaTransacao(tx, ctx);
       const lote = await this.carregarEditavel(tx, ctx, id);
       if (lote.status === 'recebido') throw new ConflitoError('validar_antes');
@@ -445,7 +454,7 @@ export class ImportacaoService {
    */
   async aplicar(ctx: RequestContext, id: string, resumoHash: string, clinicaConfirmada: string): Promise<LoteDto> {
     try {
-      return await escreverNaClinica(this.db, ctx, async (tx) => {
+      return await this.escrever(ctx, async (tx) => {
         await this.expurgarNaTransacao(tx, ctx);
         const lote = await this.carregar(tx, ctx, id, true);
         if (lote.status !== 'simulado') throw new ConflitoError(lote.status === 'expirado' ? 'lote_expirado' : 'simular_antes');
@@ -495,7 +504,7 @@ export class ImportacaoService {
    */
   async desfazer(ctx: RequestContext, id: string): Promise<LoteDto> {
     try {
-      return await escreverNaClinica(this.db, ctx, async (tx) => {
+      return await this.escrever(ctx, async (tx) => {
         const lote = await this.carregar(tx, ctx, id, true);
         if (lote.status !== 'aplicado') throw new ConflitoError('status_nao_permite');
         const [b] = await tx.execute<{ motivos: Record<string, number | string> }>(sql`select app_import_batch_blockers(${id}::uuid) as motivos`);
@@ -530,67 +539,147 @@ export class ImportacaoService {
 
   /**
    * Rotina de descarte (job diário por clínica, e oportunista em toda operação do importador): apaga o
-   * arquivo bruto vencido ou de lote encerrado e registra a evidência. Idempotente.
+   * arquivo bruto vencido ou de lote encerrado e registra a evidência. Idempotente. A destruição da chave
+   * do lote no KMS vem DEPOIS do commit (R3-a) e nunca derruba a chamada.
    */
-  expurgar(ctx: RequestContext): Promise<number> {
-    return this.db.run(ctx.tenantId, (tx) => this.expurgarNaTransacao(tx, ctx));
+  async expurgar(ctx: RequestContext): Promise<number> {
+    const n = await this.db.run(ctx.tenantId, (tx) => this.expurgarNaTransacao(tx, ctx));
+    await this.destruirChavesPendentes(ctx);
+    return n;
   }
 
   /**
    * R2 do parecer do importador: ROTINA DIÁRIA de descarte, como job do sistema (sem usuário: slot
    * travado com o sentinela da 0019). Uma transação por clínica (RLS), idempotente: rodar de novo no
    * mesmo dia apaga 0. Devolve, além do que apagou, quantos arquivos brutos estão VENCIDOS HÁ MAIS DE 24 h
-   * depois do expurgo (`atrasados`); `alarme` = atrasados > 0, para o agendador disparar o alerta.
-   * Trilha da clínica só com contagens (ator `sistema`). Como agendar: api-dominio.md §12c (R2).
+   * depois do expurgo (`atrasados`) e quantas chaves de lote seguem em `destroying` há mais de 24 h
+   * (`chavesPendentes`, R3-a: o KMS falhou nas tentativas anteriores e nesta). `alarme` = qualquer um > 0,
+   * para o agendador disparar o alerta; chave presa também gera o log `CHAVE_LOTE_PRESA` (só contagens).
+   * O KMS é chamado FORA da transação do expurgo: falha dele não desfaz o descarte do bruto nem da DEK.
+   * Trilha da clínica só com contagens (ator `sistema`). Como agendar: api-dominio.md §12c (R2) e §14.
    */
   async expurgoDiario(clinicas: readonly TenantId[]): Promise<ResultadoExpurgoDiario> {
     let arquivosDescartados = 0;
     let atrasados = 0;
+    let chavesPendentes = 0;
     const clinicasComAtraso: number[] = [];
     for (const [i, tenantId] of clinicas.entries()) {
+      const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
       const r = await this.db.run(tenantId, async (tx) => {
-        const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
         const n = await this.expurgarNaTransacao(tx, ctx);
         const [a] = await tx.execute<{ n: number }>(
           sql`select count(*)::int as n from import_raw_files where tenant_id = ${tenantId}::uuid and expires_at < now() - interval '24 hours'`,
         );
         return { n, atrasados: Number(a?.n ?? 0) };
       });
+      // Todas as pendentes da clínica (em blocos), não só o teto de uma operação do usuário.
+      for (;;) {
+        const d = await this.destruirChavesPendentes(ctx);
+        if (d.destruidas === 0 || d.falhas > 0) break;
+      }
+      const presas = await this.contarChavesPresas(tenantId);
+      if (presas > 0) {
+        this.logger.error(
+          `CHAVE_LOTE_PRESA clinica=${tenantId} chaves=${presas}: chave de lote em destroying há mais de ${PRAZO_CHAVE_LOTE_PRESA_HORAS} h (KMS); bruto e DEK já descartados, conferir IAM/KMS`,
+        );
+      }
       arquivosDescartados += r.n;
       atrasados += r.atrasados;
-      if (r.atrasados > 0) clinicasComAtraso.push(i);
+      chavesPendentes += presas;
+      if (r.atrasados > 0 || presas > 0) clinicasComAtraso.push(i);
     }
-    return { clinicas: clinicas.length, arquivosDescartados, atrasados, alarme: atrasados > 0, clinicasComAtraso };
+    return { clinicas: clinicas.length, arquivosDescartados, atrasados, chavesPendentes, alarme: atrasados > 0 || chavesPendentes > 0, clinicasComAtraso };
   }
 
   // ---------------------------------------------------------------- internos
 
+  /**
+   * Transação de escrita do importador + destruição das chaves de lote DEPOIS do commit (R3-a). O expurgo
+   * dentro da transação só marca `destroying`; o KMS fica fora dela e não derruba a operação do usuário.
+   */
+  private async escrever<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
+    const r = await escreverNaClinica(this.db, ctx, fn);
+    await this.destruirChavesPendentes(ctx);
+    return r;
+  }
+
+  /**
+   * R3-a: dentro da transação, o expurgo apaga o bruto e a DEK embrulhada e marca a chave do lote como
+   * `destroying` (`app_purge_import_raw_files`). NÃO chama o KMS aqui: uma falha dele desfaria o descarte
+   * (bruto vencido além do TTL) e travaria todas as operações do importador da clínica.
+   */
   private async expurgarNaTransacao(tx: TenantTx, ctxAuditoria?: RequestContext): Promise<number> {
     const [r] = await tx.execute<{ n: number }>(sql`select app_purge_import_raw_files() as n`);
     const n = Number(r?.n ?? 0);
-    const chaves = await this.destruirChavesDescartadas(tx);
-    if (ctxAuditoria && (n > 0 || chaves > 0)) {
-      await recordAudit(tx, ctxAuditoria, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'raw_discarded', count: n, keys_destroyed: chaves } });
+    if (ctxAuditoria && n > 0) {
+      await recordAudit(tx, ctxAuditoria, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'raw_discarded', count: n } });
     }
     return n;
   }
 
   /**
-   * R3: o expurgo já apagou a DEK embrulhada das chaves de lote descartadas (`destroying`); aqui a chave
-   * mestra de cada uma é destruída no provedor (KMS: exclusão agendada, para de abrir na hora) e a linha
-   * fecha como `destroyed`. Idempotente: se a transação cair depois do provedor, a próxima rodada refaz
-   * (chave já pendente conta como feita) e o bruto continua ilegível.
+   * R3-a: FORA de qualquer transação. Para cada chave de lote em `destroying` da clínica, agenda a
+   * destruição da chave mestra no provedor (KMS: exclusão agendada, para de abrir na hora; idempotente) e
+   * fecha as que deram certo como `destroyed`, numa transação curta com a trilha (só contagens). Falha do
+   * KMS deixa a chave em `destroying` para a próxima rodada (operação seguinte ou job diário). Nunca lança.
    */
-  private async destruirChavesDescartadas(tx: TenantTx): Promise<number> {
-    const pendentes = await tx
-      .select({ batchId: importBatchKeys.batchId, tenantId: importBatchKeys.tenantId, masterKeyId: importBatchKeys.masterKeyId })
-      .from(importBatchKeys)
-      .where(and(eq(importBatchKeys.status, 'destroying'), sql`${importBatchKeys.tenantId} = app_current_tenant()`));
-    for (const p of pendentes) {
-      await this.chavesDeLote.destroy(p.tenantId as TenantId, p.masterKeyId);
-      await tx.execute(sql`select app_finish_import_batch_key_destroy(${p.batchId}::uuid)`);
+  private async destruirChavesPendentes(ctx: RequestContext): Promise<{ destruidas: number; falhas: number }> {
+    const usuario = ctx.userId === SYSTEM_ACTOR_ID ? undefined : ctx.userId;
+    try {
+      const pendentes = await this.db.run(
+        ctx.tenantId,
+        (tx) =>
+          tx
+            .select({ batchId: importBatchKeys.batchId, masterKeyId: importBatchKeys.masterKeyId })
+            .from(importBatchKeys)
+            .where(and(eq(importBatchKeys.status, 'destroying'), sql`${importBatchKeys.tenantId} = app_current_tenant()`))
+            .orderBy(asc(importBatchKeys.discardedAt), asc(importBatchKeys.batchId))
+            .limit(MAX_DESTRUICOES_POR_OPERACAO),
+        usuario,
+      );
+      if (pendentes.length === 0) return { destruidas: 0, falhas: 0 };
+      const feitas: string[] = [];
+      let falhas = 0;
+      for (const p of pendentes) {
+        try {
+          await this.chavesDeLote.destroy(ctx.tenantId, p.masterKeyId);
+          feitas.push(p.batchId);
+        } catch {
+          falhas += 1;
+        }
+      }
+      if (falhas > 0) this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=${falhas}: fica em destroying e é retomada`);
+      if (feitas.length === 0) return { destruidas: 0, falhas };
+      const destruidas = await this.db.run(
+        ctx.tenantId,
+        async (tx) => {
+          let n = 0;
+          for (const id of feitas) {
+            const [f] = await tx.execute<{ ok: boolean }>(sql`select app_finish_import_batch_key_destroy(${id}::uuid) as ok`);
+            if (f?.ok) n += 1;
+          }
+          if (n > 0) await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'batch_keys_destroyed', count: n } });
+          return n;
+        },
+        usuario,
+      );
+      return { destruidas, falhas };
+    } catch {
+      // Banco indisponível depois do commit: a chave segue `destroying` (ilegível desde o expurgo).
+      this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId}: retomada adiada`);
+      return { destruidas: 0, falhas: 1 };
     }
-    return pendentes.length;
+  }
+
+  /** R3-a: chaves em `destroying` há mais que o prazo (índice `import_batch_keys_pending_idx`). */
+  private async contarChavesPresas(tenantId: TenantId): Promise<number> {
+    const [r] = await this.db.run(tenantId, (tx) =>
+      tx.execute<{ n: number }>(
+        sql`select count(*)::int as n from import_batch_keys where tenant_id = ${tenantId}::uuid and status = 'destroying'
+              and discarded_at < now() - make_interval(hours => ${PRAZO_CHAVE_LOTE_PRESA_HORAS})`,
+      ),
+    );
+    return Number(r?.n ?? 0);
   }
 
   /**

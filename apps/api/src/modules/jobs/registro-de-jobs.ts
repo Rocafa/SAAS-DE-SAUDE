@@ -68,12 +68,13 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
     },
     {
       // R2 do parecer do importador (§12c): descarta o bruto vencido (`IMPORT_RAW_TTL_HOURS`) ou de lote
-      // encerrado; `alarme` = bruto vencido há mais de 24 h depois do expurgo (o executor loga JOB_ALARME).
+      // encerrado e retoma a destruição no KMS das chaves de lote em `destroying` (R3-a, fora da transação do
+      // expurgo); `alarme` = bruto vencido ou chave presa há mais de 24 h (JOB_ALARME + CHAVE_LOTE_PRESA).
       nome: 'importador-expurgo',
       ...diario('45 3 * * *', 'diário, 03:45'),
       porClinica: async (t) => {
         const r = await s.importacao.expurgoDiario([t]);
-        return { arquivosDescartados: r.arquivosDescartados, atrasados: r.atrasados, alarme: r.alarme };
+        return { arquivosDescartados: r.arquivosDescartados, atrasados: r.atrasados, chavesPendentes: r.chavesPendentes, alarme: r.alarme };
       },
     },
     {
