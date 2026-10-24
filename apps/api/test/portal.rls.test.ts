@@ -1428,7 +1428,7 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
       )
     ).flat();
   const alertas = async () =>
-    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'titular_menor_revogado'`)).orderBy(desc(auditLog.createdAt)), adminA.userId);
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), sql`${auditLog.metadata}->>'transition' = 'titular_menor_revogado'`)).orderBy(sql`seq desc`), adminA.userId);
   const trilha = async (pac: string) =>
     withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'titular_menor_de_idade'`)), adminA.userId);
 
@@ -1493,7 +1493,7 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
     expect(Object.keys(ultimo?.metadata as object).sort()).toEqual(['count', 'notified', 'rule', 'transition']);
     expect(ultimo?.actorKind).toBe('sistema');
     // Trilha do job na clínica, só contagens.
-    const run = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = 'portal-titular-menor'`)).orderBy(desc(auditLog.createdAt)).limit(1), adminA.userId);
+    const run = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = 'portal-titular-menor'`)).orderBy(sql`seq desc`).limit(1), adminA.userId);
     expect(run[0]?.metadata).toMatchObject({ status: 'ok', titularesRevogados: 1, convitesEncerrados: 1, pacientes: 1, ilegiveis: 0, alarme: false });
     expect(JSON.stringify(run[0]?.metadata)).not.toContain(pac);
     // De novo: nada muda.
