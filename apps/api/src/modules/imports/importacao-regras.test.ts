@@ -182,6 +182,22 @@ describe('regras do lote de pacientes', () => {
     expect(v.divergencias.every((d) => d.gravidade === 'aviso')).toBe(true);
   });
 
+  it('R5 (rodada 22): curador de paciente sem data de nascimento entra, com aviso curatela_sem_data_de_nascimento', () => {
+    const mapa = { nome: 0, telefone: 1, nascimento: 2, responsavelNome: 3, responsavelTipo: 4, responsavelCuratelaReferencia: 5, responsavelCuratelaEscopo: 6 };
+    const p = lerCsv(
+      [
+        'n;t;d;rn;rt;rref;resc',
+        'Sem Data Fic;11900000041;;Curador Fic;curador;Proc 0003;Atos patrimoniais', // 2: sem data -> aviso
+        'Com Data Fic;11900000042;01/01/1980;Curadora Fic;curadora;Proc 0004;Atos patrimoniais', // 3: maior -> sem aviso
+      ].join('\n'),
+    );
+    const v = validarPacientes(p, mapa, new Date('2026-10-16T12:00:00Z'));
+    expect(v.validas.find((x) => x.linha === 2)?.responsavel).toMatchObject({ tipo: 'curador' });
+    expect(v.divergencias.filter((d) => d.codigo !== 'responsavel_sem_cpf')).toEqual([
+      { linha: 2, campo: 'nascimento', codigo: 'curatela_sem_data_de_nascimento', gravidade: 'aviso' },
+    ]);
+  });
+
   it('R5: mapear uma coluna do responsável exige nome e tipo; o mesmo CPF com outro nome no arquivo é aviso', () => {
     expect(errosDoMapeamento('pacientes', { nome: 0, telefone: 1, responsavelCpf: 2 }, 3).sort()).toEqual(['responsavelNome', 'responsavelTipo']);
     expect(errosDoMapeamento('pacientes', { nome: 0, telefone: 1, responsavelNome: 2, responsavelTipo: 3 }, 4)).toEqual([]);

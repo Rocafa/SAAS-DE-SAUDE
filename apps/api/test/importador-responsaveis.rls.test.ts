@@ -10,7 +10,7 @@ import type { TenantId } from '@plataforma/shared';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, guardians, importBatchRecords, importBatches, patientGuardianHistory, patientGuardians, patients, tenants } from '../src/db/schema';
+import { auditLog, guardians, importBatchRecords, importBatches, patientGuardianHistory, patientGuardians, patients, payments, tenants } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
@@ -245,6 +245,65 @@ describe('desfazer bloqueado por uso do responsável (motivos só em contagem)',
     expect(r.body).toMatchObject({ codigo: 'importacao_em_uso', motivos: { responsavel_em_uso: 1, responsavel_novo: 1 } });
     expect(JSON.stringify(r.body)).not.toContain(p1?.id as string);
     expect(await vinculosDoLote(clinicaA, id)).toHaveLength(2);
+  });
+
+  it('recebimento com o pagador do lote (guardian_payer_link_id): responsavel_em_uso, e nada é apagado', async () => {
+    // Financeiro mínimo: profissional PF com perfil fiscal, tipo, caixa aberto.
+    const finA = await api.membro(clinicaA, api.sessao(clinicaA, 'financeiro'), 'financeiro');
+    const prof = ((await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Prof Ficticia Bloqueio', especialidade: 'Fisioterapia' }).expect(201)).body as { id: string }).id;
+    const tipo = ((await api.http().post('/tipos-atendimento').set(cab(adminA)).send({ nome: 'Sessao Bloqueio', minutos: 40 }).expect(201)).body as { id: string }).id;
+    await api.http().put(`/financeiro/profissionais/${prof}/perfil-fiscal`).set(cab(finA)).send({ cpf: CPF(30) }).expect(200);
+    await api.http().post('/financeiro/caixas').set(cab(recepA)).send({ turno: 'unico' }).expect(201);
+
+    const csv = [CAB, `Paga Ficticio;11900000211;${MENOR};Mae Pagadora Ficticia;${CPF(12)};;mae;sim;;`].join('\n');
+    const { id, sim } = await ateSimular(adminA, csv);
+    expect(sim.responsaveis).toMatchObject({ vinculos: 1, pagadores: 1 });
+    expect((await aplicar(adminA, id, sim.resumoHash)).status).toBe(200);
+    const paciente = await pacienteDaLinha(clinicaA, id, 2);
+    const [vinculo] = await vinculosDoLote(clinicaA, id);
+    const ag = await api.http().post('/agendamentos').set(cab(recepA)).send({ pacienteId: paciente, profissionalId: prof, tipoId: tipo, data: '2031-06-02', hora: '09:00', encaixe: true });
+    expect(ag.status, JSON.stringify(ag.body)).toBe(201);
+    const c = await api.http().post('/financeiro/cobrancas').set(cab(recepA)).send({ agendamentoId: (ag.body as { id: string }).id, valorCentavos: 7000, atendimentoPor: 'pf' });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const p = await api.http().post(`/financeiro/cobrancas/${(c.body as { id: string }).id}/recebimentos`).set(cab(recepA)).send({ forma: 'pix_manual' });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+    const [pg] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(payments).where(eq(payments.id, (p.body as { id: string }).id)), recepA.userId);
+    expect(pg?.guardianPayerLinkId).toBe(vinculo?.id);
+
+    const r = await desfazer(adminA, id);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'importacao_em_uso', motivos: { responsavel_em_uso: 1 } });
+    expect(JSON.stringify(r.body)).not.toContain(vinculo?.id as string);
+    expect(await vinculosDoLote(clinicaA, id)).toHaveLength(1);
+    expect(await pessoasDoLote(clinicaA, id)).toHaveLength(1);
+  });
+
+  it('convite do portal para o responsável do lote: responsavel_em_uso, e nada é apagado', async () => {
+    const csv = [CAB, `Portal Ficticio;11900000221;${MENOR};Pai Portal Ficticio;${CPF(13)};11900000222;pai;;;`].join('\n');
+    const { id, sim } = await ateSimular(adminA, csv);
+    expect((await aplicar(adminA, id, sim.resumoHash)).status).toBe(200);
+    const paciente = await pacienteDaLinha(clinicaA, id, 2);
+    const [vinculo] = await vinculosDoLote(clinicaA, id);
+    const conv = await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: paciente, agindoComo: 'responsavel_legal', responsavelId: vinculo?.id });
+    expect(conv.status, JSON.stringify(conv.body)).toBe(201);
+
+    const r = await desfazer(adminA, id);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ codigo: 'importacao_em_uso', motivos: { responsavel_em_uso: 1 } });
+    expect(JSON.stringify(r.body)).not.toContain(vinculo?.id as string);
+    expect(await vinculosDoLote(clinicaA, id)).toHaveLength(1);
+    expect(await pessoasDoLote(clinicaA, id)).toHaveLength(1);
+  });
+});
+
+describe('aviso de curatela sem data de nascimento (observação da R5, rodada 22)', () => {
+  it('o dry-run avisa curatela_sem_data_de_nascimento, sem valor, e o vínculo entra no plano', async () => {
+    const csv = [CAB, `Curatelado Sem Data Ficticio;11900000231;;Curador Sem Data Ficticio;${CPF(14)};;curador;;Proc 0000002-00 fict;Atos patrimoniais`].join('\n');
+    const { sim } = await ateSimular(adminA, csv);
+    expect(sim.responsaveis).toMatchObject({ vinculos: 1 });
+    const aviso = sim.divergencias.find((d) => d.codigo === 'curatela_sem_data_de_nascimento');
+    expect(aviso).toMatchObject({ linha: 2, campo: 'nascimento', gravidade: 'aviso' });
+    expect(JSON.stringify(sim.divergencias)).not.toMatch(/Proc 0000002|Curador Sem Data/);
   });
 });
 

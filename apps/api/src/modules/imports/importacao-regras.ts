@@ -276,6 +276,9 @@ function responsavelDaLinha(
     aviso('responsavelPagador', 'pagador_exige_ciencia_do_paciente');
     pagador = false;
   }
+  // Curatela aceita sem data de nascimento (a decisão judicial é exigida), mas a recepção confere que o
+  // paciente é maior: aviso, sem valor (observação da R5 na conferência da rodada 22).
+  if (tipo === 'curador' && menor === null) aviso('nascimento', 'curatela_sem_data_de_nascimento');
   if (!cpf) aviso('responsavelCpf', 'responsavel_sem_cpf');
   return {
     avisos,
