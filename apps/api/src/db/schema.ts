@@ -470,11 +470,12 @@ export const CLINICAL_NOTICE_KINDS = [
   'retencao_retirada_aprovada',
   // 0033 (A3b do #68): pedido do titular aberto no portal; leva só o id do pedido.
   'pedido_titular_aberto',
-  // 0039 (N1 do #73): o recálculo desligou o sigilo do adolescente ou estendeu a representação além dos 18.
+  // 0039 (N1 do #73): o recálculo desligou o sigilo do adolescente ou estendeu a representação além dos 18;
+  // 0050 (R3 do #68): o titular passou a constar menor e perdeu o acesso (`titular_menor_revogado`).
   'portal_sigilo_transicao',
 ] as const;
 export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
-export const PORTAL_SIGILO_TRANSICOES = ['sigilo_desligado', 'representacao_estendida'] as const;
+export const PORTAL_SIGILO_TRANSICOES = ['sigilo_desligado', 'representacao_estendida', 'titular_menor_revogado'] as const;
 export type PortalSigiloTransicao = (typeof PORTAL_SIGILO_TRANSICOES)[number];
 export const clinicalNotices = pgTable('clinical_notices', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -872,8 +873,8 @@ export type PortalActingAs = (typeof PORTAL_ACTING_AS)[number];
 /** Motivos que a CLÍNICA usa ao revogar. */
 export const PORTAL_LINK_REVOKE_REASONS = ['pedido_do_paciente', 'acesso_indevido', 'fim_do_vinculo', 'erro_de_cadastro'] as const;
 export type PortalLinkRevokeReason = (typeof PORTAL_LINK_REVOKE_REASONS)[number];
-/** 0033 (V1 do #68): motivos só do job do sistema (fim da representação do responsável). */
-export const PORTAL_LINK_SYSTEM_REVOKE_REASONS = ['maioridade_do_titular', 'fim_da_representacao'] as const;
+/** Motivos que só o banco grava: 0033 (V1 do #68, fim da representação do responsável, job) e 0050 (R3 do #68, titular que passa a constar menor: correção do nascimento ou job). */
+export const PORTAL_LINK_SYSTEM_REVOKE_REASONS = ['maioridade_do_titular', 'fim_da_representacao', 'titular_menor_de_idade'] as const;
 export const PORTAL_CONSENT_PURPOSES = ['lembretes_whatsapp', 'escriba_ia', 'pesquisa'] as const;
 export type PortalConsentPurpose = (typeof PORTAL_CONSENT_PURPOSES)[number];
 export const PORTAL_CONSENT_RESPONSES = ['sim', 'nao', 'desfeito'] as const;
