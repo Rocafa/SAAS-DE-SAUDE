@@ -24,6 +24,8 @@ export interface ExportedGuardians {
     updatedAt: string;
     updatedBy: string;
     discardedAt: string | null;
+    /** 0048: lote de importação que criou a pessoa (null: cadastro ou pessoa que já existia). */
+    importBatchId: string | null;
   }[];
   readonly patientGuardians: readonly {
     id: string;
@@ -53,6 +55,8 @@ export interface ExportedGuardians {
     /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
     eliminatedAt: string | null;
     recordRetentionUntil: string | null;
+    /** 0048: lote de importação que criou o vínculo. */
+    importBatchId: string | null;
   }[];
   readonly patientGuardianHistory: readonly {
     id: string;
@@ -141,6 +145,7 @@ export async function exportarResponsaveis(
         updatedAt: g.updatedAt.toISOString(),
         updatedBy: g.updatedBy,
         discardedAt: iso(g.discardedAt),
+        importBatchId: g.importBatchId,
       })),
     ),
     patientGuardians: await Promise.all(vinculos.map(async (v) => ({
@@ -170,6 +175,7 @@ export async function exportarResponsaveis(
       discardAfter: v.discardAfter,
       eliminatedAt: iso(v.eliminatedAt),
       recordRetentionUntil: await guardaDe(v.patientId),
+      importBatchId: v.importBatchId,
     }))),
     patientGuardianHistory: await Promise.all(
       historico.map(async (h) => ({

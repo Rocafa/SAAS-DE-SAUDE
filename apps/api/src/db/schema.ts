@@ -955,6 +955,8 @@ export const guardians = pgTable('guardians', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy: uuid('updated_by').notNull(),
   discardedAt: timestamp('discarded_at', { withTimezone: true }),
+  /** 0048: marca imutável do lote de importação que CRIOU a pessoa (pessoa que já existia não a tem). */
+  importBatchId: uuid('import_batch_id'),
 });
 
 /** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */
@@ -992,6 +994,8 @@ export const patientGuardians = pgTable('patient_guardians', {
   discardAfter: date('discard_after'),
   /** 0034 (A4 do #67): eliminado com o prontuário do paciente, vencida a guarda de 20 anos. */
   eliminatedAt: timestamp('eliminated_at', { withTimezone: true }),
+  /** 0048: marca imutável do lote de importação que criou o vínculo (só INSERT, só pelo lote em aplicação). */
+  importBatchId: uuid('import_batch_id'),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */

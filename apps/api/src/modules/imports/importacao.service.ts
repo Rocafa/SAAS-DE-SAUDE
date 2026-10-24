@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, desc, eq, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -10,10 +10,12 @@ import {
   appointments,
   appointmentTypes,
   financeSettings,
+  guardians,
   importBatches,
   importBatchRecords,
   importIssues,
   importRawFiles,
+  patientGuardians,
   patients,
   professionals,
   tenants,
@@ -26,10 +28,12 @@ import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
+import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from '../patients/guardian-fields';
 import { patientFieldRef } from '../patients/patient-fields';
+import { SCOPE_RESPONSAVEIS } from '../patients/responsaveis.service';
 import { PatientsService } from '../patients/patients.service';
 import { normalizarBusca } from '../patients/patients.validation';
-import { capacidadeDoHorario, paraInstante } from '../scheduling/agenda-regras';
+import { capacidadeDoHorario, noFusoDaClinica, paraInstante } from '../scheduling/agenda-regras';
 import { SchedulingService } from '../scheduling/scheduling.service';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
@@ -172,6 +176,34 @@ interface Plano {
   readonly linhasComErro: number;
   readonly pacientes: ReadonlyMap<number, PacienteDaLinha>;
   readonly agendamentos: ReadonlyMap<number, { pacienteId: string; profissionalId: string; tipoId: string; data: string; hora: string }>;
+  /**
+   * R5 (0048): para cada linha a CRIAR com responsável, de onde vem a pessoa: já cadastrada na clínica
+   * (mesmo CPF, `existenteId`: não é tocada nem apagada pelo desfazer) ou nova, com a `chave` que junta as
+   * linhas da mesma pessoa no arquivo (CPF; sem CPF, a própria linha).
+   */
+  readonly responsaveis: ReadonlyMap<number, DestinoDoResponsavel>;
+}
+
+type DestinoDoResponsavel = { readonly existenteId: string } | { readonly chave: string };
+
+/** Contagens do responsável no plano (só números; vão na resposta do dry-run e na trilha). */
+export interface ResumoDeResponsaveis {
+  readonly vinculos: number;
+  readonly pessoasNovas: number;
+  readonly pessoasJaCadastradas: number;
+  readonly pagadores: number;
+}
+
+function resumoDeResponsaveis(plano: Plano): ResumoDeResponsaveis {
+  const novas = new Set<string>();
+  const existentes = new Set<string>();
+  let pagadores = 0;
+  for (const [linha, d] of plano.responsaveis) {
+    if ('existenteId' in d) existentes.add(d.existenteId);
+    else novas.add(d.chave);
+    if (plano.pacientes.get(linha)?.responsavel?.pagador) pagadores++;
+  }
+  return { vinculos: plano.responsaveis.size, pessoasNovas: novas.size, pessoasJaCadastradas: existentes.size, pagadores };
 }
 
 /**
@@ -326,7 +358,7 @@ export class ImportacaoService {
    * profissional, tipo, capacidade) e mostra o que SERIA criado ou ignorado. Não cria paciente nem
    * agendamento; grava só o estado do lote, o hash do plano e as divergências (códigos).
    */
-  simular(ctx: RequestContext, id: string): Promise<RelatorioDto & { readonly resumoHash: string }> {
+  simular(ctx: RequestContext, id: string): Promise<RelatorioDto & { readonly resumoHash: string; readonly responsaveis: ResumoDeResponsaveis }> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await this.expurgarNaTransacao(tx, ctx);
       const lote = await this.carregarEditavel(tx, ctx, id);
@@ -337,6 +369,7 @@ export class ImportacaoService {
       const hash = hashDoPlano(lote.kind, plano.acoes, mapa, sha256);
       const run = lote.currentRun + 1;
       const criar = plano.acoes.filter((a) => a.acao === 'criar').length;
+      const resp = resumoDeResponsaveis(plano);
       const [novo] = await tx
         .update(importBatches)
         .set({
@@ -362,9 +395,12 @@ export class ImportacaoService {
           create: criar,
           skip: plano.acoes.length - criar,
           errors: plano.linhasComErro,
+          guardian_links: resp.vinculos,
+          guardians_new: resp.pessoasNovas,
+          guardians_existing: resp.pessoasJaCadastradas,
         },
       });
-      return { ...this.relatorio(novo as Lote, planilha, mapa, plano.divergencias), resumoHash: hash };
+      return { ...this.relatorio(novo as Lote, planilha, mapa, plano.divergencias), resumoHash: hash, responsaveis: resp };
     });
   }
 
@@ -452,11 +488,21 @@ export class ImportacaoService {
         const [b] = await tx.execute<{ motivos: Record<string, number | string> }>(sql`select app_import_batch_blockers(${id}::uuid) as motivos`);
         const motivos = Object.fromEntries(Object.entries(b?.motivos ?? {}).map(([k, v]) => [k, Number(v)]));
         if (Object.values(motivos).some((n) => n > 0)) throw new ImportacaoEmUsoError(motivos);
-        const [r] = await tx.execute<{ r: { patients: number; appointments: number } }>(sql`select app_undo_import_batch(${id}::uuid) as r`);
+        const [r] = await tx.execute<{ r: { patients: number; appointments: number; guardian_links?: number; guardians?: number } }>(
+          sql`select app_undo_import_batch(${id}::uuid) as r`,
+        );
         await recordAudit(tx, ctx, {
           action: AuditAction.Update,
           scope: SCOPE,
-          metadata: { import_batch_id: id, op: 'undo', patients: r?.r.patients ?? 0, appointments: r?.r.appointments ?? 0 },
+          metadata: {
+            import_batch_id: id,
+            op: 'undo',
+            patients: r?.r.patients ?? 0,
+            appointments: r?.r.appointments ?? 0,
+            // 0048: vínculos e pessoas criados pelo lote (pessoa que já existia não é apagada).
+            guardian_links: r?.r.guardian_links ?? 0,
+            guardians: r?.r.guardians ?? 0,
+          },
         });
         await this.expurgarNaTransacao(tx, ctx);
         return paraDto(await this.carregar(tx, ctx, id, false));
@@ -611,6 +657,25 @@ export class ImportacaoService {
     return mapa;
   }
 
+  /**
+   * R5 (0048): CPF (decifrado) -> pessoa responsável da clínica, pela MESMA busca que o importador usa para
+   * pacientes (`cpfsDaClinica`: decifra na transação da clínica, nada sai dela). Pessoa descartada (sem CPF)
+   * não entra. Duas pessoas com o mesmo CPF (cadastro antigo): fica a mais antiga.
+   */
+  private async cpfsDeResponsaveisDaClinica(tx: TenantTx, ctx: RequestContext): Promise<Map<string, string>> {
+    const linhas = await tx
+      .select({ id: guardians.id, cpfEnc: guardians.cpfEnc })
+      .from(guardians)
+      .where(and(eq(guardians.tenantId, ctx.tenantId), isNotNull(guardians.cpfEnc), isNull(guardians.discardedAt)))
+      .orderBy(asc(guardians.createdAt), asc(guardians.id));
+    const mapa = new Map<string, string>();
+    for (const l of linhas) {
+      const cpf = await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.id, 'cpf', l.cpfEnc);
+      if (cpf && !mapa.has(cpf)) mapa.set(cpf, l.id);
+    }
+    return mapa;
+  }
+
   private async planejar(tx: TenantTx, ctx: RequestContext, kind: ImportKind, planilha: Planilha, mapa: Mapeamento): Promise<Plano> {
     return kind === 'pacientes' ? this.planejarPacientes(tx, ctx, planilha, mapa) : this.planejarAgenda(tx, ctx, planilha, mapa);
   }
@@ -626,21 +691,36 @@ export class ImportacaoService {
       const existentes = await tx.select({ nome: patients.displayName }).from(patients).where(eq(patients.tenantId, ctx.tenantId));
       for (const e of existentes) nomes.add(normalizarBusca(e.nome));
     }
+    // R5 (0048): pessoa responsável já cadastrada na clínica, pelo CPF (mesma busca do paciente acima).
+    const cpfsResp = v.validas.some((p) => p.responsavel?.cpf) ? await this.cpfsDeResponsaveisDaClinica(tx, ctx) : new Map<string, string>();
     const acoes: AcaoPlanejada[] = [];
     const porLinha = new Map<number, PacienteDaLinha>();
+    const responsaveis = new Map<number, DestinoDoResponsavel>();
     for (const p of v.validas) {
       if (p.cpf && cpfs.has(p.cpf)) {
         acoes.push({ linha: p.linha, acao: 'ignorar' });
         divergencias.push({ linha: p.linha, campo: 'cpf', codigo: 'ja_cadastrado', gravidade: 'aviso' });
+        // O paciente já existe: o responsável da linha não entra (completa-se no cadastro).
+        if (p.responsavel) divergencias.push({ linha: p.linha, campo: 'responsavelNome', codigo: 'responsavel_nao_importado', gravidade: 'aviso' });
         continue;
       }
       if (!p.cpf && nomes.has(normalizarBusca(p.nome))) {
         divergencias.push({ linha: p.linha, campo: 'nome', codigo: 'possivel_duplicado', gravidade: 'aviso' });
       }
-      acoes.push({ linha: p.linha, acao: 'criar' });
+      let ref: string | undefined;
+      const r = p.responsavel;
+      if (r) {
+        const existente = r.cpf ? cpfsResp.get(r.cpf) : undefined;
+        const destino: DestinoDoResponsavel = existente ? { existenteId: existente } : { chave: r.cpf ? `cpf:${r.cpf}` : `linha:${p.linha}` };
+        if (existente) divergencias.push({ linha: p.linha, campo: 'responsavelCpf', codigo: 'responsavel_ja_cadastrado', gravidade: 'aviso' });
+        responsaveis.set(p.linha, destino);
+        // No hash: de onde vem a pessoa (id já cadastrado ou "nova") e o vínculo; nunca o CPF nem o nome.
+        ref = `resp:${existente ?? 'nova'}|${r.tipo}|${r.pagador ? 'pagador' : '-'}`;
+      }
+      acoes.push({ linha: p.linha, acao: 'criar', ...(ref ? { ref } : {}) });
       porLinha.set(p.linha, p);
     }
-    return { acoes, divergencias, linhasComErro: v.linhasComErro, pacientes: porLinha, agendamentos: new Map() };
+    return { acoes, divergencias, linhasComErro: v.linhasComErro, pacientes: porLinha, agendamentos: new Map(), responsaveis };
   }
 
   private async planejarAgenda(tx: TenantTx, ctx: RequestContext, planilha: Planilha, mapa: Mapeamento): Promise<Plano> {
@@ -742,18 +822,71 @@ export class ImportacaoService {
       acoes.push({ linha: a.linha, acao: 'criar', ref });
       porLinha.set(a.linha, { pacienteId, profissionalId: prof.id, tipoId: tipo.id, data: a.data, hora: a.hora });
     }
-    return { acoes, divergencias, linhasComErro, pacientes: new Map(), agendamentos: porLinha };
+    return { acoes, divergencias, linhasComErro, pacientes: new Map(), agendamentos: porLinha, responsaveis: new Map() };
   }
 
   private async criarPacientes(tx: TenantTx, ctx: RequestContext, loteId: string, criar: readonly AcaoPlanejada[], plano: Plano): Promise<number> {
     let total = 0;
+    // R5 (0048): pessoa nova criada UMA vez por chave (irmãos no arquivo), em qualquer bloco.
+    const pessoasCriadas = new Map<string, string>();
+    const hoje = noFusoDaClinica(new Date()).data;
     for (let i = 0; i < criar.length; i += LOTE_DE_INSERCAO) {
       const bloco = criar.slice(i, i + LOTE_DE_INSERCAO);
       const linhas: (typeof patients.$inferInsert)[] = [];
       const livro: (typeof importBatchRecords.$inferInsert)[] = [];
+      const pessoas: (typeof guardians.$inferInsert)[] = [];
+      const vinculos: (typeof patientGuardians.$inferInsert)[] = [];
+      let reaproveitadas = 0;
       for (const acao of bloco) {
         const p = plano.pacientes.get(acao.linha) as PacienteDaLinha;
         const id = randomUUID();
+        const destino = plano.responsaveis.get(acao.linha);
+        const r = p.responsavel;
+        if (destino && r) {
+          let guardianId: string;
+          if ('existenteId' in destino) {
+            // Pessoa que já existia: não é tocada (nem a marca do lote); só o vínculo novo é do lote.
+            guardianId = destino.existenteId;
+            reaproveitadas++;
+          } else if (pessoasCriadas.has(destino.chave)) {
+            guardianId = pessoasCriadas.get(destino.chave) as string;
+          } else {
+            guardianId = randomUUID();
+            pessoasCriadas.set(destino.chave, guardianId);
+            pessoas.push({
+              id: guardianId,
+              tenantId: ctx.tenantId,
+              nameEnc: await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'name', r.nome),
+              cpfEnc: r.cpf ? await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'cpf', r.cpf) : null,
+              phoneEnc: r.telefone ? await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'phone', r.telefone) : null,
+              createdBy: ctx.userId,
+              updatedBy: ctx.userId,
+              importBatchId: loteId,
+            });
+          }
+          const vinculoId = randomUUID();
+          vinculos.push({
+            id: vinculoId,
+            tenantId: ctx.tenantId,
+            patientId: id,
+            guardianId,
+            kind: r.tipo,
+            // Pagador só de menor; vale para recebimentos FUTUROS (o recebimento congela o pagador, 0031).
+            isPayer: r.pagador,
+            // Marca clínica NUNCA pela importação (o banco também recusa, 0048).
+            receivesClinicalInfo: false,
+            validFrom: hoje,
+            ...(r.curatela
+              ? {
+                  courtDecisionRefEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, vinculoId, 'court_decision_ref', r.curatela.referencia),
+                  curatorshipScopeEnc: await cifrarCampoVinculo(this.cipher, tx, ctx, vinculoId, 'curatorship_scope', r.curatela.escopo),
+                }
+              : {}),
+            createdBy: ctx.userId,
+            updatedBy: ctx.userId,
+            importBatchId: loteId,
+          });
+        }
         const dados = {
           nome: p.nome,
           telefone: p.telefone,
@@ -774,6 +907,23 @@ export class ImportacaoService {
         scope: 'patients',
         metadata: { import_batch_id: loteId, op: 'import', created: linhas.length, block: i / LOTE_DE_INSERCAO + 1 },
       });
+      if (vinculos.length > 0) {
+        if (pessoas.length > 0) await tx.insert(guardians).values(pessoas);
+        await tx.insert(patientGuardians).values(vinculos);
+        await recordAudit(tx, ctx, {
+          action: AuditAction.Create,
+          scope: SCOPE_RESPONSAVEIS,
+          metadata: {
+            import_batch_id: loteId,
+            op: 'import',
+            links_created: vinculos.length,
+            guardians_created: pessoas.length,
+            existing_guardians: reaproveitadas,
+            payers: vinculos.filter((v) => v.isPayer).length,
+            block: i / LOTE_DE_INSERCAO + 1,
+          },
+        });
+      }
     }
     return total;
   }

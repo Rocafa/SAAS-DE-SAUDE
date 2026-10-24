@@ -121,6 +121,80 @@ describe('regras do lote de pacientes', () => {
     expect(ehMenorDeIdade('2008-10-16', hoje)).toBe(false);
   });
 
+  it('R5 (0048): responsável vira vínculo só para menor ou curatela com decisão; o resto é aviso e a linha entra', () => {
+    const mapa = {
+      nome: 0,
+      telefone: 1,
+      nascimento: 2,
+      cpf: 3,
+      responsavelNome: 4,
+      responsavelCpf: 5,
+      responsavelTelefone: 6,
+      responsavelTipo: 7,
+      responsavelPagador: 8,
+      responsavelCuratelaReferencia: 9,
+      responsavelCuratelaEscopo: 10,
+    };
+    const hoje = new Date('2026-10-16T12:00:00Z');
+    const linhas = [
+      'nome;tel;nasc;cpf;rnome;rcpf;rtel;rtipo;rpag;rref;resc',
+      `Menor Um;11900000021;01/01/2015;;Mae Ficticia;${cpf(901)};11900000091;Mãe;sim;;`, // 2: vínculo + pagador
+      `Menor Dois;11900000022;01/01/2016;;Mae Ficticia;${cpf(901)};;mae;nao;;`, // 3: irmão, mesma pessoa
+      `Adulto Tres;11900000023;01/01/1990;;Pai Ficticio;${cpf(902)};;pai;;;`, // 4: adulto sem curatela
+      `Adulto Quatro;11900000024;01/01/1980;;Curadora Ficticia;${cpf(903)};;curadora;sim;Proc 0001;Atos patrimoniais`, // 5: curatela; pagador cai
+      `Adulto Cinco;11900000025;01/01/1980;;Curador Sem Ref;${cpf(904)};;curador;;;`, // 6: curatela sem decisão
+      `Menor Seis;11900000026;01/01/2017;;Tia Ficticia;12345678900;;tutora;talvez;;`, // 7: CPF e pagador inválidos
+      `Sem Nasc;11900000027;;;Avo Ficticio;;;tutor;;;`, // 8: sem data de nascimento
+      `Menor Oito;11900000028;01/01/2018;;Mae Ficticia;${cpf(901)};;mae;;;`, // 9: mesma mãe de novo
+      `Menor Nove;11900000029;01/01/2019;${cpf(905)};Ele Mesmo;${cpf(905)};;pai;;;`, // 10: CPF do próprio paciente
+      `Menor Dez;11900000030;01/01/2019;;Sem Cpf Ficticio;;;tutor;;;`, // 11: sem CPF
+      `Menor Onze;11900000031;01/01/2019;;Curador Menor;${cpf(906)};;curador;;Proc 2;Tudo`, // 12: curatela de menor
+    ];
+    const v = validarPacientes(lerCsv(linhas.join('\n')), mapa, hoje);
+    expect(v.linhasComErro).toBe(0);
+    expect(v.validas).toHaveLength(11);
+    const resp = new Map(v.validas.map((x) => [x.linha, x.responsavel]));
+    expect(resp.get(2)).toEqual({ nome: 'Mae Ficticia', cpf: cpf(901), telefone: '11900000091', tipo: 'pai_mae', pagador: true });
+    expect(resp.get(3)).toMatchObject({ tipo: 'pai_mae', pagador: false });
+    expect(resp.get(5)).toEqual({ nome: 'Curadora Ficticia', cpf: cpf(903), tipo: 'curador', pagador: false, curatela: { referencia: 'Proc 0001', escopo: 'Atos patrimoniais' } });
+    expect(resp.get(11)).toMatchObject({ tipo: 'tutor' });
+    for (const l of [4, 6, 7, 8, 10, 12]) expect(resp.get(l), `linha ${l}`).toBeUndefined();
+    // A marca clínica não existe no tipo do responsável importado.
+    expect(JSON.stringify([...resp.values()])).not.toContain('Clinic');
+    const cod = v.divergencias.map((d) => `${d.linha}:${d.campo}:${d.codigo}`);
+    expect(cod).toEqual(
+      expect.arrayContaining([
+        '4:responsavelTipo:vinculo_exige_menor_ou_curatela',
+        '4:responsavelNome:responsavel_nao_importado',
+        '5:responsavelPagador:pagador_exige_ciencia_do_paciente',
+        '6:responsavelCuratelaReferencia:curatela_sem_decisao',
+        '7:responsavelCpf:cpf_invalido',
+        '7:responsavelPagador:valor_invalido',
+        '7:nascimento:menor_sem_responsavel',
+        '8:responsavelTipo:vinculo_sem_data_de_nascimento',
+        '10:responsavelCpf:cpf_do_proprio_paciente',
+        '11:responsavelCpf:responsavel_sem_cpf',
+        '12:responsavelTipo:curatela_de_menor',
+      ]),
+    );
+    // Menor com responsável válido não recebe menor_sem_responsavel; todos os problemas do responsável são aviso.
+    expect(cod.filter((c) => c.endsWith('menor_sem_responsavel')).map((c) => c.split(':')[0])).toEqual(['7', '10', '12']);
+    expect(v.divergencias.every((d) => d.gravidade === 'aviso')).toBe(true);
+  });
+
+  it('R5: mapear uma coluna do responsável exige nome e tipo; o mesmo CPF com outro nome no arquivo é aviso', () => {
+    expect(errosDoMapeamento('pacientes', { nome: 0, telefone: 1, responsavelCpf: 2 }, 3).sort()).toEqual(['responsavelNome', 'responsavelTipo']);
+    expect(errosDoMapeamento('pacientes', { nome: 0, telefone: 1, responsavelNome: 2, responsavelTipo: 3 }, 4)).toEqual([]);
+    expect(sugerirMapeamento('pacientes', ['Nome', 'Celular', 'Nome do Responsável', 'CPF do responsável', 'Parentesco'])).toMatchObject({
+      responsavelNome: 2,
+      responsavelCpf: 3,
+      responsavelTipo: 4,
+    });
+    const p = lerCsv(['n;t;d;rn;rc;rt', `A Fic;11900000001;01/01/2015;Mae Um;${cpf(907)};mae`, `B Fic;11900000002;01/01/2016;Mae Outra;${cpf(907)};mae`].join('\n'));
+    const v = validarPacientes(p, { nome: 0, telefone: 1, nascimento: 2, responsavelNome: 3, responsavelCpf: 4, responsavelTipo: 5 }, new Date('2026-10-16T12:00:00Z'));
+    expect(v.divergencias).toEqual([{ linha: 3, campo: 'responsavelNome', codigo: 'responsavel_nome_divergente_no_arquivo', gravidade: 'aviso' }]);
+  });
+
   it('linha com número de colunas diferente do cabeçalho é erro', () => {
     const v = validarPacientes(lerCsv('nome;telefone\nAna;11900000001;extra'), { nome: 0, telefone: 1 });
     expect(v.divergencias).toEqual([{ linha: 2, campo: 'linha', codigo: 'numero_de_colunas', gravidade: 'erro' }]);
