@@ -1039,7 +1039,7 @@ describe('N2 da conferência do #67: via oficial do recibo (IR) e via de confer�
     // Sem os UUIDs (receipt_id etc.): um id aleatório pode conter "15000"; o valor só conta como número inteiro.
     const serial = JSON.stringify(oficiais.map((l) => l.metadata)).replace(UUID_RE, '<uuid>');
     for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR]) expect(serial).not.toContain(proibido);
-    expect(serial).not.toMatch(/(?<![\w-])15000(?![\w-])/);
+    expect(serial).not.toMatch(/(?<!\w)15000(?!\w)/);
 
     // Recibo cancelado não tem via oficial.
     await post(finA, `/financeiro/recibos/${id(r)}/cancelar`, { motivo: 'dados_incorretos' }).expect(200);
