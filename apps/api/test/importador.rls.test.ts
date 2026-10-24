@@ -691,8 +691,8 @@ describe('R9 do #66: índice cego do CPF por clínica (HMAC com chave da clínic
     const saida: string[] = [];
     const out = process.stdout.write.bind(process.stdout);
     const err = process.stderr.write.bind(process.stderr);
-    process.stdout.write = ((c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), out(c, ...resto))) as typeof process.stdout.write;
-    process.stderr.write = ((c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), err(c, ...resto))) as typeof process.stderr.write;
+    process.stdout.write = (c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), out(c, ...resto));
+    process.stderr.write = (c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), err(c, ...resto));
     try {
       const csv = `nome;cpf;telefone\nLog Ficticio;${CPF(440)};11900000440\nRepetido Log Ficticio;${cpfs[4]};11900000441\n`;
       const { id, sim } = await ateSimular(adminC, 'pacientes', csv, { nome: 0, cpf: 1, telefone: 2 });

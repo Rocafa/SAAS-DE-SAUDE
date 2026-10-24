@@ -30,7 +30,6 @@ import type { DisposableKeys } from '../crypto/disposable-keys';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
 import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from '../patients/guardian-fields';
-import { patientFieldRef } from '../patients/patient-fields';
 import { SCOPE_RESPONSAVEIS } from '../patients/responsaveis.service';
 import { PatientsService } from '../patients/patients.service';
 import { normalizarBusca } from '../patients/patients.validation';
