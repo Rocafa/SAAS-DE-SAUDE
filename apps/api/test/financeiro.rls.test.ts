@@ -33,6 +33,8 @@ import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 
+/** UUID aleatório: tirado do texto antes de procurar marcador numérico (só dígitos casariam com ele). */
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 let api: ApiDeTeste;
 let clinicaA: TenantId;
 let clinicaB: TenantId;
@@ -492,7 +494,7 @@ describe('auditoria sem dado pessoal nem valores', () => {
     );
     expect(new Set(fin.map((l) => l.scope)).size).toBeGreaterThanOrEqual(8);
     // Sem os UUIDs: um id aleatório como "8a180008-..." contém "18000" e dava falso negativo.
-    const serial = JSON.stringify(fin).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>');
+    const serial = JSON.stringify(fin).replace(UUID_RE, '<uuid>');
     for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR, 'Paciente Ficticio', 'Atendimento', CONSELHO, TIPO_SENSIVEL, '20000', '18000']) {
       expect(serial).not.toContain(proibido);
     }
@@ -1034,8 +1036,10 @@ describe('N2 da conferência do #67: via oficial do recibo (IR) e via de confer�
     expect(oficiais).toHaveLength(2);
     expect(oficiais.map((l) => l.action)).toEqual(['export', 'export']);
     expect(new Set(oficiais.map((l) => l.actorId))).toEqual(new Set([finA.userId, adminA.userId]));
-    const serial = JSON.stringify(oficiais.map((l) => l.metadata));
-    for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR, '15000']) expect(serial).not.toContain(proibido);
+    // Sem os UUIDs (receipt_id etc.): um id aleatório pode conter "15000"; o valor só conta como número inteiro.
+    const serial = JSON.stringify(oficiais.map((l) => l.metadata)).replace(UUID_RE, '<uuid>');
+    for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR]) expect(serial).not.toContain(proibido);
+    expect(serial).not.toMatch(/(?<![\w-])15000(?![\w-])/);
 
     // Recibo cancelado não tem via oficial.
     await post(finA, `/financeiro/recibos/${id(r)}/cancelar`, { motivo: 'dados_incorretos' }).expect(200);

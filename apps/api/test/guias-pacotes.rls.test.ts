@@ -27,6 +27,8 @@ import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 
+/** UUID aleatório: tirado do texto antes de procurar marcador numérico (só dígitos casariam com ele). */
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 let api: ApiDeTeste;
 let clinicaA: TenantId;
 let clinicaB: TenantId;
@@ -297,7 +299,7 @@ describe('consumo, estorno e guia vencida (CNV-04.3)', () => {
       tx
         .select()
         .from(auditLog)
-        .where(and(eq(auditLog.scope, 'guide_sessions'), sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`, sql`${auditLog.metadata}->>'op' = 'reverse'`)),
+        .where(and(eq(auditLog.scope, 'guide_sessions'), sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`, sql`${auditLog.metadata}->>'op' = 'reverse'`)).orderBy(sql`seq`),
     );
     expect(aud?.metadata).toMatchObject({ reason: 'lancamento_errado', guide_id: g.id });
   });
@@ -328,7 +330,7 @@ describe('consumo, estorno e guia vencida (CNV-04.3)', () => {
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
     expect(linha?.overrideReason).toBe('prorrogacao_da_operadora');
     const [aud] = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`),
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`).orderBy(sql`seq`),
     );
     expect(aud?.metadata).toMatchObject({ op: 'consume', override: true, reason: 'prorrogacao_da_operadora' });
   });
@@ -702,7 +704,8 @@ describe('R21 do #65: correção atendido -> faltou sem perfil registrado', () =
     const recusa = await status(recepSoToken, ag, 'agendado');
     expect(recusa.status, JSON.stringify(recusa.body)).toBe(403);
     expect(recusa.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
-    expect(JSON.stringify(recusa.body)).not.toMatch(/42501|guide_sessions|SQL/i);
+    // Sem UUIDs antes de procurar o SQLSTATE: "42501" casaria com um id aleatório.
+    expect(JSON.stringify(recusa.body).replace(UUID_RE, '<uuid>')).not.toMatch(/42501|guide_sessions|SQL/i);
     // Nada gravado: status, consumo, saldo e trilha iguais.
     const [agLinha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, ag)));
     expect(agLinha?.status).toBe('checked_in');
