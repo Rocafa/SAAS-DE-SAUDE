@@ -102,6 +102,43 @@ async function sqlstates(p: Promise<unknown>): Promise<string[]> {
   }
 }
 
+type Conexao = ReturnType<typeof postgres>;
+
+/**
+ * O-R17b (0047): operadores NOMINAIS da correção do fundador = papéis LOGIN membros de app_migrator, como no
+ * runbook (no RDS quem cria é o usuário mestre; aqui, o superusuário do container via DATABASE_ADMIN_URL).
+ * Nomes e senhas descartáveis, gerados por execução; os papéis são removidos no afterAll.
+ */
+const operadores: { nome: string; conn: Conexao }[] = [];
+async function operadorNominal(): Promise<{ nome: string; conn: Conexao }> {
+  const adminUrl = process.env.DATABASE_ADMIN_URL;
+  const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+  if (!adminUrl || !migratorUrl) throw new Error('DATABASE_ADMIN_URL e DATABASE_MIGRATOR_URL são obrigatórias para o teste dos operadores nominais');
+  // Só letras: o contrato da trilha (0005) recusa string com 8+ dígitos, e o nome vai para `pedido_por`.
+  const nome = `op_teste_${randomUUID().replace(/-/g, '').slice(0, 12).replace(/[0-9]/g, (d) => 'ghijklmnop'[Number(d)]!)}`;
+  const senha = randomUUID();
+  const adm = postgres(adminUrl, { max: 1, onnotice: () => undefined });
+  try {
+    await adm.unsafe(`CREATE ROLE ${nome} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${senha}'`);
+    await adm.unsafe(`GRANT app_migrator TO ${nome}`);
+  } finally {
+    await adm.end({ timeout: 5 });
+  }
+  const u = new URL(migratorUrl);
+  u.username = nome;
+  u.password = senha;
+  const o = { nome, conn: postgres(u.toString(), { max: 1, onnotice: () => undefined }) };
+  operadores.push(o);
+  return o;
+}
+/** Uma transação do operador com o papel de operação (SET LOCAL ROLE app_migrator); session_user segue o nominal. */
+function comoOperador<T>(conn: Conexao, fn: (t: postgres.TransactionSql) => Promise<T>): Promise<T> {
+  return conn.begin(async (t) => {
+    await t`set local role app_migrator`;
+    return fn(t);
+  }) as Promise<T>;
+}
+
 beforeAll(async () => {
   api = await subirApi();
   clinica = await api.novaClinica();
@@ -118,6 +155,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await api?.fechar();
+  for (const o of operadores) await o.conn.end({ timeout: 5 });
+  if (operadores.length > 0 && process.env.DATABASE_ADMIN_URL) {
+    const adm = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => undefined });
+    try {
+      for (const o of operadores) await adm.unsafe(`DROP ROLE IF EXISTS ${o.nome}`);
+    } finally {
+      await adm.end({ timeout: 5 });
+    }
+  }
 });
 
 describe('R10: retenção legal bloqueia a eliminação de conteúdo', () => {
@@ -473,6 +519,8 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Correcao' }));
     const errado = randomUUID();
     const correto = randomUUID();
+    const a = await operadorNominal();
+    const b = await operadorNominal();
     const op = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
     try {
       await op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${errado}::uuid, 'OPS-10')`);
@@ -489,31 +537,40 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
       }, correto);
       expect(await sqlstates(gucRuntime)).toContain('42501');
 
+      // O-R17b (0047): o login COMPARTILHADO app_migrator não pede nem confirma: só operador nominal.
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('42501');
+      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${randomUUID()}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('42501');
+
       // Pedido: chamado inválido, "errado" que não é o fundador e correto igual ao errado são recusados.
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'x')`))).toContain('22023');
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${correto}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('55000');
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('22023');
+      expect(await sqlstates(comoOperador(a.conn, (t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'x')`))).toContain('22023');
+      expect(await sqlstates(comoOperador(a.conn, (t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${correto}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('55000');
+      expect(await sqlstates(comoOperador(a.conn, (t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${errado}::uuid, 'INC-10')`))).toContain('22023');
       // Pedir e confirmar na MESMA transação: recusado (a confirmação é do conferente).
-      const mesmaTx = op.begin(async (t) => {
+      const mesmaTx = comoOperador(a.conn, async (t) => {
         const [p] = await t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10') as id`;
         await t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${p!.id as string}::uuid, ${correto}::uuid, 'INC-10')`;
       });
       expect(await sqlstates(mesmaTx)).toContain('42501');
 
-      const [pedido] = await op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10') as id`);
+      const [pedido] = await comoOperador(a.conn, (t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-10') as id`);
       const pedidoId = pedido!.id as string;
+      // O-R17b: quem pediu não confirma, nem em outra transação.
+      expect(await sqlstates(comoOperador(a.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('42501');
       // Conferente com userId ou chamado diferentes do pedido: recusado, nada muda.
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${randomUUID()}::uuid, 'INC-10')`))).toContain('22023');
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-11')`))).toContain('22023');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${randomUUID()}::uuid, 'INC-10')`))).toContain('22023');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-11')`))).toContain('22023');
       // Pedido de outra clínica não vale aqui.
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${clinica}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${clinica}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
       const [t0] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
       expect(t0?.founderUserId).toBe(errado);
 
-      // Confirmação válida, em outra transação.
-      await op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`);
+      // Confirmação válida, por OUTRA pessoa nominal, em outra transação.
+      await comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`);
       // O pedido vale uma vez.
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-10')`))).toContain('55000');
+      // Os dois logins ficam gravados no pedido (session_user, não o papel de operação).
+      const [reg] = await comoOperador(a.conn, (t) => t`select requested_by, confirmed_by from founder_fix_requests where id = ${pedidoId}::uuid`);
+      expect(reg).toEqual({ requested_by: a.nome, confirmed_by: b.nome });
     } finally {
       await op.end({ timeout: 5 });
     }
@@ -533,6 +590,11 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
         expect.objectContaining({ op: 'founder_fixed', user_id_anterior: errado, user_id: correto, chamado: 'INC-10' }),
       ]),
     );
+    // O-R17b: a separação de pessoas fica verificável pela trilha.
+    const fixed = ops.find((o) => o.op === 'founder_fixed');
+    expect(fixed?.pedido_por).toEqual(expect.stringMatching(/^op_teste_/));
+    expect(fixed?.confirmado_por).toEqual(expect.stringMatching(/^op_teste_/));
+    expect(fixed?.pedido_por).not.toBe(fixed?.confirmado_por);
     // Trilha só com ids e códigos.
     expect(trilha.every((l) => l.actorKind === 'sistema')).toBe(true);
   });
@@ -554,6 +616,8 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
       scope: 'tenants.founder',
       metadata: { op, pedido, user_id_anterior: errado, user_id: correto, via: 'runbook_correcao', chamado: 'INC-20' },
     });
+    const a = await operadorNominal();
+    const b = await operadorNominal();
     const op = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
     try {
       await op.begin((t) => t`select app_runbook_registrar_fundador(${antiga}::uuid, ${errado}::uuid, 'OPS-20')`);
@@ -573,26 +637,29 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
       // 2) Pela trilha: o runtime consegue gravar um `founder_fix_requested` forjado na audit_log da clínica,
       //    mas a confirmação lê só founder_fix_requests: o id forjado não existe (55000) e nada muda.
       await withTenant(api.db.db, antiga, (tx) => tx.insert(auditLog).values(linhaDaTrilha('founder_fix_requested', forjado)), errado);
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${forjado}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${forjado}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
       const [t0] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
       expect(t0?.founderUserId).toBe(errado);
 
       // 3) Negação de serviço pela trilha: um `founder_fixed` forjado para um pedido legítimo não bloqueia a confirmação.
-      const [pedido] = await op.begin((t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-20') as id`);
+      const [pedido] = await comoOperador(a.conn, (t) => t`select app_runbook_pedir_correcao_fundador(${antiga}::uuid, ${errado}::uuid, ${correto}::uuid, 'INC-20') as id`);
       const pedidoId = pedido!.id as string;
       await withTenant(api.db.db, antiga, (tx) => tx.insert(auditLog).values(linhaDaTrilha('founder_fixed', pedidoId)), errado);
-      await op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`);
+      await comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`);
       // O pedido fica marcado como confirmado na tabela interna e vale uma vez.
       const [linha] = await op.begin((t) => t`select confirmed_at is not null as confirmado from founder_fix_requests where id = ${pedidoId}::uuid`);
       expect(linha?.confirmado).toBe(true);
-      expect(await sqlstates(op.begin((t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
+      expect(await sqlstates(comoOperador(b.conn, (t) => t`select app_runbook_confirmar_correcao_fundador(${antiga}::uuid, ${pedidoId}::uuid, ${correto}::uuid, 'INC-20')`))).toContain('55000');
 
-      // 4) Lista branca de papel: só membro de app_migrator liga a exceção dos guardas; o runtime, nunca.
-      const [comMigrator] = await op.begin(async (t) => {
-        await t`select set_config('app.correcao_fundador', ${antiga}, true)`;
-        return t`select app_runbook_corrigindo_fundador(${antiga}::uuid) as ok`;
-      });
-      expect(comMigrator?.ok).toBe(true);
+      // 4) Lista branca de papel: só operador NOMINAL (session_user membro de app_migrator) liga a exceção dos
+      //    guardas; o login compartilhado e o runtime, nunca (O-R17e: dentro de um SECURITY DEFINER chamado pelo
+      //    runtime, current_user vira o dono mas session_user continua app_user).
+      const corrigindo = (t: postgres.TransactionSql) =>
+        t`select set_config('app.correcao_fundador', ${antiga}, true)`.then(() => t`select app_runbook_corrigindo_fundador(${antiga}::uuid) as ok`);
+      const [comNominal] = await comoOperador(a.conn, corrigindo);
+      expect(comNominal?.ok).toBe(true);
+      const [comCompartilhado] = await op.begin(corrigindo);
+      expect(comCompartilhado?.ok).toBe(false);
       const [peloRuntime] = await withTenant(api.db.db, antiga, async (tx) => {
         await tx.execute(sql`select set_config('app.correcao_fundador', ${antiga}, true)`);
         const r = await tx.execute(sql`select app_runbook_corrigindo_fundador(${antiga}::uuid) as ok`);
@@ -602,6 +669,13 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
       const [def] = await op`select pg_get_functiondef('app_runbook_corrigindo_fundador(uuid)'::regprocedure) as d`;
       expect(def?.d as string).toMatch(/pg_has_role\(current_user, 'app_migrator', 'MEMBER'\)/);
       expect(def?.d as string).not.toMatch(/<>\s*'app_user'/);
+      expect(def?.d as string).toMatch(/app_operador_nominal\(\)/);
+      // O-R17d: o registro do fundador também usa lista branca, sem nome do papel de runtime.
+      for (const fn of ['tenants_founder_guard()', 'app_runbook_registrar_fundador(uuid,uuid,text)']) {
+        const [d] = await op`select pg_get_functiondef(${fn}::regprocedure) as d`;
+        expect(d?.d as string, fn).toMatch(/pg_has_role\(session_user, 'app_migrator', 'MEMBER'\)/);
+        expect(d?.d as string, fn).not.toMatch(/current_user\s*(=|<>)\s*'app_user'/);
+      }
     } finally {
       await op.end({ timeout: 5 });
     }

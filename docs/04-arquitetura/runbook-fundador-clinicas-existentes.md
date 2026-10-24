@@ -1,4 +1,4 @@
-# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63; correção na 0042 e 0044)
+# Runbook: fundador das clínicas existentes sem membros (R15 e R17 do parecer #63; correção na 0042, 0044 e 0047)
 
 **Quando usar:** uma vez, antes de abrir o acesso ao piloto, depois de aplicar a migração 0022. Também
 serve, depois disso, para qualquer clínica antiga que apareça sem admin no banco.
@@ -89,10 +89,12 @@ admin indevido tem acesso de admin à clínica: trate como **incidente**.
    admin indevido acessou nesse intervalo (trilha da clínica filtrada pelo `actor_id` dele, só ids).
 2. **Conferente confirma o `userId` correto** no provedor de identidade, como na dupla checagem do
    passo 1 (ativo, do responsável do contrato, sem vínculo indevido), e registra no chamado.
-3. **Quem executa pede a correção** (papel `app_migrator`, numa transação):
+3. **Quem executa pede a correção** (com o **próprio login nominal**, assumindo `app_migrator`, numa
+   transação; ver "Operadores nominais"):
 
    ```sql
    BEGIN;
+   SET LOCAL ROLE app_migrator;
    SELECT app_runbook_pedir_correcao_fundador('<id-da-clinica>'::uuid, '<userId-errado>'::uuid,
                                               '<userId-correto>'::uuid, 'INC-45');
    COMMIT;
@@ -105,10 +107,12 @@ admin indevido tem acesso de admin à clínica: trate como **incidente**.
    interna**, nunca da trilha: uma linha `founder_fix_requested` na trilha sem pedido na tabela é
    forjada e deve ser tratada no incidente.
 4. **O conferente confirma** em até 24 h, em **outra** transação, redigitando o `userId` correto a
-   partir do provedor de identidade (não copia de quem executa):
+   partir do provedor de identidade (não copia de quem executa), com o **login nominal dele** (outro
+   login que não o de quem pediu: o banco recusa com 42501):
 
    ```sql
    BEGIN;
+   SET LOCAL ROLE app_migrator;
    SELECT app_runbook_confirmar_correcao_fundador('<id-da-clinica>'::uuid, '<id-do-pedido>'::uuid,
                                                   '<userId-correto>'::uuid, 'INC-45');
    COMMIT;
@@ -124,7 +128,7 @@ admin indevido tem acesso de admin à clínica: trate como **incidente**.
    confirmação e uma recusa. Para conferir o pedido antes de confirmar (papel `app_migrator`):
 
    ```sql
-   SELECT id, tenant_id, user_id_anterior, user_id, chamado, created_at, confirmed_at
+   SELECT id, tenant_id, user_id_anterior, user_id, chamado, created_at, requested_by, confirmed_at, confirmed_by
      FROM founder_fix_requests WHERE id = '<id-do-pedido>'::uuid;
    ```
 5. **Conferir** como no passo 3: `GET /clinica/membros` (sessão do admin correto) mostra só ele como
@@ -138,8 +142,53 @@ correção; a exceção nos guardas de `tenants` e `clinic_members` só vale den
 runtime (e o portal, que usa o mesmo papel) não tem nenhum privilégio em `founder_fix_requests`: não
 forja um pedido por INSERT, e uma linha forjada na trilha (`founder_fix_requested` ou `founder_fixed`)
 não cria nem bloqueia pedido. A tabela é interna (`app_internal_tables()`) e fica fora da exportação
-da clínica. As duas pessoas usam o mesmo papel de banco, então a separação entre quem
-pede e quem confirma também depende do chamado: **quem pede não confirma**.
+da clínica.
+
+**Duas pessoas, verificável pelo banco (O-R17b, 0047).** Pedido e confirmação exigem o **login nominal**
+de cada operador (seção abaixo); o login compartilhado `app_migrator` recebe 42501. O pedido grava o
+`session_user` de quem pede (`requested_by`), a confirmação grava o de quem confirma (`confirmed_by`) e
+**recusa com 42501 se forem o mesmo login**. Os dois nomes vão para o `founder_fixed` da trilha
+(`pedido_por`, `confirmado_por`). Pedidos feitos antes da 0047 não têm operador e são recusados (55000):
+abra outro. A exceção dos guardas também exige `session_user` nominal: uma função `SECURITY DEFINER`
+chamada pelo runtime roda como o dono, mas o `session_user` continua `app_user`, e a exceção não liga
+(O-R17e; a guarda de schema reprova qualquer `SECURITY DEFINER` do runtime que grave `tenants` ou
+`clinic_members`).
+
+### Operadores nominais (RDS)
+
+Cada pessoa que pode pedir ou confirmar a correção tem um papel LOGIN próprio, membro de `app_migrator`.
+Não use o usuário mestre do RDS nem o login `app_migrator` nas funções do runbook. O nome é
+pseudônimo e estável (`op_<iniciais>`, ex.: `op_ab`; sem e-mail e com menos de 8 dígitos, senão o
+contrato da trilha recusa o evento): ele aparece na trilha da clínica; a relação
+nome → pessoa fica no cofre de acessos, não no banco.
+
+Criação, feita uma vez pelo usuário mestre do RDS e registrada em chamado:
+
+```sql
+-- Senha gerada e guardada no gerenciador de segredos (nunca no git nem no chamado).
+-- Preferível: IAM auth (sem senha): CREATE ROLE op_ab LOGIN; GRANT rds_iam TO op_ab;
+CREATE ROLE op_ab LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '<do-cofre>';
+GRANT app_migrator TO op_ab;
+GRANT CONNECT ON DATABASE plataforma_saude TO op_ab;
+```
+
+Uso: o operador entra com o próprio login e, em cada transação do runbook, assume o papel de operação
+(o `session_user` continua sendo o dele, e é isso que o banco grava):
+
+```sql
+BEGIN;
+SET LOCAL ROLE app_migrator;
+SELECT app_runbook_pedir_correcao_fundador(...);   -- ou app_runbook_confirmar_correcao_fundador(...)
+COMMIT;
+```
+
+Saída de um operador: `REVOKE app_migrator FROM op_ab; ALTER ROLE op_ab NOLOGIN;` (não apague o
+papel: o nome continua referenciado em `founder_fix_requests` e na trilha). Revisar a lista de membros
+de `app_migrator` a cada trimestre (`SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON
+r.oid = m.member WHERE m.roleid = 'app_migrator'::regrole;`).
+
+No CI e no ambiente local, o teste (`retencao-custodia.rls.test.ts`) cria dois papéis assim com
+`DATABASE_ADMIN_URL` (superusuário do container efêmero) e os remove no fim.
 
 ## Lista de verificação (marcar no chamado, por clínica)
 

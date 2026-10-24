@@ -479,3 +479,45 @@ describe('guarda de schema: funções do importador (0024)', () => {
     }
   });
 });
+
+/**
+ * O-R17e do #63 (0047): a exceção do fundador depende de current_user. Uma função SECURITY DEFINER de dono
+ * app_migrator roda COMO app_migrator; se o runtime pudesse executá-la (ou se um trigger a disparasse) e ela
+ * gravasse em `tenants` ou `clinic_members`, o runtime herdaria o papel de operação. Regra: nenhuma função
+ * SECURITY DEFINER executável pelo runtime, ou usada por trigger, escreve nessas tabelas.
+ */
+const DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS: Readonly<Record<string, string>> = {
+  // Lista FECHADA. Hoje vazia: o registro e a correção do fundador são SECURITY INVOKER e sem GRANT ao runtime.
+  // Incluir uma função aqui exige justificativa (valor) revisada pelo guardiao-lgpd.
+};
+const ESCRITA_EM_TENANTS_OU_MEMBROS =
+  /\b(insert\s+into|update|delete\s+from|truncate(\s+table)?|merge\s+into|copy)\s+(only\s+)?("?public"?\.)?"?(tenants|clinic_members)"?(?![\w])/i;
+
+describe('guarda de schema: SECURITY DEFINER não grava tenants nem clinic_members (O-R17e)', () => {
+  it('nenhuma função SECURITY DEFINER executável pelo runtime (ou de trigger) escreve em tenants/clinic_members', async () => {
+    const funcs = await sql<{ assinatura: string; fonte: string }[]>`
+      SELECT p.oid::regprocedure::text AS assinatura, p.prosrc AS fonte
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.prosecdef
+         AND (has_function_privilege(${RUNTIME_ROLE}, p.oid, 'EXECUTE')
+              OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgfoid = p.oid))`;
+    expect(funcs.length, 'o banco tem funções SECURITY DEFINER do runtime (sanidade da consulta)').toBeGreaterThan(0);
+    const violacoes = funcs
+      .filter((f) => ESCRITA_EM_TENANTS_OU_MEMBROS.test(f.fonte) && !(f.assinatura in DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS))
+      .map((f) => f.assinatura);
+    expect(violacoes, 'função SECURITY DEFINER do runtime grava tenants/clinic_members: torne-a SECURITY INVOKER ou tire o GRANT').toEqual([]);
+    // A lista fechada não acumula lixo: toda função permitida existe e continua no alcance do runtime.
+    for (const assinatura of Object.keys(DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS)) {
+      expect(funcs.map((f) => f.assinatura), assinatura).toContain(assinatura);
+    }
+  });
+
+  it('a regra de detecção pega as formas usuais de escrita (autoteste da expressão)', () => {
+    for (const s of ['UPDATE tenants SET x = 1', 'insert into public.clinic_members (a) values (1)', 'DELETE FROM "clinic_members"', 'update ONLY tenants set a=1']) {
+      expect(ESCRITA_EM_TENANTS_OU_MEMBROS.test(s), s).toBe(true);
+    }
+    for (const s of ['SELECT 1 FROM clinic_members', 'FROM tenants t WHERE', 'UPDATE tenant_data_keys SET a = 1', 'UPDATE tenants_x SET a = 1']) {
+      expect(ESCRITA_EM_TENANTS_OU_MEMBROS.test(s), s).toBe(false);
+    }
+  });
+});
