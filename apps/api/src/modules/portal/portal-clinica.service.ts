@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
@@ -68,6 +68,8 @@ export interface PedidoDoTitularDetalheDto extends PedidoDoTitularDto {
  */
 @Injectable()
 export class PortalClinicaService {
+  private readonly logger = new Logger('PortalClinicaService');
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
@@ -258,6 +260,57 @@ export class PortalClinicaService {
       return Number(r?.n ?? 0);
     });
     return { vinculosRevogados, consentimentosEncerrados };
+  }
+
+  /**
+   * JOB do sistema `portal-titular-menor` (R3 do #68; api-dominio §10g/§14), rede de segurança da correção do
+   * nascimento: na clínica (transação própria, sentinela de sistema), acha os pacientes com acesso de TITULAR
+   * ativo (vínculo ou convite pendente) e não emancipados, decifra a data de nascimento e, para quem consta
+   * menor hoje, chama `app_portal_revoke_minor_titular` (0050: revoga, encerra convites, trilha `sistema`,
+   * aviso e alerta ao DPO). Sem data de nascimento, ou com cifra ilegível, não decide (o convite titular já
+   * exige a data, R3; a ilegível conta em `ilegiveis` e acende o `alarme`).
+   * Idempotente. Devolve só contagens (a trilha `jobs` do executor as registra, inclusive quantos foram conferidos).
+   */
+  async revogarTitularesMenoresDaClinica(tenantId: TenantId): Promise<{ verificados: number; titularesRevogados: number; convitesEncerrados: number; pacientes: number; ilegiveis: number; alarme: boolean }> {
+    return this.db.run(tenantId, async (tx) => {
+      const candidatos = await tx.execute<{ id: string; nasc: string | null; emancipado: string | null }>(sql`
+        select p.id, p.birth_date_enc as nasc, p.emancipated_on::text as emancipado
+          from patients p
+         where p.tenant_id = ${tenantId}::uuid
+           and (exists (select 1 from portal_links l
+                         where l.tenant_id = p.tenant_id and l.patient_id = p.id and l.acting_as = 'titular' and l.revoked_at is null)
+             or exists (select 1 from portal_invites i
+                         where i.tenant_id = p.tenant_id and i.patient_id = p.id and i.acting_as = 'titular'
+                           and i.redeemed_at is null and i.revoked_at is null and i.expires_at > now()))
+         order by p.id`);
+      const hoje = hojeNaClinica();
+      let titularesRevogados = 0;
+      let convitesEncerrados = 0;
+      let pacientes = 0;
+      let ilegiveis = 0;
+      for (const c of candidatos) {
+        let nasc: string | null = null;
+        if (c.nasc) {
+          try {
+            // Savepoint: uma cifra ilegível (chave) não derruba a passada da clínica inteira.
+            nasc = await tx.transaction((sp) => this.cipher.decryptString(sp, patientFieldRef(tenantId, c.id, 'birth_date'), c.nasc as string));
+          } catch {
+            ilegiveis += 1;
+            continue;
+          }
+        }
+        if (menorEm(nasc, hoje, c.emancipado) !== true) continue;
+        const [r] = await tx.execute<{ vinculos: number; convites: number }>(sql`select * from app_portal_revoke_minor_titular(${c.id}::uuid)`);
+        const v = Number(r?.vinculos ?? 0);
+        const i = Number(r?.convites ?? 0);
+        titularesRevogados += v;
+        convitesEncerrados += i;
+        if (v + i > 0) pacientes += 1;
+      }
+      if (pacientes > 0) this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=titular_menor_revogado pacientes=${pacientes}`);
+      // Data que não se decifra não decide nada: fica visível como `alarme` (JOB_ALARME) e na contagem.
+      return { verificados: candidatos.length, titularesRevogados, convitesEncerrados, pacientes, ilegiveis, alarme: ilegiveis > 0 };
+    });
   }
 
   revogarVinculo(ctx: RequestContext, id: string, motivo: PortalLinkRevokeReason): Promise<{ revogado: true }> {

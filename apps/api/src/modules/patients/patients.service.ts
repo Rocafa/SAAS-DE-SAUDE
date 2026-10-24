@@ -14,7 +14,8 @@ import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { IndiceCegoCpf } from './cpf-indice-cego';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
-import { aniversarioDe, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
+import { hojeNaClinica } from '../insurance/guias-regras';
+import { aniversarioDe, menorEm, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
 import {
   normalizarBusca,
   type AlteracaoPaciente,
@@ -180,7 +181,7 @@ export class PatientsService {
         scope: SCOPE,
         metadata: { patient_id: id, changed: campos.join(',') },
       });
-      if (nascimentoMudou) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null);
+      if (nascimentoMudou) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null, atual.emancipatedOn);
       return this.paraDto(tx, ctx.tenantId, linha);
     });
   }
@@ -191,11 +192,17 @@ export class PatientsService {
    * da representação) da data nova. Sem data válida, fecha. O banco só reabre com a marca desta transação
    * (que consome) e grava a trilha com os valores antigos e novos; se ninguém recalcular, o COMMIT fecha.
    */
-  private async recalcularSigiloDoPortal(tx: TenantTx, id: string, nascimento: string | null): Promise<void> {
+  private async recalcularSigiloDoPortal(tx: TenantTx, id: string, nascimento: string | null, emancipadoEm: string | null): Promise<void> {
     const valida = nascimento !== null && /^\d{4}-\d{2}-\d{2}$/.test(nascimento);
     const sigilo = valida ? aniversarioDe(nascimento, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia) : null;
     const maioridade = valida ? aniversarioDe(nascimento, IDADE_MAIORIDADE) : null;
     await tx.execute(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date)`);
+    // R3 do #68 (0050): pela data nova o paciente é menor não emancipado = o acesso de TITULAR ao portal cai
+    // nesta mesma transação (vínculos revogados, convites pendentes encerrados, trilha com o usuário, aviso e
+    // alerta do banco). O job `portal-titular-menor` (§14) é a rede de segurança do que escapar deste caminho.
+    if (menorEm(nascimento, hojeNaClinica(), emancipadoEm) === true) {
+      await tx.execute(sql`select * from app_portal_revoke_minor_titular(${id}::uuid)`);
+    }
     // N1 do #73 (0039): o banco já gravou aviso e anomaly_alert da transição perigosa; o log com marcador fixo
     // (só a regra e a transição) alimenta o alarme de operação, como nos alertas do #61.
     const alertas = await tx.execute<{ transicao: string }>(

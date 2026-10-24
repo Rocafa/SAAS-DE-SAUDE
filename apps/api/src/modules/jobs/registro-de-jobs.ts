@@ -24,7 +24,7 @@ const LEMBRETES_A_CADA = 5 * MIN;
 
 export interface ServicosDosJobs {
   readonly whatsapp: Pick<WhatsappService, 'executarLembretesComoSistema' | 'executarRetencaoComoSistema'>;
-  readonly portal: Pick<PortalClinicaService, 'encerrarRepresentacoesDaClinica'>;
+  readonly portal: Pick<PortalClinicaService, 'encerrarRepresentacoesDaClinica' | 'revogarTitularesMenoresDaClinica'>;
   readonly importacao: Pick<ImportacaoService, 'expurgoDiario'>;
   readonly notas: Pick<CicloNotasPrivadasService, 'executarCicloComoSistema'>;
   readonly retencaoFiscal: Pick<RetencaoFiscalService, 'executarComoSistema'>;
@@ -65,6 +65,14 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       nome: 'portal-representacoes',
       ...diario('5 0 * * *', 'diário, 00:05'),
       porClinica: async (t) => ({ ...(await s.portal.encerrarRepresentacoesDaClinica(t)) }),
+    },
+    {
+      // R3 do #68 (§10g, 0050): rede de segurança da correção do nascimento. Revoga o acesso de TITULAR (vínculos
+      // e convites pendentes) de quem consta menor não emancipado pela data decifrada; trilha `sistema`, aviso
+      // `portal_sigilo_transicao`/`titular_menor_revogado` a admin e profissional e alerta ao DPO.
+      nome: 'portal-titular-menor',
+      ...diario('10 0 * * *', 'diário, 00:10'),
+      porClinica: async (t) => ({ ...(await s.portal.revogarTitularesMenoresDaClinica(t)) }),
     },
     {
       // R2 do parecer do importador (§12c): descarta o bruto vencido (`IMPORT_RAW_TTL_HOURS`) ou de lote
