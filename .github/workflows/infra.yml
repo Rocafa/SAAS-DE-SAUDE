@@ -276,6 +276,50 @@ jobs:
           fi
           # N1: chave do objeto de exportação só UUID opaco.
           grep -q 'sid *= *"ChaveSoUuidOpaco"' staging/exportacoes.tf
+          # R3-b do parecer do importador (api-dominio.md §12d): chave de lote separável no IAM.
+          # Cada statement da API é recortado do sid até o próximo e conferido.
+          k=staging/kms-clinicas.tf
+          api() { sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" \
+                  | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
+          gestor() { sed -n '/data "aws_iam_policy_document" "gestor_chaves"/,/^}/p' "$k" \
+                  | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
+          grep -q 'role *= *aws_iam_role.api_tarefa.id' "$k"
+          # Criar: purpose só tenant_data/import_batch, tenant_id presente, TagKeys restrito.
+          api CriarChaveDaClinica | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          api CriarChaveDeLote    | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          api CriarChaveDeLote    | grep -q '"aws:RequestTag/batch_id"'
+          api TagNaCriacao        | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["tenant_data", "import_batch"\]'
+          for s in CriarChaveDaClinica CriarChaveDeLote TagNaCriacao; do
+            api $s | grep -q '"aws:RequestTag/tenant_id"' || { echo "$s sem tenant_id"; exit 1; }
+            api $s | grep -q '"aws:TagKeys"' || { echo "$s sem aws:TagKeys"; exit 1; }
+          done
+          grep -q 'kms_tags_permitidas *= *\["tenant_id", "purpose", "batch_id"\]' "$k"
+          # Nenhum outro statement de CreateKey/TagResource na API.
+          n=$(sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" | grep -Ec '"kms:(CreateKey|TagResource)"\]')
+          [ "$n" -eq 4 ] || { echo "CreateKey/TagResource em $n statements da API (esperado 4: 3 Allow + 1 Deny)"; exit 1; }
+          # Exclusão: Allow só em import_batch; Deny fora de import_batch; Cancel/EnableKey negados no lote.
+          api ExclusaoSoDaChaveDeLote | grep -q 'actions *= *\["kms:ScheduleKeyDeletion"\]'
+          api ExclusaoSoDaChaveDeLote | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          api NuncaExcluiChaveDaClinica | grep -q 'effect *= *"Deny"'
+          api NuncaExcluiChaveDaClinica | grep -q 'test *= *"StringNotEquals"'
+          api LoteDestruidoNaoVolta | grep -q 'effect *= *"Deny"'
+          api LoteDestruidoNaoVolta | grep -q '"kms:CancelKeyDeletion", "kms:EnableKey"'
+          api LoteDestruidoNaoVolta | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          [ "$(sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" | grep -c 'ScheduleKeyDeletion"\]')" -eq 1 ] \
+            || { echo "ScheduleKeyDeletion em mais de um Allow da API"; exit 1; }
+          api NuncaDestagear | grep -q '"kms:UntagResource"'
+          api NuncaRetagear | grep -q 'effect *= *"Deny"'
+          # Uso: EncryptionContext tenant_id igual à tag tenant_id da chave.
+          api DekDaClinica | grep -q '"kms:GenerateDataKey", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo"'
+          api DekDaClinica | grep -A2 '"kms:EncryptionContext:tenant_id"' | grep -q 'values *= *\["&{aws:ResourceTag/tenant_id}"\]'
+          api RotacaoSoDaClinica | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          # Eliminação da clínica (G3) é do gestor, só em tenant_data; o gestor nunca reabre lote.
+          gestor AgendarDestruicaoComJanela | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          gestor GerirKekDeClinica | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          gestor LoteDestruidoNaoVolta | grep -q 'effect *= *"Deny"'
+          # Alerta de CancelKeyDeletion/EnableKey no tópico de segurança.
+          grep -q 'eventName   = \["CancelKeyDeletion", "EnableKey"\]' "$k"
+          grep -q 'aws_cloudwatch_event_rule.kms_reativacao.arn' staging/acesso-humano.tf
           # Região: somente sa-east-1.
           if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
             echo "Região fora de sa-east-1."; exit 1
