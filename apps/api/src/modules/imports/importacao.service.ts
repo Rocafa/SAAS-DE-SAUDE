@@ -146,6 +146,9 @@ export const PRAZO_INTENCAO_MINUTOS = 60;
  * `KeyFailureKind`), para o log `CHAVE_LOTE_KMS_FALHOU` separar IAM de indisponibilidade. Sem mensagem,
  * sem ARN e sem dado pessoal: só `tipo:contagem`, em ordem alfabética.
  */
+/** Recusas do KMS que provam que a chave NÃO foi criada (C1 da rodada 23); o resto é ambíguo. */
+const RECUSAS_DEFINITIVAS: ReadonlySet<KeyFailureKind> = new Set<KeyFailureKind>(['acesso_negado', 'estado_invalido']);
+
 class TiposDeFalha {
   private readonly contagem = new Map<KeyFailureKind, number>();
   total = 0;
@@ -277,10 +280,17 @@ export class ImportacaoService {
     const id = randomUUID();
     let registrada = false;
     let masterKeyId: string | undefined;
+    // C1 da conferência da rodada 23: só uma recusa DEFINITIVA do KMS prova que a chave não nasceu.
+    let recusaDefinitiva = false;
     try {
       await escreverNaClinica(this.db, ctx, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: ctx.tenantId }));
       registrada = true;
-      masterKeyId = await this.chavesDeLote.create(ctx.tenantId, id);
+      try {
+        masterKeyId = await this.chavesDeLote.create(ctx.tenantId, id);
+      } catch (e) {
+        recusaDefinitiva = RECUSAS_DEFINITIVAS.has(keyFailureKind(e));
+        throw e;
+      }
       await this.anotarChaveDaIntencao(ctx, id, masterKeyId);
       const { key, sealed } = await this.chavesDeLote.seal(ctx.tenantId, id, masterKeyId, refDoArquivo(ctx, id), bytes);
       return await this.escrever(ctx, async (tx) => {
@@ -326,7 +336,7 @@ export class ImportacaoService {
         };
       });
     } catch (e) {
-      if (registrada) await this.descartarChaveDoRecebimento(ctx, id, masterKeyId);
+      if (registrada) await this.descartarChaveDoRecebimento(ctx, id, masterKeyId, recusaDefinitiva);
       // O banco confere o perfil admin em clinic_members (0020): sem ele, 42501.
       if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_admin_nao_registrado');
       throw e;
@@ -752,12 +762,24 @@ export class ImportacaoService {
   }
 
   /**
-   * Observação 1 (0049): o `receber` falhou depois de registrar a intenção. Sem ARN gravado nem devolvido, o KMS
-   * não criou a chave: fecha `abandoned`. Com ARN, destrói a chave na hora e fecha `destroyed` (nunca a de um
-   * lote que chegou a ser gravado). Se o KMS ou o banco falharem, a intenção fica `pending` e o job de expurgo
-   * a retoma depois de PRAZO_INTENCAO_MINUTOS. Nunca lança (o erro original do `receber` é o que importa).
+   * Observação 1 (0049): o `receber` falhou depois de registrar a intenção. Sem ARN e com recusa DEFINITIVA do
+   * KMS na criação (`acesso_negado`/`estado_invalido`), a chave não nasceu: fecha `abandoned`. Sem ARN e com
+   * falha ambígua (timeout, indisponível, outro), o KMS pode ter criado a chave sem a resposta chegar (C1 da
+   * rodada 23): a intenção fica `pending` e o job a fecha com CHAVE_LOTE_ORFA. Com ARN, destrói a chave na hora
+   * e fecha `destroyed` (nunca a de um lote que chegou a ser gravado). Se o KMS ou o banco falharem, a intenção
+   * fica `pending` e o job de expurgo a retoma depois de PRAZO_INTENCAO_MINUTOS. Nunca lança (o erro original
+   * do `receber` é o que importa).
    */
-  private async descartarChaveDoRecebimento(ctx: RequestContext, loteId: string, masterKeyId: string | undefined): Promise<void> {
+  private async descartarChaveDoRecebimento(
+    ctx: RequestContext,
+    loteId: string,
+    masterKeyId: string | undefined,
+    recusaDefinitiva: boolean,
+  ): Promise<void> {
+    if (masterKeyId === undefined && !recusaDefinitiva) {
+      this.logger.warn(`CHAVE_LOTE_CRIACAO_AMBIGUA clinica=${ctx.tenantId} chaves=1: criação da chave do lote sem resposta definitiva; intenção fica pendente para o job`);
+      return;
+    }
     try {
       const situacao = await this.db.run(
         ctx.tenantId,

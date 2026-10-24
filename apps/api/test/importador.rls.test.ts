@@ -753,6 +753,47 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     expect(orfa).not.toContain(id);
   });
 
+  it('C1 (rodada 23): timeout do KMS na criação é ambíguo; a intenção fica `pending` e o job a fecha com CHAVE_LOTE_ORFA', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    // KMS falso que estoura o tempo no CreateKey: a chave pode ter nascido sem a resposta chegar.
+    const timeout = () => Promise.reject(Object.assign(new Error('Connection timed out after 3000 ms (arn:aws:kms:sa-east-1:000000000000)'), { name: 'TimeoutError' }));
+    const kmsFalso = { createKey: timeout } as unknown as KmsApi;
+    const antes = new Set((await intencoesDe(clinicaA)).map((i) => i.batchId));
+    const avisos: string[] = [];
+    const logAviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void avisos.push(String(m)));
+    const criar = vi
+      .spyOn(provedor, 'createMasterKey')
+      .mockImplementationOnce((t: TenantId, f?: Parameters<KeyProvider['createMasterKey']>[1]) => new KmsKeyProvider(kmsFalso).createMasterKey(t, f));
+    try {
+      expect((await enviar(adminA, 'pacientes', 'nome;telefone\nTimeout Ficticio;11900000314\n')).status).toBeGreaterThanOrEqual(400);
+    } finally {
+      criar.mockRestore();
+      logAviso.mockRestore();
+    }
+    const novas = (await intencoesDe(clinicaA)).filter((i) => !antes.has(i.batchId));
+    expect(novas).toEqual([expect.objectContaining({ status: 'pending', masterKeyId: null })]);
+    const id = novas[0]!.batchId;
+    const ambigua = avisos.find((m) => m.startsWith('CHAVE_LOTE_CRIACAO_AMBIGUA'));
+    expect(ambigua).toContain(`clinica=${clinicaA} chaves=1`);
+    expect(ambigua).not.toContain(id);
+    expect(ambigua).not.toContain('arn:');
+    // Depois do prazo, o job fecha `abandoned` e loga CHAVE_LOTE_ORFA (só clínica e contagem).
+    await envelhecerIntencao(id, PRAZO_INTENCAO_MINUTOS + 1);
+    const erros: string[] = [];
+    const logErro = vi.spyOn(Logger.prototype, 'error').mockImplementation((m: unknown) => void erros.push(String(m)));
+    try {
+      await servico.expurgoDiario([clinicaA]);
+    } finally {
+      logErro.mockRestore();
+    }
+    expect((await intencoesDe(clinicaA)).find((i) => i.batchId === id)).toMatchObject({ status: 'abandoned' });
+    const orfa = erros.find((m) => m.startsWith('CHAVE_LOTE_ORFA'));
+    expect(orfa).toContain(`clinica=${clinicaA} chaves=1`);
+    expect(orfa).not.toContain(id);
+  });
+
   it('observação 1 (0049): a intenção é da clínica (RLS), nasce só por admin e não muda nem se apaga pelo runtime', async () => {
     const id = randomUUID();
     await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: clinicaA }), recepA.userId)).rejects.toThrow();
