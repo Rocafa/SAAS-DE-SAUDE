@@ -263,7 +263,7 @@ describe('R12: retirar a retenção exige motivo e duas pessoas', () => {
     expect(ok.status).toBe(200);
     expect(ok.body).toEqual({ retencaoLegalDesde: null, retiradaPendente: false });
     // Trilha: as três etapas, sem referência nem motivo.
-    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'patients')));
+    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'patients')).orderBy(sql`seq`));
     const metas = trilha.map((l) => l.metadata as Record<string, unknown>).filter((m) => m.patient_id === p && typeof m.op === 'string' && m.op.startsWith('legal_hold'));
     expect(metas.map((m) => m.op)).toEqual(['legal_hold', 'legal_hold_release_request', 'legal_hold']);
     expect(trilha.filter((l) => (l.metadata as Record<string, unknown>).op === 'legal_hold' && (l.metadata as Record<string, unknown>).patient_id === p).map((l) => l.actorId).sort()).toEqual(
@@ -337,7 +337,7 @@ describe('R2: custódia das notas lacradas pelo psicólogo substituto', () => {
     expect(await texto(descartar)).toBe('');
     expect((await api.http().get(`/custodias/${cid}/notas`).set(cab(subst))).body).toEqual([]);
     // Trilha sem conteúdo.
-    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'private_notes')));
+    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'private_notes')).orderBy(sql`seq`));
     expect(JSON.stringify(trilha)).not.toContain('QZX8801');
     const ops = trilha.map((l) => (l.metadata as Record<string, unknown>).op);
     for (const op of ['custody_designate', 'custody_accept', 'custody_read', 'custody_decide']) expect(ops).toContain(op);
@@ -434,7 +434,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     const desfazer = withTenant(api.db.db, clinica, (tx) =>
       tx.update(clinicMembers).set({ revokedAt: null, revokedBy: null }).where(eq(clinicMembers.userId, intruso.userId)), admin.userId);
     expect(await sqlstates(desfazer)).toContain('42501');
-    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinic_members')));
+    const trilha = await withTenant(api.db.db, clinica, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinic_members')).orderBy(sql`seq`));
     const ops = trilha.map((l) => (l.metadata as Record<string, unknown>).op);
     expect(ops).toEqual(expect.arrayContaining(['member_grant', 'member_revoke']));
   });
@@ -447,7 +447,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     // Fundador registrado em tenants e como admin; tenant_create e member_found na trilha.
     const membros = await api.http().get('/clinica/membros').set(cab(dono)).expect(200);
     expect(membros.body).toEqual([expect.objectContaining({ usuarioId: fundadorId, perfil: 'admin', concedidoPor: fundadorId })]);
-    const trilha = await withTenant(api.db.db, nova, (tx) => tx.select().from(auditLog));
+    const trilha = await withTenant(api.db.db, nova, (tx) => tx.select().from(auditLog).orderBy(sql`seq`));
     expect(trilha.map((l) => (l.metadata as Record<string, unknown>).op)).toEqual(expect.arrayContaining(['tenant_create', 'member_found']));
     // A rota de "fundador" não existe mais.
     expect((await api.http().post('/clinica/membros/fundador').set(cab(outro)).send({})).status).toBe(404);
@@ -508,7 +508,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     }
     const [t] = await withTenant(api.db.db, antiga, (tx) => tx.select().from(tenants));
     expect(t?.founderUserId).toBe(fundadorId);
-    const trilha = await withTenant(api.db.db, antiga, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinic_members')));
+    const trilha = await withTenant(api.db.db, antiga, (tx) => tx.select().from(auditLog).where(eq(auditLog.scope, 'clinic_members')).orderBy(sql`seq`));
     expect(trilha.map((l) => l.metadata)).toEqual([expect.objectContaining({ op: 'member_found', user_id: fundadorId, via: 'runbook', chamado: 'OPS-1' })]);
   });
 
