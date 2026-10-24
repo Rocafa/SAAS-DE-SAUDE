@@ -144,3 +144,50 @@ Os vetos estão levantados e a pilha #44 → #47 pode seguir para o merge, desde
 | P1 a P6 | **Sim, para ligar o portal à API** | Com D4 / adaptador HTTP do portal |
 | P7, P8 | Não, mas entram no mesmo PR do adaptador | Idem |
 | R9, R10, R12, R13c ⚖️, R6 | Não | Na história correspondente (já registrado em 12/10) |
+
+## Conferência do contrato ApiPortal (24/10/2026)
+
+**Escopo:** `git diff b6bccfc..origin/eng/integracao-r19` (PR #73): `packages/shared/src/api-portal.ts`, `forma.ts`, `apps/api/src/modules/portal/` (controller, service, `portal-respostas.ts`, `portal-regras.ts`), `portal-contrato.test.ts`, `test/portal.rls.test.ts` (bloco "contrato ApiPortal") e §10h do `api-dominio.md`. Li o código e os testes. Não rodei a suíte. Os números do executor (turbo 12/12, rls 589/589, security 81) ficam como declarados, e a CI do #73 deve confirmá-los.
+
+**Veredito: APROVADO com ressalvas.** P1 está atendido. Nenhuma ressalva bloqueia o merge. C1 e C2 entram antes do adaptador HTTP do front, e C3 a C5 podem entrar no mesmo PR.
+
+### 1. Nada clínico e nada de terceiro no contrato
+- **OK.** As formas do contrato não têm conteúdo clínico, especialidade nem tipo de atendimento. Prontuário não sai pelo portal, e `documentos` é a lista vazia literal (`f.vazia`). Nenhuma rota recebe id de paciente ou de clínica (há teste para isso). O titular sai da sessão.
+- **OK. A conferência é estrita** (campo a mais = erro) e roda contra as respostas HTTP reais (titular e responsável, Postgres real). Os DTOs são literais tipados com `RespostaPortal<…>`, então o excesso de propriedade também falha no `tsc`. As mensagens de divergência citam só caminho e tipo, nunca o valor.
+- **Limite da lista `CAMPOS_CLINICOS_PROIBIDOS`:** ela confere **nomes**, não **valores**. Sozinha, não basta: um campo neutro (`descricao`, `profissional`, `emitente.nome`) pode carregar algo clínico no conteúdo. A proteção real vem de três coisas juntas: (a) a conferência estrita, que obriga qualquer campo novo a mudar o contrato e passar pelo guardião; (b) o filtro no servidor (sigilo da 0037 + RLS); (c) a origem neutra dos valores (`descricao` configurada pela clínica, `registroConselho` só com `show_council_on_receipt`). Por isso, a lista funciona como alarme, não como barreira. **C5:** registrar isso no §10h para ninguém tratá-la como garantia suficiente.
+- **Dado de outra pessoa:** o recibo mostra o nome do pagador. Quando o pagador é terceiro, o CPF sai mascarado (`***.***.***-NN`). É o mínimo para o recibo servir ao IR, então aceito. O telefone do convite sai mascarado, com teste de que o número não aparece no corpo.
+- **C3 (minimização):** `emitente.profissionalId` é um UUID interno que o front não usa para nada. Retirar do `ReciboPortal`, ou fixar `null` no portal. Hoje a montagem campo a campo copia esse id do retrato.
+
+### 2. Recibo de área sensível do adolescente (regra da 0037)
+- **OK.** Para o responsável que **não** é o pagador congelado, o recibo de área sensível (ou de profissional desconhecido, que falha fechado) **não vem na lista**, e o detalhe dá **404 antes de decifrar o retrato**. A barreira está no serviço (`reciboRestrito`) e também na policy `portal_sigilo_adolescente`. Por isso, `reciboParaPortal` nunca recebe um retrato restrito. Quando o responsável é o pagador congelado, o recibo é dele (decisão R1/N1 do #68, mantida). A montagem campo a campo impede que um campo novo do retrato chegue ao portal. Além disso, a asserção de tipo `keyof ConteudoDoRecibo ⇔ keyof ReciboPortal` obriga a decidir cada campo novo de topo.
+- **C4 (texto desatualizado):** o comentário de `reciboRestrito` (`portal.service.ts`) ainda diz que o recibo "fica sem profissional e data". O comportamento atual é **404 / fora da lista**. Corrigir o comentário para ninguém reintroduzir a versão "neutra" (que vazava a categoria; N1 do #68).
+- **Lacuna de teste (não bloqueia):** o bloco "contrato ApiPortal" do responsável usa um menor de 9 anos sem recibos (lista vazia). O sigilo está provado nos testes do N1 do #68, mas falta um caso de contrato com adolescente: recibo sensível de pagador terceiro (ausente da lista + 404) **e** recibo sensível pago pelo responsável (presente e conforme o contrato). Acrescentar no próximo PR do portal.
+
+### 3. Decisão: `nascimento` em "meus dados"
+**Decisão: entra, completo, no formato `AAAA-MM-DD`, para o titular e para o responsável legal.** Não entra como "só ano", e o campo não sai do contrato.
+
+Por quê:
+- **Direito do titular (LGPD art. 18, I a III) e qualidade dos dados (art. 6º, V).** "Meus dados" existe para o titular ver e pedir a correção do próprio cadastro. Um dado que a clínica guarda e o titular não vê não pode ser corrigido.
+- **A data muda o regime de proteção.** Ela decide a faixa etária, que por sua vez decide o sigilo do adolescente (12+), o consentimento pelo responsável (art. 14 §1º), o fim da representação aos 18 (R3, 0050) e o erro `nascimento_nao_informado`. Uma data errada, se ficar escondida, aplica a regra errada em silêncio. "Só ano" não serve para conferir as fronteiras de 12 e 18 anos.
+- **O responsável é o representante legal** do menor (CC arts. 1.634 e 1.690) e exerce os direitos do art. 18 por ele. A data não é clínica e ele já a conhece, então mostrá-la não acrescenta exposição.
+- **Base legal:** cumprimento de obrigação legal e exercício de direitos (art. 7º, II e VI). É dado cadastral, não dado sensível do art. 11.
+
+Condições (**C1**, antes do adaptador):
+- (a) Tipar o campo no contrato como data `AAAA-MM-DD` (comentário na forma + teste de formato). Hoje é `f.texto` livre.
+- (b) A data **não se edita pelo portal**: muda só por `POST /portal/meus-dados/correcao`, analisado pela clínica. Correção vinda do responsável que **reduza a idade** de um adolescente (12+), tirando-o do sigilo, exige conferência documental pela clínica. Registrar isso no fluxo de atendimento do pedido.
+- (c) Com `agindoComo = responsavel_legal`, o front rotula a tela como "dados de <primeiro nome do paciente>", e não como dados do responsável.
+- (d) Atualizar o §10h e o P7 deste parecer ("em aberto" → esta decisão).
+
+### 4. O guia "como o front liga" (§10h)
+O guia está correto no essencial (fonte única, sem cópia local, botões pelos flags, texto de consentimento do servidor, token só no `#fragmento`, cookie da D4). Mas tem pontos que podem induzir a erro (**C2**):
+- **`nascimento` "em aberto"**: trocar pela decisão do item 3.
+- **`Cache-Control: no-store`** aparece em "O que depende da D4". Ele **já** é enviado pela API (`security/http-security.ts`). Mover para "já vale": o front não deve sobrescrevê-lo, nem cachear em service worker, `localStorage` ou estado persistente.
+- **"Nada clínico para o responsável"** pode ser lido como "o recibo é inócuo". Acrescentar: o recibo detalhado pode identificar o profissional (`emitente.nome`, e o conselho quando a clínica o habilita). O front não deve enriquecê-lo (especialidade, ícone por área), nem pré-carregar ou guardar a folha, e deve imprimir só por ação do usuário.
+- **`conferirRespostaPortal` no adaptador:** deixar explícito que, em produção, divergência de contrato **não** loga o corpo da resposta (só a rota e as mensagens de caminho).
+- **Lista de campos proibidos:** registrar a limitação do item 1 (C5).
+
+| Item | Bloqueia? | Quando |
+|---|---|---|
+| C1 (`nascimento`: formato, correção só pela clínica, rótulo) | Não para o merge do #73 | Antes do adaptador HTTP do portal |
+| C2 (ajustes do §10h) | Não | Antes do adaptador HTTP do portal |
+| C3 (`profissionalId` fora do portal), C4 (comentário), C5, teste do adolescente | Não | Próximo PR do portal / do adaptador |
