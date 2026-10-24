@@ -1543,4 +1543,54 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
     expect(await codigo((tx) => tx.execute(sql`select * from app_portal_revoke_minor_titular(${pac}::uuid)`))).toBe('42501');
     expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null });
   });
+
+  it('R-a (rodada 23): nem em sessão de sistema, com a GUC ligada e o sentinela como criador, o runtime forja o aviso do banco', async () => {
+    const pac = await criarPaciente(adminA, 'Mel Ficticia Forja Sistema', { nascimento: nascidoHa(31) });
+    const fundador = api.fundador(clinicaA);
+    for (const [transicao, guc] of [
+      ['sigilo_desligado', 'app.portal_alerta'],
+      ['titular_menor_revogado', 'app.portal_titular_menor'],
+    ] as const) {
+      // Sem userId: withTenant trava o slot no sentinela (app_set_system_user), como os jobs.
+      const r = await withTenant(api.db.db, clinicaA, async (tx) => {
+        expect((await tx.execute<{ s: boolean }>(sql`select app_is_system_session() as s`))[0]?.s).toBe(true);
+        await tx.execute(sql`select set_config('app.portal_alerta', 'on', true), set_config(${guc}, 'on', true)`);
+        await tx.execute(sql`insert into clinical_notices (tenant_id, recipient_user_id, kind, patient_id, portal_transition, created_by)
+          values (${clinicaA}::uuid, ${fundador}::uuid, 'portal_sigilo_transicao', ${pac}::uuid, ${transicao}, ${SISTEMA}::uuid)`);
+        return 'ok';
+      }).catch((e: { code?: string; cause?: { code?: string } }) => e.cause?.code ?? e.code);
+      expect(r).toBe('42501');
+    }
+    expect(await avisos(pac)).toEqual([]);
+  });
+
+  it('R-b (rodada 23): data de nascimento ilegível no job não revoga nada; conta em `ilegiveis` e acende `alarme`', async () => {
+    const pac = await criarPaciente(adminA, 'Noa Ficticia Data Ilegivel', { nascimento: nascidoHa(29) });
+    const conta = await contaDe(adminA, pac);
+    const pendente = await convidar(adminA, pac);
+    // Cifra válida, mas amarrada a OUTRO paciente (AAD): não decifra nesta linha. Mesmo dizendo "15 anos".
+    const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const trocarNascimento = (ref: string, valor: string) =>
+      withTenant(api.db.db, clinicaA, async (tx) => {
+        const enc = await cifra.encrypt(tx, patientFieldRef(clinicaA, ref, 'birth_date'), valor);
+        await tx.update(patients).set({ birthDateEnc: enc }).where(eq(patients.id, pac));
+      }, adminA.userId);
+    await trocarNascimento(randomUUID(), nascidoHa(15));
+    try {
+      const jobs = api.app.get(JobsService);
+      await jobs.executar('portal-titular-menor');
+      const run = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'jobs'), sql`${auditLog.metadata}->>'job' = 'portal-titular-menor'`)).orderBy(sql`seq desc`).limit(1), adminA.userId);
+      expect(run[0]?.metadata).toMatchObject({ ilegiveis: 1, alarme: true, titularesRevogados: 0, convitesEncerrados: 0, pacientes: 0 });
+      expect(JSON.stringify(run[0]?.metadata)).not.toContain(pac);
+      expect(await api.app.get(PortalClinicaService).revogarTitularesMenoresDaClinica(clinicaA)).toMatchObject({ ilegiveis: 1, alarme: true, titularesRevogados: 0, convitesEncerrados: 0 });
+      expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null, revokeReason: null });
+      expect(await convite(pendente.id)).toMatchObject({ revokedAt: null });
+      await api.http().get('/portal/consultas').set(cab(conta)).expect(200);
+      expect(await trilha(pac)).toEqual([]);
+      expect(await avisos(pac)).toEqual([]);
+    } finally {
+      // Devolve uma data legível (adulto) para não deixar o alarme aceso para os outros testes.
+      await trocarNascimento(pac, nascidoHa(29));
+    }
+  });
 });
