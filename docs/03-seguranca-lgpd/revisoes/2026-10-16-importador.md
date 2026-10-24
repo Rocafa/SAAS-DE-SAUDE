@@ -224,3 +224,81 @@ Condições que continuam:
 - R9 antes do GA;
 - merge depois do #63 e do #65;
 - CI verde, inclusive o teste da R11 com `DATABASE_MIGRATOR_URL`.
+
+## Conferência (rodada 22)
+
+- **Revisado:** `origin/eng/integracao-r19` (PR #73, `f00bccc`). Commits da R3/R9: `e1e52ea`, `ad041dd`, `59e037f`, `659d668`, `f00bccc`. Commits da R5: `ad95e35` a `1688a54`. Li:
+  - as migrações `0046_importador_r3_r9_chaves.sql` e `0048_importador_responsaveis.sql`;
+  - `crypto/disposable-keys.ts`, `kms-key-provider.ts` e `crypto.module.ts`;
+  - `patients/cpf-indice-cego.ts` e `patients.service.ts`;
+  - `imports/importacao.service.ts`, `importacao-regras.ts`, `jobs/registro-de-jobs.ts` e `tenant-export.ts`;
+  - os testes `key-providers.test.ts`, `cpf-indice-cego.test.ts`, `importador.rls.test.ts` (R3/R9), `importador-responsaveis.rls.test.ts` e a guarda de schema;
+  - `api-dominio.md` §12c e §12d.
+
+  Li o código e os testes, **sem executá-los**. O Maestro informa, no `f00bccc`: turbo 12/12, `test:rls` 566/566 e `test:security` 81 ok, com 7 pulados (Redis real).
+
+### Veredito: **APROVADO COM RESSALVAS.** R3, R5 e R9 aceitas. Antes de `IMPORTADOR_HABILITADO=true`, faltam duas correções curtas de código (R3-a e R3-b).
+
+**R3 — chave própria do lote, em vez da DEK embrulhada pela chave da clínica: aceito, e é melhor que o pedido.** O executor tem razão. A DEK embrulhada pela chave da clínica ficaria no mesmo banco e no mesmo backup que o bruto, e a chave da clínica, ainda viva, abriria o backup: isso não seria crypto-shredding. Só uma chave mestra destruível por conta própria garante "ilegível em qualquer cópia".
+
+Conferido:
+- **Vínculo com a clínica.** A chave do lote leva a tag `tenant_id`, e a DEK fica amarrada à clínica pelo `EncryptionContext` e pela AAD (clínica + tabela + coluna + lote).
+- **Tabela `import_batch_keys`.** Tem RLS FORCE e `portal_fora`. O runtime só tem SELECT e INSERT. O ciclo `active → destroying → destroyed` só anda como dono (`app_running_as_owner`), com CHECK de coerência e lápide (sem DELETE nem TRUNCATE).
+- **Bruto novo.** Um trigger recusa bruto sem a chave ativa do próprio lote.
+- **Expurgo.** Apaga a DEK embrulhada **na mesma transação** que apaga o bruto. Se o recebimento falhar, a chave que ficou órfã é destruída.
+- **Destruição.** `destroyMasterKey` é idempotente (`PendingDeletion` conta como feito).
+- **Trilha e exportação.** A trilha leva só contagens, e a tabela fica fora da exportação, com justificativa.
+- **Testes.** Provam que a cópia de backup (cifra + DEK embrulhada) não abre depois do aplicar nem depois do TTL, e que destruir um lote não afeta outro.
+- **Janela de 7 dias do KMS.** É aceitável: durante ela a chave já não abre, e só o `CancelKeyDeletion` a traria de volta (ver R3-b).
+
+- **R3-a (corrigir antes de ligar).** `destruirChavesDescartadas` chama o KMS **dentro** da transação do expurgo e repassa o erro. Uma falha do KMS (falta de permissão no IAM, *throttling* ou indisponibilidade) causa três problemas:
+  1. desfaz o `DELETE` do bruto e o `wrapped_key = NULL`, e o bruto vencido fica no banco além do TTL, contra a R2 e a R7;
+  2. derruba **todas** as operações do importador da clínica, porque todas começam por `expurgarNaTransacao` (inclusive o recebimento e o aplicar de outro lote);
+  3. o job diário falha naquela clínica sem alarme próprio.
+
+  Correção:
+  - destruir no KMS **depois** de gravar o expurgo, ou capturar o erro chave a chave, deixando a linha em `destroying`; o bruto e a DEK embrulhada já saíram, e a próxima rodada tenta de novo;
+  - no `expurgoDiario`, devolver `chavesPendentes` (chaves em `destroying` há mais de 24 h, pelo índice `import_batch_keys_pending_idx`) e contá-las no `alarme`;
+  - teste com um provedor que falha em `destroyMasterKey`: o bruto é apagado, a chave fica `destroying` e o alarme acende; na rodada seguinte, com o provedor de volta, a chave termina `destroyed`.
+- **R3-b (corrigir antes de ligar; é o que permite ao devops escrever o IAM).** A chave do lote nasce com a **mesma** descrição e as mesmas tags da chave mestra da clínica, e o IAM não tem como distinguir as duas. Com `kms:ScheduleKeyDeletion` "condicionado à tag `tenant_id`", a API também poderia agendar a exclusão das chaves das **clínicas**. E não dá para negar `kms:CancelKeyDeletion` e `kms:EnableKey` só às chaves de lote.
+
+  Correção:
+  - `createMasterKey` recebe a finalidade e grava as tags `purpose=import_batch` e `batch_id` (só ids), com uma descrição própria;
+  - no IAM:
+    - `CreateKey` condicionado a `aws:RequestTag/purpose`;
+    - `ScheduleKeyDeletion` da API só com `aws:ResourceTag/purpose = import_batch`;
+    - *deny* explícito de `CancelKeyDeletion` e `EnableKey` nessas chaves, com alarme no CloudTrail;
+  - atualizar a lista de permissões no §12d.
+- *Observação:* `enableKeyRotation` numa chave que vive no máximo 7 dias não faz nada. Pode sair e poupar uma chamada.
+
+**R9 — índice cego do CPF por clínica: aceito.**
+- **Construção.** HMAC-SHA256 com separação de domínio, sobre uma chave aleatória de 32 bytes, por clínica e versionada, guardada só cifrada pela chave da clínica. Destruir as chaves da clínica (G3) destrói o índice junto.
+- **Sem sinal entre clínicas.** O índice não é único e nunca compara clínicas: a chave é outra e o RLS limita a busca. O teste prova que o mesmo CPF dá índices diferentes em clínicas diferentes, e o oráculo da V2 não volta.
+- **Busca.** Confirma decifrando só o paciente que casou, o que derruba índice forjado e colisão.
+- **Índice desatualizado.** O gatilho `patients_cpf_bidx_stale` garante índice ausente, nunca índice errado.
+- **Rotação.** O banco recusa destruir uma versão com paciente indexado nela.
+- **Trilha e log.** A trilha leva só contagens e versões, e o teste confere que nenhum CPF vai para stdout ou stderr.
+- **Resíduo aceito.** Dentro da clínica, o índice revela quais pacientes compartilham CPF, o que a clínica já sabe.
+- *Observação (antes do GA):* os pacientes anteriores à 0046 só ganham índice pelo passo 2 do runbook (`reindexar`), que não tem script nem job. Até rodar, a busca continua decifrando esses pacientes, como antes. Entregar o script do runbook e rodá-lo uma vez por clínica existente antes do GA. Uma base nova não tem pendentes.
+
+**Dedup de responsáveis, que continua decifrando (0048): aceita até o GA.** A decifração acontece só dentro da clínica e da transação, sem log, como a 0048 entregou. O motivo técnico procede: `guardians_guard` e `updated_at` fariam a reindexação contar como `alterado_depois`. A proposta do §12d está correta: mesma chave, domínio `guardians.cpf:v1:`, exceção no guarda só para as colunas do índice e reindexação cobrindo as duas tabelas. Prazo: o mesmo da R9 nos pacientes, antes do GA.
+
+**R5 — responsáveis no lote (0048, G2 1.18.0): aceito, R5 fechada.**
+- **Quem pode ser vínculo.** Pai/mãe e tutor só para paciente menor, pela data de nascimento; sem data, não se presume. Curador só para paciente maior, com a referência da decisão e o escopo (os dois cifrados).
+- **Pagador.** Só de menor. Na curatela, o vínculo entra **sem** pagador, com o aviso `pagador_exige_ciencia_do_paciente` (A7 do #67). O tipo `representante` não vem pela planilha.
+- **Marca clínica proibida no banco.** O guarda recusa vínculo do lote com `receives_clinical_info`, decisão ou justificativa.
+- **Marca `import_batch_id`.** Gravada só no INSERT, com lote `simulado` de pacientes e por admin da sessão, e imutável depois. O vínculo do lote só pode ser de paciente do mesmo lote.
+- **Desfazer.** Apaga, pela marca, só os vínculos, o histórico deles e as pessoas criadas pelo lote. Os gatilhos "nada se apaga" só abrem com `app.import_undo_batch` igual à marca. Uma GUC forjada pelo runtime não basta, porque ele não tem DELETE nessas tabelas (o teste prova). A pessoa que já existia fica, com o vínculo e o histórico dela.
+- **Bloqueios.** `responsavel_em_uso` (recebimento, portal, WhatsApp e paciente de fora) e `responsavel_novo` estão corretos.
+- **Sem dado pessoal no hash nem na trilha.** O hash do plano e a trilha não levam CPF nem nome.
+- **Isolamento.** O teste entre clínicas passa.
+- *Observações, sem bloqueio:*
+  - O curador de paciente sem data de nascimento é aceito. Como a decisão judicial é exigida, aceito também, mas vale um aviso `curatela_sem_data_de_nascimento` para a recepção conferir.
+  - Os bloqueios por recebimento, portal e WhatsApp não têm teste próprio no desfazer: só o de paciente de fora tem. Acrescentar um caso, por exemplo um pagamento com `guardian_payer_link_id` do lote.
+
+**Pode ligar em produção? Quanto ao código, ainda não.** Faltam a R3-a e a R3-b. Corrigidas e conferidas pelo Guardião, o código fica pronto para ligar. Continuam valendo as condições fora do código já registradas:
+- KMS ligado (Portão A);
+- IAM do devops com as tags da R3-b;
+- 1º ciclo do agendador com `alarme = false`;
+- R10 registrada;
+- registro do Guardião na fila.
