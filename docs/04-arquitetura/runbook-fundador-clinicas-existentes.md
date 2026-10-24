@@ -190,6 +190,31 @@ r.oid = m.member WHERE m.roleid = 'app_migrator'::regrole;`).
 No CI e no ambiente local, o teste (`retencao-custodia.rls.test.ts`) cria dois papéis assim com
 `DATABASE_ADMIN_URL` (superusuário do container efêmero) e os remove no fim.
 
+**O usuário mestre do RDS não pede nem confirma (O-R22b do #63, rodada 22).** No RDS o mestre não é
+`rolsuper`: se ele for membro de `app_migrator` (por exemplo, por ter criado o papel com `ADMIN`), o
+banco o aceita como "nominal". Só os logins nominais dos sócios (`op_<iniciais>`) pedem e confirmam a
+correção; o mestre só cria e retira operadores, e isso fica no chamado.
+
+**Sugestões para endurecer (O-R22a e O-R22b do #63; antes do GA, dono: devops, sem migração nesta
+rodada):**
+- **Papel de grupo `app_operador`.** Criar um papel `NOLOGIN` próprio para quem opera o runbook
+  (`CREATE ROLE app_operador NOLOGIN; GRANT app_migrator TO app_operador; GRANT app_operador TO op_ab;`)
+  e, numa migração futura, fazer `app_operador_nominal()` exigir `pg_has_role(session_user,
+  'app_operador', 'MEMBER')` em vez de aceitar qualquer membro de `app_migrator`. Assim o mestre do
+  RDS, o job de migração e qualquer outro membro técnico de `app_migrator` deixam de passar como
+  operador. A revisão trimestral passa a listar os membros de `app_operador`.
+- **pgaudit com alarme para os membros de `app_migrator`.** Ligar `pgaudit.log = 'write, ddl, role'`
+  (ou `log_statement = 'mod'` com `log_connections`) **só para os logins nominais e o mestre**
+  (`ALTER ROLE op_ab SET pgaudit.log = 'write, ddl, role'`; o papel de runtime continua sem `write`
+  para não registrar dado de paciente), com envio ao CloudWatch e retenção igual à da trilha. Criar
+  filtro de métrica e alarme (SNS on-call + DPO) para DML em `tenants`, `clinic_members` ou
+  `founder_fix_requests` feito por esses logins **fora** de `app_runbook_pedir_correcao_fundador` e
+  `app_runbook_confirmar_correcao_fundador`, e para `SET app.correcao_fundador` sem pedido confirmado.
+  O pgaudit grava sem parâmetros (`pgaudit.log_parameter = off`), então o log não leva valores.
+- Reforços opcionais, se o alarme gerar falso positivo demais: trigger que grave `requested_by` e
+  `confirmed_by` com o `session_user` (ignorando o valor enviado) e guarda que exija
+  `founder_fix_requests.confirmed_xid = txid_current()` para abrir a exceção.
+
 ## Lista de verificação (marcar no chamado, por clínica)
 
 - [ ] Clínica listada no inventário do passo 1 (sem fundador e sem membros).
