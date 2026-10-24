@@ -1608,41 +1608,41 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
 describe('contrato ApiPortal (packages/shared): respostas HTTP reais batem com o tipo', () => {
   it('titular: sessão, agenda (e ações), recibos (lista e detalhe), dados, pedidos, documentos e consentimento', async () => {
     const p = await contaDe(adminA, pacA1);
-    const confere = async (rota: RotaPortal, r: { status: number; body: unknown }) => {
+    const confere = (rota: RotaPortal, r: { status: number; body: unknown }) => {
       expect(r.status, rota).toBe(CONTRATO_PORTAL[rota].sucesso);
       expect(conferirRespostaPortal(rota, r.body), rota).toEqual([]);
       return r.body;
     };
-    await confere('GET /portal/vinculos', await api.http().get('/portal/vinculos').set(cab(p)));
-    await confere('GET /portal/sessao', await api.http().get('/portal/sessao').set(cab(p)));
-    const consultas = (await confere('GET /portal/consultas', await api.http().get('/portal/consultas').set(cab(p)))) as RespostaPortal<'GET /portal/consultas'>;
+    confere('GET /portal/vinculos', await api.http().get('/portal/vinculos').set(cab(p)));
+    confere('GET /portal/sessao', await api.http().get('/portal/sessao').set(cab(p)));
+    const consultas = (confere('GET /portal/consultas', await api.http().get('/portal/consultas').set(cab(p)))) as RespostaPortal<'GET /portal/consultas'>;
     expect(consultas.length).toBeGreaterThan(0);
     const alvo = consultas.find((c) => c.podeConfirmar);
     if (alvo) {
-      await confere('POST /portal/consultas/:id/confirmar', await api.http().post(caminhoPortal('POST /portal/consultas/:id/confirmar', { id: alvo.id })).set(cab(p)).send({}));
-      await confere(
+      confere('POST /portal/consultas/:id/confirmar', await api.http().post(caminhoPortal('POST /portal/consultas/:id/confirmar', { id: alvo.id })).set(cab(p)).send({}));
+      confere(
         'POST /portal/consultas/:id/desfazer-confirmacao',
         await api.http().post(caminhoPortal('POST /portal/consultas/:id/desfazer-confirmacao', { id: alvo.id })).set(cab(p)).send({}),
       );
     }
-    const recibos = (await confere('GET /portal/recibos', await api.http().get('/portal/recibos').set(cab(p)))) as RespostaPortal<'GET /portal/recibos'>;
+    const recibos = (confere('GET /portal/recibos', await api.http().get('/portal/recibos').set(cab(p)))) as RespostaPortal<'GET /portal/recibos'>;
     expect(recibos.find((r) => r.id === reciboA1)).toMatchObject({ valorCentavos: 5000, forma: 'dinheiro' });
-    await confere('GET /portal/recibos/:id', await api.http().get(caminhoPortal('GET /portal/recibos/:id', { id: reciboA1 })).set(cab(p)));
-    await confere('GET /portal/meus-dados', await api.http().get('/portal/meus-dados').set(cab(p)));
-    await confere('GET /portal/documentos', await api.http().get('/portal/documentos').set(cab(p)));
-    await confere('POST /portal/solicitacoes', await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'baixar' }));
-    await confere('GET /portal/solicitacoes', await api.http().get('/portal/solicitacoes').set(cab(p)));
-    await confere('GET /portal/privacidade/consentimentos', await api.http().get('/portal/privacidade/consentimentos').set(cab(p)));
+    confere('GET /portal/recibos/:id', await api.http().get(caminhoPortal('GET /portal/recibos/:id', { id: reciboA1 })).set(cab(p)));
+    confere('GET /portal/meus-dados', await api.http().get('/portal/meus-dados').set(cab(p)));
+    confere('GET /portal/documentos', await api.http().get('/portal/documentos').set(cab(p)));
+    confere('POST /portal/solicitacoes', await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'baixar' }));
+    confere('GET /portal/solicitacoes', await api.http().get('/portal/solicitacoes').set(cab(p)));
+    confere('GET /portal/privacidade/consentimentos', await api.http().get('/portal/privacidade/consentimentos').set(cab(p)));
     const fin = { finalidade: 'pesquisa' };
-    await confere(
+    confere(
       'POST /portal/privacidade/consentimentos/:finalidade',
       await api.http().post(caminhoPortal('POST /portal/privacidade/consentimentos/:finalidade', fin)).set(cab(p)).send({ resposta: 'sim' }),
     );
-    await confere(
+    confere(
       'POST /portal/privacidade/consentimentos/:finalidade/desfazer',
       await api.http().post(caminhoPortal('POST /portal/privacidade/consentimentos/:finalidade/desfazer', fin)).set(cab(p)).send({}),
     );
-    await confere(
+    confere(
       'GET /portal/privacidade/consentimentos/:finalidade/historico',
       await api.http().get(caminhoPortal('GET /portal/privacidade/consentimentos/:finalidade/historico', fin)).set(cab(p)),
     );
