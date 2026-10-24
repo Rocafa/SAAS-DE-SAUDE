@@ -491,6 +491,48 @@ A data de nascimento é cifrada, então só a API sabe a idade. Quando ela concl
 - **Só pelo caminho certo.** `portal_links_guard` aceita `titular_menor_de_idade` só do dono, com a GUC `app.portal_titular_menor`, em vínculo `titular` e com `revoked_by` = ator da sessão (ou sentinela). A clínica não usa esse motivo à mão (42501). O mesmo vale em `portal_invites_guard` para o encerramento do convite pelo job (sem usuário).
 - **Prova:** `portal.rls.test.ts` "R3 do #68 (0050)": a correção revoga e encerra o convite na mesma transação, com aviso a admin e profissional e o alerta sem id de paciente; o job pega o caso que escapou (data trocada por SQL, sem a API); o adulto (e o emancipado) não é afetado; o motivo não se forja.
 
+### 10h. Contrato `ApiPortal` e como o front liga no backend (rodada 24; P1 do parecer de 24/10)
+
+**Fonte única:** `packages/shared/src/api-portal.ts` (importe de `@plataforma/shared`). O backend usa esse contrato no controller e nos serviços do portal (`RespostaPortal<'GET /portal/consultas'>` etc.), e o front deve tipar o adaptador HTTP com `ApiPortal`, sem cópia local. Os tipos saem de descritores (`packages/shared/src/forma.ts`), que também conferem uma resposta real em tempo de execução (`conferirRespostaPortal(rota, corpo)`). A conferência é **estrita**: campo a mais é erro.
+
+- **Typecheck pega a divergência.** `apps/api/src/modules/portal/portal-respostas.ts` monta todas as respostas e amarra por tipo os enums do banco aos do contrato (`PortalActingAs`, `StatusFront`, `PaymentMethod`, `RightsRequestKind`, finalidades, eventos, estado da IA e o retrato do recibo). Se um lado mudar sem o outro, o `tsc` falha.
+- **Testes de contrato.** `portal-contrato.test.ts` (unitário) roda as mesmas funções que o serviço usa e confere agenda e ações, recibos (lista e detalhe, com CPF de terceiro mascarado), convite, consentimento, pedidos, dados e documentos. Também confere que nenhuma rota recebe id de paciente ou clínica e que nenhum campo de `CAMPOS_CLINICOS_PROIBIDOS` aparece. Os `@ts-expect-error` provam que o tipo recusa reais em vez de centavos, `pix` e status do front antigo. Em `portal.rls.test.ts`, o bloco "contrato ApiPortal" confere as **respostas HTTP reais** do titular e do responsável (Postgres real).
+- **Nada clínico para o responsável.** Titular e responsável recebem os **mesmos** formatos: agenda (sem especialidade), financeiro, cadastro, pedidos e consentimentos. O sigilo do adolescente continua só no servidor: o item oculto não vem, e o 404 é igual a inexistente. Campo novo em resposta exige mudar o contrato e passar pelo `guardiao-lgpd`.
+
+**Rota por rota** (todas com sessão do portal; GET sem query; erros comuns: 400 `campos`, 401, 429 `limite_por_usuario`; nas rotas com vínculo, também 409 `escolher_vinculo`/`sem_vinculo` e 403 `vinculo_inativo`/`janela_de_saida_encerrada`):
+
+| Rota (`RotaPortal`) | Corpo | Resposta | Erros próprios | Muda em relação ao front atual (#47) |
+|---|---|---|---|---|
+| `GET /portal/vinculos` | — | `VinculoDaConta[]` | — | **P3:** novo. Chamar depois do login. Com mais de um vínculo, mostrar a tela "de quem". |
+| `POST /portal/sessao/vinculo` | `{vinculoId}` | `VinculoDaConta` | 404 | **P3:** novo. Na troca, descartar todo o estado do `PortalProvider`. |
+| `GET /portal/sessao` | — | `VinculoDaConta` (`primeiroNome`, `clinica`, `agindoComo`) | — | **P3:** substitui o `primeiroNome()` local. Com `responsavel_legal`, mostrar "Você está agindo como responsável de X". |
+| `POST /portal/convites/resgate` | `{token}` | `{canal:'sms', destino}` (mascarado) | 409 `convite_invalido`, 429 | **P4:** tela nova `/portal/convite`. Ler o token do `#fragmento`, apagar com `history.replaceState`, usar `Referrer-Policy: no-referrer` e mostrar a mesma mensagem para qualquer falha. Token nunca em query (400). |
+| `POST /portal/convites/resgate/confirmar` | `{token, codigo}` | `{vinculoId}` | 409 `convite_invalido` | **P4:** o código vai ao telefone **do cadastro** (do responsável, no convite dele). Quem resgata não informa destino. |
+| `GET /portal/consultas` | — | `ConsultaPortal[]` | — | **P5:** `status` usa o vocabulário completo do backend (7 valores). Os botões seguem `podeConfirmar`/`podeCancelar`, nunca o status calculado no front. |
+| `POST /portal/consultas/:id/confirmar` | `{}` | `{status}` | 404, 409 `status_nao_permite`/`consulta_ja_comecou`, 403 `assinatura_bloqueia_escrita` | **P5:** substitui `confirmarPresenca`. |
+| `POST /portal/consultas/:id/desfazer-confirmacao` | `{}` | `{status}` | idem | **P5:** só desfaz **confirmação**. |
+| `POST /portal/consultas/:id/cancelar` | `{}` | `{status}` | idem + 409 `prazo_de_cancelamento_encerrado` | **P5:** substitui `avisarAusencia`. Tirar o "Desfazer" depois de "Não vou conseguir ir" (o backend não descancela) e pôr "para remarcar, fale com a clínica". |
+| `GET /portal/recibos` | — | `ReciboPortalResumo[]` | — | **P7:** `valorCentavos` (inteiro), `numero` e `situacao`, sem `texto`. A `forma` usa os nomes do banco (`pix_manual`, `cartao_credito`…). |
+| `GET /portal/recibos/:id` | — | `ReciboPortal` (emitente, pagador, beneficiário, `descricao` neutra, `pendencias`) | 404, 409 `recibo_eliminado_por_retencao_fiscal` | **P7:** a impressão (R8) monta a folha a partir disto e mostra "cancelado" quando for o caso. |
+| `GET /portal/meus-dados` | — | `MeusDadosPortal` | — | **P7:** `telefone`/`cpfMascarado` podem vir `null`. O campo `nascimento` está em aberto (minimização: tirar ou mostrar como dado do titular; decisão do `guardiao-lgpd`). |
+| `POST /portal/meus-dados/correcao` | `{detalhe}` (≥ 3) | `PedidoPortal` (201) | 409 `clinica_sem_chave_de_dados`, 429 `limite_diario_de_pedidos` | **P7:** novo. |
+| `GET /portal/solicitacoes` / `POST /portal/solicitacoes` | — / `{tipo, detalhe?}` | `PedidoPortal[]` / `PedidoPortal` (201) | idem correção | **P8:** a entrada aceita os apelidos (`ver_dados`, `corrigir`, `baixar`, `apagar`), mas a resposta traz o tipo **canônico** (`PORTAL_TIPOS_DE_PEDIDO`). Mapear na exibição. Protocolo e prazo vêm do servidor: tirar `prazoResposta` e `protocolo` do front. |
+| `GET /portal/documentos` | — | `{itens: [], disponivel: false}` | — | Sem documentos até a frente de documentos e o reforço do login (R14). |
+| `GET /portal/privacidade/consentimentos` | — | `ConsentimentoPortal[]` (lista com `titulo`, `explicacao`, `versaoTexto`; `estadoIa` só em `escriba_ia`) | — | **P6:** trocar o `Record` e os textos de `lib/portal.ts` pelo texto **do servidor**, que é o que o hash do evento prova (R15). |
+| `POST /portal/privacidade/consentimentos/:finalidade` | `{resposta:'sim'\|'nao'}` | `{resposta}` (3 estados) | 409 `consentimento_pelo_responsavel`/`nascimento_nao_informado` | **P6:** explicar o art. 14 §1º nas mensagens. |
+| `POST …/:finalidade/desfazer` | `{}` | `{resposta}` | idem + 409 `nada_a_desfazer` | **P6.** |
+| `GET …/:finalidade/historico` | — | `EventoDeConsentimentoPortal[]` | — | Histórico append-only (R15). |
+
+**Como usar no adaptador do front** (sem tocar no fake da clínica; R-47a): `caminhoPortal(rota, params)` monta a URL; `CONTRATO_PORTAL[rota].metodo`/`.sucesso` dão o método e o status. O tipo de retorno é `RespostaPortal<rota>`, o corpo é `CorpoPortal<rota>`, e o erro tem a forma `ErroDaApi` (`codigo` estável → mensagem). No teste do adaptador, `conferirRespostaPortal` serve de verificação de contrato.
+
+**O que depende da D4 (cookie de sessão do portal; P2):**
+- **Login.** Hoje só existe `DevPortalSessionProvider` (`Authorization: Bearer ptl_…`, apenas dev/test; a API não sobe em produção sem D4) e não há rota de OTP de entrada. O contrato acima **não muda** com a D4: muda só como a sessão chega.
+- **Cookie.** HttpOnly, Secure, SameSite=Strict, nome próprio, separado do cookie da clínica (de preferência em subdomínio do portal) e com proteção CSRF nos POST.
+- **Adaptador.** `credentials: 'include'` só para a origem do portal. Nunca guardar token em `localStorage`, `sessionStorage` ou memória persistente.
+- **OTP de entrada.** Limite de tentativas, validade de 10 min, uso único e a mesma resposta para número existente ou não. Tirar o "use 123456" (G8). As rotas de entrada e saída entram no `CONTRATO_PORTAL` quando forem implementadas.
+- **Ordem.** Entrar → (`GET /portal/vinculos` → escolher) → resgatar convite. Até a D4, o resgate e todas as rotas só funcionam com a sessão de dev.
+- **Gerais.** `Cache-Control: no-store` nas respostas (R1e). O service worker continua sem cache de `/portal` e da API (G3).
+
 ## 11. Responsáveis do paciente (rodada 18.2, PAC-01.2; migração 0028)
 
 > **Registro de histórico (R7 do parecer [2026-10-22-pr68](../03-seguranca-lgpd/revisoes/2026-10-22-pr68.md)):** o commit `529490e`, publicado com a mensagem `wip: trabalho em andamento salvo antes da retomada`, é o **merge da Fase B (V1)**: integra `eng/responsaveis` (0028/0031) em `eng/portal-paciente`, junto com a seção V1 da 0033. Como já foi publicado, não será reescrito. A 0033 depende de 0028 e 0031.
