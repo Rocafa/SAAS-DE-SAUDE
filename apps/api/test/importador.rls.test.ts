@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, importBatches, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
+import { appointments, auditLog, importBatches, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patientCpfIndexKeys, patients, tenants } from '../src/db/schema';
+import { PatientsService } from '../src/modules/patients/patients.service';
 import { KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
 import type { DisposableKeys } from '../src/modules/crypto/disposable-keys';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -563,6 +564,153 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     await expect(
       withTenant(api.db.db, clinicaB, (tx) => tx.insert(importBatchKeys).values({ batchId: id, tenantId: clinicaA, masterKeyId: 'local:x', wrappedKey: Buffer.alloc(60) }), adminB.userId),
     ).rejects.toThrow();
+  });
+});
+
+describe('R9 do #66: índice cego do CPF por clínica (HMAC com chave da clínica no KMS)', () => {
+  let clinicaC: TenantId;
+  let clinicaD: TenantId;
+  let adminC: Sessao;
+  let adminD: Sessao;
+  const cpfs = [CPF(401), CPF(402), CPF(403), CPF(404), CPF(405)];
+  const ctxC = () => ({ tenantId: clinicaC, userId: adminC.userId as UserId, roles: ['admin'] });
+  const bidxDe = async (t: TenantId, id: string) =>
+    (await withTenant(api.db.db, t, (tx) => tx.select({ b: patients.cpfBidx, v: patients.cpfBidxVersion }).from(patients).where(eq(patients.id, id))))[0];
+  const novoPaciente = async (s: Sessao, nome: string, cpf: string) =>
+    ((await api.http().post('/pacientes').set(cab(s)).send({ nome, telefone: '11900000400', cpf }).expect(201)).body as { id: string }).id;
+
+  beforeAll(async () => {
+    clinicaC = await api.novaClinica();
+    clinicaD = await api.novaClinica();
+    adminC = await api.membro(clinicaC, api.sessao(clinicaC, 'admin'), 'admin');
+    adminD = await api.membro(clinicaD, api.sessao(clinicaD, 'admin'), 'admin');
+    nomes.set(clinicaC, await nomeDaClinica(clinicaC));
+  });
+
+  it('o mesmo CPF tem índice DIFERENTE em duas clínicas; a chave de índice só existe cifrada e B não a lê', async () => {
+    const emC = await novoPaciente(adminC, 'Indice Ficticio C', cpfs[0] as string);
+    const emD = await novoPaciente(adminD, 'Indice Ficticio D', cpfs[0] as string);
+    const c = await bidxDe(clinicaC, emC);
+    const d = await bidxDe(clinicaD, emD);
+    expect(c?.b).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(d?.b).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(c?.b).not.toBe(d?.b);
+    expect(c?.v).toBe(1);
+    const [chave] = await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(patientCpfIndexKeys));
+    expect(chave?.keyEnc?.startsWith('v1:')).toBe(true);
+    expect(await withTenant(api.db.db, clinicaD, (tx) => tx.select().from(patientCpfIndexKeys).where(eq(patientCpfIndexKeys.tenantId, clinicaC)))).toHaveLength(0);
+    // Nem com o id do paciente de C a clínica D casa o índice (RLS + chave por clínica).
+    expect(await withTenant(api.db.db, clinicaD, (tx) => tx.select().from(patients).where(eq(patients.cpfBidx, c?.b as string)))).toHaveLength(0);
+  });
+
+  it('dedup pelo índice: o dry-run acha o CPF cadastrado decifrando só o paciente casado, não o cadastro inteiro', async () => {
+    for (const [i, cpf] of cpfs.slice(1).entries()) await novoPaciente(adminC, `Cadastro Ficticio ${i}`, cpf);
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const original = cipher.decryptString.bind(cipher);
+    let decifradosDeCpf = 0;
+    cipher.decryptString = (tx, ref, valor) => {
+      if (ref.table === 'patients' && ref.column === 'cpf') decifradosDeCpf++;
+      return original(tx, ref, valor);
+    };
+    try {
+      const csv = `nome;cpf;telefone\nNovo Ficticio;${CPF(410)};11900000410\nRepetido Ficticio;${cpfs[2]};11900000411\n`;
+      const { sim } = await ateSimular(adminC, 'pacientes', csv, { nome: 0, cpf: 1, telefone: 2 });
+      expect(sim.lote).toMatchObject({ criar: 1, ignorar: 1 });
+      expect(sim.divergencias).toContainEqual(expect.objectContaining({ linha: 3, campo: 'cpf', codigo: 'ja_cadastrado' }));
+    } finally {
+      cipher.decryptString = original;
+    }
+    // 5 pacientes com CPF na clínica: decifra só o casado (1), nunca os 5.
+    expect(decifradosDeCpf).toBe(1);
+  });
+
+  it('CPF reescrito sem índice (caminho que esqueceu o índice): o índice cai para NULL e a busca ainda acha (decifra só os pendentes)', async () => {
+    const servico = api.app.get(PatientsService);
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const id = await novoPaciente(adminC, 'Sem Indice Ficticio', CPF(420));
+    await withTenant(
+      api.db.db,
+      clinicaC,
+      async (tx) => {
+        const novo = await cipher.encrypt(tx, { tenantId: clinicaC, table: 'patients', column: 'cpf', rowId: id }, CPF(421));
+        await tx.update(patients).set({ cpfEnc: novo }).where(eq(patients.id, id));
+      },
+      adminC.userId,
+    );
+    expect(await bidxDe(clinicaC, id)).toEqual({ b: null, v: null });
+    const achados = await withTenant(api.db.db, clinicaC, (tx) => servico.indiceCpf.procurar(tx, clinicaC, [CPF(421), CPF(420)]));
+    expect(achados.get(CPF(421))?.id).toBe(id);
+    expect(achados.has(CPF(420))).toBe(false);
+    // Índice forjado (SQL injetado copia o índice de outro paciente) não vira falso "já cadastrado": a busca confirma decifrando.
+    const outro = await bidxDe(clinicaC, (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ id: patients.id }).from(patients).where(eq(patients.displayName, 'Cadastro Ficticio 0'))))[0]?.id as string);
+    await withTenant(api.db.db, clinicaC, (tx) => tx.update(patients).set({ cpfBidx: outro?.b, cpfBidxVersion: outro?.v }).where(eq(patients.id, id)), adminC.userId);
+    const depois = await withTenant(api.db.db, clinicaC, (tx) => servico.indiceCpf.procurar(tx, clinicaC, [cpfs[1] as string]));
+    expect(depois.get(cpfs[1] as string)?.id).not.toBe(id);
+    // Reindexa para não deixar o forjado.
+    await withTenant(api.db.db, clinicaC, (tx) => tx.update(patients).set({ cpfBidx: null, cpfBidxVersion: null }).where(eq(patients.id, id)), adminC.userId);
+  });
+
+  it('troca da chave do índice: girar → reindexar em lotes → descartar a antiga; a busca funciona em todas as fases', async () => {
+    const servico = api.app.get(PatientsService);
+    const indice = servico.indiceCpf;
+    const procurar = (cpf: string) => withTenant(api.db.db, clinicaC, async (tx) => (await indice.procurar(tx, clinicaC, [cpf])).get(cpf)?.id);
+    const alvo = await procurar(cpfs[3] as string);
+    expect(alvo).toBeDefined();
+    const antes = await bidxDe(clinicaC, alvo as string);
+    // 1. Girar: v1 vira retired, nasce v2; a busca ainda casa pela v1.
+    const v2 = await withTenant(api.db.db, clinicaC, (tx) => indice.girarChave(tx, ctxC()), adminC.userId);
+    expect(v2).toBe((antes?.v as number) + 1);
+    expect(await procurar(cpfs[3] as string)).toBe(alvo);
+    // Paciente novo já entra na v2.
+    const novo = await novoPaciente(adminC, 'Pos Giro Ficticio', CPF(430));
+    expect((await bidxDe(clinicaC, novo))?.v).toBe(v2);
+    // Descartar antes de reindexar não destrói a v1 (ainda há paciente nela), nem por SQL direto.
+    expect(await withTenant(api.db.db, clinicaC, (tx) => indice.descartarChavesAntigas(tx, ctxC()), adminC.userId)).toBe(0);
+    await expect(
+      withTenant(api.db.db, clinicaC, (tx) => tx.update(patientCpfIndexKeys).set({ status: 'destroyed', keyEnc: null, destroyedAt: sql`now()` }).where(eq(patientCpfIndexKeys.version, antes?.v as number)), adminC.userId),
+    ).rejects.toThrow();
+    // 2. Reindexar em lotes de 2 até zerar.
+    let r = { reindexados: 0, pendentes: 1 };
+    let voltas = 0;
+    while (r.pendentes > 0 && voltas++ < 20) r = await withTenant(api.db.db, clinicaC, (tx) => indice.reindexar(tx, ctxC(), 2), adminC.userId);
+    expect(r.pendentes).toBe(0);
+    const depois = await bidxDe(clinicaC, alvo as string);
+    expect(depois?.v).toBe(v2);
+    expect(depois?.b).not.toBe(antes?.b);
+    // 3. Descartar a antiga: key_enc apagada; a busca continua achando pela v2.
+    expect(await withTenant(api.db.db, clinicaC, (tx) => indice.descartarChavesAntigas(tx, ctxC()), adminC.userId)).toBe(1);
+    const chaves = await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(patientCpfIndexKeys).orderBy(patientCpfIndexKeys.version));
+    expect(chaves.map((k) => [k.version, k.status, k.keyEnc === null])).toEqual([
+      [antes?.v, 'destroyed', true],
+      [v2, 'active', false],
+    ]);
+    expect(await procurar(cpfs[3] as string)).toBe(alvo);
+  });
+
+  it('nenhum CPF em claro na trilha nem no log (stdout/stderr) das operações do índice e do importador', async () => {
+    const saida: string[] = [];
+    const out = process.stdout.write.bind(process.stdout);
+    const err = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), out(c, ...resto))) as typeof process.stdout.write;
+    process.stderr.write = ((c: string | Uint8Array, ...resto: never[]) => (saida.push(String(c)), err(c, ...resto))) as typeof process.stderr.write;
+    try {
+      const csv = `nome;cpf;telefone\nLog Ficticio;${CPF(440)};11900000440\nRepetido Log Ficticio;${cpfs[4]};11900000441\n`;
+      const { id, sim } = await ateSimular(adminC, 'pacientes', csv, { nome: 0, cpf: 1, telefone: 2 });
+      expect((await aplicar(adminC, id, sim.resumoHash, nomes.get(clinicaC))).status).toBe(200);
+      await withTenant(api.db.db, clinicaC, (tx) => api.app.get(PatientsService).indiceCpf.reindexar(tx, ctxC(), 10), adminC.userId);
+    } finally {
+      process.stdout.write = out;
+      process.stderr.write = err;
+    }
+    const todos = [...cpfs, CPF(410), CPF(420), CPF(421), CPF(430), CPF(440)];
+    const formatado = (c: string) => `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}`;
+    const trilha = JSON.stringify(await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(auditLog)));
+    const log = saida.join('');
+    for (const c of todos) {
+      expect(trilha.includes(c) || trilha.includes(formatado(c)), 'CPF na trilha').toBe(false);
+      expect(log.includes(c) || log.includes(formatado(c)), 'CPF no log').toBe(false);
+    }
+    expect(trilha).toContain('cpf_reindex');
   });
 });
 

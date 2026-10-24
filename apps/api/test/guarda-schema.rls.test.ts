@@ -100,6 +100,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
   // R3 (0046): chave própria do lote; o ciclo de vida anda só pelas funções do expurgo.
   import_batch_keys: { privilegios: ['SELECT', 'INSERT'] },
+  // R9 (0046): chave do índice cego do CPF; UPDATE só nas transições active -> retired -> destroyed (trigger).
+  patient_cpf_index_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   import_issues: { privilegios: ['SELECT', 'INSERT'] },
   import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
   // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
@@ -437,6 +439,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'import_batches',
       'import_raw_files',
       'import_batch_keys',
+      // R9 (0046): chave do índice cego do CPF.
+      'patient_cpf_index_keys',
       'import_issues',
       'import_batch_records',
       // Responsáveis (0028): só as funções do dono leem o vínculo.

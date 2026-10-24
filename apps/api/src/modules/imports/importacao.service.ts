@@ -691,18 +691,12 @@ export class ImportacaoService {
     for (const p of ps) await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`agenda:${ctx.tenantId}:${p.id}`}, 0))`);
   }
 
-  /** CPF (decifrado) -> paciente, de toda a clínica. Substituível por índice cego quando houver HMAC no KMS. */
-  private async cpfsDaClinica(tx: TenantTx, ctx: RequestContext): Promise<Map<string, { id: string; ativo: boolean }>> {
-    const linhas = await tx
-      .select({ id: patients.id, cpfEnc: patients.cpfEnc, ativo: patients.active })
-      .from(patients)
-      .where(and(eq(patients.tenantId, ctx.tenantId), isNotNull(patients.cpfEnc)));
-    const mapa = new Map<string, { id: string; ativo: boolean }>();
-    for (const l of linhas) {
-      const cpf = await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, l.id, 'cpf'), l.cpfEnc as string);
-      mapa.set(cpf, { id: l.id, ativo: l.ativo });
-    }
-    return mapa;
+  /**
+   * CPF do arquivo -> paciente da clínica, pelo índice cego por clínica (R9, 0046): decifra só os pacientes
+   * que casaram (para confirmar) e os ainda sem índice, nunca o cadastro inteiro. Só dentro da clínica.
+   */
+  private cpfsDaClinica(tx: TenantTx, ctx: RequestContext, cpfs: readonly string[]): Promise<Map<string, { id: string; ativo: boolean }>> {
+    return this.pacientes.indiceCpf.procurar(tx, ctx.tenantId, [...new Set(cpfs)]);
   }
 
   /**
@@ -731,7 +725,7 @@ export class ImportacaoService {
   private async planejarPacientes(tx: TenantTx, ctx: RequestContext, planilha: Planilha, mapa: Mapeamento): Promise<Plano> {
     const v = validarPacientes(planilha, mapa);
     const divergencias: Divergencia[] = [...v.divergencias];
-    const cpfs = v.validas.some((p) => p.cpf) ? await this.cpfsDaClinica(tx, ctx) : new Map<string, { id: string; ativo: boolean }>();
+    const cpfs = v.validas.some((p) => p.cpf) ? await this.cpfsDaClinica(tx, ctx, v.validas.flatMap((p) => (p.cpf ? [p.cpf] : []))) : new Map<string, { id: string; ativo: boolean }>();
     // Sem CPF: mesmo nome já cadastrado vira aviso (cria mesmo assim; o admin vê antes de aplicar).
     const semCpf = v.validas.filter((p) => !p.cpf);
     const nomes = new Set<string>();
@@ -792,7 +786,7 @@ export class ImportacaoService {
         .from(appointmentTypes)
         .where(and(eq(appointmentTypes.tenantId, ctx.tenantId), eq(appointmentTypes.active, true))),
     );
-    const cpfs = v.validas.some((a) => a.cpf) ? await this.cpfsDaClinica(tx, ctx) : new Map<string, { id: string; ativo: boolean }>();
+    const cpfs = v.validas.some((a) => a.cpf) ? await this.cpfsDaClinica(tx, ctx, v.validas.flatMap((a) => (a.cpf ? [a.cpf] : []))) : new Map<string, { id: string; ativo: boolean }>();
     const porNome = v.validas.some((a) => !a.cpf)
       ? agrupar(await tx.select({ id: patients.id, nome: patients.displayName, ativo: patients.active }).from(patients).where(eq(patients.tenantId, ctx.tenantId)))
       : new Map<string, { id: string; nome: string; ativo: boolean }[]>();

@@ -12,6 +12,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { IndiceCegoCpf } from './cpf-indice-cego';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
 import { aniversarioDe, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
 import {
@@ -62,11 +63,15 @@ function padraoContem(termo: string): string {
 @Injectable()
 export class PatientsService {
   private readonly logger = new Logger('PatientsService');
+  /** Índice cego do CPF por clínica (0046, R9 do importador): gravado junto com o CPF cifrado. */
+  readonly indiceCpf: IndiceCegoCpf;
 
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
-  ) {}
+  ) {
+    this.indiceCpf = new IndiceCegoCpf(cipher);
+  }
 
   listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
     return this.leitura(ctx, async (tx) => {
@@ -143,8 +148,12 @@ export class PatientsService {
         if (dados.nome !== undefined) campos.push('name');
         if (dados.nomeSocial !== undefined) campos.push('social_name');
       }
-      if (dados.cpf !== undefined) {
+      // R9 (0046): o índice cego anda junto com o CPF; mesmo CPF não reescreve nada (nem a cifra nem o índice).
+      if (dados.cpf !== undefined && (dados.cpf ?? null) !== (await this.decifrar(tx, ctx.tenantId, id, 'cpf', atual.cpfEnc))) {
         mudancas.cpfEnc = await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf ?? undefined);
+        const indice = dados.cpf ? await this.indiceCpf.indexar(tx, ctx, dados.cpf) : null;
+        mudancas.cpfBidx = indice?.cpfBidx ?? null;
+        mudancas.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
         campos.push('cpf');
       }
       if (dados.telefone !== undefined) {
@@ -223,8 +232,11 @@ export class PatientsService {
    */
   async prepararInsercao(tx: TenantTx, ctx: RequestContext, id: string, dados: NovoPaciente): Promise<typeof patients.$inferInsert> {
     const nomeSocial = dados.nomeSocial ?? null;
+    const indice = dados.cpf ? await this.indiceCpf.indexar(tx, ctx, dados.cpf) : null;
     return {
       id,
+      cpfBidx: indice?.cpfBidx ?? null,
+      cpfBidxVersion: indice?.cpfBidxVersion ?? null,
       tenantId: ctx.tenantId,
       displayName: dados.nome,
       socialName: nomeSocial,

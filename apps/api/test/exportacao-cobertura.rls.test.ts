@@ -135,6 +135,8 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.subscription_status': 'vai no manifesto (subscription.status)',
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
+  'patients.cpf_bidx': 'índice cego do CPF (HMAC com chave interna da clínica, 0046/R9); o CPF sai decifrado em cpf',
+  'patients.cpf_bidx_version': 'versão da chave interna do índice cego do CPF (0046/R9); não é dado da clínica',
   'portal_invites.token_hash': 'hash do token de uso único do convite: credencial, não sai (0027)',
   'whatsapp_opt_ins.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone',
   'whatsapp_outbox.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone enquanto não passa a retenção',

@@ -177,3 +177,103 @@ BEGIN
   END LOOP;
 END;
 $$;
+
+-- ---------------------------------------------------------------- R9: índice cego do CPF por clínica
+-- Antes: a deduplicação do importador decifrava TODOS os CPFs da clínica a cada validação/aplicar.
+-- Agora: patients.cpf_bidx = HMAC-SHA256(chave de índice da clínica, "patients.cpf:v1:" + 11 dígitos), em
+-- base64url, com a VERSÃO da chave em cpf_bidx_version. A chave de índice é aleatória (32 bytes), por
+-- clínica, guardada SÓ cifrada pela chave da clínica (FieldCipher: DEK embrulhada pela chave mestra da
+-- clínica no KMS), como a do WhatsApp (0032); substitui a chave de ambiente antiga (IMPORT_CPF_FP_KEY,
+-- removida na 0030). Destruir as chaves da clínica (G3) destrói o índice junto.
+-- Não substitui a cifra do CPF; não há índice único (CPF repetido continua possível, como antes) e o
+-- índice nunca compara entre clínicas (chave diferente por clínica + RLS).
+-- Troca da chave (rotação/suspeita de vazamento): nova versão `active`, a antiga `retired` (continua
+-- casando enquanto houver paciente indexado com ela), reindexação em lotes e, com zero pacientes na
+-- versão antiga, a antiga vira `destroyed` (key_enc apagada). Ver api-dominio.md §12d.
+
+CREATE TABLE patient_cpf_index_keys (
+  tenant_id    uuid NOT NULL REFERENCES tenants (id),
+  version      smallint NOT NULL CONSTRAINT patient_cpf_index_keys_version_check CHECK (version BETWEEN 1 AND 32000),
+  key_enc      text CONSTRAINT patient_cpf_index_keys_key_check CHECK (key_enc IS NULL OR app_is_sealed_field(key_enc)),
+  status       text NOT NULL DEFAULT 'active' CONSTRAINT patient_cpf_index_keys_status_check CHECK (status IN ('active', 'retired', 'destroyed')),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  retired_at   timestamptz,
+  destroyed_at timestamptz,
+  PRIMARY KEY (tenant_id, version),
+  CONSTRAINT patient_cpf_index_keys_life_check CHECK (
+    (status = 'active' AND key_enc IS NOT NULL AND retired_at IS NULL AND destroyed_at IS NULL)
+    OR (status = 'retired' AND key_enc IS NOT NULL AND retired_at IS NOT NULL AND destroyed_at IS NULL)
+    OR (status = 'destroyed' AND key_enc IS NULL AND retired_at IS NOT NULL AND destroyed_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX patient_cpf_index_keys_one_active ON patient_cpf_index_keys (tenant_id) WHERE status = 'active';
+
+CREATE FUNCTION patient_cpf_index_keys_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'active' OR NEW.version <> COALESCE(
+         (SELECT max(k.version) FROM patient_cpf_index_keys k WHERE k.tenant_id = NEW.tenant_id), 0) + 1 THEN
+      RAISE EXCEPTION 'chave de índice nasce ativa e na próxima versão' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.tenant_id = OLD.tenant_id AND NEW.version = OLD.version AND NEW.created_at = OLD.created_at
+       AND ((OLD.status = 'active' AND NEW.status = 'retired' AND NEW.key_enc = OLD.key_enc AND NEW.retired_at = now())
+         OR (OLD.status = 'retired' AND NEW.status = 'destroyed' AND NEW.key_enc IS NULL AND NEW.retired_at = OLD.retired_at
+             AND NEW.destroyed_at = now()
+             AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.tenant_id = NEW.tenant_id AND p.cpf_bidx_version = NEW.version))) THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'chave de índice só anda active -> retired -> destroyed (destruir só sem paciente indexado nela)'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RAISE EXCEPTION 'chave de índice não se apaga (a destruída fica como lápide)' USING ERRCODE = 'insufficient_privilege';
+END;
+$$;
+REVOKE ALL ON FUNCTION patient_cpf_index_keys_guard() FROM PUBLIC;
+CREATE TRIGGER patient_cpf_index_keys_guard BEFORE INSERT OR UPDATE OR DELETE ON patient_cpf_index_keys
+  FOR EACH ROW EXECUTE FUNCTION patient_cpf_index_keys_guard();
+CREATE TRIGGER patient_cpf_index_keys_no_truncate BEFORE TRUNCATE ON patient_cpf_index_keys
+  FOR EACH STATEMENT EXECUTE FUNCTION import_reject_mutation();
+
+ALTER TABLE patient_cpf_index_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patient_cpf_index_keys FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON patient_cpf_index_keys
+  USING (tenant_id = (SELECT app_current_tenant())) WITH CHECK (tenant_id = (SELECT app_current_tenant()));
+CREATE POLICY portal_fora ON patient_cpf_index_keys AS RESTRICTIVE
+  USING (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL)
+  WITH CHECK (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL);
+REVOKE ALL ON patient_cpf_index_keys FROM PUBLIC;
+REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON patient_cpf_index_keys FROM app_user;
+GRANT SELECT, INSERT, UPDATE ON patient_cpf_index_keys TO app_user;
+
+ALTER TABLE patients
+  ADD COLUMN cpf_bidx         text CONSTRAINT patients_cpf_bidx_check CHECK (cpf_bidx IS NULL OR cpf_bidx ~ '^[A-Za-z0-9_-]{43}$'),
+  ADD COLUMN cpf_bidx_version smallint,
+  ADD CONSTRAINT patients_cpf_bidx_pair_check CHECK ((cpf_bidx IS NULL) = (cpf_bidx_version IS NULL)),
+  ADD CONSTRAINT patients_cpf_bidx_needs_cpf_check CHECK (cpf_bidx IS NULL OR cpf_enc IS NOT NULL),
+  ADD CONSTRAINT patients_cpf_bidx_key_fk FOREIGN KEY (tenant_id, cpf_bidx_version) REFERENCES patient_cpf_index_keys (tenant_id, version);
+CREATE INDEX patients_cpf_bidx_idx ON patients (tenant_id, cpf_bidx) WHERE cpf_bidx IS NOT NULL;
+
+-- CPF mudou (ou foi apagado/recifrado) sem índice novo na MESMA escrita: o índice velho cai (NULL). Quem
+-- procura por CPF trata o paciente sem índice como pendente de reindexação (decifra só esses). Assim um
+-- caminho que esqueça o índice nunca deixa um índice errado, só um ausente.
+CREATE FUNCTION patients_cpf_bidx_stale() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NEW.cpf_enc IS DISTINCT FROM OLD.cpf_enc AND NEW.cpf_bidx IS NOT DISTINCT FROM OLD.cpf_bidx
+     AND NEW.cpf_bidx_version IS NOT DISTINCT FROM OLD.cpf_bidx_version THEN
+    NEW.cpf_bidx := NULL;
+    NEW.cpf_bidx_version := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION patients_cpf_bidx_stale() FROM PUBLIC;
+CREATE TRIGGER patients_cpf_bidx_stale BEFORE UPDATE OF cpf_enc ON patients
+  FOR EACH ROW EXECUTE FUNCTION patients_cpf_bidx_stale();

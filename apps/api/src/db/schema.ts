@@ -50,7 +50,31 @@ export const patients = pgTable('patients', {
   emancipationRecordedAt: timestamp('emancipation_recorded_at', { withTimezone: true }),
   /** Migração 0026 (V1 do importador): lote que criou o paciente; gravado só no INSERT, imutável. */
   importBatchId: uuid('import_batch_id'),
+  /** Migração 0046 (R9 do importador): índice cego do CPF (HMAC com a chave de índice da clínica) e a versão da chave. */
+  cpfBidx: text('cpf_bidx'),
+  cpfBidxVersion: smallint('cpf_bidx_version'),
 });
+
+/**
+ * Chave de índice cego do CPF por clínica (0046, R9): 32 bytes aleatórios SÓ cifrados pela chave da clínica
+ * (FieldCipher/KMS). Uma ativa; a trocada fica `retired` até a reindexação e então `destroyed` (key_enc nula).
+ */
+export const PATIENT_CPF_INDEX_KEY_STATUSES = ['active', 'retired', 'destroyed'] as const;
+export const patientCpfIndexKeys = pgTable(
+  'patient_cpf_index_keys',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    version: smallint('version').notNull(),
+    keyEnc: text('key_enc'),
+    status: text('status', { enum: PATIENT_CPF_INDEX_KEY_STATUSES }).notNull().default('active'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    retiredAt: timestamp('retired_at', { withTimezone: true }),
+    destroyedAt: timestamp('destroyed_at', { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.version] })],
+);
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
 export const professionals = pgTable('professionals', {
@@ -1205,6 +1229,7 @@ export const schema = {
   importBatches,
   importRawFiles,
   importBatchKeys,
+  patientCpfIndexKeys,
   importIssues,
   importBatchRecords,
   whatsappSettings,
