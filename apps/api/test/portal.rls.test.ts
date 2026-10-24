@@ -339,7 +339,7 @@ describe('paciente A nunca vê o paciente B (mesma clínica e outra clínica)', 
   it('meus dados: só o próprio cadastro, CPF mascarado; correção vira pedido para a clínica', async () => {
     const p = await contaDe(adminA, pacA1);
     const r = await api.http().get('/portal/meus-dados').set(cab(p)).expect(200);
-    expect(r.body).toEqual({ nome: 'Ana Ficticia Portal', nomeSocial: null, telefone: '11900001111', cpfMascarado: `***.***.***-${cpfFicticio(41).slice(9)}`, nascimento: '1990-03-04' });
+    expect(r.body).toEqual({ rotulo: 'meus_dados', nome: 'Ana Ficticia Portal', nomeSocial: null, telefone: '11900001111', cpfMascarado: `***.***.***-${cpfFicticio(41).slice(9)}`, nascimento: '1990-03-04' });
     const c = await api.http().post('/portal/meus-dados/correcao').set(cab(p)).send({ detalhe: 'Telefone ficticio mudou' }).expect(201);
     expect(c.body).toMatchObject({ tipo: 'correcao', situacao: 'aberto' });
   });
@@ -1672,5 +1672,136 @@ describe('contrato ApiPortal (packages/shared): respostas HTTP reais batem com o
     expect(erro.status).toBe(409);
     expect(conferirForma(FormaErroDaApi, erro.body)).toEqual([]);
     expect(erro.body).toMatchObject({ codigo: 'convite_invalido' });
+  });
+
+  it('adolescente (12+) e responsável NÃO pagador: recibo sensível fora da lista e 404 no detalhe; o do pagador confere', async () => {
+    const nasc = nascidoHa(14);
+    const teen = await criarPaciente(adminA, 'Nina Ficticia Contrato', { nascimento: nasc });
+    const psi = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Dra Psi Contrato Ficticia', especialidade: 'Clinica', areaSensivel: true }).expect(201))
+      .body as { id: string };
+    const [base] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ appointment_type_id: string }>(
+      sql`select appointment_type_id from appointments where id = ${ag.a1z}`), adminA.userId);
+    const pagador = await responsavelDe(teen, 'Olga Ficticia Pagadora', { pagador: true });
+    const naoPagador = await responsavelDe(teen, 'Pio Ficticio Nao Pagador');
+    const recPsi = await recibo(adminA, await agendar(adminA, teen, psi.id, base?.appointment_type_id as string, '2027-04-05', '09:00'));
+    const contaPagador = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: pagador });
+    const contaOutro = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: naoPagador });
+    const confere = (rota: RotaPortal, r: { status: number; body: unknown }) => {
+      expect(r.status, rota).toBe(CONTRATO_PORTAL[rota].sucesso);
+      expect(conferirRespostaPortal(rota, r.body), rota).toEqual([]);
+      return r.body;
+    };
+    const ids = (b: unknown) => (b as RespostaPortal<'GET /portal/recibos'>).map((r) => r.id);
+
+    // Responsável que NÃO pagou: o recibo de área sensível não existe para ele (nem "neutro").
+    const doOutro = confere('GET /portal/recibos', await api.http().get('/portal/recibos').set(cab(contaOutro)));
+    expect(ids(doOutro)).not.toContain(recPsi);
+    const nf = await api.http().get(caminhoPortal('GET /portal/recibos/:id', { id: recPsi })).set(cab(contaOutro));
+    expect(nf.status).toBe(404);
+    expect(conferirForma(FormaErroDaApi, nf.body)).toEqual([]);
+    expect(JSON.stringify(nf.body)).not.toMatch(/Psi|profissional|emitente/);
+
+    // Responsável pagador congelado: o recibo é dele, na lista e no detalhe, conforme o contrato (sem profissionalId, C3).
+    expect(ids(confere('GET /portal/recibos', await api.http().get('/portal/recibos').set(cab(contaPagador))))).toContain(recPsi);
+    const det = confere('GET /portal/recibos/:id', await api.http().get(caminhoPortal('GET /portal/recibos/:id', { id: recPsi })).set(cab(contaPagador)));
+    expect(JSON.stringify(det)).not.toContain(psi.id);
+    expect(JSON.stringify(det)).not.toContain('profissionalId');
+
+    // C1: os dois responsáveis veem o nascimento completo, na tela rotulada "dados do paciente".
+    for (const c of [contaOutro, contaPagador]) {
+      const md = confere('GET /portal/meus-dados', await api.http().get('/portal/meus-dados').set(cab(c)));
+      expect(md).toMatchObject({ rotulo: 'dados_do_paciente', nascimento: nasc });
+    }
+  });
+});
+
+describe('C1 (conferência de 24/10): nascimento não se edita pelo portal; correção analisada pela clínica', () => {
+  const corrigir = (c: SessaoPortal, corpo: Record<string, unknown>) => api.http().post('/portal/meus-dados/correcao').set(cab(c)).send(corpo);
+  const situacao = (id: string, corpo: Record<string, unknown>) => api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send(corpo);
+
+  it('responsável pede data que REDUZ a idade do adolescente: o cadastro não muda e atender exige documento conferido', async () => {
+    const nasc = nascidoHa(15);
+    const teen = await criarPaciente(adminA, 'Iara Ficticia Correcao', { nascimento: nasc });
+    const resp = await responsavelDe(teen, 'Joel Ficticio Correcao');
+    const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    expect((await api.http().get('/portal/meus-dados').set(cab(c)).expect(200)).body).toMatchObject({ rotulo: 'dados_do_paciente', nascimento: nasc });
+    // Não há rota que edite o cadastro pelo portal.
+    await api.http().post('/portal/meus-dados').set(cab(c)).send({ nascimento: nascidoHa(11) }).expect(404);
+    // Data inválida, em outro formato ou futura: 400 com o NOME do campo (nunca o valor).
+    for (const n of ['2013-02-29', '01/01/2015', '2999-01-01', 'quinze anos']) {
+      const r = await corrigir(c, { detalhe: 'Data ficticia', nascimento: n }).expect(400);
+      expect(r.body, n).toMatchObject({ campos: ['nascimento'] });
+      expect(JSON.stringify(r.body)).not.toContain(n);
+    }
+    const proposto = nascidoHa(11);
+    const ped = (await corrigir(c, { detalhe: 'Data de nascimento ficticia errada', nascimento: proposto }).expect(201)).body as { id: string };
+    expect(conferirRespostaPortal('POST /portal/meus-dados/correcao', ped)).toEqual([]);
+    expect(ped).toMatchObject({ tipo: 'correcao', situacao: 'aberto' });
+    // O pedido não muda o cadastro.
+    expect((await api.http().get('/portal/meus-dados').set(cab(c)).expect(200)).body).toMatchObject({ nascimento: nasc });
+
+    const det = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
+    expect(det.body).toMatchObject({ tipo: 'correcao', agindoComo: 'responsavel_legal', nascimentoProposto: proposto, exigeConferenciaDeDocumento: true, documentoConferidoEm: null });
+    for (const corpo of [{}, { documentoConferido: false }]) {
+      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(400);
+      expect(r.body).toMatchObject({ campos: ['documentoConferido'] });
+    }
+    await situacao(ped.id, { situacao: 'em_andamento' }).expect(200);
+    await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', documentoConferido: true }).expect(200);
+    const depois = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
+    expect((depois.body as { documentoConferidoEm: string | null }).documentoConferidoEm).not.toBeNull();
+
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, ped.id)), adminA.userId);
+    expect(linha?.birthDateProposedEnc).toMatch(/^v1:/);
+    expect(linha?.documentCheckedBy).toBe(adminA.userId);
+    expect(linha?.documentCheckedAt).toBeInstanceOf(Date);
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.tenantId, clinicaA)));
+    expect(JSON.stringify(trilha)).not.toContain(proposto);
+  });
+
+  it('titular adulto: aumentar a idade não exige documento; o banco guarda a data só em correção, imutável, e a conferência só pela clínica', async () => {
+    const pac = await criarPaciente(adminA, 'Otto Ficticio Correcao', { nascimento: '1990-03-04' });
+    const p = await contaDe(adminA, pac);
+    expect((await api.http().get('/portal/meus-dados').set(cab(p)).expect(200)).body).toMatchObject({ rotulo: 'meus_dados', nascimento: '1990-03-04' });
+    // A data proposta só entra pela rota de correção.
+    await api.http().post('/portal/solicitacoes').set(cab(p)).send({ tipo: 'correcao', nascimento: '1989-03-04' }).expect(400);
+    const ped = (await corrigir(p, { detalhe: 'Ano ficticio errado', nascimento: '1989-03-04' }).expect(201)).body as { id: string };
+    const det = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
+    expect(det.body).toMatchObject({ agindoComo: 'titular', nascimentoProposto: '1989-03-04', exigeConferenciaDeDocumento: false });
+    // Pedido sem data proposta não aceita a marca de conferência.
+    const semData = (await corrigir(p, { detalhe: 'Telefone ficticio mudou' }).expect(201)).body as { id: string };
+    expect((await situacao(semData.id, { situacao: 'em_andamento', documentoConferido: true }).expect(400)).body).toMatchObject({ campos: ['documentoConferido'] });
+
+    const portal = <T>(fn: (tx: TenantTx) => Promise<T>) =>
+      api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+        return fn(tx as unknown as TenantTx);
+      });
+    // O portal não marca a conferência.
+    await expect(
+      portal((tx) => tx.execute(sql`update portal_rights_requests set document_checked_by = ${p.contaId}::uuid, document_checked_at = now() where id = ${ped.id}::uuid`)),
+    ).rejects.toThrow();
+    // Data proposta fora de pedido de correção: o banco recusa (CHECK).
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, ped.id)), adminA.userId);
+    await expect(
+      portal((tx) =>
+        tx.execute(sql`insert into portal_rights_requests (tenant_id, patient_id, link_id, account_id, kind, acting_as, protocol, birth_date_proposed_enc)
+          values (${clinicaA}::uuid, ${pac}::uuid, ${p.vinculoId}::uuid, ${p.contaId}::uuid, 'acesso', 'titular', '20310101-ABCDEF09', ${linha?.birthDateProposedEnc ?? ''})`),
+      ),
+    ).rejects.toThrow();
+    const naClinica = (set: Record<string, unknown>) =>
+      withTenant(
+        api.db.db,
+        clinicaA,
+        (tx) => tx.update(portalRightsRequests).set({ status: 'em_andamento', handledBy: adminA.userId, handledAt: sql`now()`, ...set }).where(eq(portalRightsRequests.id, ped.id)),
+        adminA.userId,
+      );
+    // A clínica não troca a data proposta nem marca a conferência em nome de outro usuário.
+    await expect(naClinica({ birthDateProposedEnc: null })).rejects.toThrow();
+    await expect(naClinica({ documentCheckedBy: randomUUID(), documentCheckedAt: sql`now()` })).rejects.toThrow();
+    // Conferida pela API (uma vez), a marca não se reescreve.
+    await situacao(ped.id, { situacao: 'em_andamento', documentoConferido: true }).expect(200);
+    await expect(naClinica({ status: 'atendida', answerEnc: linha?.birthDateProposedEnc, documentCheckedAt: sql`now() - interval '1 day'` })).rejects.toThrow();
+    await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX' }).expect(200);
   });
 });
