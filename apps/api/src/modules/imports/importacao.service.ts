@@ -12,6 +12,7 @@ import {
   financeSettings,
   guardians,
   importBatches,
+  importBatchKeys,
   importBatchRecords,
   importIssues,
   importRawFiles,
@@ -24,8 +25,8 @@ import {
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
-import { TenantKeyMissingError } from '../crypto/crypto-errors';
-import { FIELD_CIPHER } from '../crypto/crypto.module';
+import { DISPOSABLE_KEYS, FIELD_CIPHER } from '../crypto/crypto.module';
+import type { DisposableKeys } from '../crypto/disposable-keys';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
 import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from '../patients/guardian-fields';
@@ -220,6 +221,7 @@ export class ImportacaoService {
     @Inject(PatientsService) private readonly pacientes: PatientsService,
     @Inject(SchedulingService) private readonly agenda: SchedulingService,
     @Inject(IMPORTACAO_CONFIG) private readonly config: ImportacaoConfig,
+    @Inject(DISPOSABLE_KEYS) private readonly chavesDeLote: DisposableKeys,
   ) {}
 
   /** Recebe o arquivo (já lido e limitado no controller), com o aceite do termo de migração. */
@@ -229,6 +231,8 @@ export class ImportacaoService {
     // Lê ANTES de abrir a transação: arquivo inválido não grava nada (nem o bruto).
     const planilha = lerCsv(decodificarUtf8(bytes));
     const sha = createHash('sha256').update(bytes).digest('hex');
+    // R3: chave mestra do lote criada no provedor; se a transação falhar, ela é destruída (sem órfã).
+    const criadas: string[] = [];
     try {
       return await escreverNaClinica(this.db, ctx, async (tx) => {
         await this.expurgarNaTransacao(tx, ctx);
@@ -254,7 +258,7 @@ export class ImportacaoService {
         await tx.insert(importRawFiles).values({
           batchId: id,
           tenantId: ctx.tenantId,
-          contentEnc: await this.cifrar(tx, ctx, refDoArquivo(ctx, id), bytes),
+          contentEnc: await this.selarBrutoDoLote(tx, ctx.tenantId, id, bytes, criadas),
           sha256: sha,
           expiresAt: sql`(select raw_expires_at from import_batches where id = ${id}::uuid)`,
         });
@@ -270,6 +274,7 @@ export class ImportacaoService {
         };
       });
     } catch (e) {
+      for (const m of criadas) await this.chavesDeLote.destroy(ctx.tenantId, m).catch(() => undefined);
       // O banco confere o perfil admin em clinic_members (0020): sem ele, 42501.
       if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_admin_nao_registrado');
       throw e;
@@ -564,10 +569,54 @@ export class ImportacaoService {
   private async expurgarNaTransacao(tx: TenantTx, ctxAuditoria?: RequestContext): Promise<number> {
     const [r] = await tx.execute<{ n: number }>(sql`select app_purge_import_raw_files() as n`);
     const n = Number(r?.n ?? 0);
-    if (ctxAuditoria && n > 0) {
-      await recordAudit(tx, ctxAuditoria, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'raw_discarded', count: n } });
+    const chaves = await this.destruirChavesDescartadas(tx);
+    if (ctxAuditoria && (n > 0 || chaves > 0)) {
+      await recordAudit(tx, ctxAuditoria, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'raw_discarded', count: n, keys_destroyed: chaves } });
     }
     return n;
+  }
+
+  /**
+   * R3: o expurgo já apagou a DEK embrulhada das chaves de lote descartadas (`destroying`); aqui a chave
+   * mestra de cada uma é destruída no provedor (KMS: exclusão agendada, para de abrir na hora) e a linha
+   * fecha como `destroyed`. Idempotente: se a transação cair depois do provedor, a próxima rodada refaz
+   * (chave já pendente conta como feita) e o bruto continua ilegível.
+   */
+  private async destruirChavesDescartadas(tx: TenantTx): Promise<number> {
+    const pendentes = await tx
+      .select({ batchId: importBatchKeys.batchId, tenantId: importBatchKeys.tenantId, masterKeyId: importBatchKeys.masterKeyId })
+      .from(importBatchKeys)
+      .where(and(eq(importBatchKeys.status, 'destroying'), sql`${importBatchKeys.tenantId} = app_current_tenant()`));
+    for (const p of pendentes) {
+      await this.chavesDeLote.destroy(p.tenantId as TenantId, p.masterKeyId);
+      await tx.execute(sql`select app_finish_import_batch_key_destroy(${p.batchId}::uuid)`);
+    }
+    return pendentes.length;
+  }
+
+  /**
+   * R3: cria a chave PRÓPRIA do lote (chave mestra no provedor + DEK embrulhada em `import_batch_keys`) e
+   * devolve o bruto cifrado com ela (v1, keyId = lote, AAD = clínica + import_raw_files + content + lote).
+   * `criadas` recebe o id da chave mestra, para o chamador destruí-la se a transação falhar.
+   */
+  async selarBrutoDoLote(tx: TenantTx, tenantId: TenantId, loteId: string, bytes: Uint8Array, criadas: string[] = []): Promise<string> {
+    const ref: FieldRef = { tenantId, table: 'import_raw_files', column: 'content', rowId: loteId };
+    const { key, sealed } = await this.chavesDeLote.createAndSeal(tenantId, loteId, ref, bytes);
+    criadas.push(key.masterKeyId);
+    await tx.insert(importBatchKeys).values({ batchId: loteId, tenantId, masterKeyId: key.masterKeyId, wrappedKey: key.wrapped });
+    return sealed;
+  }
+
+  /** Abre o bruto: chave do lote (R3); bruto anterior à 0046 (sem chave de lote) ainda abre pela chave da clínica até vencer. */
+  private async abrirBruto(tx: TenantTx, ctx: RequestContext, loteId: string, contentEnc: string): Promise<Buffer> {
+    const ref = refDoArquivo(ctx, loteId);
+    const [chave] = await tx
+      .select()
+      .from(importBatchKeys)
+      .where(and(eq(importBatchKeys.tenantId, ctx.tenantId), eq(importBatchKeys.batchId, loteId)));
+    if (!chave) return this.cipher.decrypt(tx, ref, contentEnc);
+    if (chave.status !== 'active' || !chave.wrappedKey) throw new ConflitoError('arquivo_descartado');
+    return this.chavesDeLote.open(ctx.tenantId, { scopeId: loteId, masterKeyId: chave.masterKeyId, wrapped: Buffer.from(chave.wrappedKey) }, ref, contentEnc);
   }
 
   /** R6 (a): o texto digitado bate com o nome (normalizado) ou com o CNPJ (só dígitos) da clínica da sessão. */
@@ -610,20 +659,10 @@ export class ImportacaoService {
       .from(importRawFiles)
       .where(and(eq(importRawFiles.tenantId, ctx.tenantId), eq(importRawFiles.batchId, lote.id)));
     if (!bruto || bruto.expiresAt.getTime() <= Date.now()) throw new ConflitoError('arquivo_descartado');
-    const bytes = await this.cipher.decrypt(tx, refDoArquivo(ctx, lote.id), bruto.contentEnc);
+    const bytes = await this.abrirBruto(tx, ctx, lote.id, bruto.contentEnc);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     if (sha256 !== bruto.sha256) throw new ConflitoError('arquivo_divergente');
     return { planilha: lerCsv(decodificarUtf8(bytes)), sha256 };
-  }
-
-  private async cifrar(tx: TenantTx, ctx: RequestContext, ref: FieldRef, valor: Uint8Array): Promise<string> {
-    try {
-      return await this.cipher.encrypt(tx, ref, valor);
-    } catch (e) {
-      if (!(e instanceof TenantKeyMissingError)) throw e;
-      await this.cipher.provisionTenant(tx, ctx.tenantId, ctx.userId);
-      return this.cipher.encrypt(tx, ref, valor);
-    }
   }
 
   private async gravarDivergencias(tx: TenantTx, ctx: RequestContext, id: string, run: number, lista: readonly Divergencia[]): Promise<void> {

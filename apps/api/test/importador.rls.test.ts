@@ -14,9 +14,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, importBatches, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
+import { appointments, auditLog, importBatches, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patients, tenants } from '../src/db/schema';
+import { KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
+import type { DisposableKeys } from '../src/modules/crypto/disposable-keys';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
-import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
+import { DISPOSABLE_KEYS, FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from '../src/modules/imports/termo-migracao';
@@ -468,6 +470,102 @@ describe('R6 do #66: arquivo de outra clínica', () => {
   });
 });
 
+describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descartado = ilegível até em backup)', () => {
+  it('o bruto usa a chave do lote; depois do descarte (aplicar), nem a cópia de backup (cifra + DEK embrulhada) decifra', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const csv = `nome;cpf;telefone\nShred Ficticia;${CPF(301)};11900000301\n`;
+    const { id, sim } = await ateSimular(adminA, 'pacientes', csv, { nome: 0, cpf: 1, telefone: 2 });
+    const [chave] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    const [bruto] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importRawFiles).where(eq(importRawFiles.batchId, id)));
+    expect(chave).toMatchObject({ status: 'active', tenantId: clinicaA });
+    expect(bruto?.contentEnc.startsWith(`v1:${id}:`)).toBe(true);
+    // "Backup" tirado antes do descarte: linha do bruto + linha da chave do lote.
+    const backup = { sealed: bruto?.contentEnc as string, key: { scopeId: id, masterKeyId: chave?.masterKeyId as string, wrapped: Buffer.from(chave?.wrappedKey as Buffer) } };
+    const ref = { tenantId: clinicaA, table: 'import_raw_files', column: 'content', rowId: id };
+    expect((await chaves.open(clinicaA, backup.key, ref, backup.sealed)).toString('utf8')).toBe(csv);
+    // A chave da clínica NÃO abre o bruto novo (não é mais ela que cifra).
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    await expect(withTenant(api.db.db, clinicaA, (tx) => cipher.decrypt(tx, ref, backup.sealed))).rejects.toThrow();
+
+    expect((await aplicar(adminA, id, sim.resumoHash)).status).toBe(200);
+    const [depois] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    expect(depois).toMatchObject({ status: 'destroyed', wrappedKey: null });
+    expect(depois?.discardedAt).not.toBeNull();
+    expect(depois?.destroyedAt).not.toBeNull();
+    await expect(chaves.open(clinicaA, backup.key, ref, backup.sealed)).rejects.toBeInstanceOf(KeyUnavailableError);
+    // Trilha do descarte só com contagens.
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'raw_discarded'`));
+    expect(trilha.some((l) => Number((l.metadata as { keys_destroyed?: number }).keys_destroyed) >= 1)).toBe(true);
+  });
+
+  it('expirado pelo TTL (rotina de expurgo): a chave do lote também é destruída e o lote não reabre', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const servico = api.app.get(ImportacaoService);
+    const id = randomUUID();
+    const conteudo = Buffer.from('nome;telefone\nTtl Ficticia;11900000302\n');
+    await withTenant(
+      api.db.db,
+      clinicaA,
+      async (tx) => {
+        await tx.insert(importBatches).values({
+          id, tenantId: clinicaA, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termSha256: TERMO_MIGRACAO_SHA256, termAcceptedBy: adminA.userId,
+          termAcceptedAt: sql`now() - interval '3 days'`, byteSize: conteudo.length, rowCount: 1, columnCount: 2, createdBy: adminA.userId,
+          createdAt: sql`now() - interval '3 days'`, rawExpiresAt: sql`now() - interval '1 hour'`,
+        });
+        await tx.insert(importRawFiles).values({
+          batchId: id, tenantId: clinicaA, contentEnc: await servico.selarBrutoDoLote(tx, clinicaA, id, conteudo),
+          sha256: 'd'.repeat(64), createdAt: sql`now() - interval '3 days'`, expiresAt: sql`now() - interval '1 hour'`,
+        });
+      },
+      adminA.userId,
+    );
+    const [chave] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    const [bruto] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importRawFiles).where(eq(importRawFiles.batchId, id)));
+    const backup = { scopeId: id, masterKeyId: chave?.masterKeyId as string, wrapped: Buffer.from(chave?.wrappedKey as Buffer) };
+    const r = await servico.expurgoDiario([clinicaA]);
+    expect(r.arquivosDescartados).toBeGreaterThanOrEqual(1);
+    const [depois] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    expect(depois).toMatchObject({ status: 'destroyed', wrappedKey: null });
+    await expect(
+      chaves.open(clinicaA, backup, { tenantId: clinicaA, table: 'import_raw_files', column: 'content', rowId: id }, bruto?.contentEnc as string),
+    ).rejects.toBeInstanceOf(KeyUnavailableError);
+  });
+
+  it('banco: o runtime não altera nem apaga a chave do lote; bruto novo com a chave da clínica é recusado; B não vê a chave de A', async () => {
+    const r = await enviar(adminA, 'pacientes', 'nome;telefone\nGuarda Ficticia;11900000303\n');
+    const id = (r.body as { id: string }).id;
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatchKeys).set({ status: 'destroying', wrappedKey: null, discardedAt: new Date() }).where(eq(importBatchKeys.batchId, id)), adminA.userId),
+    ).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.delete(importBatchKeys).where(eq(importBatchKeys.batchId, id)), adminA.userId)).rejects.toThrow();
+    // Lote novo cujo bruto vem cifrado com a DEK da clínica (caminho antigo): recusado.
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const outro = randomUUID();
+    await expect(
+      withTenant(
+        api.db.db,
+        clinicaA,
+        async (tx) => {
+          await tx.insert(importBatches).values({
+            id: outro, tenantId: clinicaA, kind: 'pacientes', termVersion: TERMO_MIGRACAO_VERSAO, termSha256: TERMO_MIGRACAO_SHA256, termAcceptedBy: adminA.userId,
+            byteSize: 10, rowCount: 1, columnCount: 1, createdBy: adminA.userId, rawExpiresAt: sql`now() + interval '1 day'`,
+          });
+          await tx.insert(importRawFiles).values({
+            batchId: outro, tenantId: clinicaA, sha256: 'e'.repeat(64), expiresAt: sql`now() + interval '1 day'`,
+            contentEnc: await cipher.encrypt(tx, { tenantId: clinicaA, table: 'import_raw_files', column: 'content', rowId: outro }, Buffer.from('x;y\n')),
+          });
+        },
+        adminA.userId,
+      ),
+    ).rejects.toThrow();
+    // RLS: B não lê nem grava chave de lote de A.
+    expect(await withTenant(api.db.db, clinicaB, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)))).toHaveLength(0);
+    await expect(
+      withTenant(api.db.db, clinicaB, (tx) => tx.insert(importBatchKeys).values({ batchId: id, tenantId: clinicaA, masterKeyId: 'local:x', wrappedKey: Buffer.alloc(60) }), adminB.userId),
+    ).rejects.toThrow();
+  });
+});
+
 describe('agenda futura', () => {
   it('resolve paciente (CPF ou nome), profissional e tipo; passado, desconhecido e lotado viram divergência; aplica e bloqueia o desfazer após check-in', async () => {
     const pac = ((await api.http().post('/pacientes').set(cab(adminA)).send({ nome: 'Paciente Agenda Ficticia', telefone: '11900000040', cpf: CPF(40) }).expect(201)).body as { id: string }).id;
@@ -581,7 +679,6 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
   });
 
   it('a função de expurgo apaga o vencido, marca o lote expirado com evidência, é idempotente e poupa o que não venceu', async () => {
-    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
     const vencido = randomUUID();
     await withTenant(
       api.db.db,
@@ -605,7 +702,7 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
         await tx.insert(importRawFiles).values({
           batchId: vencido,
           tenantId: clinicaA,
-          contentEnc: await cipher.encrypt(tx, { tenantId: clinicaA, table: 'import_raw_files', column: 'content', rowId: vencido }, Buffer.from('nome;telefone\nVencida;11900000060\n')),
+          contentEnc: await api.app.get(ImportacaoService).selarBrutoDoLote(tx, clinicaA, vencido, Buffer.from('nome;telefone\nVencida;11900000060\n')),
           sha256: 'a'.repeat(64),
           createdAt: sql`now() - interval '8 days'`,
           expiresAt: sql`now() - interval '1 day'`,
@@ -650,7 +747,7 @@ describe('R2 do #66: rotina diária de descarte (job do sistema, todas as clíni
           });
           await tx.insert(importRawFiles).values({
             batchId: id, tenantId: t,
-            contentEnc: await cipher.encrypt(tx, { tenantId: t, table: 'import_raw_files', column: 'content', rowId: id }, Buffer.from('nome;telefone\nX;11900000090\n')),
+            contentEnc: await api.app.get(ImportacaoService).selarBrutoDoLote(tx, t, id, Buffer.from('nome;telefone\nX;11900000090\n')),
             sha256: 'c'.repeat(64), createdAt: sql`now() - interval '9 days'`, expiresAt: sql`now() - interval '2 days'`,
           });
         },

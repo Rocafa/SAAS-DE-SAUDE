@@ -5,6 +5,7 @@ import { KeyUnavailableError } from './crypto-errors';
 import type { DataKey } from './data-key';
 import { KMS_DELETION_WINDOW_DAYS, KmsKeyProvider, type KmsApi } from './kms-key-provider';
 import { createKeyProvider } from './crypto.module';
+import { DisposableKeys } from './disposable-keys';
 import { LocalKeyProvider } from './local-key-provider';
 
 const tenantA = randomUUID() as TenantId;
@@ -99,6 +100,8 @@ function fakeKms(): FakeKms {
     },
     decrypt(input) {
       fake.calls.push({ op: 'decrypt', input });
+      // Como no KMS: chave com exclusão agendada não decifra (KMSInvalidStateException).
+      if (pendentes.has(input.KeyId)) return Promise.reject(new Error('KMSInvalidStateException'));
       const b = blobs.get(Buffer.from(input.CiphertextBlob).toString('hex'));
       if (!b || b.ctx !== JSON.stringify(input.EncryptionContext)) {
         return Promise.reject(new Error('InvalidCiphertextException'));
@@ -198,5 +201,59 @@ describe('KmsKeyProvider (contra KMS falso)', () => {
     expect(err).toBeInstanceOf(KeyUnavailableError);
     expect((err as Error).message).not.toMatch(/arn|segredo|AccessDenied/);
     expect((err as Error).cause).toBeUndefined();
+  });
+});
+
+describe('DisposableKeys: chave descartável por escopo (R3 do importador, crypto-shredding por lote)', () => {
+  const lote = randomUUID();
+  const ref = { tenantId: tenantA, table: 'import_raw_files', column: 'content', rowId: lote };
+  const bruto = Buffer.from('nome;cpf\nPaciente Ficticio;00000000191\n');
+  const provedores: readonly [string, () => { provider: LocalKeyProvider | KmsKeyProvider; kms?: FakeKms }][] = [
+    ['provedor local', () => ({ provider: new LocalKeyProvider({ nodeEnv: 'test' }) })],
+    [
+      'KMS falso',
+      () => {
+        const kms = fakeKms();
+        return { provider: new KmsKeyProvider(kms), kms };
+      },
+    ],
+  ];
+
+  for (const [nome, criar] of provedores) {
+    it(`${nome}: abre antes; depois de destruir, nem a cópia de backup (chave embrulhada + cifra) abre`, async () => {
+      const { provider, kms } = criar();
+      const chaves = new DisposableKeys(provider);
+      const { key, sealed } = await chaves.createAndSeal(tenantA, lote, ref, bruto);
+      expect(sealed.startsWith(`v1:${lote}:`)).toBe(true);
+      expect(sealed).not.toContain('Ficticio');
+      expect(await chaves.open(tenantA, key, ref, sealed)).toEqual(bruto);
+      // Outra clínica e outra linha não abrem (EncryptionContext/AAD).
+      await expect(chaves.open(tenantB, key, { ...ref, tenantId: tenantB }, sealed)).rejects.toThrow();
+      await expect(chaves.open(tenantA, key, { ...ref, rowId: randomUUID() }, sealed)).rejects.toThrow();
+      // "Backup": cópia da linha da chave e do valor cifrado tirada ANTES do descarte.
+      const backup = { key: { ...key, wrapped: Buffer.from(key.wrapped) }, sealed };
+      await chaves.destroy(tenantA, key.masterKeyId);
+      await expect(chaves.open(tenantA, backup.key, ref, backup.sealed)).rejects.toBeInstanceOf(KeyUnavailableError);
+      if (kms) {
+        expect(kms.calls.find((c) => c.op === 'createKey')?.input).toMatchObject({ Tags: [{ TagKey: 'tenant_id', TagValue: tenantA }] });
+        expect(kms.calls.find((c) => c.op === 'generateDataKey')?.input).toMatchObject({ EncryptionContext: { tenant_id: tenantA } });
+        expect(kms.calls.find((c) => c.op === 'scheduleKeyDeletion')).toEqual({
+          op: 'scheduleKeyDeletion',
+          input: { KeyId: key.masterKeyId, PendingWindowInDays: 7 },
+        });
+      }
+      // Idempotente.
+      await expect(chaves.destroy(tenantA, key.masterKeyId)).resolves.toBeUndefined();
+    });
+  }
+
+  it('cada escopo tem a própria chave mestra: destruir um lote não afeta outro da mesma clínica', async () => {
+    const chaves = new DisposableKeys(new LocalKeyProvider({ nodeEnv: 'test' }));
+    const outro = randomUUID();
+    const a = await chaves.createAndSeal(tenantA, lote, ref, bruto);
+    const b = await chaves.createAndSeal(tenantA, outro, { ...ref, rowId: outro }, bruto);
+    expect(a.key.masterKeyId).not.toBe(b.key.masterKeyId);
+    await chaves.destroy(tenantA, a.key.masterKeyId);
+    expect(await chaves.open(tenantA, b.key, { ...ref, rowId: outro }, b.sealed)).toEqual(bruto);
   });
 });

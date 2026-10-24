@@ -1,12 +1,15 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { PgDataKeyStore } from './data-key-store';
+import { DisposableKeys } from './disposable-keys';
 import { FieldCipher } from './field-cipher';
 import { auditKeyEvents } from './key-audit';
 import type { KeyProvider } from './key-provider';
 import { LocalKeyProvider } from './local-key-provider';
 
 export const FIELD_CIPHER = Symbol('FIELD_CIPHER');
+/** Chaves descartáveis por escopo (R3 do importador), sobre o MESMO provedor de chave mestra. */
+export const DISPOSABLE_KEYS = Symbol('DISPOSABLE_KEYS');
 
 /**
  * Escolhe o provedor de chave mestra no boot. Em produção o KMS ainda não está ligado (Portão A):
@@ -38,8 +41,9 @@ export class CryptoModule {
           provide: FIELD_CIPHER,
           useFactory: () => new FieldCipher<TenantTx>(provider, new PgDataKeyStore(), auditKeyEvents),
         },
+        { provide: DISPOSABLE_KEYS, useFactory: () => new DisposableKeys(provider) },
       ],
-      exports: [FIELD_CIPHER],
+      exports: [FIELD_CIPHER, DISPOSABLE_KEYS],
     };
   }
 }

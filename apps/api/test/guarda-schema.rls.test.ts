@@ -98,6 +98,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // do arquivo bruto e o desfazer passam SÓ pelas funções SECURITY DEFINER (ver bloco no fim).
   import_batches: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
+  // R3 (0046): chave própria do lote; o ciclo de vida anda só pelas funções do expurgo.
+  import_batch_keys: { privilegios: ['SELECT', 'INSERT'] },
   import_issues: { privilegios: ['SELECT', 'INSERT'] },
   import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
   // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
@@ -434,6 +436,7 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       // Importador (0024/0026): lote, arquivo bruto, divergências e livro do lote.
       'import_batches',
       'import_raw_files',
+      'import_batch_keys',
       'import_issues',
       'import_batch_records',
       // Responsáveis (0028): só as funções do dono leem o vínculo.
@@ -459,7 +462,7 @@ describe('guarda de schema: portal do paciente (0027)', () => {
  * dono sem superpoder; o runtime não apaga nada das tabelas do importador nem de pacientes/agendamentos.
  */
 describe('guarda de schema: funções do importador (0024)', () => {
-  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)']) {
+  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)', 'public.app_finish_import_batch_key_destroy(uuid)']) {
     it(`${assinatura}: SECURITY DEFINER, search_path fixo, dono sem superpoder`, async () => {
       const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
         SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
@@ -473,7 +476,7 @@ describe('guarda de schema: funções do importador (0024)', () => {
   }
 
   it('o runtime não tem DELETE nem TRUNCATE no importador, em pacientes e em agendamentos', async () => {
-    for (const tabela of ['import_batches', 'import_raw_files', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
+    for (const tabela of ['import_batches', 'import_raw_files', 'import_batch_keys', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
       const tem = await privilegiosDoRuntime(tabela);
       expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
     }

@@ -1,6 +1,8 @@
 import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
  * A fonte da verdade do DDL (RLS, policies, grants, checks) são as migrações SQL revisáveis.
@@ -703,6 +705,25 @@ export const importRawFiles = pgTable('import_raw_files', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * R3 do importador (0046): chave PRÓPRIA do lote (chave mestra no provedor + DEK embrulhada). O descarte
+ * apaga a DEK embrulhada e destrói a chave mestra: o bruto fica ilegível em qualquer cópia, inclusive backup.
+ * Runtime: só SELECT/INSERT; o ciclo de vida anda pelas funções do expurgo.
+ */
+export const IMPORT_BATCH_KEY_STATUSES = ['active', 'destroying', 'destroyed'] as const;
+export const importBatchKeys = pgTable('import_batch_keys', {
+  batchId: uuid('batch_id').primaryKey(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  masterKeyId: text('master_key_id').notNull(),
+  wrappedKey: bytea('wrapped_key'),
+  status: text('status', { enum: IMPORT_BATCH_KEY_STATUSES }).notNull().default('active'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  discardedAt: timestamp('discarded_at', { withTimezone: true }),
+  destroyedAt: timestamp('destroyed_at', { withTimezone: true }),
+});
+
 /** Divergências por linha: só códigos, nunca o valor (0024). */
 export const importIssues = pgTable(
   'import_issues',
@@ -761,8 +782,6 @@ export const auditLog = pgTable('audit_log', {
 /** Ciclo de vida das chaves (migração 0004). Mesmos valores do CHECK no banco. */
 export const KEY_STATUSES = ['active', 'retired', 'destroying', 'destroyed'] as const;
 export type KeyStatus = (typeof KEY_STATUSES)[number];
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
 
 /**
  * Chave mestra (KEK) de cada clínica: só a referência (ARN no KMS), nunca material de chave.
@@ -1185,6 +1204,7 @@ export const schema = {
   patientGuardianHistory,
   importBatches,
   importRawFiles,
+  importBatchKeys,
   importIssues,
   importBatchRecords,
   whatsappSettings,
