@@ -1,5 +1,5 @@
 import type { TenantId } from '@plataforma/shared';
-import { KeyUnavailableError } from './crypto-errors';
+import { KeyUnavailableError, type KeyFailureKind } from './crypto-errors';
 import { DataKey } from './data-key';
 import { KEY_PURPOSE_IMPORT_BATCH, KEY_PURPOSE_TENANT_DATA, type GeneratedDataKey, type KeyProvider, type MasterKeyPurpose, type WrappedDataKey } from './key-provider';
 
@@ -121,10 +121,20 @@ export class KmsKeyProvider implements KeyProvider {
   async destroyMasterKey(masterKeyId: string): Promise<void> {
     try {
       await this.kms.scheduleKeyDeletion({ KeyId: masterKeyId, PendingWindowInDays: KMS_DELETION_WINDOW_DAYS });
-    } catch {
-      // Idempotente: uma tentativa anterior pode ter agendado e parado antes de gravar `destroyed`.
-      const out = await guard(() => this.kms.describeKey({ KeyId: masterKeyId }));
-      if (out.KeyMetadata?.KeyState !== 'PendingDeletion') throw new KeyUnavailableError();
+    } catch (agendar) {
+      // Observação 2 da conferência R3-a/R3-b: passada a janela de 7 dias, o KMS já excluiu a chave e
+      // responde NotFound (no agendamento ou no describe). Não existe mais nada que abra: conta como feita.
+      if (isNotFound(agendar)) return;
+      // Idempotente: uma tentativa anterior pode ter agendado e parado antes de gravar `destroyed`
+      // (o agendamento repetido dá KMSInvalidStateException; o describe diz PendingDeletion).
+      let estado: string | undefined;
+      try {
+        estado = (await this.kms.describeKey({ KeyId: masterKeyId })).KeyMetadata?.KeyState;
+      } catch (descrever) {
+        if (isNotFound(descrever)) return;
+        throw new KeyUnavailableError(classifyKmsError(descrever));
+      }
+      if (estado !== 'PendingDeletion') throw new KeyUnavailableError(classifyKmsError(agendar));
     }
   }
 
@@ -139,11 +149,68 @@ function context(tenantId: TenantId): Record<string, string> {
   return { tenant_id: tenantId };
 }
 
-/** Erro do SDK pode trazer ARN, id de requisição e contexto: troca por erro de mensagem fixa. */
+/** Erro do SDK pode trazer ARN, id de requisição e contexto: troca por erro de mensagem fixa (com o tipo). */
 async function guard<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
-  } catch {
-    throw new KeyUnavailableError();
+  } catch (e) {
+    throw new KeyUnavailableError(classifyKmsError(e));
   }
+}
+
+const ACESSO_NEGADO = new Set([
+  'AccessDeniedException',
+  'AccessDenied',
+  'UnrecognizedClientException',
+  'InvalidClientTokenId',
+  'ExpiredTokenException',
+  'IncompleteSignature',
+  'InvalidSignatureException',
+]);
+const INDISPONIVEL = new Set([
+  'ThrottlingException',
+  'Throttling',
+  'TooManyRequestsException',
+  'LimitExceededException',
+  'KMSInternalException',
+  'DependencyTimeoutException',
+  'KeyUnavailableException',
+  'ServiceUnavailable',
+  'ServiceUnavailableException',
+  'InternalFailure',
+  'RequestTimeout',
+  'RequestTimeoutException',
+  'TimeoutError',
+  'NetworkingError',
+]);
+const ESTADO_INVALIDO = new Set(['KMSInvalidStateException', 'NotFoundException', 'DisabledException', 'InvalidArnException']);
+
+/** Nome do erro do SDK v3 (`name`; em versões antigas, `Code`/`code`). Nunca lê a mensagem. */
+function kmsErrorName(e: unknown): string | undefined {
+  if (typeof e !== 'object' || e === null) return undefined;
+  const o = e as { name?: unknown; Code?: unknown; code?: unknown };
+  for (const v of [o.name, o.Code, o.code]) if (typeof v === 'string' && v !== 'Error') return v;
+  return undefined;
+}
+
+/**
+ * Observação 3 da conferência R3-a/R3-b: o tipo da falha sai do NOME do erro e do código HTTP
+ * (`$metadata.httpStatusCode`), nunca da mensagem (que pode trazer ARN e conta).
+ */
+export function classifyKmsError(e: unknown): KeyFailureKind {
+  const name = kmsErrorName(e);
+  if (name && ACESSO_NEGADO.has(name)) return 'acesso_negado';
+  if (name && INDISPONIVEL.has(name)) return 'indisponivel';
+  if (name && ESTADO_INVALIDO.has(name)) return 'estado_invalido';
+  const status = (e as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata?.httpStatusCode;
+  if (typeof status === 'number') {
+    if (status === 401 || status === 403) return 'acesso_negado';
+    if (status === 429 || status >= 500) return 'indisponivel';
+  }
+  return 'outro';
+}
+
+/** A chave não existe mais no KMS (a exclusão agendada venceu a janela de 7 dias). */
+function isNotFound(e: unknown): boolean {
+  return kmsErrorName(e) === 'NotFoundException';
 }

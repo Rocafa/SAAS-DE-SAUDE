@@ -73,18 +73,33 @@ describe('LocalKeyProvider', () => {
   });
 });
 
-type FakeKms = KmsApi & { calls: { op: string; input: unknown }[]; fail: boolean };
+type FakeKms = KmsApi & { calls: { op: string; input: unknown }[]; fail: boolean; excluir(keyId: string): void };
+
+/** Erro como o SDK v3 lança: o tipo vem em `name`; a mensagem pode trazer ARN e conta. */
+function kmsErro(name: string, message = name, httpStatusCode?: number): Error {
+  const e = new Error(message);
+  e.name = name;
+  if (httpStatusCode !== undefined) Object.assign(e, { $metadata: { httpStatusCode } });
+  return e;
+}
 
 /** KMS falso que imita o contrato (EncryptionContext obrigatório e igual) e registra as chamadas. */
 function fakeKms(): FakeKms {
   const blobs = new Map<string, { plaintext: Buffer; ctx: string }>();
   const pendentes = new Set<string>();
+  // Exclusão já feita pelo KMS (passou a janela de 7 dias): toda operação na chave dá NotFoundException.
+  const excluidas = new Set<string>();
+  const naoExiste = (keyId: string) => Promise.reject(kmsErro('NotFoundException', `Key '${keyId}' does not exist`, 400));
   const fake: FakeKms = {
     calls: [],
     fail: false,
+    excluir(keyId) {
+      pendentes.delete(keyId);
+      excluidas.add(keyId);
+    },
     createKey(input) {
       fake.calls.push({ op: 'createKey', input });
-      if (fake.fail) return Promise.reject(new Error('AccessDenied arn:aws:kms:sa-east-1:123456789012:key/segredo'));
+      if (fake.fail) return Promise.reject(kmsErro('AccessDeniedException', 'AccessDenied arn:aws:kms:sa-east-1:123456789012:key/segredo'));
       return Promise.resolve({ KeyMetadata: { Arn: `arn:aws:kms:sa-east-1:000000000000:key/${randomUUID()}` } });
     },
     enableKeyRotation(input) {
@@ -101,10 +116,10 @@ function fakeKms(): FakeKms {
     decrypt(input) {
       fake.calls.push({ op: 'decrypt', input });
       // Como no KMS: chave com exclusão agendada não decifra (KMSInvalidStateException).
-      if (pendentes.has(input.KeyId)) return Promise.reject(new Error('KMSInvalidStateException'));
+      if (pendentes.has(input.KeyId)) return Promise.reject(kmsErro('KMSInvalidStateException'));
       const b = blobs.get(Buffer.from(input.CiphertextBlob).toString('hex'));
       if (!b || b.ctx !== JSON.stringify(input.EncryptionContext)) {
-        return Promise.reject(new Error('InvalidCiphertextException'));
+        return Promise.reject(kmsErro('InvalidCiphertextException'));
       }
       return Promise.resolve({ Plaintext: Buffer.from(b.plaintext) });
     },
@@ -114,12 +129,14 @@ function fakeKms(): FakeKms {
     },
     scheduleKeyDeletion(input) {
       fake.calls.push({ op: 'scheduleKeyDeletion', input });
-      if (pendentes.has(input.KeyId)) return Promise.reject(new Error('KMSInvalidStateException'));
+      if (excluidas.has(input.KeyId)) return naoExiste(input.KeyId);
+      if (pendentes.has(input.KeyId)) return Promise.reject(kmsErro('KMSInvalidStateException'));
       pendentes.add(input.KeyId);
       return Promise.resolve({});
     },
     describeKey(input) {
       fake.calls.push({ op: 'describeKey', input });
+      if (excluidas.has(input.KeyId)) return naoExiste(input.KeyId);
       return Promise.resolve({ KeyMetadata: { KeyState: pendentes.has(input.KeyId) ? 'PendingDeletion' : 'Enabled' } });
     },
     cancelKeyDeletion(input) {
@@ -204,8 +221,69 @@ describe('KmsKeyProvider (contra KMS falso)', () => {
   it('erro de agendamento com a chave ainda ativa NÃO é tratado como feito', async () => {
     const kms = fakeKms();
     const p = new KmsKeyProvider(kms);
-    kms.scheduleKeyDeletion = () => Promise.reject(new Error('AccessDenied'));
+    kms.scheduleKeyDeletion = () => Promise.reject(kmsErro('AccessDeniedException'));
     await expect(p.destroyMasterKey(await p.createMasterKey(tenantA))).rejects.toBeInstanceOf(KeyUnavailableError);
+  });
+
+  it('observação 2: chave que o KMS já excluiu (passou a janela de 7 dias) conta como destruída', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    // Agendada, a linha não fechou (banco caiu) e o KMS excluiu depois dos 7 dias: NotFound no agendamento.
+    const arn = await p.createMasterKey(tenantA, { purpose: 'import_batch', batchId: randomUUID() });
+    await p.destroyMasterKey(arn);
+    kms.excluir(arn);
+    await expect(p.destroyMasterKey(arn)).resolves.toBeUndefined();
+    // KMSInvalidStateException no agendamento e NotFound no describe (excluída entre as duas chamadas).
+    const outra = await p.createMasterKey(tenantA, { purpose: 'import_batch', batchId: randomUUID() });
+    await p.destroyMasterKey(outra);
+    const describe = kms.describeKey.bind(kms);
+    kms.describeKey = (input) => {
+      kms.excluir(input.KeyId);
+      return describe(input);
+    };
+    await expect(p.destroyMasterKey(outra)).resolves.toBeUndefined();
+    expect(kms.calls.slice(-2).map((c) => c.op)).toEqual(['scheduleKeyDeletion', 'describeKey']);
+  });
+
+  it('observação 2: NotFound só conta como feito para NotFound; outro erro no describe segue falhando', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    const arn = await p.createMasterKey(tenantA);
+    kms.scheduleKeyDeletion = () => Promise.reject(kmsErro('KMSInvalidStateException'));
+    kms.describeKey = () => Promise.reject(kmsErro('ThrottlingException', 'Rate exceeded', 400));
+    const err = await p.destroyMasterKey(arn).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(KeyUnavailableError);
+    expect((err as KeyUnavailableError).kind).toBe('indisponivel');
+  });
+
+  it('observação 3: o erro do KMS vira um TIPO de lista fechada (sem mensagem nem ARN)', async () => {
+    const casos: readonly [Error, string][] = [
+      [kmsErro('AccessDeniedException', 'User: arn:aws:iam::123456789012:role/api is not authorized'), 'acesso_negado'],
+      [kmsErro('ThrottlingException', 'Rate exceeded'), 'indisponivel'],
+      [kmsErro('KMSInternalException'), 'indisponivel'],
+      [kmsErro('DependencyTimeoutException'), 'indisponivel'],
+      [kmsErro('KMSInvalidStateException', 'arn:aws:kms:sa-east-1:123456789012:key/x is pending deletion'), 'estado_invalido'],
+      [kmsErro('DisabledException'), 'estado_invalido'],
+      [kmsErro('Desconhecido', 'qualquer', 403), 'acesso_negado'],
+      [kmsErro('Desconhecido', 'qualquer', 503), 'indisponivel'],
+      [new Error('AccessDeniedException arn:aws:kms:sa-east-1:123456789012:key/x'), 'outro'],
+      [kmsErro('ValidationException'), 'outro'],
+    ];
+    for (const [erro, tipo] of casos) {
+      const kms = fakeKms();
+      kms.createKey = () => Promise.reject(erro);
+      const err = await new KmsKeyProvider(kms).createMasterKey(tenantA).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(KeyUnavailableError);
+      expect((err as KeyUnavailableError).kind, erro.name).toBe(tipo);
+      expect((err as Error).message).toBe('chave de criptografia indisponível');
+      expect(JSON.stringify(err)).not.toMatch(/arn:|123456789012|Rate|pending/);
+    }
+    // Agendamento recusado pelo IAM: a destruição falha com o tipo do agendamento (não do describe).
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms);
+    const arn = await p.createMasterKey(tenantA);
+    kms.scheduleKeyDeletion = () => Promise.reject(kmsErro('AccessDeniedException'));
+    expect(((await p.destroyMasterKey(arn).catch((e: unknown) => e)) as KeyUnavailableError).kind).toBe('acesso_negado');
   });
 
   it('cancelar a destruição cancela o agendamento e reabilita a chave (fica Disabled no KMS)', async () => {
