@@ -312,7 +312,16 @@ export class ImportacaoService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { import_batch_id: id, op: 'map', fields: Object.keys(mapa).sort().join(',') },
+        // Texto da trilha tem teto de 64: as colunas do responsável (0048) vão só em contagem.
+        metadata: {
+          import_batch_id: id,
+          op: 'map',
+          fields: Object.keys(mapa)
+            .filter((c) => !c.startsWith('responsavel'))
+            .sort()
+            .join(','),
+          guardian_fields: Object.keys(mapa).filter((c) => c.startsWith('responsavel')).length,
+        },
       });
       return paraDto(novo as Lote);
     });
