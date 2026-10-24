@@ -1,7 +1,7 @@
 /**
  * Regras puras do portal do paciente (rodada 18.1). Sem banco: testadas em portal-regras.test.ts.
  */
-import { PORTAL_APELIDOS_DE_PEDIDO, PORTAL_TIPOS_DE_PEDIDO_ACEITOS } from '@plataforma/shared';
+import { ehDataAAAAMMDD, PORTAL_APELIDOS_DE_PEDIDO, PORTAL_TIPOS_DE_PEDIDO_ACEITOS } from '@plataforma/shared';
 import { createHash, randomBytes } from 'node:crypto';
 import type {
   AiConsentState,
@@ -224,4 +224,25 @@ export function idadeEm(nascimento: string, hoje: string): number {
   const [an, mn, dn] = nascimento.split('-').map(Number) as [number, number, number];
   const [ah, mh, dh] = hoje.split('-').map(Number) as [number, number, number];
   return ah - an - (mh < mn || (mh === mn && dh < dn) ? 1 : 0);
+}
+
+/**
+ * Data de nascimento proposta num pedido de correção (C1 da conferência de 24/10): `AAAA-MM-DD` que existe,
+ * não futura e não anterior a 1900. Só vai para a clínica analisar; o portal não grava no cadastro.
+ */
+export function nascimentoPropostoValido(valor: string, hoje: string): boolean {
+  return ehDataAAAAMMDD(valor) && valor <= hoje && valor >= '1900-01-01';
+}
+
+/**
+ * A correção de nascimento exige CONFERÊNCIA DE DOCUMENTO pela clínica? Sim quando a data proposta REDUZ a
+ * idade de paciente que hoje tem 12 anos ou mais (`IDADE_MINIMA_TITULAR`: pode tirá-lo do sigilo do
+ * adolescente, devolver a representação a quem já a perdeu aos 18 ou trocar quem consente). Data atual
+ * desconhecida ou ilegível: falha fechada (exige). Aumentar a idade, ou corrigir a de criança, não exige
+ * documento (a clínica analisa do mesmo jeito).
+ */
+export function correcaoDeNascimentoExigeDocumento(atual: string | null, proposto: string, hoje: string): boolean {
+  if (atual === null || !ehDataAAAAMMDD(atual)) return true;
+  if (proposto <= atual) return false;
+  return idadeEm(atual, hoje) >= IDADE_MINIMA_TITULAR;
 }

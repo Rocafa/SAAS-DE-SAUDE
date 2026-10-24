@@ -31,6 +31,7 @@ import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
 import {
   CONSENTIMENTOS,
   consentimentoIa,
+  correcaoDeNascimentoExigeDocumento,
   estadoDoConsentimento,
   eventoVale,
   exigeResposta,
@@ -59,6 +60,11 @@ export interface PedidoDoTitularDetalheDto extends PedidoDoTitularDto {
   readonly resposta: string | null;
   /** Texto-modelo para a clínica adaptar (só em `eliminacao`: retenção legal do prontuário; A3d do #68). */
   readonly modeloDeResposta: string | null;
+  /** Data de nascimento (AAAA-MM-DD) que o titular/responsável pede na correção; null sem data. */
+  readonly nascimentoProposto: string | null;
+  /** C1: a data proposta reduz a idade de paciente com 12+ (ou a atual é desconhecida): atender exige documento. */
+  readonly exigeConferenciaDeDocumento: boolean;
+  readonly documentoConferidoEm: string | null;
 }
 
 /**
@@ -353,21 +359,33 @@ export class PortalClinicaService {
   pedido(ctx: RequestContext, id: string): Promise<PedidoDoTitularDetalheDto> {
     return lerNaClinica(this.db, ctx, async (tx) => {
       const r = await this.carregar(tx, ctx, id, false);
-      await recordAudit(tx, ctx, { action: AuditAction.Read, scope: 'portal_rights_requests', metadata: { request_id: id, patient_id: r.patientId } });
+      const nasc = await this.nascimentoDoPedido(tx, ctx, r);
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Read,
+        scope: 'portal_rights_requests',
+        metadata: { request_id: id, patient_id: r.patientId, has_birth_date: nasc !== null },
+      });
       return {
         ...this.dto(r),
         detalhe: await decifrarCampoPortal(this.cipher, tx, ctx.tenantId, id, 'detail', r.detailEnc),
         resposta: await decifrarCampoPortal(this.cipher, tx, ctx.tenantId, id, 'answer', r.answerEnc),
         modeloDeResposta: r.kind === 'eliminacao' ? MODELO_RESPOSTA_ELIMINACAO : null,
+        nascimentoProposto: nasc?.proposto ?? null,
+        exigeConferenciaDeDocumento: nasc?.exigeDocumento ?? false,
+        documentoConferidoEm: r.documentCheckedAt?.toISOString() ?? null,
       };
     });
   }
 
-  /** Registra o andamento/atendimento. A execução (correção, cópia, eliminação) é ato da clínica. */
+  /**
+   * Registra o andamento/atendimento. A execução (correção, cópia, eliminação) é ato da clínica.
+   * C1 (conferência de 24/10): a correção de nascimento que REDUZ a idade de paciente com 12 anos ou mais só
+   * é ATENDIDA com `documentoConferido: true` (quem conferiu e quando ficam no pedido, 0051).
+   */
   atualizarPedido(
     ctx: RequestContext,
     id: string,
-    dados: { situacao: Exclude<RightsRequestStatus, 'aberta'>; resposta?: string },
+    dados: { situacao: Exclude<RightsRequestStatus, 'aberta'>; resposta?: string; documentoConferido?: boolean },
   ): Promise<PedidoDoTitularDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       const r = await this.carregar(tx, ctx, id, true);
@@ -375,20 +393,59 @@ export class PortalClinicaService {
       if (r.status === dados.situacao) throw new ConflitoError('transicao_invalida');
       // A3a do #68: recusa e atendimento comunicam as razões ou o resultado ao titular (o banco confere).
       if (exigeResposta(dados.situacao) && !dados.resposta?.trim() && r.answerEnc === null) throw new EntradaInvalidaError(['resposta']);
+      const nasc = await this.nascimentoDoPedido(tx, ctx, r);
+      // Conferência de documento só existe em pedido com data proposta.
+      if (dados.documentoConferido === true && nasc === null) throw new EntradaInvalidaError(['documentoConferido']);
+      if (dados.situacao === 'atendida' && nasc?.exigeDocumento && dados.documentoConferido !== true && r.documentCheckedAt === null) {
+        throw new EntradaInvalidaError(['documentoConferido']);
+      }
+      const conferirAgora = dados.documentoConferido === true && r.documentCheckedAt === null;
       const answerEnc = dados.resposta ? await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, ctx.userId, id, 'answer', dados.resposta) : r.answerEnc;
       const [novo] = await tx
         .update(portalRightsRequests)
-        .set({ status: dados.situacao, handledBy: ctx.userId, handledAt: sql`now()`, answerEnc })
+        .set({
+          status: dados.situacao,
+          handledBy: ctx.userId,
+          handledAt: sql`now()`,
+          answerEnc,
+          ...(conferirAgora ? { documentCheckedBy: ctx.userId, documentCheckedAt: sql`now()` } : {}),
+        })
         .where(and(eq(portalRightsRequests.tenantId, ctx.tenantId), eq(portalRightsRequests.id, id)))
         .returning();
       if (!novo) throw new NaoEncontradoError();
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: 'portal_rights_requests',
-        metadata: { request_id: id, from: r.status, to: dados.situacao, has_answer: dados.resposta !== undefined, patient_id: r.patientId },
+        metadata: {
+          request_id: id,
+          from: r.status,
+          to: dados.situacao,
+          has_answer: dados.resposta !== undefined,
+          patient_id: r.patientId,
+          ...(nasc ? { document_required: nasc.exigeDocumento, document_checked: conferirAgora || r.documentCheckedAt !== null } : {}),
+        },
       });
       return this.dto(novo);
     });
+  }
+
+  /**
+   * Data proposta no pedido de correção (decifrada) e se a mudança exige conferência de documento, comparada
+   * com a data ATUAL do cadastro (decifrada; hoje no fuso da clínica). null = pedido sem data proposta.
+   */
+  private async nascimentoDoPedido(
+    tx: TenantTx,
+    ctx: RequestContext,
+    r: typeof portalRightsRequests.$inferSelect,
+  ): Promise<{ proposto: string; exigeDocumento: boolean } | null> {
+    const proposto = await decifrarCampoPortal(this.cipher, tx, ctx.tenantId, r.id, 'birth_date_proposed', r.birthDateProposedEnc);
+    if (proposto === null) return null;
+    const [p] = await tx
+      .select({ id: patients.id, birthDateEnc: patients.birthDateEnc })
+      .from(patients)
+      .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, r.patientId)));
+    const atual = p?.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, 'birth_date'), p.birthDateEnc) : null;
+    return { proposto, exigeDocumento: correcaoDeNascimentoExigeDocumento(atual, proposto, hojeNaClinica()) };
   }
 
   /** Estado atual de cada consentimento do paciente (para a recepção e o escriba). */

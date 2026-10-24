@@ -58,7 +58,6 @@ import {
   IDADE_CONSENTIMENTO_PROPRIO,
   idadeEm,
   JANELA_CONSULTAS,
-  mascararCpf,
   novoProtocolo,
   primeiroNome,
   situacaoParaOTitular,
@@ -75,6 +74,7 @@ import {
   consentimentoParaPortal,
   consultaParaPortal,
   desafioDoConvite,
+  meusDadosParaPortal,
   pedidoParaPortal,
   reciboParaPortal,
   reciboResumoParaPortal,
@@ -417,13 +417,15 @@ export class PortalService {
       const p = await this.paciente(tx, ctx);
       const dec = (col: 'cpf' | 'phone' | 'birth_date', v: string | null) =>
         v === null ? Promise.resolve(null) : this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, col), v);
-      const dto: RespostaPortal<'GET /portal/meus-dados'> = {
+      // C1 (conferência de 24/10): nascimento completo para o titular E para o responsável legal; a tela do
+      // responsável é rotulada "dados do paciente". Não se edita aqui: só por pedido de correção.
+      const dto: RespostaPortal<'GET /portal/meus-dados'> = meusDadosParaPortal(ctx.agindoComo, {
         nome: p.displayName,
         nomeSocial: p.socialName,
         telefone: await dec('phone', p.phoneEnc),
-        cpfMascarado: mascararCpf(await dec('cpf', p.cpfEnc)),
+        cpf: await dec('cpf', p.cpfEnc),
         nascimento: await dec('birth_date', p.birthDateEnc),
-      };
+      });
       await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'patients', metadata: { op: 'portal_self' } });
       return dto;
     });
@@ -433,11 +435,17 @@ export class PortalService {
    * Registra o pedido para a clínica atender (nada é executado automaticamente). Teto diário por vínculo
    * (429 + um anomaly_alert; o banco confere o mesmo teto) e aviso aos admins da clínica (A3 do #68).
    */
-  async abrirPedido(sessao: SessaoDoPortal, req: RequisicaoParaSessao, tipo: RightsRequestKind, detalhe: string | undefined): Promise<RespostaPortal<'POST /portal/solicitacoes'>> {
+  async abrirPedido(
+    sessao: SessaoDoPortal,
+    req: RequisicaoParaSessao,
+    tipo: RightsRequestKind,
+    detalhe: string | undefined,
+    nascimentoProposto?: string,
+  ): Promise<RespostaPortal<'POST /portal/solicitacoes'>> {
     let teto: { vinculoId: string } | null = null;
     let aberto: { dto: PedidoPortalDto; tenantId: TenantId } | null = null;
     try {
-      aberto = await this.registrarPedido(sessao, req, tipo, detalhe);
+      aberto = await this.registrarPedido(sessao, req, tipo, detalhe, nascimentoProposto);
     } catch (e) {
       if (e instanceof TetoDePedidosError) teto = { vinculoId: e.vinculoId };
       else throw e;
@@ -466,7 +474,10 @@ export class PortalService {
     req: RequisicaoParaSessao,
     tipo: RightsRequestKind,
     detalhe: string | undefined,
+    nascimentoProposto: string | undefined,
   ): Promise<{ dto: PedidoPortalDto; tenantId: TenantId }> {
+    // Data proposta só em pedido de CORREÇÃO (o banco confere o mesmo).
+    if (nascimentoProposto !== undefined && tipo !== 'correcao') throw new Error('nascimento proposto fora de pedido de correção');
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const [hoje] = await tx.execute<{ n: number }>(
         sql`select count(*)::int as n from portal_rights_requests
@@ -474,7 +485,8 @@ export class PortalService {
       );
       if ((hoje?.n ?? 0) >= TETO_DIARIO_PEDIDOS) throw new TetoDePedidosError(ctx.vinculoId);
       const id = randomUUID();
-      const detailEnc = detalhe ? await this.cifrarDetalhe(tx, ctx, id, detalhe) : null;
+      const detailEnc = detalhe ? await this.cifrarNoPedido(tx, ctx, id, 'detail', detalhe) : null;
+      const birthDateProposedEnc = nascimentoProposto ? await this.cifrarNoPedido(tx, ctx, id, 'birth_date_proposed', nascimentoProposto) : null;
       const [row] = await tx
         .insert(portalRightsRequests)
         .values({
@@ -487,13 +499,14 @@ export class PortalService {
           actingAs: ctx.agindoComo,
           protocol: novoProtocolo(),
           detailEnc,
+          birthDateProposedEnc,
         })
         .returning();
       if (!row) throw new Error('pedido não gravado');
       await this.auditar(tx, ctx, {
         action: AuditAction.Create,
         scope: 'portal_rights_requests',
-        metadata: { request_id: id, kind: tipo, has_detail: detailEnc !== null, acting_as: ctx.agindoComo },
+        metadata: { request_id: id, kind: tipo, has_detail: detailEnc !== null, has_birth_date: birthDateProposedEnc !== null, acting_as: ctx.agindoComo },
       });
       return { dto: this.pedidoDto(row, null), tenantId: ctx.tenantId };
     });
@@ -670,10 +683,11 @@ export class PortalService {
   }
 
   /**
-   * R1 do #68: o recibo de área sensível (profissional da cobrança ou da consulta; desconhecido = sensível,
-   * inclusive a consulta que o RLS já esconde) fica sem profissional e data para o responsável, A MENOS que
-   * ele seja o pagador congelado no recebimento (0031): aí o recibo é dele (IR). Pagador informado só na
-   * cobrança não é conferido aqui: falha fechada.
+   * R1/N1 do #68: o recibo de área sensível (profissional da cobrança ou da consulta; desconhecido = sensível,
+   * inclusive a consulta que o RLS já esconde) NÃO aparece na lista e dá 404 no detalhe (antes de decifrar o
+   * retrato) para o responsável, A MENOS que ele seja o pagador congelado no recebimento (0031): aí o recibo
+   * é dele (IR). Nada de versão "neutra" sem profissional e data: a marca já revelava a categoria (N1 do #68).
+   * Pagador informado só na cobrança não é conferido aqui: falha fechada.
    */
   private reciboRestrito(ctx: ContextoPortal, sensivel: boolean | null, especialidade: string | null, pagadorCongelado: string | null): boolean {
     const prof = sensivel !== null && especialidade !== null ? { sensitiveArea: sensivel, specialty: especialidade } : null;
@@ -708,9 +722,9 @@ export class PortalService {
   }
 
   /** O portal nunca provisiona chave (V2 do #68): clínica sem chave = 409, a clínica provisiona. */
-  private async cifrarDetalhe(tx: TenantTx, ctx: ContextoPortal, id: string, detalhe: string): Promise<string> {
+  private async cifrarNoPedido(tx: TenantTx, ctx: ContextoPortal, id: string, campo: 'detail' | 'birth_date_proposed', valor: string): Promise<string> {
     try {
-      return await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, null, id, 'detail', detalhe);
+      return await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, null, id, campo, valor);
     } catch (e) {
       if (e instanceof TenantKeyMissingError) throw new ConflitoError('clinica_sem_chave_de_dados');
       throw e;

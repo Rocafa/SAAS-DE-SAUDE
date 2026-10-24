@@ -4,6 +4,7 @@ import {
   areaSensivelDoProfissional,
   consentimentoIa,
   consultaOcultaAoResponsavel,
+  correcaoDeNascimentoExigeDocumento,
   especialidadeSensivel,
   estadoDoConsentimento,
   eventoVale,
@@ -13,6 +14,7 @@ import {
   idadeEm,
   loadAntecedenciaCancelamento,
   mascararCpf,
+  nascimentoPropostoValido,
   novoProtocolo,
   novoTokenDeConvite,
   permitido,
@@ -126,5 +128,36 @@ describe('V1 do #68: representação do responsável e sigilo do adolescente', (
     expect(areaSensivelDoProfissional({ sensitiveArea: false, specialty: 'Psicóloga' })).toBe(true);
     expect(areaSensivelDoProfissional({ sensitiveArea: false, specialty: 'Fisioterapia' })).toBe(false);
     expect(areaSensivelDoProfissional(null)).toBe(true);
+  });
+});
+
+describe('C1 (conferência de 24/10): correção do nascimento', () => {
+  const HOJE = '2027-06-15';
+
+  it('data proposta: AAAA-MM-DD que existe, não futura, desde 1900', () => {
+    expect(nascimentoPropostoValido('2012-02-29', HOJE)).toBe(true);
+    expect(nascimentoPropostoValido(HOJE, HOJE)).toBe(true);
+    for (const v of ['2013-02-29', '15/06/2012', '2012-6-1', '2027-06-16', '1899-12-31', 'ontem']) expect(nascimentoPropostoValido(v, HOJE), v).toBe(false);
+  });
+
+  it('reduzir a idade de paciente com 12+ exige documento; aumentar ou corrigir criança não', () => {
+    // 15 anos -> 11 anos: sairia do sigilo do adolescente.
+    expect(correcaoDeNascimentoExigeDocumento('2012-01-10', '2016-01-10', HOJE)).toBe(true);
+    // 15 -> 14 (continua adolescente): ainda reduz, exige.
+    expect(correcaoDeNascimentoExigeDocumento('2012-01-10', '2013-01-10', HOJE)).toBe(true);
+    // Fez 12 hoje: já conta como adolescente.
+    expect(correcaoDeNascimentoExigeDocumento('2015-06-15', '2015-06-16', HOJE)).toBe(true);
+    // Adulto -> menor (devolveria a representação): exige.
+    expect(correcaoDeNascimentoExigeDocumento('2000-01-01', '2012-01-01', HOJE)).toBe(true);
+    // Aumentar a idade ou manter a data: não exige.
+    expect(correcaoDeNascimentoExigeDocumento('2012-01-10', '2011-01-10', HOJE)).toBe(false);
+    expect(correcaoDeNascimentoExigeDocumento('2012-01-10', '2012-01-10', HOJE)).toBe(false);
+    // Criança (11 anos, véspera dos 12): não exige.
+    expect(correcaoDeNascimentoExigeDocumento('2015-06-16', '2016-06-16', HOJE)).toBe(false);
+  });
+
+  it('data atual desconhecida ou ilegível: falha fechada (exige)', () => {
+    expect(correcaoDeNascimentoExigeDocumento(null, '2010-01-01', HOJE)).toBe(true);
+    expect(correcaoDeNascimentoExigeDocumento('04/03/1990', '2010-01-01', HOJE)).toBe(true);
   });
 });

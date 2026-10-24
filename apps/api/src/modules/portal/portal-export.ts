@@ -3,7 +3,7 @@ import { asc, eq } from 'drizzle-orm';
 import { portalConsents, portalInvites, portalLinks, portalRightsRequests } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
-import { decifrarCampoPortal } from './portal-fields';
+import { decifrarCampoPortal, type CampoPortal } from './portal-fields';
 
 /**
  * Portal do paciente no pacote G2 (migrações 0027 e 0033, schemaVersion 1.15.0): convites (sem o hash do token,
@@ -81,6 +81,10 @@ export interface ExportedPortal {
     handledAt: string | null;
     answer: string | null;
     guardianId: string | null;
+    /** 0051: data de nascimento proposta no pedido de correção (decifrada no pacote). */
+    birthDateProposed: string | null;
+    documentCheckedBy: string | null;
+    documentCheckedAt: string | null;
   }[];
 }
 
@@ -126,7 +130,7 @@ export async function exportarPortal(
       .orderBy(asc(portalRightsRequests.createdAt), asc(portalRightsRequests.id)),
     tenantId,
   );
-  const dec = (rowId: string, campo: 'detail' | 'answer', valor: string | null): Promise<string | null> =>
+  const dec = (rowId: string, campo: CampoPortal, valor: string | null): Promise<string | null> =>
     valor === null ? Promise.resolve(null) : decifrarCampoPortal(decifrar(), tx, tenantId, rowId, campo, valor);
 
   const rightsRequests: ExportedPortal['rightsRequests'][number][] = [];
@@ -147,6 +151,9 @@ export async function exportarPortal(
       handledAt: iso(p.handledAt),
       answer: await dec(p.id, 'answer', p.answerEnc),
       guardianId: p.guardianId,
+      birthDateProposed: await dec(p.id, 'birth_date_proposed', p.birthDateProposedEnc),
+      documentCheckedBy: p.documentCheckedBy,
+      documentCheckedAt: iso(p.documentCheckedAt),
     });
   }
   const data: ExportedPortal = {

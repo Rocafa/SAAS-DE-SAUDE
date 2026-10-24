@@ -7,7 +7,8 @@ import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { PortalGuard, RequisicaoPortal, SessaoPortal, type SessaoDoPortal } from './portal-auth';
 import { PortalClinicaService } from './portal-clinica.service';
-import { TIPOS_DE_PEDIDO_ACEITOS, tipoDePedido, VALIDADE_CONVITE_HORAS } from './portal-regras';
+import { hojeNaClinica } from '../insurance/guias-regras';
+import { nascimentoPropostoValido, TIPOS_DE_PEDIDO_ACEITOS, tipoDePedido, VALIDADE_CONVITE_HORAS } from './portal-regras';
 import { PortalService } from './portal.service';
 
 /** GET do portal não aceita NENHUM parâmetro de query (nada de pacienteId/tenantId/vinculoId). */
@@ -133,10 +134,14 @@ export class PortalController {
   /** "Solicitar correção" dos dados cadastrais: vira pedido `correcao` (art. 18, III) para a clínica. */
   @Post('meus-dados/correcao')
   correcao(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/meus-dados/correcao'>> {
-    const v = new Validador(exigirObjeto(corpo, ['detalhe']));
+    const v = new Validador(exigirObjeto(corpo, ['detalhe', 'nascimento']));
     const detalhe = v.texto('detalhe', { min: 3, max: 500, obrigatorio: true });
+    // C1: a data de nascimento NÃO se edita pelo portal; aqui ela só vai, cifrada, para a clínica analisar.
+    const nascimento = v.texto('nascimento', { min: 10, max: 10 });
+    if (nascimento !== undefined && !nascimentoPropostoValido(nascimento, hojeNaClinica())) v.falhar('nascimento');
     v.concluir();
-    return this.service.abrirPedido(s, req, 'correcao', detalhe);
+    const pedido: CorpoPortal<'POST /portal/meus-dados/correcao'> = { detalhe, ...(nascimento ? { nascimento } : {}) };
+    return this.service.abrirPedido(s, req, 'correcao', pedido.detalhe, pedido.nascimento);
   }
 
   @Get('solicitacoes')
@@ -276,13 +281,16 @@ export class PortalClinicaController {
   @HttpCode(200)
   @Permissao('titular:atender')
   atualizar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
-    const v = new Validador(exigirObjeto(corpo, ['situacao', 'resposta']));
+    const v = new Validador(exigirObjeto(corpo, ['situacao', 'resposta', 'documentoConferido']));
     const situacao = v.umDe('situacao', ['em_andamento', 'atendida', 'recusada'] as const, true);
     const resposta = v.texto('resposta', { min: 3, max: 1000 });
+    // C1: correção de nascimento que reduz a idade de paciente com 12+ só é atendida com documento conferido.
+    const documentoConferido = v.booleano('documentoConferido');
     v.concluir();
     return this.service.atualizarPedido(paraRequestContext(auth), exigirUuid(id), {
       situacao: situacao as 'em_andamento' | 'atendida' | 'recusada',
       ...(resposta ? { resposta } : {}),
+      ...(documentoConferido !== undefined ? { documentoConferido } : {}),
     });
   }
 }

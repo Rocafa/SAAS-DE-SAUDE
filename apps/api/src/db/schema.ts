@@ -977,6 +977,11 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   answerEnc: text('answer_enc'),
   /** 0033 (V1): qual responsável abriu (gatilho, a partir do vínculo). */
   guardianId: uuid('guardian_id'),
+  /** 0051 (C1 de 24/10): data de nascimento proposta no pedido de correção (cifrada; só em `correcao`). */
+  birthDateProposedEnc: text('birth_date_proposed_enc'),
+  /** 0051: quem da clínica conferiu o documento da data proposta, e quando (uma vez; imutável). */
+  documentCheckedBy: uuid('document_checked_by'),
+  documentCheckedAt: timestamp('document_checked_at', { withTimezone: true }),
 });
 
 /** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */

@@ -7,9 +7,10 @@ import type { FieldRef } from '../crypto/field-format';
 /**
  * Colunas cifradas do portal (migração 0027). Tabela e coluna entram no AAD (com a clínica e o id da
  * linha): não renomear sem recifrar. O detalhe do pedido do titular pode conter dado de saúde (texto
- * livre do paciente) e a resposta da clínica também: só cifrados.
+ * livre do paciente) e a resposta da clínica também: só cifrados. A data de nascimento proposta num pedido de
+ * correção (0051) também é cifrada, como a do cadastro.
  */
-export type CampoPortal = 'detail' | 'answer';
+export type CampoPortal = 'detail' | 'answer' | 'birth_date_proposed';
 
 export function campoPortalRef(tenantId: TenantId, rowId: string, campo: CampoPortal): FieldRef {
   return { tenantId, table: 'portal_rights_requests', column: campo, rowId };
