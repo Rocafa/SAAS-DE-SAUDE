@@ -59,7 +59,10 @@
 | Rodada 22.1: ✅ **#66 R3/R9** (0046) + R3-a/R3-b — **importador APROVADO pelo código**; liga em produção quando IAM/KMS (Terraform), alarme `CHAVE_LOTE_PRESA`, R10 e 1º ciclo do agendador estiverem prontos | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 22.2: ✅ #63 O-R17b/d/e (0047) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 22.3: ✅ importador R5, responsáveis (0048) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
-| Rodada 22.4: IAM das chaves de lote no Terraform (`purpose=import_batch`) | Maestro @Rocafa (agente devops-ci) | 23/10/2026 | PR #58 |
+| Rodada 22.4: ✅ IAM das chaves KMS no Terraform (b9eb6a5) | Maestro @Rocafa | 23/10/2026 | PR #58 |
+| Rodada 23.1: varredura de testes instáveis (marcadores curtos, consultas sem ORDER BY, pool) — test:rls 5× seguidas | Maestro @Rocafa (agente qa-testes) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 23.2: importador — chave órfã, NotFound após a janela, tipo do erro no log (0049) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
+| Rodada 23.3: portal — revogar titular que passa a constar como menor (na correção + job diário) (0050) | Maestro @Rocafa (agente engenharia) | 23/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
@@ -67,7 +70,6 @@
 |---|---|
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
-| **Importador (antes do GA):** chave órfã de `receber` com falha; `NotFound` após 7 dias em `destroying` contar como destruída; tipo do erro em `CHAVE_LOTE_KMS_FALHOU` | parecer do importador, R3-a/R3-b 23/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
