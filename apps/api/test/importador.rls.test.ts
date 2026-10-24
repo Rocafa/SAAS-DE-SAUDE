@@ -16,7 +16,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@nestjs/common';
 import type { KeyProvider } from '../src/modules/crypto/key-provider';
-import { appointments, auditLog, importBatches, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patientCpfIndexKeys, patients, tenants } from '../src/db/schema';
+import { appointments, auditLog, importBatches, importBatchKeyIntents, importBatchKeys, importBatchRecords, importIssues, importRawFiles, patientCpfIndexKeys, patients, tenants } from '../src/db/schema';
 import { PatientsService } from '../src/modules/patients/patients.service';
 import { KeyUnavailableError } from '../src/modules/crypto/crypto-errors';
 import type { DisposableKeys } from '../src/modules/crypto/disposable-keys';
@@ -25,7 +25,8 @@ import { DISPOSABLE_KEYS, FIELD_CIPHER } from '../src/modules/crypto/crypto.modu
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from '../src/modules/imports/termo-migracao';
-import { ImportacaoService, loadImportacaoConfig } from '../src/modules/imports/importacao.service';
+import { ImportacaoService, loadImportacaoConfig, PRAZO_INTENCAO_MINUTOS } from '../src/modules/imports/importacao.service';
+import { KmsKeyProvider, type KmsApi } from '../src/modules/crypto/kms-key-provider';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -77,6 +78,38 @@ async function nomeDaClinica(t: TenantId): Promise<string> {
   return linha?.nome as string;
 }
 
+/**
+ * Semente de teste: chave PRÓPRIA do lote (R3) gravada na transação de quem semeia o lote fora do `receber`
+ * (bruto vencido, TTL, outra clínica). Devolve o bruto cifrado com ela (v1, keyId = lote).
+ */
+async function selarBruto(tx: TenantTx, t: TenantId, loteId: string, bytes: Uint8Array): Promise<string> {
+  const ref = { tenantId: t, table: 'import_raw_files', column: 'content', rowId: loteId };
+  const { key, sealed } = await api.app.get<DisposableKeys>(DISPOSABLE_KEYS).createAndSeal(t, loteId, ref, bytes);
+  await tx.insert(importBatchKeys).values({ batchId: loteId, tenantId: t, masterKeyId: key.masterKeyId, wrappedKey: key.wrapped });
+  return sealed;
+}
+
+/** Intenções de chave de lote (0049) da clínica. */
+const intencoesDe = (t: TenantId) => withTenant(api.db.db, t, (tx) => tx.select().from(importBatchKeyIntents));
+
+/**
+ * Adianta o relógio de UMA intenção de chave de lote (0049) em `minutos` (simula recebimento que falhou há
+ * tempo). O runtime não consegue (guarda da 0049): superusuário do container efêmero, só no teste.
+ */
+async function envelhecerIntencao(batchId: string, minutos: number): Promise<void> {
+  const url = process.env.DATABASE_ADMIN_URL;
+  if (!url) throw new Error('DATABASE_ADMIN_URL é obrigatória para o teste da intenção de chave de lote');
+  const adm = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await adm.begin(async (t) => {
+      await t`set local session_replication_role = replica`;
+      await t`update import_batch_key_intents set created_at = created_at - make_interval(mins => ${minutos}) where batch_id = ${batchId}::uuid`;
+    });
+  } finally {
+    await adm.end();
+  }
+}
+
 /** Lote de A com bruto já vencido, cifrado com a chave própria do lote (R3). */
 async function loteVencidoComChave(servico: ImportacaoService, csv: string): Promise<string> {
   const id = randomUUID();
@@ -91,7 +124,7 @@ async function loteVencidoComChave(servico: ImportacaoService, csv: string): Pro
         createdAt: sql`now() - interval '3 days'`, rawExpiresAt: sql`now() - interval '1 hour'`,
       });
       await tx.insert(importRawFiles).values({
-        batchId: id, tenantId: clinicaA, contentEnc: await servico.selarBrutoDoLote(tx, clinicaA, id, conteudo),
+        batchId: id, tenantId: clinicaA, contentEnc: await selarBruto(tx, clinicaA, id, conteudo),
         sha256: 'd'.repeat(64), createdAt: sql`now() - interval '3 days'`, expiresAt: sql`now() - interval '1 hour'`,
       });
     },
@@ -590,6 +623,185 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     expect(r3).toMatchObject({ chavesPendentes: 0, alarme: false });
   });
 
+  it('observação 1 (0049): receber que falha depois de criar a chave a destrói na hora; nada fica órfão', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    const antes = new Set((await intencoesDe(clinicaA)).map((i) => i.batchId));
+    const destruir = vi.spyOn(provedor, 'destroyMasterKey');
+    // Falha DENTRO da transação do lote (depois de a chave existir no provedor e o ARN estar gravado).
+    const tx = vi.spyOn(servico as unknown as { expurgarNaTransacao: () => Promise<number> }, 'expurgarNaTransacao').mockRejectedValueOnce(new Error('falha simulada'));
+    try {
+      const r = await enviar(adminA, 'pacientes', 'nome;telefone\nFalha Ficticia;11900000310\n');
+      expect(r.status).toBeGreaterThanOrEqual(500);
+      const novas = (await intencoesDe(clinicaA)).filter((i) => !antes.has(i.batchId));
+      expect(novas).toHaveLength(1);
+      const [i] = novas;
+      expect(i).toMatchObject({ status: 'destroyed' });
+      expect(i?.masterKeyId).toBeTruthy();
+      expect(i?.closedAt).not.toBeNull();
+      expect(destruir).toHaveBeenCalledWith(i?.masterKeyId, clinicaA);
+      // Nem lote nem chave de lote: o recebimento não deixou nada além da lápide da intenção.
+      expect(await withTenant(api.db.db, clinicaA, (t) => t.select().from(importBatches).where(eq(importBatches.id, i?.batchId as string)))).toHaveLength(0);
+      expect(await withTenant(api.db.db, clinicaA, (t) => t.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, i?.batchId as string)))).toHaveLength(0);
+    } finally {
+      tx.mockRestore();
+      destruir.mockRestore();
+    }
+    // Recebimento bom: a intenção fecha `committed` no mesmo commit da chave do lote.
+    const ok = await enviar(adminA, 'pacientes', 'nome;telefone\nCommit Ficticia;11900000311\n');
+    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+    const id = (ok.body as { id: string }).id;
+    const [c] = (await intencoesDe(clinicaA)).filter((x) => x.batchId === id);
+    const [k] = await withTenant(api.db.db, clinicaA, (t) => t.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+    expect(c).toMatchObject({ status: 'committed', masterKeyId: k?.masterKeyId });
+  });
+
+  it('observação 1 (0049): KMS também falhando, a intenção fica pendente e o job de expurgo a retoma; observação 3: o log traz só o tipo', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    const antes = new Set((await intencoesDe(clinicaA)).map((i) => i.batchId));
+    const avisos: string[] = [];
+    const logAviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void avisos.push(String(m)));
+    const dek = vi.spyOn(provedor, 'generateDataKey').mockRejectedValueOnce(new KeyUnavailableError('indisponivel'));
+    const kms = vi.spyOn(provedor, 'destroyMasterKey').mockRejectedValue(new KeyUnavailableError('acesso_negado'));
+    let id: string;
+    let arn: string;
+    try {
+      const r = await enviar(adminA, 'pacientes', 'nome;telefone\nOrfa Ficticia;11900000312\n');
+      expect(r.status).toBeGreaterThanOrEqual(400);
+      const novas = (await intencoesDe(clinicaA)).filter((i) => !antes.has(i.batchId));
+      expect(novas).toHaveLength(1);
+      id = novas[0]?.batchId as string;
+      arn = novas[0]?.masterKeyId as string;
+      expect(novas[0]).toMatchObject({ status: 'pending' });
+      expect(arn).toBeTruthy();
+      // Observação 3: tipo da falha (lista fechada), sem mensagem, sem ARN, sem lote, sem dado pessoal.
+      const falhou = avisos.find((m) => m.startsWith('CHAVE_LOTE_KMS_FALHOU'));
+      expect(falhou).toContain(`clinica=${clinicaA} chaves=1 tipos=acesso_negado:1`);
+      expect(falhou).not.toMatch(/Orfa|Ficticia|11900000312|local:|arn:/);
+      expect(falhou).not.toContain(id);
+      expect(falhou).not.toContain(arn);
+
+      // Recém-falhado (< PRAZO_INTENCAO_MINUTOS): o job não mexe (o recebimento poderia estar em andamento).
+      kms.mockClear();
+      await servico.expurgoDiario([clinicaA]);
+      expect(kms).not.toHaveBeenCalledWith(arn, clinicaA);
+      // Depois do prazo, com o KMS ainda falhando: segue pendente e o log traz o tipo.
+      await envelhecerIntencao(id, PRAZO_INTENCAO_MINUTOS + 1);
+      avisos.length = 0;
+      await servico.expurgoDiario([clinicaA]);
+      expect(kms).toHaveBeenCalledWith(arn, clinicaA);
+      expect((await intencoesDe(clinicaA)).find((i) => i.batchId === id)).toMatchObject({ status: 'pending' });
+      const doJob = avisos.find((m) => m.startsWith('CHAVE_LOTE_KMS_FALHOU') && m.includes('tipos=acesso_negado:'));
+      expect(doJob).toBeDefined();
+      expect(doJob).not.toContain(arn);
+      // Pendente há mais de 24 h: entra no alarme.
+      await envelhecerIntencao(id, 24 * 60);
+      const r3 = await servico.expurgoDiario([clinicaA]);
+      expect(r3.chavesPendentes).toBeGreaterThanOrEqual(1);
+      expect(r3.alarme).toBe(true);
+    } finally {
+      dek.mockRestore();
+      kms.mockRestore();
+      logAviso.mockRestore();
+    }
+    // KMS de volta: o job destrói a chave e fecha a intenção; o alarme apaga.
+    const destruir = vi.spyOn(provedor, 'destroyMasterKey');
+    try {
+      const r4 = await servico.expurgoDiario([clinicaA]);
+      expect(destruir).toHaveBeenCalledWith(arn, clinicaA);
+      expect((await intencoesDe(clinicaA)).find((i) => i.batchId === id)).toMatchObject({ status: 'destroyed' });
+      expect(r4).toMatchObject({ chavesPendentes: 0, alarme: false });
+    } finally {
+      destruir.mockRestore();
+    }
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'batch_key_intents_closed'`));
+    expect(trilha.length).toBeGreaterThanOrEqual(1);
+    expect(trilha.every((l) => Object.keys(l.metadata as object).sort().join(',') === 'count,op')).toBe(true);
+  });
+
+  it('observação 1 (0049): sem ARN, a intenção fecha `abandoned`; no job, com o log CHAVE_LOTE_ORFA (só clínica e contagem)', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    // KMS recusou a criação: não há chave; a intenção fecha `abandoned` na hora.
+    const antes = new Set((await intencoesDe(clinicaA)).map((i) => i.batchId));
+    const criar = vi.spyOn(provedor, 'createMasterKey').mockRejectedValueOnce(new KeyUnavailableError('acesso_negado'));
+    try {
+      expect((await enviar(adminA, 'pacientes', 'nome;telefone\nSem Chave Ficticia;11900000313\n')).status).toBeGreaterThanOrEqual(400);
+    } finally {
+      criar.mockRestore();
+    }
+    const novas = (await intencoesDe(clinicaA)).filter((i) => !antes.has(i.batchId));
+    expect(novas).toEqual([expect.objectContaining({ status: 'abandoned', masterKeyId: null })]);
+    // Intenção sem ARN que ficou pendente (o ARN não chegou ao banco): o job fecha e loga CHAVE_LOTE_ORFA.
+    const id = randomUUID();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: clinicaA }), adminA.userId);
+    await envelhecerIntencao(id, PRAZO_INTENCAO_MINUTOS + 1);
+    const erros: string[] = [];
+    const logErro = vi.spyOn(Logger.prototype, 'error').mockImplementation((m: unknown) => void erros.push(String(m)));
+    try {
+      await servico.expurgoDiario([clinicaA]);
+    } finally {
+      logErro.mockRestore();
+    }
+    expect((await intencoesDe(clinicaA)).find((i) => i.batchId === id)).toMatchObject({ status: 'abandoned' });
+    const orfa = erros.find((m) => m.startsWith('CHAVE_LOTE_ORFA'));
+    expect(orfa).toContain(`clinica=${clinicaA} chaves=1`);
+    expect(orfa).not.toContain(id);
+  });
+
+  it('observação 1 (0049): a intenção é da clínica (RLS), nasce só por admin e não muda nem se apaga pelo runtime', async () => {
+    const id = randomUUID();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: clinicaA }), recepA.userId)).rejects.toThrow();
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: clinicaA, masterKeyId: 'local:forjada' }), adminA.userId),
+    ).rejects.toThrow();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: clinicaA }), adminA.userId);
+    // Outra clínica não vê nem fecha.
+    expect(await withTenant(api.db.db, clinicaB, (tx) => tx.select().from(importBatchKeyIntents).where(eq(importBatchKeyIntents.batchId, id)), adminB.userId)).toHaveLength(0);
+    const [deB] = await withTenant(api.db.db, clinicaB, (tx) => tx.execute<{ ok: boolean }>(sql`select app_close_import_batch_key_intent(${id}::uuid, 'abandoned') as ok`), adminB.userId);
+    expect(deB?.ok).toBe(false);
+    // Runtime não altera nem apaga; `committed` sem a chave do lote gravada é recusado.
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.update(importBatchKeyIntents).set({ masterKeyId: 'local:x' }).where(eq(importBatchKeyIntents.batchId, id)), adminA.userId)).rejects.toThrow();
+    await expect(withTenant(api.db.db, clinicaA, (tx) => tx.delete(importBatchKeyIntents).where(eq(importBatchKeyIntents.batchId, id)), adminA.userId)).rejects.toThrow();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_record_import_batch_key_intent(${id}::uuid, 'local:teste')`), adminA.userId);
+    await expect(
+      withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`select app_close_import_batch_key_intent(${id}::uuid, 'committed')`), adminA.userId),
+    ).rejects.toThrow();
+    expect((await intencoesDe(clinicaA)).find((i) => i.batchId === id)).toMatchObject({ status: 'pending', masterKeyId: 'local:teste' });
+  });
+
+  it('observação 2: chave em destroying que o KMS já excluiu (NotFound depois dos 7 dias) conta como destruída e o alarme apaga', async () => {
+    const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
+    const provedor = (chaves as unknown as { provider: KeyProvider }).provider;
+    const servico = api.app.get(ImportacaoService);
+    const id = await loteVencidoComChave(servico, 'nome;telefone\nExcluida Ficticia;11900000314\n');
+    // O KMS agendou, mas o banco não fechou a linha (simulado: o provedor "falha" e a chave fica destroying).
+    const falha = vi.spyOn(provedor, 'destroyMasterKey').mockRejectedValue(new KeyUnavailableError('indisponivel'));
+    try {
+      await servico.expurgoDiario([clinicaA]);
+    } finally {
+      falha.mockRestore();
+    }
+    await envelhecerDescarte(id, 24 * 8);
+    // KMS falso em que a chave já foi excluída: agendamento e describe dão NotFoundException.
+    const naoExiste = () => Promise.reject(Object.assign(new Error('Key arn:aws:kms:sa-east-1:000000000000:key/x does not exist'), { name: 'NotFoundException' }));
+    const kmsFalso = { scheduleKeyDeletion: naoExiste, describeKey: naoExiste } as unknown as KmsApi;
+    const kms = vi.spyOn(provedor, 'destroyMasterKey').mockImplementation((m: string) => new KmsKeyProvider(kmsFalso).destroyMasterKey(m));
+    try {
+      const r = await servico.expurgoDiario([clinicaA]);
+      expect(kms).toHaveBeenCalled();
+      const [k] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(importBatchKeys).where(eq(importBatchKeys.batchId, id)));
+      expect(k).toMatchObject({ status: 'destroyed', wrappedKey: null });
+      expect(r).toMatchObject({ chavesPendentes: 0, alarme: false });
+    } finally {
+      kms.mockRestore();
+    }
+  });
+
   it('expirado pelo TTL (rotina de expurgo): a chave do lote também é destruída e o lote não reabre', async () => {
     const chaves = api.app.get<DisposableKeys>(DISPOSABLE_KEYS);
     const servico = api.app.get(ImportacaoService);
@@ -605,7 +817,7 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
           createdAt: sql`now() - interval '3 days'`, rawExpiresAt: sql`now() - interval '1 hour'`,
         });
         await tx.insert(importRawFiles).values({
-          batchId: id, tenantId: clinicaA, contentEnc: await servico.selarBrutoDoLote(tx, clinicaA, id, conteudo),
+          batchId: id, tenantId: clinicaA, contentEnc: await selarBruto(tx, clinicaA, id, conteudo),
           sha256: 'd'.repeat(64), createdAt: sql`now() - interval '3 days'`, expiresAt: sql`now() - interval '1 hour'`,
         });
       },
@@ -941,7 +1153,7 @@ describe('expiração do arquivo bruto (≤ 7 dias)', () => {
         await tx.insert(importRawFiles).values({
           batchId: vencido,
           tenantId: clinicaA,
-          contentEnc: await api.app.get(ImportacaoService).selarBrutoDoLote(tx, clinicaA, vencido, Buffer.from('nome;telefone\nVencida;11900000060\n')),
+          contentEnc: await selarBruto(tx, clinicaA, vencido, Buffer.from('nome;telefone\nVencida;11900000060\n')),
           sha256: 'a'.repeat(64),
           createdAt: sql`now() - interval '8 days'`,
           expiresAt: sql`now() - interval '1 day'`,
@@ -986,7 +1198,7 @@ describe('R2 do #66: rotina diária de descarte (job do sistema, todas as clíni
           });
           await tx.insert(importRawFiles).values({
             batchId: id, tenantId: t,
-            contentEnc: await api.app.get(ImportacaoService).selarBrutoDoLote(tx, t, id, Buffer.from('nome;telefone\nX;11900000090\n')),
+            contentEnc: await selarBruto(tx, t, id, Buffer.from('nome;telefone\nX;11900000090\n')),
             sha256: 'c'.repeat(64), createdAt: sql`now() - interval '9 days'`, expiresAt: sql`now() - interval '2 days'`,
           });
         },

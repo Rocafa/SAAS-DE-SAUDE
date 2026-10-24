@@ -100,6 +100,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
   // R3 (0046): chave própria do lote; o ciclo de vida anda só pelas funções do expurgo.
   import_batch_keys: { privilegios: ['SELECT', 'INSERT'] },
+  // Observação 1 da conferência R3-a/R3-b (0049): intenção da chave de lote; anda só pelas funções do importador.
+  import_batch_key_intents: { privilegios: ['SELECT', 'INSERT'] },
   // R9 (0046): chave do índice cego do CPF; UPDATE só nas transições active -> retired -> destroyed (trigger).
   patient_cpf_index_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   import_issues: { privilegios: ['SELECT', 'INSERT'] },
@@ -439,6 +441,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'import_batches',
       'import_raw_files',
       'import_batch_keys',
+      // 0049: intenção da chave de lote (sem órfã no KMS).
+      'import_batch_key_intents',
       // R9 (0046): chave do índice cego do CPF.
       'patient_cpf_index_keys',
       'import_issues',
@@ -466,7 +470,7 @@ describe('guarda de schema: portal do paciente (0027)', () => {
  * dono sem superpoder; o runtime não apaga nada das tabelas do importador nem de pacientes/agendamentos.
  */
 describe('guarda de schema: funções do importador (0024)', () => {
-  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)', 'public.app_finish_import_batch_key_destroy(uuid)']) {
+  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)', 'public.app_finish_import_batch_key_destroy(uuid)', 'public.app_record_import_batch_key_intent(uuid,text)', 'public.app_close_import_batch_key_intent(uuid,text)']) {
     it(`${assinatura}: SECURITY DEFINER, search_path fixo, dono sem superpoder`, async () => {
       const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
         SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
@@ -480,7 +484,7 @@ describe('guarda de schema: funções do importador (0024)', () => {
   }
 
   it('o runtime não tem DELETE nem TRUNCATE no importador, em pacientes e em agendamentos', async () => {
-    for (const tabela of ['import_batches', 'import_raw_files', 'import_batch_keys', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
+    for (const tabela of ['import_batches', 'import_raw_files', 'import_batch_keys', 'import_batch_key_intents', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
       const tem = await privilegiosDoRuntime(tabela);
       expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
     }

@@ -197,6 +197,8 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'chave interna (cifrada) do índice cego do CPF (0046, R9); o CPF sai decifrado em patients e o índice (cpf_bidx) é derivado dele',
   import_batch_keys:
     'chave interna e transitória do lote de importação (0046, R3): só a DEK embrulhada do arquivo bruto, apagada no descarte; não é dado da clínica (o bruto nem sai no pacote) e a evidência do descarte está em import_batches',
+  import_batch_key_intents:
+    'controle interno da chave de lote no provedor (0049): só id do lote, ARN e situação, para nenhuma chave ficar órfã no KMS; não é dado da clínica e não tem dado pessoal',
   import_issues:
     'divergências da validação/simulação (0024): diagnóstico refeito a cada rodada, só linha, campo e código (sem valor); os totais estão em import_batches, que sai no pacote',
 };

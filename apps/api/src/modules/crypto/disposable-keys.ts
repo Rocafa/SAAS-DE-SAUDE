@@ -32,19 +32,34 @@ export class DisposableKeys {
   async createAndSeal(tenantId: TenantId, scopeId: string, ref: FieldRef, plaintext: Uint8Array): Promise<{ key: DisposableKey; sealed: string }> {
     assertFieldRef(ref);
     if (ref.tenantId !== tenantId) throw new KeyUnavailableError();
-    // R3-b: tag `purpose=import_batch` + `batch_id` e descrição própria (o IAM separa da chave da clínica).
-    const masterKeyId = await this.provider.createMasterKey(tenantId, { purpose: KEY_PURPOSE_IMPORT_BATCH, batchId: scopeId });
+    const masterKeyId = await this.create(tenantId, scopeId);
     try {
-      const generated = await this.provider.generateDataKey(masterKeyId, tenantId);
-      try {
-        const sealed = sealField(generated.plaintext, scopeId, ref, plaintext);
-        return { key: { scopeId, masterKeyId, wrapped: generated.wrapped }, sealed };
-      } finally {
-        generated.plaintext.destroy();
-      }
+      return await this.seal(tenantId, scopeId, masterKeyId, ref, plaintext);
     } catch (e) {
       await this.provider.destroyMasterKey(masterKeyId, tenantId).catch(() => undefined);
       throw e;
+    }
+  }
+
+  /**
+   * Só cria a chave mestra do escopo e devolve o id (ARN). Para quem precisa REGISTRAR o id antes de usar a
+   * chave (importador, 0049: nenhuma chave órfã no KMS); quem chama é dono da destruição se algo falhar.
+   */
+  create(tenantId: TenantId, scopeId: string): Promise<string> {
+    // R3-b: tag `purpose=import_batch` + `batch_id` e descrição própria (o IAM separa da chave da clínica).
+    return this.provider.createMasterKey(tenantId, { purpose: KEY_PURPOSE_IMPORT_BATCH, batchId: scopeId });
+  }
+
+  /** Gera a DEK sob a chave do escopo e cifra `plaintext`. Não destrói a chave se falhar (ver `create`). */
+  async seal(tenantId: TenantId, scopeId: string, masterKeyId: string, ref: FieldRef, plaintext: Uint8Array): Promise<{ key: DisposableKey; sealed: string }> {
+    assertFieldRef(ref);
+    if (ref.tenantId !== tenantId) throw new KeyUnavailableError();
+    const generated = await this.provider.generateDataKey(masterKeyId, tenantId);
+    try {
+      const sealed = sealField(generated.plaintext, scopeId, ref, plaintext);
+      return { key: { scopeId, masterKeyId, wrapped: generated.wrapped }, sealed };
+    } finally {
+      generated.plaintext.destroy();
     }
   }
 

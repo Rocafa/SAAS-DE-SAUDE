@@ -748,6 +748,23 @@ export const importBatchKeys = pgTable('import_batch_keys', {
   destroyedAt: timestamp('destroyed_at', { withTimezone: true }),
 });
 
+/**
+ * Intenção da chave de lote (0049, observação 1 da conferência R3-a/R3-b): registrada ANTES de o KMS criar a
+ * chave, com o ARN logo depois, para nenhuma chave ficar órfã se o `receber` falhar. Runtime: só
+ * SELECT/INSERT; anda pelas funções `app_record_import_batch_key_intent`/`app_close_import_batch_key_intent`.
+ */
+export const IMPORT_BATCH_KEY_INTENT_STATUSES = ['pending', 'committed', 'destroyed', 'abandoned'] as const;
+export const importBatchKeyIntents = pgTable('import_batch_key_intents', {
+  batchId: uuid('batch_id').primaryKey(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  masterKeyId: text('master_key_id'),
+  status: text('status', { enum: IMPORT_BATCH_KEY_INTENT_STATUSES }).notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+});
+
 /** Divergências por linha: só códigos, nunca o valor (0024). */
 export const importIssues = pgTable(
   'import_issues',
@@ -1229,6 +1246,7 @@ export const schema = {
   importBatches,
   importRawFiles,
   importBatchKeys,
+  importBatchKeyIntents,
   patientCpfIndexKeys,
   importIssues,
   importBatchRecords,

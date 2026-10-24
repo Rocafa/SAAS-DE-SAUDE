@@ -13,6 +13,7 @@ import {
   guardians,
   importBatches,
   importBatchKeys,
+  importBatchKeyIntents,
   importBatchRecords,
   importIssues,
   importRawFiles,
@@ -26,6 +27,7 @@ import {
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { DISPOSABLE_KEYS, FIELD_CIPHER } from '../crypto/crypto.module';
+import { keyFailureKind, type KeyFailureKind } from '../crypto/crypto-errors';
 import type { DisposableKeys } from '../crypto/disposable-keys';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
@@ -133,6 +135,35 @@ export const PRAZO_CHAVE_LOTE_PRESA_HORAS = 24;
 /** Teto de chaves que uma operação do usuário tenta destruir no KMS depois do commit (o job pega o resto). */
 const MAX_DESTRUICOES_POR_OPERACAO = 20;
 
+/**
+ * Observação 1 (0049): intenção de chave `pending` há mais que isto é de um `receber` que já terminou (o
+ * recebimento leva segundos; a transação tem teto bem menor). Só então o job de expurgo a retoma.
+ */
+export const PRAZO_INTENCAO_MINUTOS = 60;
+
+/**
+ * Observação 3 da conferência R3-a/R3-b: conta as falhas do provedor de chaves por TIPO (lista fechada de
+ * `KeyFailureKind`), para o log `CHAVE_LOTE_KMS_FALHOU` separar IAM de indisponibilidade. Sem mensagem,
+ * sem ARN e sem dado pessoal: só `tipo:contagem`, em ordem alfabética.
+ */
+class TiposDeFalha {
+  private readonly contagem = new Map<KeyFailureKind, number>();
+  total = 0;
+
+  contar(e: unknown): void {
+    const tipo = keyFailureKind(e);
+    this.contagem.set(tipo, (this.contagem.get(tipo) ?? 0) + 1);
+    this.total += 1;
+  }
+
+  texto(): string {
+    return [...this.contagem.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([tipo, n]) => `${tipo}:${n}`)
+      .join(',');
+  }
+}
+
 /** 409 do desfazer bloqueado, com os motivos SÓ em contagens (nenhum id nem dado de paciente). */
 export class ImportacaoEmUsoError extends ConflictException {
   constructor(readonly motivos: Readonly<Record<string, number>>) {
@@ -239,12 +270,21 @@ export class ImportacaoService {
     // Lê ANTES de abrir a transação: arquivo inválido não grava nada (nem o bruto).
     const planilha = lerCsv(decodificarUtf8(bytes));
     const sha = createHash('sha256').update(bytes).digest('hex');
-    // R3: chave mestra do lote criada no provedor; se a transação falhar, ela é destruída (sem órfã).
-    const criadas: string[] = [];
+    // R3 + observação 1 da conferência R3-a/R3-b (0049): a chave mestra do lote nunca fica órfã no KMS.
+    // 1. a intenção é REGISTRADA (commit próprio) antes de o KMS criar a chave; 2. o ARN é gravado logo
+    // depois (commit próprio); 3. a transação do lote fecha a intenção como `committed`. Se algo falhar, a
+    // chave é destruída na hora; se o KMS também falhar, a intenção fica `pending` e o job de expurgo a retoma.
+    const id = randomUUID();
+    let registrada = false;
+    let masterKeyId: string | undefined;
     try {
+      await escreverNaClinica(this.db, ctx, (tx) => tx.insert(importBatchKeyIntents).values({ batchId: id, tenantId: ctx.tenantId }));
+      registrada = true;
+      masterKeyId = await this.chavesDeLote.create(ctx.tenantId, id);
+      await this.anotarChaveDaIntencao(ctx, id, masterKeyId);
+      const { key, sealed } = await this.chavesDeLote.seal(ctx.tenantId, id, masterKeyId, refDoArquivo(ctx, id), bytes);
       return await this.escrever(ctx, async (tx) => {
         await this.expurgarNaTransacao(tx, ctx);
-        const id = randomUUID();
         const [lote] = await tx
           .insert(importBatches)
           .values({
@@ -263,10 +303,14 @@ export class ImportacaoService {
           })
           .returning();
         if (!lote) throw new Error('falha ao criar lote');
+        await tx.insert(importBatchKeys).values({ batchId: id, tenantId: ctx.tenantId, masterKeyId: key.masterKeyId, wrappedKey: key.wrapped });
+        // No MESMO commit da chave do lote. false = o job já destruiu a chave (recebimento lento demais).
+        const [fechada] = await tx.execute<{ ok: boolean }>(sql`select app_close_import_batch_key_intent(${id}::uuid, 'committed') as ok`);
+        if (!fechada?.ok) throw new ConflitoError('chave_do_lote_expirada');
         await tx.insert(importRawFiles).values({
           batchId: id,
           tenantId: ctx.tenantId,
-          contentEnc: await this.selarBrutoDoLote(tx, ctx.tenantId, id, bytes, criadas),
+          contentEnc: sealed,
           sha256: sha,
           expiresAt: sql`(select raw_expires_at from import_batches where id = ${id}::uuid)`,
         });
@@ -282,7 +326,7 @@ export class ImportacaoService {
         };
       });
     } catch (e) {
-      for (const m of criadas) await this.chavesDeLote.destroy(ctx.tenantId, m).catch(() => undefined);
+      if (registrada) await this.descartarChaveDoRecebimento(ctx, id, masterKeyId);
       // O banco confere o perfil admin em clinic_members (0020): sem ele, 42501.
       if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_admin_nao_registrado');
       throw e;
@@ -577,6 +621,11 @@ export class ImportacaoService {
         const d = await this.destruirChavesPendentes(ctx);
         if (d.destruidas === 0 || d.falhas > 0) break;
       }
+      // Observação 1 (0049): chave de recebimento que falhou e cuja destruição na hora também falhou.
+      for (;;) {
+        const d = await this.retomarIntencoesPendentes(ctx);
+        if (d.fechadas === 0 || d.falhas > 0) break;
+      }
       const presas = await this.contarChavesPresas(tenantId);
       if (presas > 0) {
         this.logger.error(
@@ -639,16 +688,19 @@ export class ImportacaoService {
       );
       if (pendentes.length === 0) return { destruidas: 0, falhas: 0 };
       const feitas: string[] = [];
-      let falhas = 0;
+      const tipos = new TiposDeFalha();
       for (const p of pendentes) {
         try {
           await this.chavesDeLote.destroy(ctx.tenantId, p.masterKeyId);
           feitas.push(p.batchId);
-        } catch {
-          falhas += 1;
+        } catch (e) {
+          tipos.contar(e);
         }
       }
-      if (falhas > 0) this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=${falhas}: fica em destroying e é retomada`);
+      const falhas = tipos.total;
+      if (falhas > 0) {
+        this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=${falhas} tipos=${tipos.texto()}: fica em destroying e é retomada`);
+      }
       if (feitas.length === 0) return { destruidas: 0, falhas };
       const destruidas = await this.db.run(
         ctx.tenantId,
@@ -666,33 +718,133 @@ export class ImportacaoService {
       return { destruidas, falhas };
     } catch {
       // Banco indisponível depois do commit: a chave segue `destroying` (ilegível desde o expurgo).
-      this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId}: retomada adiada`);
+      this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} tipos=outro:1 (banco indisponível): retomada adiada`);
       return { destruidas: 0, falhas: 1 };
     }
   }
 
-  /** R3-a: chaves em `destroying` há mais que o prazo (índice `import_batch_keys_pending_idx`). */
+  /**
+   * R3-a: chaves em `destroying` há mais que o prazo (índice `import_batch_keys_pending_idx`) + observação 1
+   * (0049): intenções de chave de recebimento que falhou ainda `pending` há mais que o mesmo prazo.
+   */
   private async contarChavesPresas(tenantId: TenantId): Promise<number> {
     const [r] = await this.db.run(tenantId, (tx) =>
       tx.execute<{ n: number }>(
-        sql`select count(*)::int as n from import_batch_keys where tenant_id = ${tenantId}::uuid and status = 'destroying'
-              and discarded_at < now() - make_interval(hours => ${PRAZO_CHAVE_LOTE_PRESA_HORAS})`,
+        sql`select (select count(*)::int from import_batch_keys where tenant_id = ${tenantId}::uuid and status = 'destroying'
+                      and discarded_at < now() - make_interval(hours => ${PRAZO_CHAVE_LOTE_PRESA_HORAS}))
+                 + (select count(*)::int from import_batch_key_intents where tenant_id = ${tenantId}::uuid and status = 'pending'
+                      and created_at < now() - make_interval(hours => ${PRAZO_CHAVE_LOTE_PRESA_HORAS})) as n`,
       ),
     );
     return Number(r?.n ?? 0);
   }
 
+  /** Observação 1 (0049): grava o ARN na intenção, em commit próprio, logo depois de o KMS criar a chave. */
+  private async anotarChaveDaIntencao(ctx: RequestContext, loteId: string, masterKeyId: string): Promise<void> {
+    await this.db.run(
+      ctx.tenantId,
+      async (tx) => {
+        const [r] = await tx.execute<{ ok: boolean }>(sql`select app_record_import_batch_key_intent(${loteId}::uuid, ${masterKeyId}) as ok`);
+        if (!r?.ok) throw new Error('intenção da chave de lote não está pendente');
+      },
+      ctx.userId,
+    );
+  }
+
   /**
-   * R3: cria a chave PRÓPRIA do lote (chave mestra no provedor + DEK embrulhada em `import_batch_keys`) e
-   * devolve o bruto cifrado com ela (v1, keyId = lote, AAD = clínica + import_raw_files + content + lote).
-   * `criadas` recebe o id da chave mestra, para o chamador destruí-la se a transação falhar.
+   * Observação 1 (0049): o `receber` falhou depois de registrar a intenção. Sem ARN gravado nem devolvido, o KMS
+   * não criou a chave: fecha `abandoned`. Com ARN, destrói a chave na hora e fecha `destroyed` (nunca a de um
+   * lote que chegou a ser gravado). Se o KMS ou o banco falharem, a intenção fica `pending` e o job de expurgo
+   * a retoma depois de PRAZO_INTENCAO_MINUTOS. Nunca lança (o erro original do `receber` é o que importa).
    */
-  async selarBrutoDoLote(tx: TenantTx, tenantId: TenantId, loteId: string, bytes: Uint8Array, criadas: string[] = []): Promise<string> {
-    const ref: FieldRef = { tenantId, table: 'import_raw_files', column: 'content', rowId: loteId };
-    const { key, sealed } = await this.chavesDeLote.createAndSeal(tenantId, loteId, ref, bytes);
-    criadas.push(key.masterKeyId);
-    await tx.insert(importBatchKeys).values({ batchId: loteId, tenantId, masterKeyId: key.masterKeyId, wrappedKey: key.wrapped });
-    return sealed;
+  private async descartarChaveDoRecebimento(ctx: RequestContext, loteId: string, masterKeyId: string | undefined): Promise<void> {
+    try {
+      const situacao = await this.db.run(
+        ctx.tenantId,
+        async (tx) => (await tx.select({ status: importBatchKeyIntents.status }).from(importBatchKeyIntents).where(eq(importBatchKeyIntents.batchId, loteId)))[0]?.status,
+        ctx.userId,
+      );
+      if (situacao !== 'pending') return;
+      if (masterKeyId !== undefined) {
+        try {
+          await this.chavesDeLote.destroy(ctx.tenantId, masterKeyId);
+        } catch (e) {
+          const tipos = new TiposDeFalha();
+          tipos.contar(e);
+          this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=1 tipos=${tipos.texto()}: chave do recebimento que falhou fica pendente e é retomada`);
+          return;
+        }
+      }
+      await this.db.run(
+        ctx.tenantId,
+        (tx) => tx.execute(sql`select app_close_import_batch_key_intent(${loteId}::uuid, ${masterKeyId === undefined ? 'abandoned' : 'destroyed'})`),
+        ctx.userId,
+      );
+    } catch {
+      // Banco indisponível: a intenção (com ou sem ARN) segue `pending`; o job de expurgo a retoma.
+      this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=1 tipos=outro:1 (banco indisponível): chave do recebimento que falhou fica pendente e é retomada`);
+    }
+  }
+
+  /**
+   * Observação 1 (0049), no job de expurgo: intenções `pending` há mais de PRAZO_INTENCAO_MINUTOS (o `receber`
+   * dono delas já terminou). Com ARN: destrói no provedor e fecha `destroyed`. Sem ARN: o KMS pode ter criado
+   * a chave sem o ARN chegar ao banco; fecha `abandoned` e loga CHAVE_LOTE_ORFA (só clínica e contagem) para a
+   * varredura do IaC por `purpose=import_batch`. Trilha só com contagens. Nunca lança.
+   */
+  private async retomarIntencoesPendentes(ctx: RequestContext): Promise<{ fechadas: number; falhas: number }> {
+    try {
+      const pendentes = await this.db.run(ctx.tenantId, (tx) =>
+        tx
+          .select({ batchId: importBatchKeyIntents.batchId, masterKeyId: importBatchKeyIntents.masterKeyId })
+          .from(importBatchKeyIntents)
+          .where(
+            and(
+              eq(importBatchKeyIntents.status, 'pending'),
+              sql`${importBatchKeyIntents.tenantId} = app_current_tenant()`,
+              sql`${importBatchKeyIntents.createdAt} < now() - make_interval(mins => ${PRAZO_INTENCAO_MINUTOS})`,
+            ),
+          )
+          .orderBy(asc(importBatchKeyIntents.createdAt), asc(importBatchKeyIntents.batchId))
+          .limit(MAX_DESTRUICOES_POR_OPERACAO),
+      );
+      if (pendentes.length === 0) return { fechadas: 0, falhas: 0 };
+      const fechar: { batchId: string; status: 'destroyed' | 'abandoned' }[] = [];
+      const tipos = new TiposDeFalha();
+      for (const p of pendentes) {
+        if (p.masterKeyId === null) {
+          fechar.push({ batchId: p.batchId, status: 'abandoned' });
+          continue;
+        }
+        try {
+          await this.chavesDeLote.destroy(ctx.tenantId, p.masterKeyId);
+          fechar.push({ batchId: p.batchId, status: 'destroyed' });
+        } catch (e) {
+          tipos.contar(e);
+        }
+      }
+      if (tipos.total > 0) {
+        this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} chaves=${tipos.total} tipos=${tipos.texto()}: chave de recebimento que falhou fica pendente e é retomada`);
+      }
+      const orfas = fechar.filter((f) => f.status === 'abandoned').length;
+      if (orfas > 0) {
+        this.logger.error(`CHAVE_LOTE_ORFA clinica=${ctx.tenantId} chaves=${orfas}: recebimento falhou sem o ARN gravado; conferir chaves purpose=import_batch Enabled no KMS`);
+      }
+      if (fechar.length === 0) return { fechadas: 0, falhas: tipos.total };
+      const fechadas = await this.db.run(ctx.tenantId, async (tx) => {
+        let n = 0;
+        for (const f of fechar) {
+          const [r] = await tx.execute<{ ok: boolean }>(sql`select app_close_import_batch_key_intent(${f.batchId}::uuid, ${f.status}) as ok`);
+          if (r?.ok) n += 1;
+        }
+        if (n > 0) await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'batch_key_intents_closed', count: n } });
+        return n;
+      });
+      return { fechadas, falhas: tipos.total };
+    } catch {
+      this.logger.warn(`CHAVE_LOTE_KMS_FALHOU clinica=${ctx.tenantId} tipos=outro:1 (banco indisponível): retomada adiada`);
+      return { fechadas: 0, falhas: 1 };
+    }
   }
 
   /** Abre o bruto: chave do lote (R3); bruto anterior à 0046 (sem chave de lote) ainda abre pela chave da clínica até vencer. */
