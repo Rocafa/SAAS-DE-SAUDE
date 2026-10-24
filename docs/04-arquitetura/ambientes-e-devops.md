@@ -19,7 +19,7 @@ Princípios:
   - liberar `kms:ScheduleKeyDeletion` **só** com `aws:ResourceTag/purpose = import_batch` (a API nunca agenda a exclusão da chave de uma clínica);
   - negar explicitamente `kms:CancelKeyDeletion` e `kms:EnableKey` nas chaves com `purpose = import_batch` (salvo *break-glass*), com alarme no CloudTrail;
   - negar `kms:UntagResource` e a troca da tag `purpose` em chave existente;
-  - criar filtro de métrica e alarme para o log `CHAVE_LOTE_PRESA` (chave de lote em `destroying` há mais de 24 h, R3-a), destino SNS de on-call e do DPO.
+  - criar filtro de métrica e alarme para os logs `CHAVE_LOTE_PRESA` (chave de lote em `destroying` ou intenção pendente há mais de 24 h, R3-a/0049) e `CHAVE_LOTE_ORFA` (recebimento que falhou sem ARN gravado, 0049), destino SNS de on-call e do DPO.
 
   Lista completa das permissões em [api-dominio.md §12d](api-dominio.md), "Chave de lote separável no IAM".
 - Feature flags para liberar funcionalidades por tenant (ex.: IA, TISS).
