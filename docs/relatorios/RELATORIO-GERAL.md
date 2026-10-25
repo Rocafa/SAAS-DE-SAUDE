@@ -482,14 +482,14 @@ Fontes: [roadmap.md](../02-produto/roadmap.md) §8, [PRD.md](../02-produto/PRD.m
 Um PR por vez, só com o CI verde. Regra da fila: quem abriu o PR faz o merge.
 
 1. **#72** (Dependabot: next 16.4.2 e mais 13 pacotes). É o mais urgente, porque fecha as 2 vulnerabilidades críticas do Next.js. Conferir no CI os testes de RLS e o E2E com o Playwright novo.
-2. **#54** (economia de minutos do Actions).
-3. **#43** (telas de agenda e pacientes).
-4. **#57** → **#61** → **#62** → **#63** → **#65** (API: pacientes e agenda, vínculo de cuidado, guias e pacotes, prontuário, financeiro).
-5. **#73** (integração, que **substitui #66, #67, #68 e #69**). Condição: os testes com Redis real verdes no CI, com a saída anexada.
-6. **#60** (telas na API real) → **#56** (golden sets da IA) → **#59** (imagem Docker) → **#58** (Terraform).
-7. Demais Dependabot, nesta ordem: **#70 + #71** juntos (CodeQL 4.39.0) → **#52** e **#51** (setup-node e upload-artifact) → **#74** (multer 2.5.0 e body-parser 2.4.0, aberto pelo Maestro) → **#49** (ioredis 6) por último. Antes do #49: pedir `@dependabot rebase` depois do #72, validar o BullMQ com Redis real e confirmar que o Redis da AWS (ElastiCache) está na versão 6 ou maior.
+2. **#74** (multer 2.5.0 e body-parser 2.4.0, aberto pelo Maestro). Vem logo depois do #72 porque, sem ele, o check de auditoria de dependências continua vermelho e travaria todos os merges seguintes (decisão do Maestro, 25/10/2026).
+3. **#54** (economia de minutos do Actions).
+4. **#43** (telas de agenda e pacientes).
+5. **#57** → **#61** → **#62** → **#63** → **#65** (API: pacientes e agenda, vínculo de cuidado, guias e pacotes, prontuário, financeiro).
+6. **#73** (integração, que **substitui #66, #67, #68 e #69**). Condição: os testes com Redis real verdes no CI, com a saída anexada.
+7. **#60** (telas na API real) → **#56** (golden sets da IA) → **#59** (imagem Docker) → **#58** (Terraform).
+8. Demais Dependabot, nesta ordem: **#70 + #71** juntos (CodeQL 4.39.0) → **#52** e **#51** (setup-node e upload-artifact) → **#49** (ioredis 6) por último. Antes do #49: pedir `@dependabot rebase` depois do #72, validar o BullMQ com Redis real e confirmar que o Redis da AWS (ElastiCache) está na versão 6 ou maior.
 
-**Atenção:** depois do #72, o check de auditoria de dependências continua vermelho por 1 falha alta no multer, que já existe na `main`, até o #74 entrar ([Dependabot local](2026-10-24-dependabot-local.md)). Se isso atrapalhar os merges do meio, cabe ao Maestro decidir antecipar o #74.
 
 **Pilha do front do @Lopesloro** (#44 → #45 → #46 → #47, todas aprovadas pelo Guardião, e o **#75** por cima, se ele aceitar): fica empilhada sobre o #43, e quem decide a posição e faz o merge é o @Lopesloro. Condição do Guardião: CI verde, incluindo os E2E novos de B1, B2 e R11.
 
