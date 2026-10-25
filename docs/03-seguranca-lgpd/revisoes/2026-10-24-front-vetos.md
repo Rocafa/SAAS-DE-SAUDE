@@ -224,3 +224,35 @@ O guia está correto no essencial (fonte única, sem cópia local, botões pelos
 | C1-b′ item 1 (`document_required` gravado na abertura) | Não para o merge do #73 | Antes do adaptador HTTP do portal |
 | C1-b′ item 2 (documento também no `PATCH /pacientes/:id`, mesma regra) | Não para o merge do #73 | Antes do adaptador HTTP do portal |
 | C1-b′ item 3 (aumento de idade nas fronteiras 12/18) | Não | Decisão de produto, registrar no §10h |
+
+## Conferência 0052 (24/10/2026)
+
+**Escopo:** `git diff faceb21..origin/eng/integracao-r19` (PR #73): `0052_conferencia_de_documento_do_nascimento.sql`, `erros-dominio.ts`, `schema.ts`, `patients.service.ts` e `patients.validation(.test).ts`, `portal.service.ts`, `portal-clinica.service.ts`, `portal-export.ts`, `test/portal.rls.test.ts` (bloco "C1-b′" e os testes antigos ajustados) e §10d/§10h do `api-dominio.md`. Li o código e os testes. Não rodei a suíte: os números do executor (turbo 12/12, rls 596/596, security 81) ficam como declarados.
+
+**Veredito: APROVADO. A C1-b′ itens 1 e 2 está resolvida e o adaptador HTTP do portal está liberado** quanto a esta conferência. As ressalvas abaixo não bloqueiam.
+
+### O que foi conferido
+- **Item 1 (`document_required` na abertura).** `POST /portal/meus-dados/correcao` decifra a data vigente e grava `document_required` com `correcaoDeNascimentoExigeDocumento`. A trilha leva `document_required`, sem a data. No banco, a coluna é `NOT NULL`. Quando o pedido é gravado sem essa decisão, o gatilho preenche `true` se houver data proposta (falha fechada). Um CHECK impede `true` sem data proposta, e o campo é imutável no gatilho da 0051. A migração preenche os pedidos antigos com `birth_date_proposed_enc IS NOT NULL`, o que também é falha fechada. O atendimento usa o valor gravado e não recalcula pelo cadastro. O banco recusa `atendida` com `document_required` e sem `document_checked_at` (23514). Há teste da ordem natural que antes contornava a trava (abrir, depois `PATCH` com a data proposta, depois atender sem a flag): resulta em 400 pela API, 23514 por SQL e 42501 ao tentar trocar `document_required`.
+- **Item 2 (`PATCH /pacientes/:id`).** A regra é a mesma do portal (mesma função). O 422 `documento_nao_conferido` sai antes do `UPDATE`, e a transação desfaz o resto. O corpo traz só o nome do campo (há teste de que a data não aparece). `documentoConferido` precisa ser booleano, só é aceito junto com `nascimento` e é recusado no `POST /pacientes`. Apagar a data não exige documento: o recálculo fecha, que é a direção segura. Quem conferiu fica na trilha duas vezes, sem a data: no `update` de `patients` (`document_required`/`document_checked`, ator = sessão) e na função do banco (`op: birth_date_document_checked`). Os testes (i), (ii) e (iii) pedidos estão feitos com a sessão da recepção: sem a flag, cadastro, sigilo e avisos ficam intactos; com a flag, o recálculo e o aviso da 0039 acontecem; aumentar a idade ou corrigir a de uma criança passa sem a flag.
+- **Trava no banco.** `app_patient_birth_date_document_checked` só aceita a sessão da clínica com usuário, na transação que mudou a data e antes do recálculo (fora disso, 55000). A marca fica na tabela interna da 0038, não numa GUC que daria para forjar, e é zerada se a data mudar de novo. `app_portal_recalc_sigilo` recusa (42501) adiar o dia dos 12 de vínculo ou convite cujo sigilo já valia, quando falta a marca. A conferência final da 0052 checa `SECURITY DEFINER` e dono sem superusuário, sem BYPASSRLS e diferente do runtime. Há teste de SQL arbitrário: sem marca, marca fora de ordem, marca seguida de nova troca da data e sessão do portal são todos recusados.
+- **G2.** `documentRequired` é exportado junto com a data proposta e a conferência, coerente com o art. 18, II.
+- **Item 3.** A decisão (aumentar a idade não exige documento) está registrada no §10h.
+
+### A lacuna do banco (paciente sem vínculo ou convite de responsável aberto): aceitável
+Sem vínculo ou convite aberto, a data errada não muda nenhum acesso no momento: não há responsável no portal para ganhar ou perder sigilo. O risco só aparece depois, se um convite de responsável for criado com a data errada. Para isso acontecer sem a API, é preciso SQL arbitrário na sessão da clínica. É o mesmo resíduo já aceito no R1 (o banco não lê a data cifrada), e esse ator já consegue trocar a cifra e recalcular. A API barra o caminho normal, e a regra está escrita no §10d e no §10h. **Aceito como resíduo**, com as condições abaixo.
+
+### Ressalvas (não bloqueiam)
+1. **A conferência é uma declaração de quem está na sessão.** `pacientes:escrever` (a recepção) basta para enviar `documentoConferido: true`, e o banco não tem como saber se o documento foi de fato visto. O que fica é a responsabilização: o ator está na trilha. Recomendo que o front da clínica mostre a confirmação explícita ("conferi o documento original") e que o relatório de anomalias (0039) também conte as mudanças `document_checked: true` por usuário.
+2. **Data atual desconhecida exige documento.** Com `atual = null` a função devolve `true`, então informar a data pela primeira vez via `PATCH` (paciente cadastrado sem data) exige a flag até para criança. É falha fechada e aceitável, mas não há teste de `PATCH` nesse caso. Acrescentar um teste e uma linha no §10h.
+3. **Código de erro diferente nos dois caminhos.** O `PATCH` responde 422 `documento_nao_conferido` e o atendimento do pedido responde 400 `campos: ['documentoConferido']`. Não é falha de segurança, mas o front precisa tratar os dois. Unificar quando der, ou registrar no §10h.
+4. **Resíduo do banco documentado.** Manter no §10d/§10h que a trava do banco cobre só pacientes com vínculo ou convite aberto. Qualquer rotina futura que crie convite de responsável para paciente com 12 anos ou mais deve usar a data vigente (já é o caso) e passar pela API.
+5. **Ainda aberto (não bloqueia):** fazer o atendimento do pedido aplicar a data na mesma transação.
+
+| Item | Bloqueia? | Situação |
+|---|---|---|
+| C1-b′ item 1 (`document_required` na abertura, imutável, banco recusa `atendida`) | — | Resolvido |
+| C1-b′ item 2 (documento no `PATCH`, mesma regra, trilha sem a data, trava no recálculo) | — | Resolvido |
+| C1-b′ item 3 (aumento de idade nas fronteiras 12/18) | — | Decisão registrada no §10h |
+| Lacuna do banco sem vínculo/convite | Não | Resíduo aceito (igual ao R1) |
+| Ressalvas 1–5 | Não | Próximas micropartes |
+| **Adaptador HTTP do portal** | — | **Liberado** |

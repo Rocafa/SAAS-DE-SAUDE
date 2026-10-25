@@ -64,12 +64,18 @@
 | Rodada 23.2: ✅ importador — chave `pending` antes de criar, órfã com alarme, NotFound = destruída, tipo do erro, timeout ambíguo fica para o job (0049) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 | Rodada 23.3: ✅ portal — titular que passa a menor revogado na correção e pelo job diário (0050) — **APROVADO** | Maestro @Rocafa | 23/10/2026 | `eng/integracao-r19` |
 
+| Rodada 24.1: ✅ re-revisão dos vetos do front (#44 e #47 aprovados c/ ressalvas, #46 aprovado) | Maestro @Rocafa | 24/10/2026 | PRs #44/#46/#47 |
+| Rodada 24.2: ✅ Dependabot testados localmente + **PR #74** (multer/body-parser) | Maestro @Rocafa | 24/10/2026 | PR #74 |
+| Rodada 24.3: ✅ contrato **`ApiPortal`** em `packages/shared` + C1–C5 + documento obrigatório ao reduzir idade (0051/0052) — **adaptador HTTP do portal liberado** pelo Guardião | Maestro @Rocafa | 24/10/2026 | `eng/integracao-r19` |
+| Próximo do front (@Lopesloro ou Maestro, a combinar no #47): ligar o portal ao backend real seguindo o §10h do api-dominio | — | — | PR #47 |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
+| **Portal (sem bloqueio):** conferência de documento é declaração da sessão; teste de PATCH com data atual desconhecida; erros 422×400 unificar; atender pedido gravar a data na mesma transação | parecer front-vetos, 0052 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
