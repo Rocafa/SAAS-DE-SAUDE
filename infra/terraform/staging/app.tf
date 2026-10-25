@@ -180,13 +180,11 @@ data "aws_iam_policy_document" "api_execucao" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.api.arn}:*"]
   }
+  # Leitura mínima: só os segredos que a tarefa da API referencia (nunca banco-app-migrator).
   statement {
-    sid     = "SegredosDaApi"
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.app["banco-app-user"].arn,
-      aws_secretsmanager_secret.app["redis"].arn,
-    ]
+    sid       = "SegredosDaApi"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = local.api_segredos_arns
   }
   statement {
     sid       = "Decifrar"
@@ -220,12 +218,48 @@ locals {
     ],
     # R6: a API sobe HTTPS com certificado autoassinado gerado em memória (contrato com a ENG).
     var.tls_ate_a_tarefa ? [{ name = "API_TLS", value = "autoassinado" }] : [],
+    # §4.5: variáveis NÃO secretas, com valor seguro por padrão.
+    [
+      # Atrás do ALB: sem isto o rate limit por IP contaria todo mundo como o IP do ALB.
+      { name = "HTTP_TRUST_PROXY_HOPS", value = "1" },
+      { name = "IMPORTADOR_HABILITADO", value = tostring(var.importador_habilitado) },
+      { name = "WHATSAPP_PROVEDOR", value = var.whatsapp_provedor },
+      { name = "SUPPORT_PSEUDONYM_KMS_KEY_ID", value = aws_kms_key.pseudonimo_suporte.arn },
+    ],
+    length(var.cors_origens) > 0 ? [{ name = "CORS_ALLOWED_ORIGINS", value = join(",", var.cors_origens) }] : [],
+    var.whatsapp_provedor == "cloud_api" ? [{ name = "WHATSAPP_WABA_ID", value = var.whatsapp_waba_id }] : [],
+    var.whatsapp_provedor == "cloud_api" && var.whatsapp_clausulas_padrao_assinadas ? [{ name = "WHATSAPP_R17_CLAUSULAS_PADRAO", value = "assinadas" }] : [],
   )
 
-  api_segredos = [
-    { name = "DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.app["banco-app-user"].arn}:url::" },
-    { name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app["redis"].arn}:url::" },
+  # Segredo -> segredo do Secrets Manager. Toda chave daqui entra (e só ela) na política de leitura.
+  api_segredos_origem = merge(
+    {
+      DATABASE_URL          = { segredo = aws_secretsmanager_secret.app["banco-app-user"].arn, campo = "url" }
+      REDIS_URL             = { segredo = aws_secretsmanager_secret.app["redis"].arn, campo = "url" }
+      PAGINATION_CURSOR_KEY = { segredo = aws_secretsmanager_secret.app["pagination-cursor-key"].arn, campo = "chave" }
+      RATE_LIMIT_HASH_KEY   = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
+    },
+    var.whatsapp_provedor == "cloud_api" ? {
+      WHATSAPP_ACCESS_TOKEN         = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "access_token" }
+      WHATSAPP_APP_SECRET           = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "app_secret" }
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "webhook_verify_token" }
+    } : {},
+  )
+
+  api_segredos      = [for nome, s in local.api_segredos_origem : { name = nome, valueFrom = "${s.segredo}:${s.campo}::" }]
+  api_segredos_arns = distinct([for s in local.api_segredos_origem : s.segredo])
+
+  # Contrato com a API (branch eng/integracao-r19): sem estes, a API não sobe com NODE_ENV=production.
+  api_segredos_obrigatorios = ["DATABASE_URL", "REDIS_URL", "PAGINATION_CURSOR_KEY", "RATE_LIMIT_HASH_KEY"]
+  api_ambiente_obrigatorio  = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID"]
+  # Nunca na tarefa da API: credencial de migração/admin, segredo local de dev, chave do pseudônimo
+  # fora do KMS, rate limit por instância, jobs desligados (§4.4), TLS sem validação.
+  api_variaveis_proibidas = [
+    "DATABASE_ADMIN_URL", "DATABASE_MIGRATOR_URL", "SUPPORT_PSEUDONYM_KEY", "FIELD_KEYS_DEV_ROOT_SECRET",
+    "RATE_LIMIT_ALLOW_SINGLE_INSTANCE", "JOBS_HABILITADOS", "NODE_TLS_REJECT_UNAUTHORIZED", "AUTH_PROVIDER", "PORTAL_AUTH_PROVIDER",
   ]
+  api_nomes_ambiente = [for v in local.api_ambiente : v.name]
+  api_nomes_segredos = [for s in local.api_segredos : s.name]
 }
 
 resource "aws_ecs_task_definition" "api" {
@@ -281,6 +315,28 @@ resource "aws_ecs_task_definition" "api" {
     precondition {
       condition     = !contains(concat([for v in local.api_ambiente : v.name], [for s in local.api_segredos : s.name]), "JOBS_HABILITADOS")
       error_message = "Não defina JOBS_HABILITADOS na tarefa da API em staging/produção (infra-staging.md §4.4). Desligar os jobs só com incidente registrado."
+    }
+    # §4.5 / C1 do parecer 2026-10-25-pr76: cada segredo obrigatório vem do Secrets Manager (nunca
+    # em environment, em texto claro) e cada chave HMAC tem o seu segredo.
+    precondition {
+      condition     = length(setsubtract(local.api_segredos_obrigatorios, local.api_nomes_segredos)) == 0 && length(setintersection(local.api_segredos_obrigatorios, local.api_nomes_ambiente)) == 0
+      error_message = "Faltam segredos obrigatórios da API em `secrets` (DATABASE_URL, REDIS_URL, PAGINATION_CURSOR_KEY, RATE_LIMIT_HASH_KEY), ou algum foi posto em `environment`. Sem eles a API não sobe com NODE_ENV=production. Ver infra-staging.md §4.5."
+    }
+    precondition {
+      condition     = local.api_segredos_origem["PAGINATION_CURSOR_KEY"].segredo != local.api_segredos_origem["RATE_LIMIT_HASH_KEY"].segredo
+      error_message = "PAGINATION_CURSOR_KEY e RATE_LIMIT_HASH_KEY precisam de segredos distintos (C1 do parecer 2026-10-25-pr76)."
+    }
+    precondition {
+      condition     = length(setsubtract(local.api_ambiente_obrigatorio, local.api_nomes_ambiente)) == 0
+      error_message = "Falta variável obrigatória em `environment` da API (NODE_ENV, API_PORT, HTTP_TRUST_PROXY_HOPS, IMPORTADOR_HABILITADO, WHATSAPP_PROVEDOR, SUPPORT_PSEUDONYM_KMS_KEY_ID). Ver infra-staging.md §4.5."
+    }
+    precondition {
+      condition     = length(setintersection(local.api_variaveis_proibidas, concat(local.api_nomes_ambiente, local.api_nomes_segredos))) == 0
+      error_message = "Variável proibida na tarefa da API (DATABASE_ADMIN_URL, DATABASE_MIGRATOR_URL, SUPPORT_PSEUDONYM_KEY, FIELD_KEYS_DEV_ROOT_SECRET, RATE_LIMIT_ALLOW_SINGLE_INSTANCE, JOBS_HABILITADOS, NODE_TLS_REJECT_UNAUTHORIZED, AUTH_PROVIDER, PORTAL_AUTH_PROVIDER). Ver infra-staging.md §4.5."
+    }
+    precondition {
+      condition     = var.whatsapp_provedor != "cloud_api" || (var.whatsapp_clausulas_padrao_assinadas && var.whatsapp_waba_id != "" && length(setsubtract(["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"], local.api_nomes_segredos)) == 0)
+      error_message = "whatsapp_provedor = cloud_api exige cláusulas-padrão da ANPD assinadas (R17), whatsapp_waba_id e as três credenciais no segredo whatsapp. Ver infra-staging.md §4.5."
     }
   }
 }

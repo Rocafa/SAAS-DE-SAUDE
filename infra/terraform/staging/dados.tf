@@ -298,6 +298,15 @@ ephemeral "random_password" "banco" {
   special  = false # vai dentro de URL; sem especiais não precisa de escape
 }
 
+# Chaves HMAC da API (C1 da conferência do cursor, revisoes/2026-10-25-pr76.md): uma por uso,
+# nunca a mesma para o rate limit e para o cursor. 64 alfanuméricos aleatórios (~381 bits; o código
+# exige >= 32 bytes UTF-8). Mesmo padrão das senhas: efêmeras, gravadas write-only.
+ephemeral "random_password" "chave_api" {
+  for_each = toset(["pagination-cursor-key", "rate-limit-hash-key"])
+  length   = 64
+  special  = false
+}
+
 locals {
   host_banco = aws_db_instance.this.address
 
@@ -314,6 +323,14 @@ locals {
     "redis" = {
       descricao = "REDIS_URL com TLS (rediss://) e AUTH"
       versao    = var.redis_auth_versao
+    }
+    "pagination-cursor-key" = {
+      descricao = "PAGINATION_CURSOR_KEY: HMAC do cursor da lista de pacientes (trocar invalida os cursores em curso)"
+      versao    = var.pagination_cursor_key_versao
+    }
+    "rate-limit-hash-key" = {
+      descricao = "RATE_LIMIT_HASH_KEY: HMAC das chaves do rate limit no Redis (nunca IP ou usuario em claro)"
+      versao    = var.rate_limit_hash_key_versao
     }
   }
 
@@ -332,6 +349,8 @@ locals {
     "redis" = jsonencode({
       url = "rediss://:${ephemeral.random_password.redis_auth.result}@${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
     })
+    "pagination-cursor-key" = jsonencode({ chave = ephemeral.random_password.chave_api["pagination-cursor-key"].result })
+    "rate-limit-hash-key"   = jsonencode({ chave = ephemeral.random_password.chave_api["rate-limit-hash-key"].result })
   }
 }
 

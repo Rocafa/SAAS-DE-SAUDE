@@ -240,6 +240,70 @@ variable "banco_senhas_versao" {
   }
 }
 
+# --- Ambiente da API (C1 da conferência do cursor, infra-staging.md §4.5) -------------------
+
+variable "pagination_cursor_key_versao" {
+  description = "Versão do PAGINATION_CURSOR_KEY. Incrementar gera chave nova (write-only) no Secrets Manager; depois, forçar deploy do ECS. Invalida os cursores em curso (409 cursor_invalido; o front recomeça a lista)."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.pagination_cursor_key_versao >= 1 && floor(var.pagination_cursor_key_versao) == var.pagination_cursor_key_versao
+    error_message = "Inteiro >= 1."
+  }
+}
+
+variable "rate_limit_hash_key_versao" {
+  description = "Versão do RATE_LIMIT_HASH_KEY. Incrementar gera chave nova (write-only) no Secrets Manager; depois, forçar deploy do ECS. Os contadores da janela atual recomeçam."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.rate_limit_hash_key_versao >= 1 && floor(var.rate_limit_hash_key_versao) == var.rate_limit_hash_key_versao
+    error_message = "Inteiro >= 1."
+  }
+}
+
+variable "importador_habilitado" {
+  description = "IMPORTADOR_HABILITADO da API. Seguro por padrão: false (o importador só liga por decisão explícita)."
+  type        = bool
+  default     = false
+}
+
+variable "whatsapp_provedor" {
+  description = "WHATSAPP_PROVEDOR da API: desligado (padrão) ou cloud_api. O adaptador falso não existe fora de development/test."
+  type        = string
+  default     = "desligado"
+  validation {
+    condition     = contains(["desligado", "cloud_api"], var.whatsapp_provedor)
+    error_message = "Use desligado ou cloud_api (falso só existe em development/test)."
+  }
+}
+
+variable "whatsapp_clausulas_padrao_assinadas" {
+  description = "true só depois de assinadas as cláusulas-padrão da ANPD com a Meta (R17 do RIPD-whatsapp). Vira WHATSAPP_R17_CLAUSULAS_PADRAO=assinadas."
+  type        = bool
+  default     = false
+}
+
+variable "whatsapp_waba_id" {
+  description = "WHATSAPP_WABA_ID (conta dos modelos na Meta). Identificador, não segredo. Obrigatório com cloud_api."
+  type        = string
+  default     = ""
+  validation {
+    condition     = can(regex("^[0-9]*$", var.whatsapp_waba_id))
+    error_message = "Só dígitos."
+  }
+}
+
+variable "cors_origens" {
+  description = "CORS_ALLOWED_ORIGINS da API. Vazio (padrão) = nenhuma origem cruzada. Só https, sem curinga."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for o in var.cors_origens : can(regex("^https://[a-z0-9.-]+(:[0-9]+)?$", o))])
+    error_message = "Cada origem: https://host[:porta], sem curinga, sem caminho."
+  }
+}
+
 # --- Âncora da auditoria encadeada (R2 do parecer do PR #37) -------------------------------
 
 variable "conta_auditoria_id" {

@@ -120,8 +120,8 @@ Método igual ao da D13 ([rodada 7 §4](../relatorios/2026-10-10-rodada-7-necess
 | ALB + IPv4 públicos | 1 ALB em 3 sub-redes, LCU baixo | 35–45 |
 | WAF | 1 Web ACL + 6 regras, poucas requisições | 10–12 |
 | VPC endpoints de interface | 5 endpoints × 1 AZ | 37–55 |
-| KMS | 11 chaves fixas (inclui exportacoes, CloudTrail, alertas e backup) + KEKs das clínicas de teste (US$ 1 cada) | 12–16 |
-| Secrets Manager, S3, ECR, DynamoDB | 4 segredos, volume de teste | 4–10 |
+| KMS | 12 chaves fixas (inclui exportacoes, CloudTrail, alertas, backup e a HMAC do pseudônimo do suporte) + KEKs das clínicas de teste (US$ 1 cada) | 12–16 |
+| Secrets Manager, S3, ECR, DynamoDB | 6 segredos (7 com WhatsApp), volume de teste | 4–10 |
 | AWS Backup | 1 ponto de recuperação mensal do RDS (20 GB) guardado 35 dias | 1–4 |
 | CloudWatch | Logs (app, RDS, Redis, WAF, flow logs ALL) e Container Insights | 15–40 |
 | CloudTrail | 1ª trilha de gerenciamento grátis; data events de S3 a ~US$ 0,10 por 100 mil; bucket da trilha | 2–10 |
@@ -165,6 +165,7 @@ O NAT está desligado. Ligá-lo (`habilitar_nat`) soma cerca de US$ 50–70.
 **Rotação:**
 - **Redis:** incrementar `redis_auth_versao` e aplicar. Com a estratégia `ROTATE`, o token antigo continua válido. Em seguida, forçar um deploy novo do ECS para as tarefas lerem a `REDIS_URL` nova.
 - **Banco:** incrementar `banco_senhas_versao`, aplicar e reexecutar o bootstrap.
+- **Chaves HMAC da API** (`PAGINATION_CURSOR_KEY`, `RATE_LIMIT_HASH_KEY`): procedimento e efeitos na §4.5.
 - **Atenção:** se o endpoint do RDS ou do Redis mudar (recriação), os segredos só são regravados quando a versão é incrementada.
 
 ## 4. O que falta
@@ -263,3 +264,50 @@ O canary `jobs-ready-stg` lê `https://<DNS do ALB>/health/ready` a cada 5 min (
 - [ ] **Disparo de teste aos tópicos de operação e do DPO:** `aws cloudwatch set-alarm-state` num alarme que avisa `alertas-seguranca` e no `alta-jobs-retencao-dpo` (`alertas-dpo`), com o e-mail recebido pelos dois e a assinatura do DPO confirmada. Devolver os alarmes a `OK` em seguida.
 - [ ] **Remoção da exceção de TLS quando houver domínio (I10):** trocar `URL_READY` para o domínio e apagar `VALIDAR_CERTIFICADO = "false"` de `jobs-ready.tf` antes de qualquer dado real em staging. O canary passa a validar o certificado pelo padrão do script.
 - [ ] Conferir na AWS que `canary_runtime` (`syn-nodejs-puppeteer-10.0`) segue suportado.
+
+### 4.5 Contrato com a API: variáveis de ambiente da tarefa (C1 da conferência do cursor, `revisoes/2026-10-25-pr76.md`)
+
+A tarefa roda com `NODE_ENV=production`. Antes desta rodada, `api_segredos` só tinha `DATABASE_URL` e `REDIS_URL`, e a API recusava subir por falta de `PAGINATION_CURSOR_KEY` e de `RATE_LIMIT_HASH_KEY` (esta última obrigatória desde o #30). O levantamento abaixo foi feito com grep de `process.env` e das validações de boot em `apps/api/src` (branch `eng/integracao-r19`, 25/10/2026).
+
+**Como está no código** (`app.tf`, `dados.tf`, `api-ambiente.tf`):
+- `local.api_segredos_origem` liga cada segredo ao seu segredo do Secrets Manager e ao campo JSON dele. Essa mesma lista gera os `secrets` da task definition e a política `SegredosDaApi` da role de execução (`GetSecretValue` só nesses ARNs, nunca no `banco-app-migrator`).
+- Precondições da task definition fazem o **plano falhar** quando: falta um segredo obrigatório ou ele aparece em `environment` (texto claro); o cursor e o rate limit usam o mesmo segredo; falta uma variável obrigatória de `environment`; aparece uma variável proibida; ou `cloud_api` está ligado sem R17, WABA e as três credenciais.
+- `infra.yml` (Travas do projeto) confere a lista, a origem de cada segredo, as precondições, os padrões seguros e a ausência de variáveis proibidas.
+
+| Variável | Tipo | Origem | Valor em staging | Rotação |
+|---|---|---|---|---|
+| `DATABASE_URL` | segredo | `banco-app-user` (campo `url`), senha efêmera write-only | `postgres://app_user:…?sslmode=verify-full` | `banco_senhas_versao` + bootstrap (§3) |
+| `REDIS_URL` | segredo | `redis` (campo `url`), token efêmero write-only | `rediss://:…` | `redis_auth_versao` + deploy forçado (§3) |
+| `PAGINATION_CURSOR_KEY` | segredo | `pagination-cursor-key` (campo `chave`): `ephemeral "random_password"`, 64 alfanuméricos, write-only, KMS `segredos` | gerado | `pagination_cursor_key_versao`: por calendário (mesmo ciclo dos outros segredos de app) e na hora, em caso de suspeita. Procedimento abaixo |
+| `RATE_LIMIT_HASH_KEY` | segredo | `rate-limit-hash-key` (campo `chave`): igual ao anterior, **segredo distinto** | gerado | `rate_limit_hash_key_versao`: mesmo ciclo. Os contadores da janela recomeçam (o limite fica frouxo por no máximo uma janela) |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET` (base64), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | segredo | `whatsapp`, **só com `whatsapp_provedor = "cloud_api"`**. Nasce vazio; preencher com `put-secret-value` fora do git (comentário em `api-ambiente.tf`) | ausentes (WhatsApp desligado) | Gerar no painel da Meta, regravar o segredo e forçar o deploy |
+| `NODE_ENV` | ambiente | fixo | `production` | — |
+| `API_PORT` | ambiente | `local.api_porta` | `3333` | — |
+| `NODE_EXTRA_CA_CERTS` | ambiente | fixo (CA do RDS na imagem) | `/app/certs/rds-sa-east-1-bundle.pem` | junto com a CA da AWS |
+| `HTTP_TRUST_PROXY_HOPS` | ambiente | fixo | `1` (ALB). Com `0`, todo cliente seria contado como o IP do ALB no rate limit | — |
+| `IMPORTADOR_HABILITADO` | ambiente | `var.importador_habilitado` | `false` | — |
+| `WHATSAPP_PROVEDOR` | ambiente | `var.whatsapp_provedor` (`desligado` ou `cloud_api`; `falso` é recusado) | `desligado` | — |
+| `WHATSAPP_R17_CLAUSULAS_PADRAO` | ambiente | `var.whatsapp_clausulas_padrao_assinadas`, só com `cloud_api` | ausente | — |
+| `WHATSAPP_WABA_ID` | ambiente | `var.whatsapp_waba_id`, só com `cloud_api` | ausente | — |
+| `SUPPORT_PSEUDONYM_KMS_KEY_ID` | ambiente (é ARN, não segredo) | `aws_kms_key.pseudonimo_suporte` (HMAC_256). A role da tarefa só tem `kms:GenerateMac`, e há Deny de `GenerateMac`/`VerifyMac` para humanos | ARN da chave | O KMS não rotaciona chave HMAC automaticamente, e trocar a chave muda todos os pseudônimos. Troca só por suspeita, com o Guardião |
+| `CORS_ALLOWED_ORIGINS` | ambiente | `var.cors_origens` (só https, sem curinga) | ausente = nenhuma origem cruzada | — |
+| `API_TLS` | ambiente | `var.tls_ate_a_tarefa` (R6) | ausente | — |
+| `EXIT_WINDOW_DAYS`, `DB_*`, `RATE_LIMIT_MAX`/`_WINDOW_MS`, `HTTP_BODY_LIMIT`, `PATIENT_*`, `PORTAL_*`, `ATTENDANCE_*`, `SELF_SCHEDULED_ALERT_PER_DAY`, `IMPORT_RAW_TTL_HOURS`, `WHATSAPP_GRAPH_VERSAO` | ambiente | não definidas: valem os padrões do código (validados no boot) | padrão | — |
+
+**Proibidas na tarefa da API** (precondição e CI): `DATABASE_ADMIN_URL` e `DATABASE_MIGRATOR_URL` (só a tarefa de migração/bootstrap), `SUPPORT_PSEUDONYM_KEY` e `FIELD_KEYS_DEV_ROOT_SECRET` (segredo local de dev), `RATE_LIMIT_ALLOW_SINGLE_INSTANCE` (rate limit por instância), `JOBS_HABILITADOS` (§4.4), a variável global do Node que desliga a validação de TLS, `AUTH_PROVIDER` e `PORTAL_AUTH_PROVIDER` (hoje só aceitam `dev`). `AI_PROVIDER` não entra porque o `AiModule` não está no `AppModule`. Quando entrar, `fake` derruba o boot em produção.
+
+**Rotação do `PAGINATION_CURSOR_KEY`:**
+1. Incrementar `pagination_cursor_key_versao` no `staging.tfvars`, gerar o plano e aplicar com um sócio. Uma chave nova é gerada e gravada write-only no segredo `pagination-cursor-key`. O valor antigo não fica no estado.
+2. Forçar um deploy novo do serviço (`aws ecs update-service --cluster <nome> --service api --force-new-deployment`). Cada tarefa lê o segredo só ao iniciar.
+3. **Efeito esperado e aceito:** trocar a chave invalida todos os cursores em curso (validade de no máximo 10 min). O próximo pedido com cursor antigo recebe `409 cursor_invalido`, e **o front recomeça a lista do início**: descarta as páginas já juntadas e pede a página 1 de novo, depois de conferir a sessão (§3b de `api-dominio.md`, C2 do mesmo parecer). Durante o deploy, com tarefas velhas e novas juntas, um cursor emitido por uma tarefa pode cair na outra e também dar 409. Por isso não há chave dupla: o custo é só um recomeço da lista.
+4. Os 409 contam no limite por usuário (vigilância). Um pico curto de `cursor_invalido` no log logo depois da rotação é esperado. Fora de uma rotação, é sinal para investigar.
+5. Em caso de suspeita de vazamento da chave, rotacionar na hora, sem esperar o calendário. Um cursor forjado com a chave vazada fica preso à clínica e ao usuário que ele carrega e continua passando pelo RLS, mas a chave precisa sair de uso.
+
+**Bloqueios do boot que o IaC NÃO resolve** (no `eng/integracao-r19`, a API continua sem subir com `NODE_ENV=production` mesmo com todas as variáveis acima, por desenho de falha fechada):
+- `createAuthProvider` e `createPortalAuthProvider`/`createPortalOtpSender`: não há provedor real de login nem de OTP do portal (D4);
+- `createKeyProvider`: o provedor de chave KMS (KEK por clínica) não está ligado (Portão A);
+- `createPseudonymSigner`: com `SUPPORT_PSEUDONYM_KMS_KEY_ID` definida, exige o cliente KMS injetado, que o `AppModule` ainda não passa;
+- `API_TLS=autoassinado` (R6) não é lido pela API.
+Esses itens são da ENG e dos sócios (D4). O Terraform já entrega as variáveis e as permissões, de modo que, quando o código estiver pronto, o deploy não trave por falta de ambiente.
+
+**Não validado nesta rodada** (a máquina não tem `terraform`): `fmt`, `validate`, `tflint` e `checkov` (rodam no `infra.yml` do PR). Pontos a conferir no CI ou no 1º plano: a unificação de tipos do `merge(..., cond ? {...} : {})` em `api_segredos_origem`; `one(aws_secretsmanager_secret.whatsapp[*].arn)` com `count = 0`; o skip `CKV_AWS_7` na chave HMAC; e se o ECS aceita referenciar um segredo **sem versão** (com `cloud_api`, a tarefa só inicia depois do `put-secret-value`). Rodaram localmente só as travas de grep do `infra.yml` (verdes).

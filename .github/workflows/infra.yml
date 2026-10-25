@@ -215,9 +215,53 @@ jobs:
           # R3 do parecer de jobs (infra-staging.md §4.4): REDIS_URL obrigatório na tarefa da API,
           # sem JOBS_HABILITADOS, alarme (termo exato) para cada marcador de falha dos jobs no log
           # group da API, todos para a operação; DPO só para falha de retenção/revogação.
-          grep -q '{ name = "REDIS_URL", valueFrom = "${aws_secretsmanager_secret.app\["redis"\].arn}:url::" }' staging/app.tf
+          grep -Eq 'REDIS_URL += \{ segredo = aws_secretsmanager_secret.app\["redis"\].arn, campo = "url" \}' staging/app.tf
           grep -Eq 'secrets +=\s*local.api_segredos' staging/app.tf
           grep -q 'contains(\[for s in local.api_segredos : s.name\], "REDIS_URL")' staging/app.tf
+          # §4.5 (C1 do parecer 2026-10-25-pr76): lista de segredos obrigatórios da API, cada um
+          # vindo do seu segredo no Secrets Manager; o mesmo nome na lista da precondição.
+          for par in DATABASE_URL:banco-app-user REDIS_URL:redis \
+                     PAGINATION_CURSOR_KEY:pagination-cursor-key RATE_LIMIT_HASH_KEY:rate-limit-hash-key; do
+            v=${par%%:*}; s=${par#*:}
+            grep -Eq "^\s*$v += \{ segredo = aws_secretsmanager_secret.app\[\"$s\"\].arn," staging/app.tf \
+              || { echo "segredo $v fora de api_segredos_origem (ou de outro segredo)"; exit 1; }
+            grep -E '^\s*api_segredos_obrigatorios *=' staging/app.tf | grep -q "\"$v\"" \
+              || { echo "$v fora de api_segredos_obrigatorios"; exit 1; }
+            grep -Eq "^\s*\"$s\" = \{" staging/dados.tf || { echo "segredo $s ausente em segredos_app"; exit 1; }
+          done
+          # Chaves HMAC efêmeras (nunca no estado), uma por uso, cada uma com sua versão.
+          grep -q 'ephemeral "random_password" "chave_api"' staging/dados.tf
+          grep -q 'versao    = var.pagination_cursor_key_versao' staging/dados.tf
+          grep -q 'versao    = var.rate_limit_hash_key_versao' staging/dados.tf
+          # Leitura de segredo pela role de execução: só os da tarefa (nunca banco-app-migrator).
+          grep -q 'resources = local.api_segredos_arns' staging/app.tf
+          grep -Eq 'api_segredos_arns *= *distinct\(\[for s in local.api_segredos_origem : s.segredo\]\)' staging/app.tf
+          if grep -A6 'sid *= *"SegredosDaApi"' staging/app.tf | grep -q 'banco-app-migrator'; then
+            echo "role de execução da API lendo o segredo do migrator"; exit 1
+          fi
+          # Precondições de segredos e ambiente obrigatórios, chaves distintas e variáveis proibidas.
+          grep -q 'setsubtract(local.api_segredos_obrigatorios, local.api_nomes_segredos)' staging/app.tf
+          grep -q 'setsubtract(local.api_ambiente_obrigatorio, local.api_nomes_ambiente)' staging/app.tf
+          grep -q 'local.api_segredos_origem\["PAGINATION_CURSOR_KEY"\].segredo != local.api_segredos_origem\["RATE_LIMIT_HASH_KEY"\].segredo' staging/app.tf
+          grep -q 'setintersection(local.api_variaveis_proibidas,' staging/app.tf
+          for v in DATABASE_ADMIN_URL DATABASE_MIGRATOR_URL SUPPORT_PSEUDONYM_KEY FIELD_KEYS_DEV_ROOT_SECRET \
+                   RATE_LIMIT_ALLOW_SINGLE_INSTANCE JOBS_HABILITADOS NODE_TLS_REJECT_UNAUTHORIZE[D] AUTH_PROVIDER; do
+            grep -A3 '^\s*api_variaveis_proibidas *=' staging/app.tf | grep -q "\"$v\"" \
+              || { echo "$v fora de api_variaveis_proibidas"; exit 1; }
+          done
+          if grep -rEn --include='*.tf' 'name *= *"(DATABASE_ADMIN_URL|DATABASE_MIGRATOR_URL|SUPPORT_PSEUDONYM_KEY|FIELD_KEYS_DEV_ROOT_SECRET|RATE_LIMIT_ALLOW_SINGLE_INSTANCE)"' .; then
+            echo "variável proibida na tarefa da API (§4.5)"; exit 1
+          fi
+          # Valores seguros por padrão: importador e WhatsApp desligados; atrás do ALB, 1 salto de proxy.
+          grep -A3 'variable "importador_habilitado"' staging/variables.tf | grep -Eq 'default += false'
+          grep -A3 'variable "whatsapp_provedor"' staging/variables.tf | grep -Eq 'default += "desligado"'
+          grep -A3 'variable "whatsapp_clausulas_padrao_assinadas"' staging/variables.tf | grep -Eq 'default += false'
+          grep -q '{ name = "HTTP_TRUST_PROXY_HOPS", value = "1" }' staging/app.tf
+          grep -q '{ name = "SUPPORT_PSEUDONYM_KMS_KEY_ID", value = aws_kms_key.pseudonimo_suporte.arn }' staging/app.tf
+          # Segredo do WhatsApp nasce vazio: nenhuma versão com valor no IaC.
+          if grep -rEn --include='*.tf' 'secret_id *= *aws_secretsmanager_secret.whatsapp' .; then
+            echo "credencial da Meta no IaC; o segredo whatsapp é preenchido fora do git (§4.5)"; exit 1
+          fi
           if grep -rEn --include='*.tf' 'name *= *"JOBS_HABILITADOS"' .; then
             echo "JOBS_HABILITADOS definido no IaC (§4.4: só com incidente registrado)."; exit 1
           fi
