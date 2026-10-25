@@ -1098,7 +1098,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(await vinculo()).toMatchObject(original);
 
     // Pela API (a data muda de verdade): a trilha é gravada pelo BANCO, com os valores antigos e novos.
-    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13), documentoConferido: true }).expect(200);
     const novo = { confidentialFrom: nascidoHa(13 - 12), representUntil: nascidoHa(13 - 18) };
     expect(await vinculo()).toMatchObject(novo);
     const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'op' = 'confidentiality_recalculated'`)).orderBy(sql`seq`), adminA.userId);
@@ -1168,6 +1168,8 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
         clinicaA,
         async (tx) => {
           await tx.execute(sql`${troca}${pac}::uuid`);
+          // C1-b′ (0052): sem a conferência na marca, o recálculo que reduz a idade de quem tem 12+ é recusado.
+          await tx.execute(sql`select app_patient_birth_date_document_checked(${pac}::uuid)`);
           await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
           await tx.execute(sql`update patients set birth_date_enc = ${enc0} where id = ${pac}::uuid`);
           if (recalcDepois) await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
@@ -1216,7 +1218,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await agendar(adminA, teen, profId, base?.appointment_type_id as string, '2027-04-06', '09:00');
     await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Caco Ficticio Pai Aviso') });
     expect(await avisos(teen)).toEqual([]);
-    await api.http().patch(`/pacientes/${teen}`).set(cab(adminA)).send({ nascimento: nascidoHa(11) }).expect(200);
+    await api.http().patch(`/pacientes/${teen}`).set(cab(adminA)).send({ nascimento: nascidoHa(11), documentoConferido: true }).expect(200);
     // A representação também se estende (o dia dos 18 vai 3 anos para frente, valendo): N2 (0040) avisa as duas.
     const a1 = await avisos(teen);
     const desl = a1.filter((a) => a.portalTransition === 'sigilo_desligado');
@@ -1233,7 +1235,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await contaDe(adminA, quase, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(quase, 'Edu Ficticio Pai Aviso') });
     await api.http().patch(`/pacientes/${quase}`).set(cab(adminA)).send({ nascimento: nascidoHa(19) }).expect(200);
     expect(await avisos(quase)).toEqual([]); // encerrar a representação não é transição perigosa
-    await api.http().patch(`/pacientes/${quase}`).set(cab(adminA)).send({ nascimento: nascidoHa(16) }).expect(200);
+    await api.http().patch(`/pacientes/${quase}`).set(cab(adminA)).send({ nascimento: nascidoHa(16), documentoConferido: true }).expect(200);
     const a2 = await avisos(quase);
     expect(a2.map((a) => a.recipientUserId).sort()).toEqual([fundador, profUser].sort());
     expect(a2.every((a) => a.portalTransition === 'representacao_estendida')).toBe(true);
@@ -1271,7 +1273,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     const pac = await criarPaciente(adminA, 'Gabi Ficticia Aviso N2', { nascimento: nascidoHa(17) });
     await agendar(adminA, pac, profId, base?.appointment_type_id as string, '2027-04-07', '09:00');
     const conta = await contaDe(adminA, pac, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(pac, 'Hugo Ficticio Pai N2') });
-    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13) }).expect(200);
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(13), documentoConferido: true }).expect(200);
     const [vinc] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, conta.vinculoId)), adminA.userId);
     expect(vinc).toMatchObject({ confidentialFrom: nascidoHa(1), representUntil: nascidoHa(-5) });
     const doFundador = await avisosDe(pac, fundador);
@@ -1281,7 +1283,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
     expect(await alertas('sigilo_desligado')).toBe(antes.sigilo);
     // Encurtar a representação (13 -> 15) não alerta.
-    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15), documentoConferido: true }).expect(200);
     expect(await avisosDe(pac, fundador)).toHaveLength(1);
     expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
 
@@ -1450,7 +1452,7 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
     await api.http().get('/portal/consultas').set(cab(conta)).expect(200);
     const alertasAntes = (await alertas()).length;
 
-    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: nascidoHa(15), documentoConferido: true }).expect(200);
 
     expect(await vinculo(conta.vinculoId)).toMatchObject({ revokeReason: 'titular_menor_de_idade', revokedBy: adminA.userId });
     expect(await convite(pendente.id)).toMatchObject({ revokedBy: adminA.userId, redeemedAt: null });
@@ -1516,12 +1518,12 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
     const adulto = await criarPaciente(adminA, 'Iara Ficticia Titular Adulta', { nascimento: nascidoHa(40) });
     const contaAdulto = await contaDe(adminA, adulto);
     const convAdulto = await convidar(adminA, adulto);
-    await api.http().patch(`/pacientes/${adulto}`).set(cab(adminA)).send({ nascimento: nascidoHa(18) }).expect(200);
+    await api.http().patch(`/pacientes/${adulto}`).set(cab(adminA)).send({ nascimento: nascidoHa(18), documentoConferido: true }).expect(200);
     // Emancipado aos 16 é titular; corrigir para 15 não o torna "menor não emancipado".
     const emanc = await criarPaciente(adminA, 'Juca Ficticio Emancipado', { nascimento: nascidoHa(16) });
     await api.http().post(`/pacientes/${emanc}/responsaveis/emancipacao`).set(cab(adminA)).send({ data: hojeNaClinica(), documento: 'Escritura ficticia 050' }).expect(200);
     const contaEmanc = await contaDe(adminA, emanc);
-    await api.http().patch(`/pacientes/${emanc}`).set(cab(adminA)).send({ nascimento: nascidoHa(15) }).expect(200);
+    await api.http().patch(`/pacientes/${emanc}`).set(cab(adminA)).send({ nascimento: nascidoHa(15), documentoConferido: true }).expect(200);
     await api.app.get(JobsService).executar('portal-titular-menor');
     for (const [pac, conta] of [[adulto, contaAdulto], [emanc, contaEmanc]] as const) {
       expect(await vinculo(conta.vinculoId)).toMatchObject({ revokedAt: null, revokeReason: null });
@@ -1803,5 +1805,168 @@ describe('C1 (conferência de 24/10): nascimento não se edita pelo portal; corr
     await situacao(ped.id, { situacao: 'em_andamento', documentoConferido: true }).expect(200);
     await expect(naClinica({ status: 'atendida', answerEnc: linha?.birthDateProposedEnc, documentCheckedAt: sql`now() - interval '1 day'` })).rejects.toThrow();
     await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX' }).expect(200);
+  });
+});
+
+describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento trava a MUDANÇA da data, não só o pedido', () => {
+  const corrigir = (c: SessaoPortal, corpo: Record<string, unknown>) => api.http().post('/portal/meus-dados/correcao').set(cab(c)).send(corpo);
+  const situacao = (id: string, corpo: Record<string, unknown>) => api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send(corpo);
+  const vinculoDe = async (id: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, id)), adminA.userId))[0];
+  const avisos = async (pac: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), api.fundador(clinicaA));
+  const trilhaDe = async (pac: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'patients'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`)).orderBy(sql`seq`), adminA.userId);
+  const codigo = async (userId: string, fn: (tx: TenantTx) => Promise<unknown>) => {
+    try {
+      await withTenant(api.db.db, clinicaA, fn, userId);
+      return 'ok';
+    } catch (e) {
+      return (e as { cause?: { code?: string }; code?: string }).cause?.code ?? (e as { code?: string }).code;
+    }
+  };
+
+  it('item 1: a exigência é gravada NA ABERTURA; a clínica corrige o cadastro antes e, ao atender, o documento continua exigido', async () => {
+    const nasc = nascidoHa(15);
+    const teen = await criarPaciente(adminA, 'Rui Ficticio Ordem', { nascimento: nasc });
+    const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Lia Ficticia Mae Ordem') });
+    const proposto = nascidoHa(11);
+    const ped = (await corrigir(c, { detalhe: 'Data ficticia errada', nascimento: proposto }).expect(201)).body as { id: string };
+    const linha = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, ped.id)), adminA.userId))[0];
+    expect((await linha())?.documentRequired).toBe(true);
+    // A clínica corrige o cadastro primeiro (a mudança direta exige documento: item 2).
+    await api.http().patch(`/pacientes/${teen}`).set(cab(adminA)).send({ nascimento: proposto, documentoConferido: true }).expect(200);
+    // Agora atual == proposto; mesmo assim o pedido continua exigindo a conferência gravada.
+    const det = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
+    expect(det.body).toMatchObject({ nascimentoProposto: proposto, exigeConferenciaDeDocumento: true, documentoConferidoEm: null });
+    for (const corpo of [{}, { documentoConferido: false }]) {
+      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(400);
+      expect(r.body).toMatchObject({ campos: ['documentoConferido'] });
+    }
+    // SQL arbitrário na sessão da clínica: atender sem a conferência gravada e trocar a exigência são recusados.
+    const naClinica = (set: Record<string, unknown>) => (tx: TenantTx) =>
+      tx.update(portalRightsRequests).set({ handledBy: adminA.userId, handledAt: sql`now()`, ...set }).where(eq(portalRightsRequests.id, ped.id));
+    const resposta = (await linha())?.birthDateProposedEnc;
+    expect(await codigo(adminA.userId, naClinica({ status: 'atendida', answerEnc: resposta }))).toBe('23514');
+    expect(await codigo(adminA.userId, naClinica({ status: 'em_andamento', documentRequired: false }))).toBe('42501');
+    expect((await linha())?.documentRequired).toBe(true);
+    await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', documentoConferido: true }).expect(200);
+    expect(await linha()).toMatchObject({ status: 'atendida', documentRequired: true, documentCheckedBy: adminA.userId });
+    const abertura = (
+      await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_rights_requests'), sql`${auditLog.metadata}->>'request_id' = ${ped.id}`)).orderBy(sql`seq`), adminA.userId)
+    )[0];
+    expect(abertura?.metadata).toMatchObject({ has_birth_date: true, document_required: true });
+  });
+
+  it('item 1: a exigência vem da data vigente na abertura (adulto que AUMENTA a idade: não exige); sem decisão, o banco preenche com falha fechada', async () => {
+    const pac = await criarPaciente(adminA, 'Ana Ficticia Abertura', { nascimento: '1991-05-06' });
+    const p = await contaDe(adminA, pac);
+    const ped = (await corrigir(p, { detalhe: 'Ano ficticio', nascimento: '1990-05-06' }).expect(201)).body as { id: string };
+    const [l] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, ped.id)), adminA.userId);
+    expect(l?.documentRequired).toBe(false);
+    // Gravação sem a decisão da API (SQL na sessão do portal): o gatilho preenche true quando há data proposta;
+    // `document_required` true sem data proposta é recusado (CHECK).
+    const portal = (fn: (tx: TenantTx) => Promise<unknown>) =>
+      api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${p.contaId}::uuid, ${p.vinculoId}::uuid)`);
+        return fn(tx);
+      });
+    const id = randomUUID();
+    await portal((tx) =>
+      tx.execute(sql`insert into portal_rights_requests (id, tenant_id, patient_id, link_id, account_id, kind, acting_as, protocol, birth_date_proposed_enc)
+        values (${id}::uuid, ${clinicaA}::uuid, ${pac}::uuid, ${p.vinculoId}::uuid, ${p.contaId}::uuid, 'correcao', 'titular', '20310101-ABCDEF0A', ${l?.birthDateProposedEnc ?? ''})`),
+    );
+    const [semDecisao] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, id)), adminA.userId);
+    expect(semDecisao?.documentRequired).toBe(true);
+    await expect(
+      portal((tx) =>
+        tx.execute(sql`insert into portal_rights_requests (tenant_id, patient_id, link_id, account_id, kind, acting_as, protocol, document_required)
+          values (${clinicaA}::uuid, ${pac}::uuid, ${p.vinculoId}::uuid, ${p.contaId}::uuid, 'correcao', 'titular', '20310101-ABCDEF0B', true)`),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('item 2: PATCH /pacientes/:id que reduz a idade de quem tem 12+ exige documentoConferido (422), com a trilha de quem conferiu', async () => {
+    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const nasc = nascidoHa(15);
+    const teen = await criarPaciente(adminA, 'Gil Ficticio Recepcao', { nascimento: nasc });
+    const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Noa Ficticia Mae Recepcao') });
+    const antes = await vinculoDe(c.vinculoId);
+    const novo = nascidoHa(11);
+    // (i) sem a flag (ou com false): 422 com código claro; cadastro, sigilo e avisos intactos.
+    for (const extra of [{}, { documentoConferido: false }]) {
+      const r = await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, ...extra }).expect(422);
+      expect(r.body).toEqual({ statusCode: 422, message: 'Regra não atendida', codigo: 'documento_nao_conferido', campos: ['documentoConferido'] });
+      expect(JSON.stringify(r.body)).not.toContain(novo);
+    }
+    expect(((await api.http().get(`/pacientes/${teen}`).set(cab(adminA)).expect(200)).body as { nascimento: string }).nascimento).toBe(nasc);
+    expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
+    expect(await avisos(teen)).toEqual([]);
+    // A flag só acompanha a data e é booleana; o cadastro inicial não a aceita.
+    await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ telefone: '11900001112', documentoConferido: true }).expect(400);
+    await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, documentoConferido: 'sim' }).expect(400);
+    await api.http().post('/pacientes').set(cab(recepcao)).send({ nome: 'Ivo Ficticio', telefone: '11900001111', nascimento: novo, documentoConferido: true }).expect(400);
+    // (ii) com a flag: 200, recálculo da 0038 feito (sigilo desligado), aviso da 0039 gravado, trilha com quem conferiu.
+    await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, documentoConferido: true }).expect(200);
+    const depois = await vinculoDe(c.vinculoId);
+    expect((depois?.confidentialFrom ?? '') > hojeNaClinica()).toBe(true);
+    expect((await avisos(teen)).some((a) => a.portalTransition === 'sigilo_desligado')).toBe(true);
+    const trilha = await trilhaDe(teen);
+    const update = trilha.find((t) => (t.metadata as { changed?: string }).changed === 'birth_date');
+    expect(update?.actorId).toBe(recepcao.userId);
+    expect(update?.metadata).toMatchObject({ document_required: true, document_checked: true });
+    const conf = trilha.filter((t) => (t.metadata as { op?: string }).op === 'birth_date_document_checked');
+    expect(conf.map((t) => [t.actorId, t.metadata])).toEqual([[recepcao.userId, { op: 'birth_date_document_checked', patient_id: teen, document_checked: true }]]);
+    expect(JSON.stringify(trilha)).not.toContain(novo);
+    expect(JSON.stringify(trilha)).not.toContain(nasc);
+    // (iii) aumentar a idade, ou corrigir a de uma criança: 200 sem a flag.
+    await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: nascidoHa(13) }).expect(200);
+    const crianca = await criarPaciente(adminA, 'Mel Ficticia Crianca', { nascimento: nascidoHa(8) });
+    await contaDe(adminA, crianca, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(crianca, 'Teo Ficticio Pai Crianca') });
+    await api.http().patch(`/pacientes/${crianca}`).set(cab(recepcao)).send({ nascimento: nascidoHa(7) }).expect(200);
+    expect((await trilhaDe(crianca)).find((t) => (t.metadata as { changed?: string }).changed === 'birth_date')?.metadata).toMatchObject({
+      document_required: false,
+      document_checked: false,
+    });
+  });
+
+  it('item 2 no banco: SQL arbitrário que reduz a idade de quem tem 12+ e recalcula sem a marca de conferência é recusado', async () => {
+    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const teen = await criarPaciente(adminA, 'Bel Ficticia Sql', { nascimento: nascidoHa(15) });
+    const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Davi Ficticio Pai Sql') });
+    const doador = await criarPaciente(adminA, 'Rafa Ficticio Doador Sql', { nascimento: nascidoHa(8) });
+    const outro = await criarPaciente(adminA, 'Lu Ficticia Doadora Sql', { nascimento: nascidoHa(9) });
+    const antes = await vinculoDe(c.vinculoId);
+    const troca = (de: string) => sql`update patients set birth_date_enc = (select birth_date_enc from patients where id = ${de}::uuid) where id = ${teen}::uuid`;
+    const recalc = sql`select app_portal_recalc_sigilo(${teen}::uuid, '2093-01-01'::date, '2099-01-01'::date)`;
+    const marca = sql`select app_patient_birth_date_document_checked(${teen}::uuid)`;
+    // Sem a marca: recusado; nada muda.
+    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(recalc); })).toBe('42501');
+    expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
+    // A marca só vale na transação que mudou a data, antes do recálculo; e a data mudar de novo depois a zera.
+    expect(await codigo(recepcao.userId, (tx) => tx.execute(marca))).toBe('55000');
+    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(recalc); await tx.execute(marca); })).toBe('42501');
+    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(troca(outro)); await tx.execute(recalc); })).toBe('42501');
+    // A sessão do portal não marca.
+    expect(
+      await api.db.db
+        .transaction(async (tx) => {
+          await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+          await tx.execute(marca);
+        })
+        .then(
+          () => 'ok',
+          (e: { cause?: { code?: string } }) => e.cause?.code,
+        ),
+    ).toBe('42501');
+    expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
+    // Com a marca: o recálculo vale, e a trilha registra quem conferiu (sem a data).
+    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(recalc); })).toBe('ok');
+    expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: '2093-01-01', representUntil: '2099-01-01' });
+    const conf = (await trilhaDe(teen)).filter((t) => (t.metadata as { op?: string }).op === 'birth_date_document_checked');
+    expect(conf.map((t) => t.actorId)).toEqual([recepcao.userId]);
+    // Direção segura (sem recálculo): o COMMIT fecha sem exigir nada.
+    expect(await codigo(recepcao.userId, (tx) => tx.execute(troca(outro)))).toBe('ok');
   });
 });
