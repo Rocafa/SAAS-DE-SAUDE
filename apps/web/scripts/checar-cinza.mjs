@@ -4,9 +4,9 @@
  * verde… Só preto, branco, cinza e transparente passam (preferência do sócio, ORDEM-001 do front).
  * A lógica de leitura das cores fica em lib/cores.mjs e é testada no Vitest.
  */
+import { fileURLToPath } from 'node:url';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { coresNaoCinza } from '../lib/cores.mjs';
 
 const raiz = fileURLToPath(new URL('../.next/static', import.meta.url));

@@ -1,7 +1,7 @@
+import { fileURLToPath } from 'node:url';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { coresNaoCinza } from '../lib/cores.mjs';
 
 const TELAS: [string, string][] = [
