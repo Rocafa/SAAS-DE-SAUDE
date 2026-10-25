@@ -21,11 +21,11 @@ describe('token do convite: só do fragmento', () => {
     expect(tokenDoFragmento('#convite=%E0%A4%A')).toBe('');
     expect(tokenDoFragmento('#%')).toBe('');
   });
-  it('query ?token= é ignorada: só o hash entra', () => {
+  it('query ?token= é ignorada (só o hash entra), mas sai da barra e do histórico (O5 do #75)', () => {
     const historico = { replaceState: vi.fn() };
     const local = { hash: '', pathname: '/portal/convite', search: `?token=${TOKEN_CONVITE}`, href: `http://localhost/portal/convite?token=${TOKEN_CONVITE}` };
     expect(tirarTokenDaBarra(local, historico)).toBe('');
-    expect(historico.replaceState).not.toHaveBeenCalled();
+    expect(historico.replaceState).toHaveBeenCalledExactlyOnceWith(null, '', '/portal/convite');
   });
   it('apaga o token da barra e do histórico, mantendo só o caminho (sem query nem hash)', () => {
     const historico = { replaceState: vi.fn() };

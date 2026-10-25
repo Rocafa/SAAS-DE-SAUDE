@@ -21,10 +21,13 @@ export function tokenDoFragmento(hash: string): string {
   }
 }
 
-/** Lê o token do fragmento e o apaga da barra de endereço e do histórico (mantém só o caminho). */
-export function tirarTokenDaBarra(local: { hash: string; pathname: string }, historico: Pick<History, 'replaceState'>): string {
+/**
+ * Lê o token do fragmento e o apaga da barra de endereço e do histórico (mantém só o caminho).
+ * Uma query (ex. `?token=` colado por engano) nunca é lida, mas também é apagada (O5 do #75).
+ */
+export function tirarTokenDaBarra(local: { hash: string; pathname: string; search?: string }, historico: Pick<History, 'replaceState'>): string {
   const token = tokenDoFragmento(local.hash);
-  if (local.hash) historico.replaceState(null, '', local.pathname);
+  if (local.hash || local.search) historico.replaceState(null, '', local.pathname);
   return token;
 }
 
