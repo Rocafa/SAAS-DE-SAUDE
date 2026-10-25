@@ -3,7 +3,8 @@
 /**
  * Portal: documentos (recibos). A lista vem em CENTAVOS (P7). A folha é montada só quando o paciente
  * pede para imprimir, a partir de `GET /portal/recibos/:id` (retrato emitido): nada é pré-carregado nem
- * guardado, a folha sai do estado depois da impressão, e o recibo não ganha enriquecimento nenhum
+ * guardado, a folha sai do estado depois da impressão (afterprint, matchMedia ou limite de tempo), fica fora do
+ * leitor de tela (aria-hidden), e o recibo não ganha enriquecimento nenhum
  * (especialidade, ícone ou cor por área; §10h).
  */
 import { FileText, Printer } from 'lucide-react';
@@ -14,6 +15,7 @@ import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import type { ReciboPortal } from '@/lib/api/portal';
 import { centavosEmReais, dataBr, NOME_FORMA_PORTAL } from '@/lib/portal';
+import { imprimirELimpar } from '@/lib/portal-impressao';
 
 export default function PortalDocumentos() {
   const { api } = usePortal();
@@ -26,13 +28,8 @@ export default function PortalDocumentos() {
 
   useEffect(() => {
     if (!folha) return;
-    const limpar = () => setFolha(null);
-    window.addEventListener('afterprint', limpar);
-    const t = setTimeout(() => window.print(), 50);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener('afterprint', limpar);
-    };
+    // R2 (#75): sai da página no afterprint, no fim do matchMedia('print') ou no limite de tempo.
+    return imprimirELimpar(window, () => setFolha(null));
   }, [folha]);
 
   async function imprimir(id: string) {
@@ -88,7 +85,8 @@ export default function PortalDocumentos() {
 
 function FolhaDoRecibo({ r }: { r: ReciboPortal }) {
   return (
-    <div data-imprimir className="sr-only print:not-sr-only">
+    // Fora do leitor de tela e da tela (R2): só existe para o papel, e só durante a impressão.
+    <div data-imprimir aria-hidden="true" className="hidden print:block">
       <h2>
         Recibo nº {r.numero}
         {r.situacao === 'cancelado' ? ' — CANCELADO' : ''}
