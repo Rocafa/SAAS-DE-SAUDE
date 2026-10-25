@@ -124,6 +124,20 @@ const POR_CODIGO: Record<string, string> = {
   nada_a_desfazer: 'Não há resposta para desfazer.',
 };
 
+/** Frase da tela para falha que não veio do servidor (configuração, rede, bug). */
+export const MENSAGEM_GENERICA = 'O portal não está disponível agora. Tente de novo mais tarde ou fale com a clínica.';
+
+/**
+ * Erro → texto da tela (R3 do parecer do #75). `ErroPortal` já tem frase pensada para o paciente.
+ * Qualquer outro erro (ex.: `lerConfigPortal` citando variável de ambiente) vira frase genérica: o
+ * detalhe interno só aparece em desenvolvimento (`NODE_ENV === 'development'`), nunca no build de produção.
+ */
+export function mensagemParaTela(e: unknown, generica: string = MENSAGEM_GENERICA, ambiente: string | undefined = process.env.NODE_ENV): string {
+  if (e instanceof ErroPortal) return e.message;
+  if (ambiente === 'development' && e instanceof Error && e.message) return `${generica} [dev: ${e.message}]`;
+  return generica;
+}
+
 /** Mensagem para a tela. Mesma frase para "não existe" e "não é sua" (404), sem revelar nada. */
 export function mensagemDoErro(status: number, codigo?: string): string {
   if (codigo && POR_CODIGO[codigo]) return POR_CODIGO[codigo];

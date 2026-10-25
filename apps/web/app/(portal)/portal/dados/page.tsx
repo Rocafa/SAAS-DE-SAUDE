@@ -12,6 +12,7 @@ import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
+import { mensagemParaTela } from '@/lib/api/portal';
 import { dataBr, prazoBr, tituloDosDados, validarCorrecao } from '@/lib/portal';
 
 const CAMPO = 'rounded-md border-2 border-borda-forte bg-fundo p-3 text-lg';
@@ -42,7 +43,7 @@ export default function PortalDados() {
       setErro('');
       avisar({ texto: `Pedido enviado à clínica. Protocolo ${r.protocolo}. Resposta até ${prazoBr(r.prazo)}.` });
     } catch (err) {
-      setErro(err instanceof Error ? err.message : 'Não deu para enviar.');
+      setErro(mensagemParaTela(err, 'Não deu para enviar.'));
     }
   }
 

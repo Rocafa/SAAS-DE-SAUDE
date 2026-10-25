@@ -12,7 +12,7 @@ import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
-import type { ConsultaPortal } from '@/lib/api/portal';
+import { mensagemParaTela, type ConsultaPortal } from '@/lib/api/portal';
 
 export default function PortalConsultas() {
   const { api, atualizar, vinculo } = usePortal();
@@ -36,13 +36,13 @@ export default function PortalConsultas() {
           try {
             await api.desfazerConfirmacao(c.id);
           } catch (e) {
-            setErro(e instanceof Error ? e.message : 'Não deu para desfazer.');
+            setErro(mensagemParaTela(e, 'Não deu para desfazer.'));
           }
           atualizar();
         },
       });
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não deu certo. Tente de novo.');
+      setErro(mensagemParaTela(e, 'Não deu certo. Tente de novo.'));
       atualizar();
     }
   }
@@ -56,7 +56,7 @@ export default function PortalConsultas() {
       avisar({ texto: 'Pronto, a clínica foi avisada. Para marcar outro dia, fale com a clínica.' });
     } catch (e) {
       setCancelando(null);
-      setErro(e instanceof Error ? e.message : 'Não deu certo. Tente de novo.');
+      setErro(mensagemParaTela(e, 'Não deu certo. Tente de novo.'));
       atualizar();
     }
   }

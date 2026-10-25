@@ -12,7 +12,7 @@ import { useAviso } from '@/components/app/desfazer';
 import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
-import type { PortalTipoDePedido } from '@/lib/api/portal';
+import { mensagemParaTela, type PortalTipoDePedido } from '@/lib/api/portal';
 import { PRAZO_RESPOSTA_DIAS, TEXTO_RESPOSTA, direitosDoVinculo, mensagemNoVinculo, prazoBr, tituloDoPedido } from '@/lib/portal';
 import { cn } from '@/lib/utils';
 
@@ -44,13 +44,13 @@ export default function PortalDireitos() {
           try {
             await api.desfazerConsentimento(finalidade);
           } catch (e) {
-            setErro(e instanceof Error ? e.message : 'Não deu para desfazer.');
+            setErro(mensagemParaTela(e, 'Não deu para desfazer.'));
           }
           atualizar();
         },
       });
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não deu para registrar.');
+      setErro(mensagemParaTela(e, 'Não deu para registrar.'));
     }
   }
 
@@ -63,7 +63,7 @@ export default function PortalDireitos() {
       avisar({ texto: `Pedido enviado. Protocolo ${r.protocolo}. A clínica responde até ${prazoBr(r.prazo)}.` });
     } catch (e) {
       setConfirmando(null);
-      setErro(e instanceof Error ? e.message : 'Não deu para enviar.');
+      setErro(mensagemParaTela(e, 'Não deu para enviar.'));
     }
   }
 

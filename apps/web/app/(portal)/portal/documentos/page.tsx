@@ -13,7 +13,7 @@ import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
-import type { ReciboPortal } from '@/lib/api/portal';
+import { mensagemParaTela, type ReciboPortal } from '@/lib/api/portal';
 import { centavosEmReais, dataBr, NOME_FORMA_PORTAL } from '@/lib/portal';
 import { imprimirELimpar } from '@/lib/portal-impressao';
 
@@ -37,7 +37,7 @@ export default function PortalDocumentos() {
       setErro('');
       setFolha(await api.recibo(id));
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não deu para abrir o recibo.');
+      setErro(mensagemParaTela(e, 'Não deu para abrir o recibo.'));
     }
   }
 

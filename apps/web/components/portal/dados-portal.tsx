@@ -11,7 +11,7 @@
  * Nada do portal vai para localStorage, sessionStorage ou cache (G3; §10h).
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ErroPortal, mensagemDoErro, type ClientePortal, type VinculoDaConta } from '@/lib/api/portal';
+import { ErroPortal, mensagemDoErro, mensagemParaTela, type ClientePortal, type VinculoDaConta } from '@/lib/api/portal';
 import { criarClientePortal, lerConfigPortal, type ModoPortal } from '@/lib/api/portal-selecionar';
 
 interface ContextoPortal {
@@ -41,7 +41,7 @@ function criar(): { api: ClientePortal; modo: ModoPortal } | { erro: string } {
     const config = lerConfigPortal();
     return { api: criarClientePortal(config), modo: config.modo };
   } catch (e) {
-    return { erro: e instanceof Error ? e.message : 'Configuração do portal inválida.' };
+    return { erro: mensagemParaTela(e) };
   }
 }
 
@@ -81,11 +81,11 @@ export function PortalProvider({ children, telas }: { children: ReactNode; telas
           setPodeTrocar(vinculos.length > 1);
           setFase({ fase: 'escolher', vinculos });
         } catch (e2) {
-          setFase(faseDoErro(e2) ?? { fase: 'erro', mensagem: e2 instanceof Error ? e2.message : 'Algo falhou.' });
+          setFase(faseDoErro(e2) ?? { fase: 'erro', mensagem: mensagemParaTela(e2, 'Algo falhou.') });
         }
         return;
       }
-      setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: e instanceof Error ? e.message : 'Algo falhou.' });
+      setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: mensagemParaTela(e, 'Algo falhou.') });
     }
   }, [api]);
 
@@ -99,7 +99,7 @@ export function PortalProvider({ children, telas }: { children: ReactNode; telas
     try {
       setFase({ fase: 'escolher', vinculos: await api.vinculos() });
     } catch (e) {
-      setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: e instanceof Error ? e.message : 'Algo falhou.' });
+      setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: mensagemParaTela(e, 'Algo falhou.') });
     }
   }, [api]);
 
@@ -112,7 +112,7 @@ export function PortalProvider({ children, telas }: { children: ReactNode; telas
         setVersao(0);
         setFase({ fase: 'pronto', vinculo });
       } catch (e) {
-        setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: e instanceof Error ? e.message : 'Algo falhou.' });
+        setFase(faseDoErro(e) ?? { fase: 'erro', mensagem: mensagemParaTela(e, 'Algo falhou.') });
       }
     },
     [api],
@@ -161,7 +161,7 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
         vivo &&
-        setEstado({ estado: 'erro', mensagem: e instanceof Error ? e.message : 'Algo falhou.', tentarDeNovo: () => setTentativa((t) => t + 1) }),
+        setEstado({ estado: 'erro', mensagem: mensagemParaTela(e, 'Algo falhou.'), tentarDeNovo: () => setTentativa((t) => t + 1) }),
       );
     return () => {
       vivo = false;
