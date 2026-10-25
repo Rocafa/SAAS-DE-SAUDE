@@ -403,6 +403,54 @@ describe('adaptador HTTP: retrato amarrado à sessão (veto B1 do #76)', () => {
     soltar();
     expect(await emCurso).toMatchObject({ status: 409, codigo: 'sessao_mudou' });
   });
+
+  it('R5: sessão troca no meio da paginação (sem outra conferência): confere de novo no fim, descarta e responde 409', async () => {
+    let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
+    const { chamadas, fetch } = simular(
+      (c) => {
+        const pagina = Number(c.url.searchParams.get('pagina'));
+        const clinica = sessao.clinicaId.slice(-3);
+        // Outra aba troca a sessão de A para B enquanto a página 1 chega.
+        if (pagina === 1) sessao = { ...sessao, clinicaId: U(902) };
+        return respostaJson(200, {
+          itens: [{ id: U(10 + pagina), nome: `Fulano ${pagina} da ${clinica}`, nomeSocial: null, ativo: true }],
+          temMais: pagina < 2,
+        });
+      },
+      () => sessao,
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await expect(api.listarPacientes()).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou' });
+    // A última chamada da carga foi a conferência nova de /sessao, depois da página 2.
+    const ultimas = chamadas.slice(-2).map((c) => `${c.metodo} ${c.url.pathname}${c.url.search}`);
+    expect(ultimas[0]).toContain('pagina=2');
+    expect(ultimas[1]).toBe('GET /sessao');
+    // Nada da lista misturada ficou guardado: a próxima carga baixa de novo, só com B.
+    const depois = await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(4);
+    expect(JSON.stringify(depois)).not.toContain('901');
+  });
+
+  it('R6: escrita com a sessão já trocada em outra aba esquece o retrato em vez de pôr nele o item da outra sessão', async () => {
+    let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
+    const { chamadas, fetch } = simular(
+      (c) => {
+        if (c.metodo === 'POST' && c.url.pathname === '/pacientes')
+          return respostaJson(201, { id: U(8), nome: 'Beltrano da clinica B', nomeSocial: null, cpf: null, telefone: '11900000009', nascimento: null, ativo: true });
+        return respostaJson(200, { itens: [{ id: U(7), nome: `Fulano da ${sessao.clinicaId.slice(-3)}`, nomeSocial: null, ativo: true }], temMais: false });
+      },
+      () => sessao,
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await api.listarPacientes(); // retrato com a chave A
+    sessao = { ...sessao, clinicaId: U(902) }; // outra aba: A → B, sem esta aba perceber
+    await api.criarPaciente({ nome: 'Beltrano da clinica B', telefone: '(11) 90000-0009' });
+    sessao = { ...sessao, clinicaId: U(901) }; // e volta para A
+    const lista = await api.listarPacientes();
+    // O retrato foi esquecido (baixou de novo) e o item da sessão B não aparece para A.
+    expect(listagens(chamadas)).toHaveLength(2);
+    expect(lista.map((p) => p.nome)).toEqual(['Fulano da 901']);
+  });
 });
 
 describe('adaptador HTTP: erros', () => {
