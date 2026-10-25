@@ -32,7 +32,7 @@ function Estrutura({ children }: { children: ReactNode }) {
     { rotulo: 'Consultas', rota: '/portal', icone: CalendarDays },
     { rotulo: 'Documentos', rota: '/portal/documentos', icone: FileText },
     { rotulo: responsavel ? 'Dados do paciente' : 'Meus dados', rota: '/portal/dados', icone: UserRound },
-    { rotulo: 'Meus direitos', rota: '/portal/direitos', icone: ShieldCheck },
+    { rotulo: responsavel ? 'Direitos do paciente' : 'Meus direitos', rota: '/portal/direitos', icone: ShieldCheck },
   ];
   return (
     <div className="min-h-dvh pb-28 md:pb-10">

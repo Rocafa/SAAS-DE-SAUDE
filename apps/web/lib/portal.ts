@@ -8,21 +8,43 @@ import { ehDataAAAAMMDD, type MeusDadosPortal, type PortalFormaDePagamento, type
 /** Prazo que a plataforma dá à clínica (só para o texto; a data do prazo vem do servidor). */
 export const PRAZO_RESPOSTA_DIAS = 15;
 
-/** Pedidos com os nomes CANÔNICOS do backend (P8). `correcao` vai para a tela de dados (pedido próprio). */
-export const DIREITOS: { tipo: PortalTipoDePedido; titulo: string; explicacao: string }[] = [
-  { tipo: 'acesso', titulo: 'Ver quais dados a clínica tem sobre mim', explicacao: 'Você recebe a lista do que está guardado e para quê.' },
-  { tipo: 'correcao', titulo: 'Corrigir um dado errado', explicacao: 'Telefone, data de nascimento, nome social ou outro dado que mudou.' },
-  { tipo: 'portabilidade', titulo: 'Baixar uma cópia dos meus dados', explicacao: 'Em arquivo aberto, para levar a outro profissional se quiser.' },
-  {
-    tipo: 'eliminacao',
-    titulo: 'Pedir para apagar dados',
-    explicacao: 'A clínica apaga o que não for obrigatório. O prontuário fica guardado pelo prazo da lei (ex.: 20 anos para o CFM).',
-  },
-  { tipo: 'compartilhamento', titulo: 'Saber com quem meus dados são compartilhados', explicacao: 'Por exemplo, convênio ou laboratório.' },
-];
+type Direito = { tipo: PortalTipoDePedido; titulo: string; explicacao: string };
 
-export function tituloDoPedido(tipo: PortalTipoDePedido): string {
-  return DIREITOS.find((d) => d.tipo === tipo)?.titulo ?? 'Pedido';
+/**
+ * Pedidos com os nomes CANÔNICOS do backend (P8). `correcao` vai para a tela de dados (pedido próprio).
+ * Responsável legal (R1 do parecer do #75): os dados são do PACIENTE, então o texto fala dele
+ * ("sobre Sofia", "dados de Sofia"), nunca "sobre mim"/"meus dados" (mesma lógica da C1-c).
+ */
+export function direitosDoVinculo(paciente?: string): Direito[] {
+  const sobre = paciente ? `sobre ${paciente}` : 'sobre mim';
+  const copia = paciente ? `dos dados de ${paciente}` : 'dos meus dados';
+  const compartilhados = paciente ? `os dados de ${paciente} são compartilhados` : 'meus dados são compartilhados';
+  return [
+    { tipo: 'acesso', titulo: `Ver quais dados a clínica tem ${sobre}`, explicacao: 'Você recebe a lista do que está guardado e para quê.' },
+    { tipo: 'correcao', titulo: 'Corrigir um dado errado', explicacao: 'Telefone, data de nascimento, nome social ou outro dado que mudou.' },
+    { tipo: 'portabilidade', titulo: `Baixar uma cópia ${copia}`, explicacao: 'Em arquivo aberto, para levar a outro profissional se quiser.' },
+    {
+      tipo: 'eliminacao',
+      titulo: 'Pedir para apagar dados',
+      explicacao: 'A clínica apaga o que não for obrigatório. O prontuário fica guardado pelo prazo da lei (ex.: 20 anos para o CFM).',
+    },
+    { tipo: 'compartilhamento', titulo: `Saber com quem ${compartilhados}`, explicacao: 'Por exemplo, convênio ou laboratório.' },
+  ];
+}
+
+/** Textos do próprio paciente (sem vínculo de responsável). */
+export const DIREITOS: Direito[] = direitosDoVinculo();
+
+export function tituloDoPedido(tipo: PortalTipoDePedido, paciente?: string): string {
+  return direitosDoVinculo(paciente).find((d) => d.tipo === tipo)?.titulo ?? 'Pedido';
+}
+
+/**
+ * Ajusta a mensagem ao vínculo: para o responsável o menu se chama "Dados do paciente", não
+ * "Meus dados" (R1 do #75). Só troca o nome do menu; o resto é a frase do código do servidor.
+ */
+export function mensagemNoVinculo(mensagem: string, responsavel: boolean): string {
+  return responsavel ? mensagem.replaceAll('"Meus dados"', '"Dados do paciente"') : mensagem;
 }
 
 /** Três estados (ressalva R1 do Guardião): "não respondido" vale como NÃO. */

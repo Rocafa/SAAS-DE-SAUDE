@@ -14,7 +14,19 @@ import {
 import { describe, expect, it } from 'vitest';
 import { ErroPortal, mensagemDoErro, ROTAS, type ClientePortal } from './api/portal';
 import { CODIGO_CONVITE_DEMONSTRACAO, TOKEN_CONVITE_DEMONSTRACAO, criarApiPortalFake } from './api/portal-fake';
-import { centavosEmReais, dataBr, DIREITOS, NOME_FORMA_PORTAL, permitido, prazoBr, tituloDosDados, validarCorrecao } from './portal';
+import {
+  centavosEmReais,
+  dataBr,
+  DIREITOS,
+  direitosDoVinculo,
+  mensagemNoVinculo,
+  NOME_FORMA_PORTAL,
+  permitido,
+  prazoBr,
+  tituloDoPedido,
+  tituloDosDados,
+  validarCorrecao,
+} from './portal';
 
 const hoje = new Date(2026, 9, 12, 10);
 const raiz = fileURLToPath(new URL('..', import.meta.url));
@@ -59,6 +71,18 @@ describe('portal: regras de exibição', () => {
   it('responsável legal vê "Dados de <nome>", nunca "seus dados"', () => {
     expect(tituloDosDados('dados_do_paciente', 'Sofia')).toBe('Dados de Sofia');
     expect(tituloDosDados('meus_dados', 'Maria')).toBe('Meus dados');
+  });
+  it('responsável: direitos e pedidos falam do paciente, nunca "sobre mim"/"meus dados" (R1 do #75)', () => {
+    const textos = direitosDoVinculo('Sofia').map((d) => d.titulo + ' ' + d.explicacao);
+    for (const t of textos) expect(t).not.toMatch(/\bmim\b|\bmeus?\b|\bminhas?\b/i);
+    expect(direitosDoVinculo('Sofia').find((d) => d.tipo === 'acesso')?.titulo).toBe('Ver quais dados a clínica tem sobre Sofia');
+    expect(tituloDoPedido('portabilidade', 'Sofia')).toBe('Baixar uma cópia dos dados de Sofia');
+    expect(tituloDoPedido('compartilhamento', 'Sofia')).toMatch(/dados de Sofia/);
+    expect(tituloDoPedido('acesso')).toBe('Ver quais dados a clínica tem sobre mim');
+    const msg = mensagemDoErro(409, 'nascimento_nao_informado');
+    expect(mensagemNoVinculo(msg, true)).toMatch(/"Dados do paciente"/);
+    expect(mensagemNoVinculo(msg, true)).not.toMatch(/Meus dados/);
+    expect(mensagemNoVinculo(msg, false)).toBe(msg);
   });
   it('correção: detalhe ≥ 3 e data existente, não futura, desde 1900 (mesma regra do servidor)', () => {
     expect(validarCorrecao('  ', undefined, '2026-10-12')).toMatch(/o que está errado/);

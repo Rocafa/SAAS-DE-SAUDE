@@ -13,7 +13,7 @@ import { useConsultaPortal, usePortal } from '@/components/portal/dados-portal';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import type { PortalTipoDePedido } from '@/lib/api/portal';
-import { DIREITOS, PRAZO_RESPOSTA_DIAS, TEXTO_RESPOSTA, prazoBr, tituloDoPedido } from '@/lib/portal';
+import { PRAZO_RESPOSTA_DIAS, TEXTO_RESPOSTA, direitosDoVinculo, mensagemNoVinculo, prazoBr, tituloDoPedido } from '@/lib/portal';
 import { cn } from '@/lib/utils';
 
 export default function PortalDireitos() {
@@ -29,6 +29,8 @@ export default function PortalDireitos() {
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
   const { cons, pedidos } = consulta.dados;
   const responsavel = vinculo.agindoComo === 'responsavel_legal';
+  // R1 (#75): no modo responsável os textos falam do paciente representado, não "de mim".
+  const paciente = responsavel ? vinculo.primeiroNome : undefined;
 
   async function responder(finalidade: string, r: 'sim' | 'nao') {
     try {
@@ -67,14 +69,14 @@ export default function PortalDireitos() {
 
   return (
     <>
-      <h1 className="mb-1 text-[1.75rem] font-bold">Meus direitos</h1>
+      <h1 className="mb-1 text-[1.75rem] font-bold">{responsavel ? `Direitos de ${vinculo.primeiroNome}` : 'Meus direitos'}</h1>
       <p className="mb-6 text-texto-suave">
         {responsavel ? `Os dados de ${vinculo.primeiroNome} são dele(a).` : 'Seus dados são seus.'} A clínica cuida deles e responde aos pedidos em até{' '}
         {PRAZO_RESPOSTA_DIAS} dias.
       </p>
       {erro && (
         <p role="alert" className="mb-4 font-bold">
-          ⚠ {erro}
+          ⚠ {mensagemNoVinculo(erro, responsavel)}
         </p>
       )}
 
@@ -109,7 +111,7 @@ export default function PortalDireitos() {
           Fazer um pedido
         </h2>
         <ul className="flex flex-col gap-3">
-          {DIREITOS.map((d) => (
+          {direitosDoVinculo(paciente).map((d) => (
             <li key={d.tipo} className="flex flex-col gap-2 rounded-md border-2 border-borda p-3">
               <p className="font-bold">{d.titulo}</p>
               <p className="text-texto-suave">{d.explicacao}</p>
@@ -152,7 +154,7 @@ export default function PortalDireitos() {
             {pedidos.map((p) => (
               <li key={p.id} className="flex flex-col gap-1 rounded-md border-2 border-borda p-3">
                 <span>
-                  <strong>Protocolo {p.protocolo}</strong> · {tituloDoPedido(p.tipo)} ·{' '}
+                  <strong>Protocolo {p.protocolo}</strong> · {tituloDoPedido(p.tipo, paciente)} ·{' '}
                   {p.situacao === 'respondido' ? 'respondido' : `resposta até ${prazoBr(p.prazo)}`}
                 </span>
                 {p.resposta && <span>Resposta da clínica: {p.resposta}</span>}
