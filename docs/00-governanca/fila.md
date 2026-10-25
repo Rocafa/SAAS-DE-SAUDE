@@ -70,12 +70,17 @@
 | Rodada 25.1: ✅ **PR #75** — portal ligado ao backend real, empilhado sobre o #47 (aprovado c/ ressalvas, R1–R4 corrigidas); aguarda @Lopesloro aceitar/descartar | Maestro @Rocafa | 25/10/2026 | PR #75 |
 | Rodada 25.2: ✅ ressalvas do portal (0053) — **APROVADO** | Maestro @Rocafa | 25/10/2026 | `eng/integracao-r19` |
 
+| Rodada 26.1: ✅ ensaio local do merge completo (24 PRs; API 923, web 293, rls 605, audit limpo) + import duplicado do #75 corrigido | Maestro @Rocafa | 25/10/2026 | [relatório](../relatorios/2026-10-25-ensaio-de-merge.md) |
+| Rodada 26.2: ✅ RELATORIO-GERAL até a rodada 25; #74 logo depois do #72 | Maestro @Rocafa | 25/10/2026 | main |
+| Rodada 26.3: ✅ **PR #76** (pacientes/agenda alinhados ao backend r19+) — vetado e corrigido; **veto levantado**; R5/R6 feitas | Maestro @Rocafa | 25/10/2026 | PR #76 |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
+| **Backend (#76 R5 residual):** cursor da paginação de pacientes ligado à sessão no servidor (troca A→B→A durante a paginação) | parecer #76, 25/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
