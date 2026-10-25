@@ -29,8 +29,12 @@ test.describe('Agenda', () => {
 
   test('remarcar arrastando na semana (computador)', async ({ page }, info) => {
     test.skip(info.project.name === 'celular', 'No celular o caminho é o botão Remarcar.');
+    // Relógio fixo numa quarta-feira: no domingo (fim da semana exibida) não há dia livre depois de hoje.
+    // setFixedTime só fixa a data; os timers (aviso de 10 s, Desfazer) continuam correndo.
+    const QUARTA = '2026-10-21';
+    await page.clock.setFixedTime(new Date(`${QUARTA}T10:00:00-03:00`));
     await page.goto('/agenda?ver=semana');
-    const hoje = hojeIso();
+    const hoje = QUARTA;
     const cartoes = page.locator('details[draggable="true"]');
     await expect(cartoes.first()).toBeVisible();
     // Acha uma consulta com um dia livre depois dela na mesma semana.
