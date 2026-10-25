@@ -12,7 +12,7 @@ import {
   type RotaPortal,
 } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
-import { ErroPortal, mensagemDoErro, ROTAS, type ClientePortal } from './api/portal';
+import { ErroPortal, MENSAGEM_GENERICA, mensagemDoErro, mensagemParaTela, ROTAS, type ClientePortal } from './api/portal';
 import { CODIGO_CONVITE_DEMONSTRACAO, TOKEN_CONVITE_DEMONSTRACAO, criarApiPortalFake } from './api/portal-fake';
 import {
   centavosEmReais,
@@ -256,6 +256,8 @@ describe('B3 do Guardião e R-47a: portal separado da clínica', () => {
       'lib/api/portal-http.ts',
       'lib/api/portal-selecionar.ts',
       'lib/portal.ts',
+      'lib/portal-convite.ts',
+      'lib/portal-impressao.ts',
       'components/portal/dados-portal.tsx',
       'components/portal/resgate-convite.tsx',
       ...lista('app/(portal)').map((f) => f.slice(raiz.length)),
@@ -264,8 +266,38 @@ describe('B3 do Guardião e R-47a: portal separado da clínica', () => {
       const codigo = readFileSync(join(raiz, f), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
       expect(codigo, f).not.toMatch(/\bconsole\.|localStorage|sessionStorage|indexedDB|document\.cookie|sendBeacon|gtag|dataLayer|posthog|sentry/i);
     }
-    const convite = readFileSync(join(raiz, 'components/portal/resgate-convite.tsx'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    expect(convite).not.toMatch(/location\.search|useSearchParams|searchParams/);
-    expect(convite).toMatch(/history\.replaceState/);
+    const semComentario = (f: string) => readFileSync(join(raiz, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const convite = semComentario('components/portal/resgate-convite.tsx');
+    const regras = semComentario('lib/portal-convite.ts');
+    for (const c of [convite, regras]) expect(c).not.toMatch(/location\.search|useSearchParams|searchParams/);
+    expect(convite).toMatch(/tirarTokenDaBarra\(window\.location, window\.history\)/);
+    expect(regras).toMatch(/historico\.replaceState/);
+  });
+});
+
+describe('R3 do #75: detalhe interno de configuração não aparece na tela', () => {
+  const interno = new Error('NEXT_PUBLIC_PORTAL_SESSAO_DEV ausente: configure o modo http');
+  it('fora de desenvolvimento, erro que não é ErroPortal vira frase genérica', () => {
+    for (const amb of ['production', 'test', undefined]) {
+      expect(mensagemParaTela(interno, MENSAGEM_GENERICA, amb)).toBe(MENSAGEM_GENERICA);
+      expect(mensagemParaTela(interno, 'Não deu para enviar.', amb)).toBe('Não deu para enviar.');
+      expect(mensagemParaTela('texto solto', MENSAGEM_GENERICA, amb)).toBe(MENSAGEM_GENERICA);
+    }
+  });
+  it('em desenvolvimento, mostra o detalhe junto da frase genérica', () => {
+    expect(mensagemParaTela(interno, MENSAGEM_GENERICA, 'development')).toMatch(/NEXT_PUBLIC_PORTAL_SESSAO_DEV/);
+  });
+  it('ErroPortal continua com a frase própria do código', () => {
+    expect(mensagemParaTela(new ErroPortal(409, 'consulta_ja_comecou'), 'x', 'production')).toBe(mensagemDoErro(409, 'consulta_ja_comecou'));
+  });
+  it('nenhuma tela do portal mostra e.message direto', () => {
+    const arquivos = [
+      'components/portal/dados-portal.tsx',
+      'components/portal/resgate-convite.tsx',
+      ...readdirSync(join(raiz, 'app/(portal)'), { recursive: true })
+        .map((f) => join('app/(portal)', String(f)))
+        .filter((f) => f.endsWith('.tsx')),
+    ];
+    for (const f of arquivos) expect(readFileSync(join(raiz, f), 'utf8'), f).not.toMatch(/\.message\b/);
   });
 });

@@ -16,41 +16,25 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Botao } from '@/components/ui/botao';
-import { ErroPortal, mensagemDoErro, type ClientePortal } from '@/lib/api/portal';
+import { MENSAGEM_GENERICA, mensagemParaTela, type ClientePortal } from '@/lib/api/portal';
 import { CODIGO_CONVITE_DEMONSTRACAO, TOKEN_CONVITE_DEMONSTRACAO } from '@/lib/api/portal-fake';
 import { criarClientePortal, lerConfigPortal, type ModoPortal } from '@/lib/api/portal-selecionar';
+import { codigoDoOtp, mensagemDoResgate, tirarTokenDaBarra } from '@/lib/portal-convite';
 
 const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
-const FALHA_DO_CONVITE = mensagemDoErro(409, 'convite_invalido');
-
-/** Tira o token do fragmento (`#<token>` ou `#convite=<token>`). Nunca olha a query. */
-export function tokenDoFragmento(hash: string): string {
-  const bruto = hash.replace(/^#/, '');
-  const valor = bruto.startsWith('convite=') ? bruto.slice('convite='.length) : bruto;
-  try {
-    return decodeURIComponent(valor).trim();
-  } catch {
-    return '';
-  }
-}
-
-/** Mensagem da tela: falha do convite é sempre a mesma; só sessão e limite têm texto próprio. */
-export function mensagemDoResgate(e: unknown): { texto: string; entrar: boolean } {
-  if (e instanceof ErroPortal && e.status === 401) return { texto: 'Para usar o convite, entre primeiro no portal.', entrar: true };
-  if (e instanceof ErroPortal && e.status === 429) return { texto: mensagemDoErro(429), entrar: false };
-  return { texto: FALHA_DO_CONVITE, entrar: false };
-}
 
 export function ResgateDoConvite() {
   const router = useRouter();
-  const [cliente] = useState<{ api: ClientePortal; modo: ModoPortal } | null>(() => {
+  const [criado] = useState<{ api: ClientePortal; modo: ModoPortal } | { erro: string }>(() => {
     try {
       const config = lerConfigPortal();
       return { api: criarClientePortal(config), modo: config.modo };
-    } catch {
-      return null;
+    } catch (e) {
+      // R3 (#75): detalhe de configuração só em desenvolvimento; fora dele, frase genérica.
+      return { erro: mensagemParaTela(e) };
     }
   });
+  const cliente = 'api' in criado ? criado : null;
   const [token, setToken] = useState('');
   const [etapa, setEtapa] = useState<'token' | 'codigo'>('token');
   const [destino, setDestino] = useState('');
@@ -59,9 +43,8 @@ export function ResgateDoConvite() {
   const [enviando, setEnviando] = useState(false);
 
   useEffect(() => {
-    const doLink = tokenDoFragmento(window.location.hash);
     // Apaga o token da barra de endereço e do histórico antes de qualquer outra coisa.
-    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
+    const doLink = tirarTokenDaBarra(window.location, window.history);
     if (doLink) setToken(doLink);
   }, []);
 
@@ -84,10 +67,11 @@ export function ResgateDoConvite() {
   async function confirmar(e: FormEvent) {
     e.preventDefault();
     if (!cliente) return;
-    if (!/^\d{6}$/.test(codigo.replace(/\s/g, ''))) return setErro({ texto: 'O código tem 6 números.', entrar: false });
+    const otp = codigoDoOtp(codigo);
+    if (!otp) return setErro({ texto: 'O código tem 6 números.', entrar: false });
     setEnviando(true);
     try {
-      await cliente.api.confirmarConvite(token.trim(), codigo.replace(/\s/g, ''));
+      await cliente.api.confirmarConvite(token.trim(), otp);
       setToken('');
       router.push('/portal');
     } catch (err) {
@@ -108,7 +92,7 @@ export function ResgateDoConvite() {
     </div>
   );
 
-  if (!cliente) return <p role="alert">O portal não está disponível agora.</p>;
+  if (!cliente) return <p role="alert">{'erro' in criado ? criado.erro : MENSAGEM_GENERICA}</p>;
 
   return etapa === 'token' ? (
     <form onSubmit={resgatar} noValidate className="flex flex-col gap-4">
