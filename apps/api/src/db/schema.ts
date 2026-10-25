@@ -982,6 +982,11 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   /** 0051: quem da clínica conferiu o documento da data proposta, e quando (uma vez; imutável). */
   documentCheckedBy: uuid('document_checked_by'),
   documentCheckedAt: timestamp('document_checked_at', { withTimezone: true }),
+  /**
+   * 0052 (C1-b′): a correção de nascimento exige documento conferido? Decidido NA ABERTURA, contra a data
+   * vigente naquele momento; imutável. Omitido na gravação: o gatilho preenche (falha fechada).
+   */
+  documentRequired: boolean('document_required').notNull().default(sql`null`),
 });
 
 /** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */

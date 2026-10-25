@@ -19,6 +19,11 @@ export interface AlteracaoPaciente {
   readonly cpf?: string | null;
   readonly telefone?: string;
   readonly nascimento?: string | null;
+  /**
+   * C1-b′ (conferência de 24/10): a clínica conferiu o documento da data nova. Exigido quando a mudança
+   * reduz a idade de paciente com 12 anos ou mais (`correcaoDeNascimentoExigeDocumento`). Só com `nascimento`.
+   */
+  readonly documentoConferido?: boolean;
 }
 
 export interface FiltroPacientes {
@@ -94,13 +99,16 @@ export function validarNovoPaciente(corpo: unknown): NovoPaciente {
 }
 
 export function validarAlteracaoPaciente(corpo: unknown): AlteracaoPaciente {
-  const entrada = exigirObjeto(corpo, CAMPOS);
+  const entrada = exigirObjeto(corpo, [...CAMPOS, 'documentoConferido']);
   const v = new Validador(entrada);
   const nome = v.texto('nome', { max: 200 });
   const nomeSocial = v.textoOuNulo('nomeSocial', { max: 200 });
   const cpf = documentos(v, 'cpf', v.textoOuNulo('cpf', { max: 20 }));
   const telefone = documentos(v, 'telefone', v.texto('telefone', { max: 25 }));
   const nascimento = documentos(v, 'nascimento', v.textoOuNulo('nascimento', { max: 10 }));
+  const documentoConferido = v.booleano('documentoConferido');
+  // A conferência de documento só acompanha a data de nascimento.
+  if (documentoConferido !== undefined && !v.tem('nascimento')) v.falhar('documentoConferido');
   v.concluir();
   if (!CAMPOS.some((c) => v.tem(c))) throw new EntradaInvalidaError(['corpo']);
   const out: { -readonly [K in keyof AlteracaoPaciente]: AlteracaoPaciente[K] } = {};
@@ -109,6 +117,7 @@ export function validarAlteracaoPaciente(corpo: unknown): AlteracaoPaciente {
   if (cpf !== undefined) out.cpf = cpf;
   if (telefone) out.telefone = telefone;
   if (nascimento !== undefined) out.nascimento = nascimento;
+  if (documentoConferido !== undefined) out.documentoConferido = documentoConferido;
   return out;
 }
 

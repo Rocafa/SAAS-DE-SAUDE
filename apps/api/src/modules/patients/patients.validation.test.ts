@@ -81,6 +81,13 @@ describe('validação estrita de pacientes', () => {
     expect(campos(() => validarAlteracaoPaciente({ telefone: null }))).toEqual(['telefone']);
   });
 
+  it('C1-b′: documentoConferido é booleano, só acompanha a data e não basta sozinho', () => {
+    expect(validarAlteracaoPaciente({ nascimento: '2010-01-02', documentoConferido: true })).toEqual({ nascimento: '2010-01-02', documentoConferido: true });
+    expect(campos(() => validarAlteracaoPaciente({ nascimento: '2010-01-02', documentoConferido: 'sim' }))).toEqual(['documentoConferido']);
+    expect(campos(() => validarAlteracaoPaciente({ telefone: '11987654321', documentoConferido: true }))).toEqual(['documentoConferido']);
+    expect(campos(() => validarNovoPaciente({ nome: 'Fulano Ficticio', telefone: '11987654321', documentoConferido: true }))).toEqual(['campo_desconhecido']);
+  });
+
   it('filtro: limite máximo 100, página positiva, busca de 2 a 80 caracteres', () => {
     expect(validarFiltroPacientes({})).toEqual({ situacao: 'ativos', pagina: 1, limite: 50 });
     expect(validarFiltroPacientes({ limite: '100', pagina: '3', situacao: 'todos' })).toEqual({

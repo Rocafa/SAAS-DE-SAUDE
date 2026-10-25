@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, RegraNaoAtendidaError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -15,6 +15,7 @@ import { TenantDatabase } from '../tenancy/tenancy.module';
 import { IndiceCegoCpf } from './cpf-indice-cego';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
 import { hojeNaClinica } from '../insurance/guias-regras';
+import { correcaoDeNascimentoExigeDocumento } from '../portal/portal-regras';
 import { aniversarioDe, menorEm, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
 import {
   normalizarBusca,
@@ -162,9 +163,15 @@ export class PatientsService {
         campos.push('phone');
       }
       // R1/R3 do #73: só reescreve a data cifrada (e recalcula o sigilo do portal) quando a data MUDOU de fato.
-      const nascimentoMudou =
-        dados.nascimento !== undefined &&
-        (dados.nascimento ?? null) !== (await this.decifrar(tx, ctx.tenantId, id, 'birth_date', atual.birthDateEnc));
+      const nascimentoAntes = dados.nascimento !== undefined ? await this.decifrar(tx, ctx.tenantId, id, 'birth_date', atual.birthDateEnc) : null;
+      const nascimentoMudou = dados.nascimento !== undefined && (dados.nascimento ?? null) !== nascimentoAntes;
+      // C1-b′ (conferência de 24/10): reduzir a idade de paciente com 12 anos ou mais (ou de data atual
+      // desconhecida) exige documento conferido, com a MESMA regra do pedido de correção pelo portal. Apagar a
+      // data não exige (o recálculo fecha: sigilo liga, representação acaba).
+      const exigeDocumento =
+        nascimentoMudou && typeof dados.nascimento === 'string' && correcaoDeNascimentoExigeDocumento(nascimentoAntes, dados.nascimento, hojeNaClinica());
+      if (exigeDocumento && dados.documentoConferido !== true) throw new RegraNaoAtendidaError('documento_nao_conferido', ['documentoConferido']);
+      const documentoConferido = nascimentoMudou && dados.documentoConferido === true;
       if (nascimentoMudou) {
         mudancas.birthDateEnc = await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento ?? undefined);
         campos.push('birth_date');
@@ -179,9 +186,18 @@ export class PatientsService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { patient_id: id, changed: campos.join(',') },
+        metadata: {
+          patient_id: id,
+          changed: campos.join(','),
+          ...(nascimentoMudou ? { document_required: exigeDocumento, document_checked: documentoConferido } : {}),
+        },
       });
-      if (nascimentoMudou) await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null, atual.emancipatedOn);
+      if (nascimentoMudou) {
+        // A marca de conferência vai na marca da mudança da data desta transação (0052): o recálculo do banco
+        // recusa empurrar o sigilo de quem já tinha 12+ sem ela. A função grava a trilha com o usuário (sem a data).
+        if (documentoConferido) await tx.execute(sql`select app_patient_birth_date_document_checked(${id}::uuid)`);
+        await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null, atual.emancipatedOn);
+      }
       return this.paraDto(tx, ctx.tenantId, linha);
     });
   }

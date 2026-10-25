@@ -63,6 +63,7 @@ import {
   situacaoParaOTitular,
   areaSensivelDoProfissional,
   consultaOcultaAoResponsavel,
+  correcaoDeNascimentoExigeDocumento,
   eventoVale,
   TETO_DIARIO_PEDIDOS,
   TOKEN_CONVITE_RE,
@@ -487,6 +488,9 @@ export class PortalService {
       const id = randomUUID();
       const detailEnc = detalhe ? await this.cifrarNoPedido(tx, ctx, id, 'detail', detalhe) : null;
       const birthDateProposedEnc = nascimentoProposto ? await this.cifrarNoPedido(tx, ctx, id, 'birth_date_proposed', nascimentoProposto) : null;
+      // C1-b′ (0052): exigir documento é decidido AGORA, contra a data vigente; o atendimento usa o valor gravado
+      // (corrigir o cadastro antes de atender não tira a exigência).
+      const documentRequired = nascimentoProposto ? correcaoDeNascimentoExigeDocumento(await this.nascimentoAtual(tx, ctx), nascimentoProposto, hojeNaClinica()) : false;
       const [row] = await tx
         .insert(portalRightsRequests)
         .values({
@@ -500,13 +504,14 @@ export class PortalService {
           protocol: novoProtocolo(),
           detailEnc,
           birthDateProposedEnc,
+          documentRequired,
         })
         .returning();
       if (!row) throw new Error('pedido não gravado');
       await this.auditar(tx, ctx, {
         action: AuditAction.Create,
         scope: 'portal_rights_requests',
-        metadata: { request_id: id, kind: tipo, has_detail: detailEnc !== null, has_birth_date: birthDateProposedEnc !== null, acting_as: ctx.agindoComo },
+        metadata: { request_id: id, kind: tipo, has_detail: detailEnc !== null, has_birth_date: birthDateProposedEnc !== null, document_required: documentRequired, acting_as: ctx.agindoComo },
       });
       return { dto: this.pedidoDto(row, null), tenantId: ctx.tenantId };
     });
@@ -700,6 +705,12 @@ export class PortalService {
     const p = await this.paciente(tx, ctx);
     const nasc = p.birthDateEnc ? await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, 'birth_date'), p.birthDateEnc) : null;
     return faixaEtariaEm(nasc, hojeNaClinica(), p.emancipatedOn);
+  }
+
+  /** Data de nascimento vigente no cadastro (decifrada); null sem data. */
+  private async nascimentoAtual(tx: TenantTx, ctx: ContextoPortal): Promise<string | null> {
+    const p = await this.paciente(tx, ctx);
+    return p.birthDateEnc ? this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, p.id, 'birth_date'), p.birthDateEnc) : null;
   }
 
   private async dadosDaSaudacao(tx: TenantTx, ctx: ContextoPortal): Promise<{ clinica: string; primeiroNome: string }> {

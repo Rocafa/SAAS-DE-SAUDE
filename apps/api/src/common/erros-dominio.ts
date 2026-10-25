@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { ExitWindowClosedError, SubscriptionWriteBlockedError } from '../modules/exports/access-policy';
 
 /**
@@ -19,6 +19,19 @@ export class ConflitoError extends ConflictException {
     campos?: readonly string[],
   ) {
     super({ statusCode: 409, message: 'Conflito', codigo, ...(campos ? { campos: [...campos] } : {}) });
+  }
+}
+
+/**
+ * 422: o corpo é válido, mas falta cumprir uma regra de negócio antes da operação (ex.: C1-b′, reduzir a idade
+ * de paciente com 12 anos ou mais exige `documentoConferido: true`). `codigo` estável; `campos` só NOMES.
+ */
+export class RegraNaoAtendidaError extends UnprocessableEntityException {
+  constructor(
+    readonly codigo: string,
+    campos?: readonly string[],
+  ) {
+    super({ statusCode: 422, message: 'Regra não atendida', codigo, ...(campos ? { campos: [...campos] } : {}) });
   }
 }
 
