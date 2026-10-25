@@ -25,7 +25,15 @@ function respostaJson(status: number, corpo: unknown): Response {
   });
 }
 
-function simular(responder: (c: Chamada) => Response | Promise<Response>) {
+interface SessaoFicticia {
+  usuarioId: string;
+  clinicaId: string;
+  perfis: string[];
+}
+const SESSAO_PADRAO: SessaoFicticia = { usuarioId: U(1001), clinicaId: U(9001), perfis: ['recepcao'] };
+
+/** GET /sessao responde sempre com `sessao()` (o adaptador confere a sessão antes de devolver o retrato). */
+function simular(responder: (c: Chamada) => Response | Promise<Response>, sessao: () => SessaoFicticia = () => SESSAO_PADRAO) {
   const chamadas: Chamada[] = [];
   const fetchFalso = vi.fn(async (entrada: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]));
@@ -37,10 +45,14 @@ function simular(responder: (c: Chamada) => Response | Promise<Response>) {
       init,
     };
     chamadas.push(c);
+    if (c.url.pathname === '/sessao' && c.metodo === 'GET') return respostaJson(200, sessao());
     return responder(c);
   });
   return { chamadas, fetch: fetchFalso as unknown as typeof fetch };
 }
+
+/** Só as idas à lista de pacientes (GET /pacientes). */
+const listagens = (chamadas: Chamada[]) => chamadas.filter((c) => c.metodo === 'GET' && c.url.pathname === '/pacientes');
 
 const AGORA = new Date(2026, 9, 13, 10, 0);
 
@@ -74,7 +86,7 @@ describe('adaptador HTTP: sessão e clínica', () => {
   });
 
   it('sem obterToken não envia Authorization (navegador: sessão em cookie HttpOnly, D4)', async () => {
-    const { chamadas, fetch } = simular(() => respostaJson(200, { usuarioId: U(1), clinicaId: U(9), perfis: ['admin'] }));
+    const { chamadas, fetch } = simular(() => respostaJson(500, {}), () => ({ usuarioId: U(1), clinicaId: U(9), perfis: ['admin'] }));
     const u = await criarApiHttp({ baseUrl: BASE, fetch }).usuarioAtual();
     expect(chamadas[0]!.headers.authorization).toBeUndefined();
     expect(u).toMatchObject({ id: U(1), clinicaId: U(9), papel: 'admin' });
@@ -98,7 +110,7 @@ describe('adaptador HTTP: pacientes', () => {
     });
     const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarPacientes();
     expect(lista).toHaveLength(3);
-    expect(chamadas.map((c) => c.url.searchParams.get('limite'))).toEqual(['100', '100', '100']);
+    expect(listagens(chamadas).map((c) => c.url.searchParams.get('limite'))).toEqual(['100', '100', '100']);
     expect(lista[1]).toMatchObject({ nomeSocial: 'Social', cpf: '', telefone: '', nascimento: '' });
   });
 
@@ -253,37 +265,42 @@ describe('adaptador HTTP: rodada 19+ (retrato e correção de cadastro)', () => 
     const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => new Date(t) });
     const [a, b] = await Promise.all([api.listarPacientes(), api.listarPacientes()]);
     await api.listarPacientes();
-    expect(chamadas).toHaveLength(1);
+    expect(listagens(chamadas)).toHaveLength(1);
     // Cópias: mexer numa não muda a outra.
     a[0]!.nome = 'mudado';
     expect(b[0]!.nome).toBe('A');
     expect((await api.listarPacientes())[0]!.nome).toBe('A');
     t += RETRATO_TTL_MS;
     await api.listarPacientes();
-    expect(chamadas).toHaveLength(2);
+    expect(listagens(chamadas)).toHaveLength(2);
   });
 
-  it('cadastrar, alterar e inativar invalidam o retrato; erro não fica guardado', async () => {
+  it('cadastrar, alterar e inativar atualizam só o item no retrato (sem baixar de novo); erro não fica guardado', async () => {
     let falhar = true;
+    const NOVO = { ...PAC, id: U(2), nome: 'Bia Ficticia', cpf: '00000000191', telefone: '11900000002' };
     const { chamadas, fetch } = simular((c) => {
       if (c.metodo === 'GET' && c.url.pathname === '/pacientes') {
         if (falhar) return respostaJson(503, {});
-        return respostaJson(200, { itens: [], temMais: false });
+        return respostaJson(200, { itens: [{ id: U(1), nome: 'Paciente Ficticio', nomeSocial: null, ativo: true }], temMais: false });
       }
       if (c.url.pathname.endsWith('/inativar')) return respostaJson(204, undefined);
-      return respostaJson(c.metodo === 'POST' ? 201 : 200, PAC);
+      if (c.metodo === 'POST') return respostaJson(201, NOVO);
+      return respostaJson(200, { ...PAC, nomeSocial: 'Social Ficticio' });
     });
     const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
     await expect(api.listarPacientes()).rejects.toThrow(MENSAGENS.indisponivel);
     falhar = false;
     await api.listarPacientes();
-    await api.criarPaciente({ nome: 'Paciente Ficticio', telefone: '(11) 90000-0001' });
-    await api.listarPacientes();
-    await api.alterarPaciente(U(1), { telefone: '(11) 90000-0002' });
-    await api.listarPacientes();
-    await api.inativarPaciente(U(1), 'Outro');
-    await api.listarPacientes();
-    expect(chamadas.filter((c) => c.metodo === 'GET' && c.url.pathname === '/pacientes')).toHaveLength(5);
+    await api.criarPaciente({ nome: 'Bia Ficticia', telefone: '(11) 90000-0002' });
+    expect((await api.listarPacientes()).map((p) => p.nome)).toEqual(['Bia Ficticia', 'Paciente Ficticio']);
+    await api.alterarPaciente(U(1), { telefone: '(11) 90000-0003' });
+    expect((await api.listarPacientes()).find((p) => p.id === U(1))?.nomeSocial).toBe('Social Ficticio');
+    await api.inativarPaciente(U(2), 'Outro');
+    const lista = await api.listarPacientes();
+    expect(lista.find((p) => p.id === U(2))?.ativo).toBe(false);
+    // Projeção da lista: o que a escrita devolve (CPF, telefone, nascimento) não entra no retrato.
+    for (const p of lista) expect(p).toMatchObject({ cpf: '', telefone: '', nascimento: '' });
+    expect(listagens(chamadas)).toHaveLength(2);
   });
 
   it('alterarPaciente: PATCH com só o que mudou; conferência só acompanha o nascimento', async () => {
@@ -315,6 +332,76 @@ describe('adaptador HTTP: rodada 19+ (retrato e correção de cadastro)', () => 
       .catch((e: unknown) => e);
     expect(erro).toBeInstanceOf(ErroApi);
     expect(erro).toMatchObject({ status: 422, codigo: 'documento_nao_conferido', message: MENSAGENS.documentoNaoConferido });
+  });
+});
+
+describe('adaptador HTTP: retrato amarrado à sessão (veto B1 do #76)', () => {
+  /** Cada clínica/usuário vê uma lista própria (nomes fictícios). */
+  function servidor() {
+    let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
+    const sim = simular(
+      () =>
+        respostaJson(200, {
+          itens: [{ id: U(7), nome: `Fulano da ${sessao.clinicaId.slice(-3)} visto por ${sessao.usuarioId.slice(-1)}`, nomeSocial: null, ativo: true }],
+          temMais: false,
+        }),
+      () => sessao,
+    );
+    return { ...sim, trocar: (s: Partial<SessaoFicticia>) => (sessao = { ...sessao, ...s }) };
+  }
+
+  it('troca de clínica (A → B) em outra aba: descarta o retrato e nada de A aparece', async () => {
+    const { chamadas, fetch, trocar } = servidor();
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    expect((await api.listarPacientes()).map((p) => p.nome)).toEqual(['Fulano da 901 visto por 1']);
+    trocar({ clinicaId: U(902) }); // o cookie é o mesmo para todas as abas
+    const depois = await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(2);
+    expect(depois.map((p) => p.nome)).toEqual(['Fulano da 902 visto por 1']);
+    expect(JSON.stringify(depois)).not.toContain('901');
+  });
+
+  it('troca de usuário (1 → 2) na mesma clínica: descarta o retrato e nada do usuário 1 aparece', async () => {
+    const { chamadas, fetch, trocar } = servidor();
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await api.listarPacientes();
+    trocar({ usuarioId: U(2) });
+    // usuarioAtual() vê a sessão nova primeiro (fluxo do provedor) e o retrato já cai ali.
+    expect((await api.usuarioAtual()).id).toBe(U(2));
+    const depois = await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(2);
+    expect(depois.map((p) => p.nome)).toEqual(['Fulano da 901 visto por 2']);
+  });
+
+  it('esquecerCache() (limpar do provedor: sair, trocar de clínica) apaga o retrato', async () => {
+    const { chamadas, fetch } = servidor();
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await api.listarPacientes();
+    await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(1);
+    api.esquecerCache!();
+    await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(2);
+  });
+
+  it('sessão que muda enquanto a lista chega: a lista antiga não é entregue', async () => {
+    let soltar: () => void = () => undefined;
+    const portao = new Promise<void>((r) => (soltar = r));
+    let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
+    const { fetch } = simular(
+      async () => {
+        await portao;
+        return respostaJson(200, { itens: [{ id: U(7), nome: 'Fulano da clinica A', nomeSocial: null, ativo: true }], temMais: false });
+      },
+      () => sessao,
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    const emCurso = api.listarPacientes().catch((e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    sessao = { ...sessao, clinicaId: U(902) };
+    await api.usuarioAtual();
+    soltar();
+    expect(await emCurso).toMatchObject({ status: 409, codigo: 'sessao_mudou' });
   });
 });
 

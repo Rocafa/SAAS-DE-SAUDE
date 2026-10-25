@@ -37,6 +37,11 @@ export interface ApiClinica {
    */
   buscarPacientes?(termo: string): Promise<Paciente[]>;
   obterPaciente(id: string): Promise<Paciente | null>;
+  /**
+   * Descarta o que o adaptador guarda em memória (retrato de pacientes). O provedor chama no `limpar()`
+   * (sair, trocar de clínica, sessão mudou). Opcional: o fake não guarda nada além dos dados fictícios.
+   */
+  esquecerCache?(): void;
   listarProfissionais(): Promise<Profissional[]>;
   listarTiposAtendimento(): Promise<TipoAtendimento[]>;
   listarAgendamentos(filtro?: FiltroAgenda): Promise<Agendamento[]>;

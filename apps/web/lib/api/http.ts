@@ -17,8 +17,13 @@
  * - Rodada 19+ (#73): a API conta lista/busca por usuário (429 `limite_por_usuario`, 60/min; alerta de
  *   anomalia acima de 40 páginas em 10 min). Por isso o retrato de pacientes fica em memória por
  *   `RETRATO_TTL_MS` e chamadas simultâneas compartilham a mesma ida ao servidor; cadastrar, alterar e
- *   inativar invalidam o retrato. Mudar o nascimento pode exigir a conferência de documento (422
- *   `documento_nao_conferido`; só admin ou profissional declara: 403 `conferencia_exige_perfil`).
+ *   inativar ATUALIZAM o item no retrato (sem baixar a lista de novo, para não disparar o alerta à toa).
+ *   Mudar o nascimento pode exigir a conferência de documento (422 `documento_nao_conferido`; só admin
+ *   ou profissional declara: 403 `conferencia_exige_perfil`).
+ * - Isolamento por sessão (veto B1 do #76): o retrato é amarrado à chave usuário + clínica do
+ *   `GET /sessao`. Antes de devolver a lista, o adaptador confere a sessão atual (o cookie vale para
+ *   todas as abas: outra aba pode ter trocado de clínica ou de usuário); se mudou, descarta e busca de
+ *   novo. `esquecerCache()` (chamado no `limpar()` do provedor) e o 401 também descartam.
  */
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import type {
@@ -58,6 +63,7 @@ export type ApiHttpPacientesAgenda = Pick<
   | 'removerSerie'
   | 'pendenciasDoDia'
   | 'buscarPacientes'
+  | 'esquecerCache'
 >;
 
 export interface OpcoesHttp {
@@ -210,6 +216,12 @@ function diasEntre(de: string, ate: string): number {
   return Math.round((Date.UTC(a2, m2 - 1, d2) - Date.UTC(a1, m1 - 1, d1)) / 86_400_000);
 }
 
+interface SessaoApi {
+  usuarioId: string;
+  clinicaId: string;
+  perfis: string[];
+}
+
 interface PacienteApi {
   id: string;
   nome: string;
@@ -264,23 +276,79 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
   const timeoutMs = opcoes.timeoutMs ?? 10_000;
   const agora = opcoes.agora ?? (() => new Date());
   const retratoTtlMs = opcoes.retratoTtlMs ?? RETRATO_TTL_MS;
-  /** Retrato compartilhado: a promessa em andamento ou já resolvida, com o instante em que nasceu. */
-  let retrato: { promessa: Promise<Paciente[]>; desde: number } | null = null;
+  /**
+   * Retrato compartilhado: a promessa em andamento ou já resolvida, o instante em que nasceu e a sessão
+   * (usuário + clínica) a que pertence. Nunca é devolvido para outra sessão.
+   */
+  let retrato: { promessa: Promise<Paciente[]>; desde: number; chave: string } | null = null;
+  /** Última sessão vista no servidor (`usuarioId|clinicaId`). */
+  let chaveSessao: string | null = null;
+  let sessaoEmVoo: Promise<SessaoApi> | null = null;
   function invalidarRetrato() {
     retrato = null;
   }
-  function retratoDePacientes(): Promise<Paciente[]> {
+  /** Anota a sessão vista; se mudou, o retrato da anterior vai embora na hora. */
+  function anotarSessao(s: SessaoApi): string {
+    const chave = `${s.usuarioId}|${s.clinicaId}`;
+    if (chaveSessao !== chave || (retrato && retrato.chave !== chave)) invalidarRetrato();
+    chaveSessao = chave;
+    return chave;
+  }
+  /** `GET /sessao` compartilhado entre chamadas simultâneas. */
+  function lerSessao(): Promise<SessaoApi> {
+    if (!sessaoEmVoo) {
+      const voo = chamar<SessaoApi>('GET', '/sessao');
+      sessaoEmVoo = voo;
+      const soltar = () => {
+        if (sessaoEmVoo === voo) sessaoEmVoo = null;
+      };
+      voo.then(soltar, soltar);
+    }
+    return sessaoEmVoo;
+  }
+  async function retratoDePacientes(): Promise<Paciente[]> {
+    // Confere a sessão ANTES de devolver qualquer coisa guardada.
+    const chave = anotarSessao(await lerSessao());
     const t = agora().getTime();
-    if (!retrato || t - retrato.desde >= retratoTtlMs) {
-      const atual = { promessa: paginasDePacientes(), desde: t };
+    if (!retrato || retrato.chave !== chave || t - retrato.desde >= retratoTtlMs) {
+      const atual = { promessa: paginasDePacientes(), desde: t, chave };
       retrato = atual;
       // Falhou: não guarda o erro (a próxima tela tenta de novo).
       atual.promessa.catch(() => {
         if (retrato === atual) retrato = null;
       });
     }
+    const lista = await retrato.promessa;
+    // A sessão mudou enquanto a lista chegava (outra chamada viu outra sessão, ou limpar()): não entrega.
+    if (chaveSessao !== chave) {
+      if (retrato?.chave === chave) invalidarRetrato();
+      throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+    }
     // Cópia: uma tela não altera o retrato da outra.
-    return retrato.promessa.then((l) => l.map((p) => ({ ...p })));
+    return lista.map((p) => ({ ...p }));
+  }
+  /**
+   * Escrita: troca só o item no retrato já guardado (projeção da lista: id, nome, nome social, situação),
+   * sem baixar as páginas de novo (R3 do parecer #76: não disparar o alerta de leitura anômala à toa).
+   */
+  function atualizarNoRetrato(id: string, mudar: (anterior: Paciente | undefined) => Paciente | null) {
+    const atual = retrato;
+    if (!atual) return;
+    const promessa = atual.promessa.then((lista) => {
+      const i = lista.findIndex((p) => p.id === id);
+      const novo = mudar(i >= 0 ? lista[i] : undefined);
+      if (!novo) return lista.filter((p) => p.id !== id);
+      if (i >= 0) return [...lista.slice(0, i), novo, ...lista.slice(i + 1)];
+      return [...lista, novo].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    });
+    retrato = { ...atual, promessa };
+    promessa.catch(() => {
+      if (retrato?.promessa === promessa) retrato = null;
+    });
+  }
+  /** Só o que a lista da API traz: CPF, telefone e nascimento não entram no retrato. */
+  function projecaoDaLista(p: Paciente): Paciente {
+    return paraPaciente({ id: p.id, nome: p.nome, nomeSocial: p.nomeSocial ?? null, ativo: p.ativo });
   }
   /** Séries criadas nesta aba (para o "Desfazer"): a API ainda não tem série. */
   const series = new Map<string, string[]>();
@@ -404,11 +472,16 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
 
   return {
     async usuarioAtual(): Promise<Usuario> {
-      const s = await chamar<{ usuarioId: string; clinicaId: string; perfis: string[] }>('GET', '/sessao');
+      const s = await lerSessao();
+      anotarSessao(s);
       // O nome do usuário e da clínica chegam com o provedor real (D4).
       return { id: s.usuarioId, nome: 'Você', papel: papelDosPerfis(s.perfis), clinica: '', clinicaId: s.clinicaId };
     },
     listarPacientes: retratoDePacientes,
+    esquecerCache() {
+      invalidarRetrato();
+      chaveSessao = null;
+    },
     async buscarPacientes(termo: string) {
       const t = termo.trim().replace(/\s+/g, ' ');
       if (t.length < 2) return [];
@@ -430,7 +503,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       if (dados.cpf?.trim()) corpo.cpf = dados.cpf.trim();
       if (dados.nascimento?.trim()) corpo.nascimento = dados.nascimento.trim();
       const p = paraPaciente(await chamar<PacienteApi>('POST', '/pacientes', corpo));
-      invalidarRetrato();
+      atualizarNoRetrato(p.id, () => projecaoDaLista(p));
       return p;
     },
     async alterarPaciente(id, dados: AlteracaoPaciente) {
@@ -444,18 +517,18 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       }
       if (!Object.keys(corpo).length) throw new ErroApi(MENSAGENS.nadaMudou, 400);
       const p = paraPaciente(await chamar<PacienteApi>('PATCH', `/pacientes/${encodeURIComponent(id)}`, corpo));
-      invalidarRetrato();
+      atualizarNoRetrato(p.id, () => projecaoDaLista(p));
       return p;
     },
     // A API não apaga paciente (retenção, R4): o "Desfazer" do cadastro inativa.
     async removerPaciente(id) {
       await chamar('POST', `/pacientes/${encodeURIComponent(id)}/inativar`, {});
-      invalidarRetrato();
+      atualizarNoRetrato(id, (anterior) => (anterior ? { ...anterior, ativo: false } : null));
     },
     // O motivo ainda não é gravado pela API; fica só na tela.
     async inativarPaciente(id) {
       await chamar('POST', `/pacientes/${encodeURIComponent(id)}/inativar`, {});
-      invalidarRetrato();
+      atualizarNoRetrato(id, (anterior) => (anterior ? { ...anterior, ativo: false } : null));
     },
     reativarPaciente: () => Promise.reject(new ErroApi(MENSAGENS.semReativar, 501)),
     async listarProfissionais(): Promise<Profissional[]> {
