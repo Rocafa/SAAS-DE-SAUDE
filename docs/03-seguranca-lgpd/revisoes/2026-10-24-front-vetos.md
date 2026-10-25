@@ -256,3 +256,41 @@ Sem vínculo ou convite aberto, a data errada não muda nenhum acesso no momento
 | Lacuna do banco sem vínculo/convite | Não | Resíduo aceito (igual ao R1) |
 | Ressalvas 1–5 | Não | Próximas micropartes |
 | **Adaptador HTTP do portal** | — | **Liberado** |
+
+## Conferência 0053 (25/10/2026)
+
+**Escopo:** `git diff 17d6887..origin/eng/integracao-r19` (PR #73): `0053_perfil_na_conferencia_de_documento.sql`, `nascimento-do-cadastro.ts` (novo), `patients.service.ts`, `portal-clinica.service.ts`, `portal-export.ts`, `schema.ts`, `test/portal.rls.test.ts` (bloco "Conferência 0052" e os testes antigos ajustados) e §10d/§10h do `api-dominio.md`. Li o código e os testes. Não rodei a suíte: os números do executor (rls 600/600, security 81) ficam como declarados.
+
+**Veredito: APROVADO.** As ressalvas 1, 2, 3 e 5 da Conferência 0052 estão resolvidas, e a 4 está documentada. O adaptador HTTP do portal continua liberado. As ressalvas abaixo não bloqueiam.
+
+### O que foi conferido
+- **Ressalva 1 (quem confere).** A trava está no banco e na API. `app_document_check_role` lê o perfil **ativo** em `clinic_members` da clínica da transação (`app_user_has_role` da 0020: `revoked_at IS NULL`). Quem tem os dois perfis fica como `admin`. O perfil nunca vem de quem grava. No pedido, o gatilho sobrescreve `document_checked_role` (há teste de que mandar `'admin'` como profissional grava `profissional`). Ele recusa (42501) quem não tem o perfil, recusa perfil ou autor sem conferência e torna os três campos imutáveis. O CHECK impede perfil sem `document_checked_at`. Na marca da data, `app_patient_birth_date_document_checked` recusa a recepção (42501), grava o perfil na marca e na trilha (`role`, sem a data), e a 0038 zera o perfil junto com a conferência. Um CHECK amarra `document_checked_by` ao `document_checked_role`. A API devolve 403 `conferencia_exige_perfil` antes de qualquer escrita. Há teste de que nada muda: com a recepção registrada no banco, a recusa vem pela API e também pelo SQL na ordem certa. `documentCheckedRole` é exportado no G2. Conferências anteriores à 0053 ficam com perfil nulo e sem backfill. Isso é aceitável: não há como recuperar o perfil da época, e pela API só o admin (`titular:atender`) conferia.
+- **Ressalva 2 (data desconhecida).** Com data nula, informar a data de uma criança dá 422, e com a flag dá 200. Com data ilegível, a cifra com AAD de outra linha não vira 500: o erro é isolado num savepoint, conta como desconhecida, exige documento e grava `birth_date_unreadable` na trilha. Apagar a data não exige documento. Há teste dos dois casos, e a trilha não traz a data.
+- **Ressalva 3 (um código só).** Os dois caminhos devolvem 422 `documento_nao_conferido` com corpo idêntico (há teste com `toEqual`). O 400 ficou só para corpo inválido. No atendimento, a exigência é a gravada na abertura **ou** a regra contra o cadastro de agora, o que é falha fechada. Há teste de cadastro mudado depois da abertura.
+- **Ressalva 5 (atender grava a data).** O fluxo trava a linha do paciente (`FOR UPDATE`), decifra a data vigente e cifra a proposta. Depois roda, na mesma transação, o UPDATE do pedido (o gatilho da 0052 ainda recusa `atendida` sem conferência), o UPDATE de `patients`, a trilha (`request_id`, flags, sem a data), a marca e `app_portal_recalc_sigilo`, e por fim a revogação do titular menor (0050). Com 422 nada muda: o teste confere cadastro, vínculo e pedido. Paciente inativo recebe 409. `em_andamento` e `recusada` não tocam o cadastro.
+- **Conferência final da 0053.** `SECURITY DEFINER` e dono sem superusuário, sem BYPASSRLS e diferente do runtime, nas duas funções redefinidas.
+
+### Testes antigos ajustados: não enfraqueceram
+- `adminA` passou a ser membro `admin` no banco (`api.membro`). O efeito é só **somar** um destinatário admin real.
+- **N1 do #73 (a):** a recepção virou profissional porque o teste chama `app_patient_birth_date_document_checked`, que agora recusa a recepção. O que o teste prova (devolver a cifra na mesma transação fecha o sigilo e volta a representação, com o ator na trilha) não mudou. A recusa da recepção ficou coberta à parte, em "item 2 no banco".
+- **O1 (avisos):** o "outro" que não deve ler era `adminA`, que antes era admin só de sessão. Agora é um admin novo só de sessão, então o caso negativo é o mesmo. Ganhou ainda uma asserção positiva: `adminA` recebe `representacao_estendida`.
+- **R3 do #68:** `notified: 2 → 3` reflete o admin a mais. A contagem continua exata (`toEqual`), sem afrouxar.
+- **Item 2 / item 2 no banco:** os casos positivos passaram ao profissional. Os negativos (sem marca, marca fora de ordem, marca zerada, portal) continuam, e a recepção ganhou recusas novas (403 e 42501). O caso (iii) (aumentar a idade ou corrigir a de uma criança sem a flag) continua com a recepção. Isso **reforça** a cobertura.
+
+### Ressalvas (não bloqueiam)
+1. **Atendimento de pedido já conferido antes.** Se a conferência foi gravada num `em_andamento` anterior, a marca da data no atendimento sai em nome de quem atende, e não de quem conferiu. A trilha do pedido tem os dois, mas a marca e o `op: birth_date_document_checked` apontam o atendente. Registrar no §10h ou levar `request_id` na trilha da marca.
+2. **Sessão com perfil no token e sem `clinic_members`.** A API passa no 403, mas o banco recusa com 42501, que tende a virar 500. Mapear 42501 da conferência para 403 `conferencia_exige_perfil`, ou garantir que todo usuário de sessão é membro.
+3. **Membro revogado.** Falta um teste de que um perfil `admin`/`profissional` com `revoked_at` preenchido não confere. O SQL já cobre esse caso, então o teste serve de regressão.
+4. **`nascimentoVigente` engole qualquer erro** (inclusive a falta de chave e erros do banco) e trata como "ilegível". O resultado é falha fechada, porque exige documento e a cifração da data nova falha sem chave. Mas `nascimento: null` com chave ausente passa a apagar a data com `birth_date_unreadable`. Restringir o `catch` aos erros de decifração quando der.
+5. **Resíduo da 0052 mantido:** sem vínculo ou convite aberto, só a API protege (§10d/§10h).
+
+| Item | Bloqueia? | Situação |
+|---|---|---|
+| Ressalva 1 (perfil admin/profissional, banco + API, perfil gravado e exportado) | — | Resolvido |
+| Ressalva 2 (data nula/ilegível exige documento) | — | Resolvido, com teste |
+| Ressalva 3 (422 único) | — | Resolvido |
+| Ressalva 4 (resíduo documentado) | — | Registrado no §10d/§10h |
+| Ressalva 5 (atender grava a data na mesma transação) | — | Resolvido |
+| Testes antigos ajustados | — | Sem perda de cobertura |
+| Ressalvas 1–4 desta conferência | Não | Próximas micropartes |
+| **Adaptador HTTP do portal** | — | **Continua liberado** |
