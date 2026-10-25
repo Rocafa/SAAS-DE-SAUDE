@@ -128,7 +128,8 @@ beforeAll(async () => {
   api = await subirApi();
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
-  adminA = api.sessao(clinicaA, 'admin');
+  // 0053: a conferência de documento exige perfil ATIVO no banco (clinic_members), não só na sessão.
+  adminA = await api.membro(clinicaA, api.sessao(clinicaA, 'admin'), 'admin');
   adminB = api.sessao(clinicaB, 'admin');
   const profA = (await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Prof Ficticia A', especialidade: 'Fisioterapia' })).body as { id: string };
   const tipoA = (await api.http().post('/tipos-atendimento').set(cab(adminA)).send({ nome: 'Sessao', minutos: 30 })).body as { id: string };
@@ -1148,7 +1149,8 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
   });
 
   it('N1 do #73 (a): trocar a cifra, recalcular e devolver a original na mesma transação não vale; o sigilo fecha e a representação volta', async () => {
-    const recepcao = api.sessao(clinicaA, 'recepcao');
+    // 0053: a marca de conferência exige perfil ATIVO admin/profissional no banco.
+    const conferente = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
     const doador = await criarPaciente(adminA, 'Teo Ficticio Doador Volta', { nascimento: nascidoHa(30) });
     const cifraDe = async (id: string) =>
       (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ enc: patients.birthDateEnc }).from(patients).where(eq(patients.id, id)), adminA.userId))[0]?.enc as string;
@@ -1174,7 +1176,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
           await tx.execute(sql`update patients set birth_date_enc = ${enc0} where id = ${pac}::uuid`);
           if (recalcDepois) await tx.execute(sql`select app_portal_recalc_sigilo(${pac}::uuid, '2093-01-01'::date, '2099-01-01'::date)`);
         },
-        recepcao.userId,
+        conferente.userId,
       );
       expect(await cifraDe(pac)).toBe(enc0);
       const depois = await vinculo();
@@ -1188,7 +1190,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
         (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_links'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`, sql`${auditLog.metadata}->>'reason' = 'birth_date_reverted'`)).orderBy(sql`seq`),
         adminA.userId,
       );
-      expect(volta.map((t) => t.actorId)).toEqual([recepcao.userId]);
+      expect(volta.map((t) => t.actorId)).toEqual([conferente.userId]);
       expect(volta[0]?.metadata).toMatchObject({ kind: 'link', target_id: conta.vinculoId, closed: true, confidential_now_on: true, representing_now_on: true });
     }
   });
@@ -1278,6 +1280,7 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(vinc).toMatchObject({ confidentialFrom: nascidoHa(1), representUntil: nascidoHa(-5) });
     const doFundador = await avisosDe(pac, fundador);
     const doProf = await avisosDe(pac, profUser);
+    expect((await avisosDe(pac, adminA.userId)).map((a) => a.portalTransition)).toEqual(['representacao_estendida']);
     expect(doFundador.map((a) => a.portalTransition)).toEqual(['representacao_estendida']);
     expect(doProf.map((a) => a.portalTransition)).toEqual(['representacao_estendida']);
     expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
@@ -1288,7 +1291,8 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     expect(await alertas('representacao_estendida')).toBe(antes.repr + 1);
 
     // O1: só o destinatário lê e marca como lido, inclusive por SQL arbitrário.
-    for (const outro of [adminA.userId, recepcao.userId]) {
+    // adminA é admin no banco desde a 0053 (também recebe); o "outro" é um admin só de sessão.
+    for (const outro of [api.sessao(clinicaA, 'admin').userId, recepcao.userId]) {
       expect(await avisosDe(pac, outro)).toEqual([]);
       const [{ n } = { n: -1 }] = await withTenant(api.db.db, clinicaA, (tx) => tx.execute<{ n: number }>(
         sql`select count(*)::int as n from clinical_notices where patient_id = ${pac}::uuid or recipient_user_id = ${fundador}::uuid`), outro);
@@ -1468,7 +1472,8 @@ describe('R3 do #68 (0050): titular que passa a constar menor perde o acesso', (
     expect(a.every((x) => x.portalTransition === 'titular_menor_revogado' && x.createdBy === adminA.userId && x.readAt === null)).toBe(true);
     const al = await alertas();
     expect(al).toHaveLength(alertasAntes + 1);
-    expect(al[0]?.metadata).toEqual({ rule: 'portal_sigilo_transicao', transition: 'titular_menor_revogado', count: 2, notified: 2 });
+    // notified: fundador, profissional e adminA (admin no banco desde a 0053; `avisos` só lê os dois primeiros).
+    expect(al[0]?.metadata).toEqual({ rule: 'portal_sigilo_transicao', transition: 'titular_menor_revogado', count: 2, notified: 3 });
     expect(al[0]?.actorId).toBe(adminA.userId);
     // O job depois não acha mais nada deste paciente.
     await api.app.get(PortalClinicaService).revogarTitularesMenoresDaClinica(clinicaA);
@@ -1745,18 +1750,21 @@ describe('C1 (conferência de 24/10): nascimento não se edita pelo portal; corr
     const det = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
     expect(det.body).toMatchObject({ tipo: 'correcao', agindoComo: 'responsavel_legal', nascimentoProposto: proposto, exigeConferenciaDeDocumento: true, documentoConferidoEm: null });
     for (const corpo of [{}, { documentoConferido: false }]) {
-      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(400);
-      expect(r.body).toMatchObject({ campos: ['documentoConferido'] });
+      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(422);
+      expect(r.body).toEqual({ statusCode: 422, message: 'Regra não atendida', codigo: 'documento_nao_conferido', campos: ['documentoConferido'] });
     }
     await situacao(ped.id, { situacao: 'em_andamento' }).expect(200);
     await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', documentoConferido: true }).expect(200);
     const depois = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
     expect((depois.body as { documentoConferidoEm: string | null }).documentoConferidoEm).not.toBeNull();
+    // Ressalva 5 (Conferência 0052): atender a correção grava a data no cadastro na mesma transação.
+    expect((await api.http().get('/portal/meus-dados').set(cab(c)).expect(200)).body).toMatchObject({ nascimento: proposto });
 
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, ped.id)), adminA.userId);
     expect(linha?.birthDateProposedEnc).toMatch(/^v1:/);
     expect(linha?.documentCheckedBy).toBe(adminA.userId);
     expect(linha?.documentCheckedAt).toBeInstanceOf(Date);
+    expect(linha?.documentCheckedRole).toBe('admin');
     const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.tenantId, clinicaA)));
     expect(JSON.stringify(trilha)).not.toContain(proposto);
   });
@@ -1841,8 +1849,8 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
     const det = await api.http().get(`/clinica/portal/solicitacoes/${ped.id}`).set(cab(adminA)).expect(200);
     expect(det.body).toMatchObject({ nascimentoProposto: proposto, exigeConferenciaDeDocumento: true, documentoConferidoEm: null });
     for (const corpo of [{}, { documentoConferido: false }]) {
-      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(400);
-      expect(r.body).toMatchObject({ campos: ['documentoConferido'] });
+      const r = await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', ...corpo }).expect(422);
+      expect(r.body).toEqual({ statusCode: 422, message: 'Regra não atendida', codigo: 'documento_nao_conferido', campos: ['documentoConferido'] });
     }
     // SQL arbitrário na sessão da clínica: atender sem a conferência gravada e trocar a exigência são recusados.
     const naClinica = (set: Record<string, unknown>) => (tx: TenantTx) =>
@@ -1888,7 +1896,8 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
   });
 
   it('item 2: PATCH /pacientes/:id que reduz a idade de quem tem 12+ exige documentoConferido (422), com a trilha de quem conferiu', async () => {
-    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const recepcao = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    const prof = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
     const nasc = nascidoHa(15);
     const teen = await criarPaciente(adminA, 'Gil Ficticio Recepcao', { nascimento: nasc });
     const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Noa Ficticia Mae Recepcao') });
@@ -1907,17 +1916,21 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
     await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ telefone: '11900001112', documentoConferido: true }).expect(400);
     await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, documentoConferido: 'sim' }).expect(400);
     await api.http().post('/pacientes').set(cab(recepcao)).send({ nome: 'Ivo Ficticio', telefone: '11900001111', nascimento: novo, documentoConferido: true }).expect(400);
-    // (ii) com a flag: 200, recálculo da 0038 feito (sigilo desligado), aviso da 0039 gravado, trilha com quem conferiu.
-    await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, documentoConferido: true }).expect(200);
+    // 0053: a recepção sozinha não confere (403 com código; nada muda), nem registrada no banco.
+    const r403 = await api.http().patch(`/pacientes/${teen}`).set(cab(recepcao)).send({ nascimento: novo, documentoConferido: true }).expect(403);
+    expect(r403.body).toEqual({ statusCode: 403, message: 'Sem permissão', codigo: 'conferencia_exige_perfil' });
+    expect(((await api.http().get(`/pacientes/${teen}`).set(cab(adminA)).expect(200)).body as { nascimento: string }).nascimento).toBe(nasc);
+    // (ii) com a flag, pelo profissional: 200, recálculo da 0038 feito (sigilo desligado), aviso da 0039 gravado, trilha com quem conferiu e o perfil.
+    await api.http().patch(`/pacientes/${teen}`).set(cab(prof)).send({ nascimento: novo, documentoConferido: true }).expect(200);
     const depois = await vinculoDe(c.vinculoId);
     expect((depois?.confidentialFrom ?? '') > hojeNaClinica()).toBe(true);
     expect((await avisos(teen)).some((a) => a.portalTransition === 'sigilo_desligado')).toBe(true);
     const trilha = await trilhaDe(teen);
     const update = trilha.find((t) => (t.metadata as { changed?: string }).changed === 'birth_date');
-    expect(update?.actorId).toBe(recepcao.userId);
+    expect(update?.actorId).toBe(prof.userId);
     expect(update?.metadata).toMatchObject({ document_required: true, document_checked: true });
     const conf = trilha.filter((t) => (t.metadata as { op?: string }).op === 'birth_date_document_checked');
-    expect(conf.map((t) => [t.actorId, t.metadata])).toEqual([[recepcao.userId, { op: 'birth_date_document_checked', patient_id: teen, document_checked: true }]]);
+    expect(conf.map((t) => [t.actorId, t.metadata])).toEqual([[prof.userId, { op: 'birth_date_document_checked', patient_id: teen, document_checked: true, role: 'profissional' }]]);
     expect(JSON.stringify(trilha)).not.toContain(novo);
     expect(JSON.stringify(trilha)).not.toContain(nasc);
     // (iii) aumentar a idade, ou corrigir a de uma criança: 200 sem a flag.
@@ -1932,7 +1945,8 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
   });
 
   it('item 2 no banco: SQL arbitrário que reduz a idade de quem tem 12+ e recalcula sem a marca de conferência é recusado', async () => {
-    const recepcao = api.sessao(clinicaA, 'recepcao');
+    const recepcao = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    const prof = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
     const teen = await criarPaciente(adminA, 'Bel Ficticia Sql', { nascimento: nascidoHa(15) });
     const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Davi Ficticio Pai Sql') });
     const doador = await criarPaciente(adminA, 'Rafa Ficticio Doador Sql', { nascimento: nascidoHa(8) });
@@ -1945,9 +1959,11 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
     expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(recalc); })).toBe('42501');
     expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
     // A marca só vale na transação que mudou a data, antes do recálculo; e a data mudar de novo depois a zera.
-    expect(await codigo(recepcao.userId, (tx) => tx.execute(marca))).toBe('55000');
-    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(recalc); await tx.execute(marca); })).toBe('42501');
-    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(troca(outro)); await tx.execute(recalc); })).toBe('42501');
+    expect(await codigo(prof.userId, (tx) => tx.execute(marca))).toBe('55000');
+    expect(await codigo(prof.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(recalc); await tx.execute(marca); })).toBe('42501');
+    expect(await codigo(prof.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(troca(outro)); await tx.execute(recalc); })).toBe('42501');
+    // 0053: a recepção (registrada no banco) não põe a marca, nem na ordem certa.
+    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(recalc); })).toBe('42501');
     // A sessão do portal não marca.
     expect(
       await api.db.db
@@ -1962,11 +1978,157 @@ describe('C1-b′ (conferência C1–C5 de 24/10): a conferência de documento t
     ).toBe('42501');
     expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
     // Com a marca: o recálculo vale, e a trilha registra quem conferiu (sem a data).
-    expect(await codigo(recepcao.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(recalc); })).toBe('ok');
+    expect(await codigo(prof.userId, async (tx) => { await tx.execute(troca(doador)); await tx.execute(marca); await tx.execute(recalc); })).toBe('ok');
     expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: '2093-01-01', representUntil: '2099-01-01' });
     const conf = (await trilhaDe(teen)).filter((t) => (t.metadata as { op?: string }).op === 'birth_date_document_checked');
-    expect(conf.map((t) => t.actorId)).toEqual([recepcao.userId]);
+    expect(conf.map((t) => [t.actorId, (t.metadata as { role?: string }).role])).toEqual([[prof.userId, 'profissional']]);
     // Direção segura (sem recálculo): o COMMIT fecha sem exigir nada.
     expect(await codigo(recepcao.userId, (tx) => tx.execute(troca(outro)))).toBe('ok');
+  });
+});
+
+describe('Conferência 0052 (ressalvas 1, 2, 3 e 5): perfil de quem confere, data desconhecida, 422 único e atendimento que grava a data', () => {
+  const corrigir = (c: SessaoPortal, corpo: Record<string, unknown>) => api.http().post('/portal/meus-dados/correcao').set(cab(c)).send(corpo);
+  const situacao = (id: string, corpo: Record<string, unknown>) => api.http().post(`/clinica/portal/solicitacoes/${id}/situacao`).set(cab(adminA)).send(corpo);
+  const nascimentoDe = async (pac: string) => ((await api.http().get(`/pacientes/${pac}`).set(cab(adminA)).expect(200)).body as { nascimento: string | null }).nascimento;
+  const vinculoDe = async (id: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalLinks).where(eq(portalLinks.id, id)), adminA.userId))[0];
+  const pedidoDe = async (id: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(portalRightsRequests).where(eq(portalRightsRequests.id, id)), adminA.userId))[0];
+  const trilhaDe = async (pac: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'patients'), sql`${auditLog.metadata}->>'patient_id' = ${pac}`)).orderBy(sql`seq`), adminA.userId);
+  const avisos = async (pac: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.select().from(clinicalNotices).where(and(eq(clinicalNotices.kind, 'portal_sigilo_transicao'), eq(clinicalNotices.patientId, pac))), api.fundador(clinicaA));
+  const codigo = async (userId: string, fn: (tx: TenantTx) => Promise<unknown>) => {
+    try {
+      await withTenant(api.db.db, clinicaA, fn, userId);
+      return 'ok';
+    } catch (e) {
+      return (e as { cause?: { code?: string }; code?: string }).cause?.code ?? (e as { code?: string }).code;
+    }
+  };
+  const ERRO_422 = { statusCode: 422, message: 'Regra não atendida', codigo: 'documento_nao_conferido', campos: ['documentoConferido'] };
+
+  it('ressalva 2: PATCH com a data atual desconhecida (nula ou ilegível) exige documento, até para criança; apagar não exige', async () => {
+    // Nula: paciente cadastrado sem data.
+    const semData = await criarPaciente(adminA, 'Lis Ficticia Sem Data');
+    const crianca = nascidoHa(7);
+    for (const extra of [{}, { documentoConferido: false }]) {
+      const r = await api.http().patch(`/pacientes/${semData}`).set(cab(adminA)).send({ nascimento: crianca, ...extra }).expect(422);
+      expect(r.body).toEqual(ERRO_422);
+    }
+    expect(await nascimentoDe(semData)).toBeNull();
+    await api.http().patch(`/pacientes/${semData}`).set(cab(adminA)).send({ nascimento: crianca, documentoConferido: true }).expect(200);
+    expect(await nascimentoDe(semData)).toBe(crianca);
+    expect((await trilhaDe(semData)).find((t) => (t.metadata as { changed?: string }).changed === 'birth_date')?.metadata).toMatchObject({
+      document_required: true,
+      document_checked: true,
+    });
+
+    // Ilegível: cifra válida, mas amarrada a OUTRO paciente (AAD). Não é 500: conta como desconhecida.
+    const ilegivel = await criarPaciente(adminA, 'Rui Ficticio Data Ilegivel', { nascimento: nascidoHa(8) });
+    const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const estragar = () =>
+      withTenant(api.db.db, clinicaA, async (tx) => {
+        const enc = await cifra.encrypt(tx, patientFieldRef(clinicaA, randomUUID(), 'birth_date'), nascidoHa(8));
+        await tx.update(patients).set({ birthDateEnc: enc }).where(eq(patients.id, ilegivel));
+      }, adminA.userId);
+    await estragar();
+    const r = await api.http().patch(`/pacientes/${ilegivel}`).set(cab(adminA)).send({ nascimento: nascidoHa(8) }).expect(422);
+    expect(r.body).toEqual(ERRO_422);
+    await api.http().patch(`/pacientes/${ilegivel}`).set(cab(adminA)).send({ nascimento: nascidoHa(8), documentoConferido: true }).expect(200);
+    expect(await nascimentoDe(ilegivel)).toBe(nascidoHa(8));
+    const upd = (await trilhaDe(ilegivel)).filter((t) => (t.metadata as { changed?: string }).changed === 'birth_date');
+    expect(upd.at(-1)?.metadata).toMatchObject({ document_required: true, document_checked: true, birth_date_unreadable: true });
+    // Apagar a data ilegível não exige documento (o recálculo fecha), e reescreve a coluna.
+    await estragar();
+    await api.http().patch(`/pacientes/${ilegivel}`).set(cab(adminA)).send({ nascimento: null }).expect(200);
+    expect(await nascimentoDe(ilegivel)).toBeNull();
+    const trilha = await trilhaDe(ilegivel);
+    expect(JSON.stringify(trilha)).not.toContain(nascidoHa(8));
+  });
+
+  it('ressalva 5: ATENDER a correção grava a data no cadastro na mesma transação, com o recálculo da 0038, a marca e o perfil', async () => {
+    const nasc = nascidoHa(15);
+    const teen = await criarPaciente(adminA, 'Ivo Ficticio Atende', { nascimento: nasc });
+    const c = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: await responsavelDe(teen, 'Ema Ficticia Mae Atende') });
+    const antes = await vinculoDe(c.vinculoId);
+    const proposto = nascidoHa(11);
+    const ped = (await corrigir(c, { detalhe: 'Data ficticia errada', nascimento: proposto }).expect(201)).body as { id: string };
+    // Em andamento e recusa não tocam o cadastro.
+    await situacao(ped.id, { situacao: 'em_andamento' }).expect(200);
+    expect(await nascimentoDe(teen)).toBe(nasc);
+    // Sem a conferência: 422 único; nada muda (nem o cadastro, nem o sigilo, nem o pedido).
+    expect((await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX' }).expect(422)).body).toEqual(ERRO_422);
+    expect(await nascimentoDe(teen)).toBe(nasc);
+    expect(await vinculoDe(c.vinculoId)).toMatchObject({ confidentialFrom: antes?.confidentialFrom, representUntil: antes?.representUntil });
+    expect(await pedidoDe(ped.id)).toMatchObject({ status: 'em_andamento', documentCheckedAt: null, documentCheckedRole: null });
+
+    await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', documentoConferido: true }).expect(200);
+    expect(await nascimentoDe(teen)).toBe(proposto);
+    expect(await pedidoDe(ped.id)).toMatchObject({ status: 'atendida', documentCheckedBy: adminA.userId, documentCheckedRole: 'admin' });
+    // Recálculo da 0038 com a data nova (sigilo desligado: 11 anos) e aviso da 0039.
+    const depois = await vinculoDe(c.vinculoId);
+    expect((depois?.confidentialFrom ?? '') > hojeNaClinica()).toBe(true);
+    expect((await avisos(teen)).some((a) => a.portalTransition === 'sigilo_desligado')).toBe(true);
+    // Trilha: update do cadastro com o pedido, a marca com o perfil; nunca a data.
+    const trilha = await trilhaDe(teen);
+    const upd = trilha.find((t) => (t.metadata as { changed?: string }).changed === 'birth_date');
+    expect(upd?.actorId).toBe(adminA.userId);
+    expect(upd?.metadata).toMatchObject({ request_id: ped.id, document_required: true, document_checked: true });
+    const conf = trilha.filter((t) => (t.metadata as { op?: string }).op === 'birth_date_document_checked');
+    expect(conf.map((t) => [t.actorId, (t.metadata as { role?: string }).role])).toEqual([[adminA.userId, 'admin']]);
+    const ultimo = (
+      await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'portal_rights_requests'), sql`${auditLog.metadata}->>'request_id' = ${ped.id}`)).orderBy(sql`seq`), adminA.userId)
+    ).at(-1);
+    expect(ultimo?.metadata).toMatchObject({ to: 'atendida', document_checked: true, birth_date_applied: true });
+    expect(JSON.stringify(trilha)).not.toContain(proposto);
+    expect(JSON.stringify(trilha)).not.toContain(nasc);
+  });
+
+  it('ressalva 3: o cadastro mudou depois da abertura e a data proposta passou a reduzir a idade: o mesmo 422 ao atender', async () => {
+    const pac = await criarPaciente(adminA, 'Ari Ficticio Depois', { nascimento: '1991-05-06' });
+    const p = await contaDe(adminA, pac);
+    // Na abertura, a proposta AUMENTA a idade: não exige documento.
+    const ped = (await corrigir(p, { detalhe: 'Ano ficticio', nascimento: '1990-05-06' }).expect(201)).body as { id: string };
+    expect((await pedidoDe(ped.id))?.documentRequired).toBe(false);
+    // A clínica muda o cadastro para uma data mais antiga (aumento: sem documento).
+    await api.http().patch(`/pacientes/${pac}`).set(cab(adminA)).send({ nascimento: '1985-05-06' }).expect(200);
+    // Agora aplicar a proposta reduz a idade de um adulto: falha fechada, 422 único.
+    expect((await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX' }).expect(422)).body).toEqual(ERRO_422);
+    expect(await nascimentoDe(pac)).toBe('1985-05-06');
+    await situacao(ped.id, { situacao: 'atendida', resposta: 'Resposta ficticia QZX', documentoConferido: true }).expect(200);
+    expect(await nascimentoDe(pac)).toBe('1990-05-06');
+  });
+
+  it('ressalva 1 no banco: conferência do pedido por SQL exige perfil admin/profissional; o perfil é do banco e imutável', async () => {
+    const pac = await criarPaciente(adminA, 'Bia Ficticia Perfil', { nascimento: '1990-03-04' });
+    const p = await contaDe(adminA, pac);
+    const ped = (await corrigir(p, { detalhe: 'Ano ficticio', nascimento: '1989-03-04' }).expect(201)).body as { id: string };
+    const recepcao = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    const prof = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
+    const conferir = (userId: string, extra: Record<string, unknown> = {}) => (tx: TenantTx) =>
+      tx
+        .update(portalRightsRequests)
+        .set({ status: 'em_andamento', handledBy: userId, handledAt: sql`now()`, documentCheckedBy: userId, documentCheckedAt: sql`now()`, ...extra })
+        .where(eq(portalRightsRequests.id, ped.id));
+    // A recepção (registrada no banco) não confere; perfil sem conferência também é recusado.
+    expect(await codigo(recepcao.userId, conferir(recepcao.userId))).toBe('42501');
+    expect(
+      await codigo(prof.userId, (tx) =>
+        tx.update(portalRightsRequests).set({ status: 'em_andamento', handledBy: prof.userId, handledAt: sql`now()`, documentCheckedRole: 'admin' }).where(eq(portalRightsRequests.id, ped.id)),
+      ),
+    ).toBe('42501');
+    // O profissional confere; o perfil informado por quem grava é ignorado (o banco grava o de clinic_members).
+    expect(await codigo(prof.userId, conferir(prof.userId, { documentCheckedRole: 'admin' }))).toBe('ok');
+    expect(await pedidoDe(ped.id)).toMatchObject({ documentCheckedBy: prof.userId, documentCheckedRole: 'profissional' });
+    // Depois, imutável.
+    expect(
+      await codigo(adminA.userId, (tx) =>
+        tx.update(portalRightsRequests).set({ handledBy: adminA.userId, handledAt: sql`now()`, status: 'recusada', answerEnc: 'v1:x', documentCheckedRole: 'admin' }).where(eq(portalRightsRequests.id, ped.id)),
+      ),
+    ).toBe('42501');
+    // Pela API, a recepção nem chega à rota (titular:atender é do dono).
+    await api.http().post(`/clinica/portal/solicitacoes/${ped.id}/situacao`).set(cab(recepcao)).send({ situacao: 'atendida', resposta: 'Resposta ficticia QZX' }).expect(403);
   });
 });
