@@ -7,6 +7,7 @@
 import { Check, TriangleAlert, Undo2, X } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
+import { ErroApi } from '@/lib/api/http';
 
 interface Aviso {
   id: number;
@@ -22,9 +23,12 @@ export function useAviso() {
   return useContext(Ctx);
 }
 
-/** Texto para a tela: os erros do adaptador já vêm em pt-BR, sem dado pessoal. */
-export function textoDoErro(e: unknown): string {
-  return e instanceof Error && e.message ? e.message : 'Não deu certo. Tente de novo.';
+/**
+ * Texto para a tela: só os erros do adaptador (`ErroApi`, texto fixo em pt-BR, sem dado pessoal).
+ * Qualquer outra exceção (TypeError, erro interno em inglês) vira a mensagem genérica.
+ */
+export function textoDoErro(e: unknown, generica = 'Não deu certo. Tente de novo.'): string {
+  return e instanceof ErroApi && e.message ? e.message : generica;
 }
 
 /**

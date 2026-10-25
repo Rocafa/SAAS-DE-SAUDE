@@ -62,4 +62,17 @@ describe('adaptador falso: alterarPaciente', () => {
     await api.inativarPaciente('p02', 'Outro');
     await expect(api.alterarPaciente('p02', { telefone: '(11) 90000-0102' })).rejects.toMatchObject({ status: 409, message: MENSAGENS.inativo });
   });
+
+  it('conferência sem data e data futura são recusadas (400), como na API', async () => {
+    const api = criarApiFake({ agora });
+    await expect(api.alterarPaciente('p01', { telefone: '(11) 90000-0101', documentoConferido: true })).rejects.toMatchObject({
+      status: 400,
+      message: 'Confira conferência do documento: algum dado não está certo.',
+    });
+    await expect(api.alterarPaciente('p01', { nascimento: '2026-10-26', documentoConferido: true })).rejects.toMatchObject({
+      status: 400,
+      message: 'Confira data de nascimento: algum dado não está certo.',
+    });
+    expect((await api.obterPaciente('p01'))?.telefone).not.toBe('(11) 90000-0101');
+  });
 });

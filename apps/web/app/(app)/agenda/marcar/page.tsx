@@ -8,7 +8,7 @@ import { CalendarCheck, ChevronDown, Search, UserRound, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useId, useMemo, useState, type FormEvent } from 'react';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { textoDoErro, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { usePreenchimento } from '@/components/app/executor';
 import { Botao } from '@/components/ui/botao';
@@ -173,7 +173,7 @@ function FormularioMarcar() {
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {
-      setErros({ geral: err instanceof Error ? err.message : 'Não deu para marcar. Tente de novo.' });
+      setErros({ geral: textoDoErro(err, 'Não deu para marcar. Tente de novo.') });
       setEnviando(false);
     }
   }
