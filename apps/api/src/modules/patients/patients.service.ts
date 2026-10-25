@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, like, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { ConflitoError, NaoEncontradoError, RegraNaoAtendidaError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -10,13 +10,12 @@ import { recordAudit } from '../audit/audit-log';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
-import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { IndiceCegoCpf } from './cpf-indice-cego';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { correcaoDeNascimentoExigeDocumento } from '../portal/portal-regras';
-import { aniversarioDe, menorEm, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
+import { documentoNaoConferido, exigirPerfilQueConfere, nascimentoVigente, recalcularSigiloDoPortal } from './nascimento-do-cadastro';
 import {
   normalizarBusca,
   type AlteracaoPaciente,
@@ -163,15 +162,19 @@ export class PatientsService {
         campos.push('phone');
       }
       // R1/R3 do #73: só reescreve a data cifrada (e recalcula o sigilo do portal) quando a data MUDOU de fato.
-      const nascimentoAntes = dados.nascimento !== undefined ? await this.decifrar(tx, ctx.tenantId, id, 'birth_date', atual.birthDateEnc) : null;
-      const nascimentoMudou = dados.nascimento !== undefined && (dados.nascimento ?? null) !== nascimentoAntes;
+      // Data vigente ilegível (Conferência 0052, ressalva 2): conta como desconhecida e como mudança.
+      const antes = dados.nascimento !== undefined ? await nascimentoVigente(this.cipher, tx, ctx.tenantId, id, atual.birthDateEnc) : null;
+      const nascimentoAntes = antes?.valor ?? null;
+      const nascimentoMudou = dados.nascimento !== undefined && (antes?.ilegivel === true || (dados.nascimento ?? null) !== nascimentoAntes);
       // C1-b′ (conferência de 24/10): reduzir a idade de paciente com 12 anos ou mais (ou de data atual
-      // desconhecida) exige documento conferido, com a MESMA regra do pedido de correção pelo portal. Apagar a
-      // data não exige (o recálculo fecha: sigilo liga, representação acaba).
+      // desconhecida/ilegível) exige documento conferido, com a MESMA regra (e o mesmo 422) do pedido de
+      // correção pelo portal. Apagar a data não exige (o recálculo fecha: sigilo liga, representação acaba).
+      // 0053: só admin ou profissional declara a conferência (403 `conferencia_exige_perfil`; o banco confere).
       const exigeDocumento =
         nascimentoMudou && typeof dados.nascimento === 'string' && correcaoDeNascimentoExigeDocumento(nascimentoAntes, dados.nascimento, hojeNaClinica());
-      if (exigeDocumento && dados.documentoConferido !== true) throw new RegraNaoAtendidaError('documento_nao_conferido', ['documentoConferido']);
+      if (exigeDocumento && dados.documentoConferido !== true) throw documentoNaoConferido();
       const documentoConferido = nascimentoMudou && dados.documentoConferido === true;
+      if (documentoConferido) exigirPerfilQueConfere(ctx);
       if (nascimentoMudou) {
         mudancas.birthDateEnc = await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento ?? undefined);
         campos.push('birth_date');
@@ -189,44 +192,23 @@ export class PatientsService {
         metadata: {
           patient_id: id,
           changed: campos.join(','),
-          ...(nascimentoMudou ? { document_required: exigeDocumento, document_checked: documentoConferido } : {}),
+          ...(nascimentoMudou
+            ? { document_required: exigeDocumento, document_checked: documentoConferido, ...(antes?.ilegivel ? { birth_date_unreadable: true } : {}) }
+            : {}),
         },
       });
       if (nascimentoMudou) {
-        // A marca de conferência vai na marca da mudança da data desta transação (0052): o recálculo do banco
-        // recusa empurrar o sigilo de quem já tinha 12+ sem ela. A função grava a trilha com o usuário (sem a data).
-        if (documentoConferido) await tx.execute(sql`select app_patient_birth_date_document_checked(${id}::uuid)`);
-        await this.recalcularSigiloDoPortal(tx, id, dados.nascimento ?? null, atual.emancipatedOn);
+        // A marca de conferência vai na marca da mudança da data desta transação (0052/0053): o recálculo do banco
+        // recusa empurrar o sigilo de quem já tinha 12+ sem ela. A função grava a trilha com o usuário e o perfil.
+        await recalcularSigiloDoPortal(tx, this.logger, {
+          pacienteId: id,
+          nascimento: dados.nascimento ?? null,
+          emancipadoEm: atual.emancipatedOn,
+          documentoConferido,
+        });
       }
       return this.paraDto(tx, ctx.tenantId, linha);
     });
-  }
-
-  /**
-   * N3 do #68 (conferência de 22/10) e R1 do #73: a data de nascimento mudou. O gatilho da 0038 marcou a
-   * mudança nesta transação; aqui o serviço recalcula pelo dia dos 12 (sigilo do adolescente) e dos 18 (fim
-   * da representação) da data nova. Sem data válida, fecha. O banco só reabre com a marca desta transação
-   * (que consome) e grava a trilha com os valores antigos e novos; se ninguém recalcular, o COMMIT fecha.
-   */
-  private async recalcularSigiloDoPortal(tx: TenantTx, id: string, nascimento: string | null, emancipadoEm: string | null): Promise<void> {
-    const valida = nascimento !== null && /^\d{4}-\d{2}-\d{2}$/.test(nascimento);
-    const sigilo = valida ? aniversarioDe(nascimento, REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia) : null;
-    const maioridade = valida ? aniversarioDe(nascimento, IDADE_MAIORIDADE) : null;
-    await tx.execute(sql`select app_portal_recalc_sigilo(${id}::uuid, ${sigilo}::date, ${maioridade}::date)`);
-    // R3 do #68 (0050): pela data nova o paciente é menor não emancipado = o acesso de TITULAR ao portal cai
-    // nesta mesma transação (vínculos revogados, convites pendentes encerrados, trilha com o usuário, aviso e
-    // alerta do banco). O job `portal-titular-menor` (§14) é a rede de segurança do que escapar deste caminho.
-    if (menorEm(nascimento, hojeNaClinica(), emancipadoEm) === true) {
-      await tx.execute(sql`select * from app_portal_revoke_minor_titular(${id}::uuid)`);
-    }
-    // N1 do #73 (0039): o banco já gravou aviso e anomaly_alert da transição perigosa; o log com marcador fixo
-    // (só a regra e a transição) alimenta o alarme de operação, como nos alertas do #61.
-    const alertas = await tx.execute<{ transicao: string }>(
-      sql`select metadata->>'transition' as transicao from audit_log
-           where tenant_id = app_current_tenant() and action = 'anomaly_alert' and created_at = now()
-             and metadata->>'rule' = 'portal_sigilo_transicao'`,
-    );
-    for (const a of alertas) this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=${a.transicao}`);
   }
 
   /** Inativar, nunca apagar (retenção por conselho; front-r8 R4). Idempotente. */

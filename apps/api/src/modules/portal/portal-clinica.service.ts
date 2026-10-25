@@ -24,12 +24,14 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
+import { documentoNaoConferido, exigirPerfilQueConfere, nascimentoVigente, recalcularSigiloDoPortal } from '../patients/nascimento-do-cadastro';
 import { patientFieldRef } from '../patients/patient-fields';
 import { aniversarioDe, idadeEm, menorEm, REGRA_INFORMACAO_CLINICA, vigenteEm } from '../patients/responsaveis-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
 import {
   CONSENTIMENTOS,
+  correcaoDeNascimentoExigeDocumento,
   consentimentoIa,
   estadoDoConsentimento,
   eventoVale,
@@ -381,6 +383,9 @@ export class PortalClinicaService {
    * C1 (conferência de 24/10): a correção de nascimento que REDUZ a idade de paciente com 12 anos ou mais só
    * é ATENDIDA com `documentoConferido: true` (quem conferiu e quando ficam no pedido, 0051). C1-b′ (0052): a
    * exigência é a gravada na abertura do pedido; o banco recusa atender sem a conferência gravada.
+   * Conferência 0052: sem a conferência, 422 `documento_nao_conferido` (o mesmo do PATCH); só admin ou
+   * profissional confere (0053, o banco grava o perfil); ATENDER a correção grava a data no cadastro nesta
+   * transação, com o recálculo da 0038/0039 (e a marca de conferência da 0052).
    */
   atualizarPedido(
     ctx: RequestContext,
@@ -396,10 +401,15 @@ export class PortalClinicaService {
       const nasc = await this.nascimentoDoPedido(tx, ctx, r);
       // Conferência de documento só existe em pedido com data proposta.
       if (dados.documentoConferido === true && nasc === null) throw new EntradaInvalidaError(['documentoConferido']);
-      if (dados.situacao === 'atendida' && nasc?.exigeDocumento && dados.documentoConferido !== true && r.documentCheckedAt === null) {
-        throw new EntradaInvalidaError(['documentoConferido']);
-      }
       const conferirAgora = dados.documentoConferido === true && r.documentCheckedAt === null;
+      // 0053: só admin ou profissional declara a conferência (o gatilho grava o perfil e recusa os demais).
+      if (conferirAgora) exigirPerfilQueConfere(ctx);
+      const conferido = conferirAgora || r.documentCheckedAt !== null;
+      // Ressalva 5 (Conferência 0052): ATENDER a correção grava a data proposta no cadastro nesta transação.
+      const aplicar = dados.situacao === 'atendida' && nasc !== null ? await this.prepararNascimento(tx, ctx, r.patientId, nasc.proposto) : null;
+      // A exigência é a gravada na abertura OU, se o cadastro mudou desde então, a regra contra a data de agora
+      // (falha fechada). Mesmo 422 do PATCH (ressalva 3).
+      if (dados.situacao === 'atendida' && (nasc?.exigeDocumento || aplicar?.exigeDocumento) && !conferido) throw documentoNaoConferido();
       const answerEnc = dados.resposta ? await cifrarCampoPortal(this.cipher, tx, ctx.tenantId, ctx.userId, id, 'answer', dados.resposta) : r.answerEnc;
       const [novo] = await tx
         .update(portalRightsRequests)
@@ -413,6 +423,32 @@ export class PortalClinicaService {
         .where(and(eq(portalRightsRequests.tenantId, ctx.tenantId), eq(portalRightsRequests.id, id)))
         .returning();
       if (!novo) throw new NaoEncontradoError();
+      if (aplicar?.mudou) {
+        await tx
+          .update(patients)
+          .set({ birthDateEnc: aplicar.enc, updatedAt: new Date() })
+          .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, r.patientId)));
+        // Mesma trilha do PATCH (só nomes e flags, nunca a data), com o pedido que originou a mudança.
+        await recordAudit(tx, ctx, {
+          action: AuditAction.Update,
+          scope: 'patients',
+          metadata: {
+            patient_id: r.patientId,
+            changed: 'birth_date',
+            request_id: id,
+            document_required: Boolean(nasc?.exigeDocumento || aplicar.exigeDocumento),
+            document_checked: conferido,
+            ...(aplicar.ilegivel ? { birth_date_unreadable: true } : {}),
+          },
+        });
+        // Recálculo da 0038/0039 (e revogação do titular menor, 0050) na mesma transação, com a marca de conferência.
+        await recalcularSigiloDoPortal(tx, this.logger, {
+          pacienteId: r.patientId,
+          nascimento: nasc?.proposto ?? null,
+          emancipadoEm: aplicar.emancipadoEm,
+          documentoConferido: conferido,
+        });
+      }
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: 'portal_rights_requests',
@@ -422,11 +458,42 @@ export class PortalClinicaService {
           to: dados.situacao,
           has_answer: dados.resposta !== undefined,
           patient_id: r.patientId,
-          ...(nasc ? { document_required: nasc.exigeDocumento, document_checked: conferirAgora || r.documentCheckedAt !== null } : {}),
+          ...(nasc ? { document_required: nasc.exigeDocumento, document_checked: conferido } : {}),
+          ...(aplicar ? { birth_date_applied: aplicar.mudou } : {}),
         },
       });
       return this.dto(novo);
     });
+  }
+
+  /**
+   * Ressalva 5 (Conferência 0052): o que o atendimento faz no cadastro. Trava a linha do paciente, decifra a
+   * data vigente (ilegível = desconhecida, falha fechada) e, se a proposta é diferente, cifra a nova e diz se a
+   * regra de agora exige documento. Paciente inativo: 409 `paciente_inativo` (como no PATCH; reative antes).
+   */
+  private async prepararNascimento(
+    tx: TenantTx,
+    ctx: RequestContext,
+    pacienteId: string,
+    proposto: string,
+  ): Promise<{ mudou: boolean; enc: string; exigeDocumento: boolean; ilegivel: boolean; emancipadoEm: string | null }> {
+    const [p] = await tx
+      .select({ ativo: patients.active, nascEnc: patients.birthDateEnc, emancipadoEm: patients.emancipatedOn })
+      .from(patients)
+      .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, pacienteId)))
+      .for('update');
+    if (!p) throw new NaoEncontradoError();
+    const vigente = await nascimentoVigente(this.cipher, tx, ctx.tenantId, pacienteId, p.nascEnc);
+    const mudou = vigente.ilegivel || vigente.valor !== proposto;
+    if (!mudou) return { mudou, enc: p.nascEnc ?? '', exigeDocumento: false, ilegivel: false, emancipadoEm: p.emancipadoEm };
+    if (!p.ativo) throw new ConflitoError('paciente_inativo');
+    return {
+      mudou,
+      enc: await this.cipher.encrypt(tx, patientFieldRef(ctx.tenantId, pacienteId, 'birth_date'), proposto),
+      exigeDocumento: correcaoDeNascimentoExigeDocumento(vigente.valor, proposto, hojeNaClinica()),
+      ilegivel: vigente.ilegivel,
+      emancipadoEm: p.emancipadoEm,
+    };
   }
 
   /**
