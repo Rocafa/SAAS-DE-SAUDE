@@ -88,16 +88,17 @@ describe('validação estrita de pacientes', () => {
     expect(campos(() => validarNovoPaciente({ nome: 'Fulano Ficticio', telefone: '11987654321', documentoConferido: true }))).toEqual(['campo_desconhecido']);
   });
 
-  it('filtro: limite máximo 100, página positiva, busca de 2 a 80 caracteres', () => {
-    expect(validarFiltroPacientes({})).toEqual({ situacao: 'ativos', pagina: 1, limite: 50 });
-    expect(validarFiltroPacientes({ limite: '100', pagina: '3', situacao: 'todos' })).toEqual({
-      limite: 100,
-      pagina: 3,
-      situacao: 'todos',
-    });
+  it('filtro: limite máximo 100; página 2 em diante só por cursor (R5 do parecer #76)', () => {
+    expect(validarFiltroPacientes({})).toEqual({ situacao: 'ativos', limite: 50 });
+    expect(validarFiltroPacientes({ limite: '100', pagina: '1', situacao: 'todos' })).toEqual({ limite: 100, situacao: 'todos' });
+    expect(validarFiltroPacientes({ cursor: 'v1.abc.def' })).toEqual({ situacao: 'ativos', limite: 50, cursor: 'v1.abc.def' });
     expect(campos(() => validarFiltroPacientes({ limite: '101' }))).toEqual(['limite']);
     expect(campos(() => validarFiltroPacientes({ limite: ['1', '2'] }))).toEqual(['limite']);
     expect(campos(() => validarFiltroPacientes({ pagina: '-1' }))).toEqual(['pagina']);
+    expect(campos(() => validarFiltroPacientes({ pagina: '3' }))).toEqual(['pagina']);
+    expect(campos(() => validarFiltroPacientes({ pagina: '1', cursor: 'v1.abc.def' }))).toEqual(['pagina']);
+    expect(campos(() => validarFiltroPacientes({ cursor: ['a', 'b'] }))).toEqual(['cursor']);
+    expect(campos(() => validarFiltroPacientes({ cursor: 'x'.repeat(513) }))).toEqual(['cursor']);
   });
 
   it('termo de busca (ou qualquer texto livre) na query é recusado: a URL vai para logs do ALB/WAF', () => {
@@ -107,13 +108,14 @@ describe('validação estrita de pacientes', () => {
   });
 
   it('busca no corpo: termo de 2 a 80 caracteres, paginação numérica até 100', () => {
-    expect(validarBuscaPacientes({ busca: 'Ána', limite: 100, pagina: 3, situacao: 'todos' })).toEqual({
+    expect(validarBuscaPacientes({ busca: 'Ána', limite: 100, pagina: 1, situacao: 'todos' })).toEqual({
       busca: 'ana',
       limite: 100,
-      pagina: 3,
       situacao: 'todos',
     });
-    expect(validarBuscaPacientes({ busca: 'ana' })).toEqual({ busca: 'ana', situacao: 'ativos', pagina: 1, limite: 50 });
+    expect(validarBuscaPacientes({ busca: 'ana' })).toEqual({ busca: 'ana', situacao: 'ativos', limite: 50 });
+    expect(validarBuscaPacientes({ busca: 'ana', cursor: 'v1.a.b' })).toEqual({ busca: 'ana', situacao: 'ativos', limite: 50, cursor: 'v1.a.b' });
+    expect(campos(() => validarBuscaPacientes({ busca: 'ana', pagina: 3 }))).toEqual(['pagina']);
     expect(campos(() => validarBuscaPacientes({}))).toEqual(['busca']);
     expect(campos(() => validarBuscaPacientes({ busca: 'a' }))).toEqual(['busca']);
     expect(campos(() => validarBuscaPacientes({ busca: 'x'.repeat(81) }))).toEqual(['busca']);

@@ -64,6 +64,18 @@ describe('R5 — limite por usuário na lista/busca de pacientes', () => {
     expect((await api.http().get('/pacientes').set(cab(outro))).status).toBe(200);
   });
 
+  it('cursor recusado (409 cursor_invalido) também conta no limite por usuário (R5 do parecer #76)', async () => {
+    const recep = api.sessao(clinica, 'recepcao');
+    for (let i = 0; i < LIMITE; i++) {
+      const r = await api.http().get('/pacientes').query({ cursor: `v1.forjado${i}.assinatura` }).set(cab(recep));
+      expect(r.status).toBe(409);
+      expect(r.body).toEqual({ statusCode: 409, message: 'Conflito', codigo: 'cursor_invalido' });
+    }
+    expect((await api.http().get('/pacientes').query({ cursor: 'v1.x.y' }).set(cab(recep))).status).toBe(429);
+    const regras = (await alertas(clinica, recep.userId)).map((l) => l.metadata.rule);
+    expect(regras).toContain('limite_por_usuario');
+  });
+
   it('o mesmo usuário em outra clínica não compartilha o contador (chave por clínica + usuário)', async () => {
     const userIdQualquer = api.sessao(outraClinica, 'recepcao');
     for (let i = 0; i < LIMITE; i++) expect((await api.http().get('/pacientes').set(cab(userIdQualquer))).status).toBe(200);

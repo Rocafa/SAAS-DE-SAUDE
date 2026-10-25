@@ -4,6 +4,8 @@ import { ehDataValida, EntradaInvalidaError, exigirObjeto, Validador } from '../
 export const LIMITE_PADRAO = 50;
 export const LIMITE_MAXIMO = 100;
 export const PAGINA_MAXIMA = 1000;
+/** Tamanho máximo do cursor opaco (R5 do parecer #76); o real fica perto de 250 caracteres. */
+export const CURSOR_MAX = 512;
 
 export interface NovoPaciente {
   readonly nome: string;
@@ -29,8 +31,18 @@ export interface AlteracaoPaciente {
 export interface FiltroPacientes {
   readonly busca?: string;
   readonly situacao: 'ativos' | 'inativos' | 'todos';
-  readonly pagina: number;
   readonly limite: number;
+  /** Cursor opaco da página anterior (`proximoCursor`); ausente = primeira página. */
+  readonly cursor?: string;
+}
+
+/**
+ * Página 2 em diante só por cursor (R5 do parecer #76): `pagina` aceita só 1 (compatibilidade da
+ * primeira página) e não vem junto com `cursor`.
+ */
+function paginacao(v: Validador, pagina: number | undefined, cursor: string | undefined): { cursor?: string } {
+  if (pagina !== undefined && (pagina !== 1 || cursor !== undefined)) v.falhar('pagina');
+  return cursor !== undefined ? { cursor } : {};
 }
 
 /** Só dígitos; CPF com dígitos verificadores corretos e sem sequência repetida. */
@@ -128,7 +140,7 @@ export function validarAlteracaoPaciente(corpo: unknown): AlteracaoPaciente {
  */
 export const TEXTO_LIVRE_NA_URL = ['busca', 'q', 'termo', 'nome', 'nomeSocial', 'cpf', 'telefone', 'nascimento'] as const;
 
-/** `GET /pacientes`: só situação e paginação na query; termo de busca na URL é recusado (400). */
+/** `GET /pacientes`: só situação e paginação (limite, cursor) na query; termo de busca na URL é recusado (400). */
 export function validarFiltroPacientes(query: unknown): FiltroPacientes {
   if (
     typeof query === 'object' &&
@@ -137,24 +149,28 @@ export function validarFiltroPacientes(query: unknown): FiltroPacientes {
   ) {
     throw new EntradaInvalidaError(['busca_na_url']);
   }
-  const v = new Validador(exigirObjeto(query ?? {}, ['situacao', 'pagina', 'limite']));
+  const v = new Validador(exigirObjeto(query ?? {}, ['situacao', 'pagina', 'limite', 'cursor']));
   const situacao = v.umDe('situacao', ['ativos', 'inativos', 'todos'] as const, false) ?? 'ativos';
-  const pagina = v.inteiroDeTexto('pagina', { min: 1, max: PAGINA_MAXIMA, padrao: 1 });
+  const pagina = v.tem('pagina') ? v.inteiroDeTexto('pagina', { min: 1, max: PAGINA_MAXIMA, padrao: 1 }) : undefined;
   const limite = v.inteiroDeTexto('limite', { min: 1, max: LIMITE_MAXIMO, padrao: LIMITE_PADRAO });
+  const cursor = v.texto('cursor', { max: CURSOR_MAX });
+  const extra = paginacao(v, pagina, cursor);
   v.concluir();
-  return { situacao, pagina, limite };
+  return { situacao, limite, ...extra };
 }
 
 /** `POST /pacientes/busca`: termo (2 a 80 caracteres) obrigatório no corpo; paginação como no GET. */
 export function validarBuscaPacientes(corpo: unknown): FiltroPacientes & { readonly busca: string } {
-  const v = new Validador(exigirObjeto(corpo, ['busca', 'situacao', 'pagina', 'limite']));
+  const v = new Validador(exigirObjeto(corpo, ['busca', 'situacao', 'pagina', 'limite', 'cursor']));
   const busca = v.texto('busca', { min: 2, max: 80, obrigatorio: true });
   const situacao = v.umDe('situacao', ['ativos', 'inativos', 'todos'] as const, false) ?? 'ativos';
-  const pagina = v.inteiro('pagina', { min: 1, max: PAGINA_MAXIMA }) ?? 1;
+  const pagina = v.inteiro('pagina', { min: 1, max: PAGINA_MAXIMA });
   const limite = v.inteiro('limite', { min: 1, max: LIMITE_MAXIMO }) ?? LIMITE_PADRAO;
+  const cursor = v.texto('cursor', { max: CURSOR_MAX });
+  const extra = paginacao(v, pagina, cursor);
   v.concluir();
   const normal = normalizarBusca(busca);
   // Termo só de acentos/espaços fica vazio depois de normalizar: seria "listar tudo" disfarçado.
   if (normal.length < 2) throw new EntradaInvalidaError(['busca']);
-  return { busca: normal, situacao, pagina, limite };
+  return { busca: normal, situacao, limite, ...extra };
 }

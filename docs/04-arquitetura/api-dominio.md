@@ -64,8 +64,8 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | `GET /sessao` | todos | `usuarioAtual` | ids e perfis; o nome do usuário entra com o provedor real |
 | `GET /clinica/vinculo-de-cuidado` | cadastros:ler | — | `{dias, teto}` da janela de continuidade do vínculo |
 | `PUT /clinica/vinculo-de-cuidado` | cadastros:gerir | — | `{dias}` inteiro 1..180; auditado com valor anterior e novo |
-| `GET /pacientes?situacao&pagina&limite` | pacientes:ler | `listarPacientes` (sem termo) | `limite` ≤ 100 (padrão 50); item = `{id, nome, nomeSocial, ativo}`; `busca` (ou `q`, `termo`, `nome`, `cpf`, `telefone`...) na query = 400 `busca_na_url` |
-| `POST /pacientes/busca` | pacientes:ler | `listarPacientes` (com termo) | corpo `{busca, situacao?, pagina?, limite?}`; 200; busca sem acento, 2–80 caracteres; `pagina`/`limite` numéricos, `limite` ≤ 100; auditoria só com contagem, página e "houve busca" |
+| `GET /pacientes?situacao&limite&cursor` | pacientes:ler | `listarPacientes` (sem termo) | `limite` ≤ 100 (padrão 50); item = `{id, nome, nomeSocial, ativo}`; resposta `{itens, pagina, limite, temMais, proximoCursor}`; página 2 em diante **só por cursor** (§3b); `busca` (ou `q`, `termo`, `nome`, `cpf`, `telefone`...) na query = 400 `busca_na_url` |
+| `POST /pacientes/busca` | pacientes:ler | `listarPacientes` (com termo) | corpo `{busca, situacao?, limite?, cursor?}`; 200; busca sem acento, 2–80 caracteres; `limite` numérico ≤ 100; cursor como no GET (§3b), amarrado também ao termo; auditoria só com contagem, página e "houve busca" |
 | `GET /pacientes/:id` | pacientes:ler | `obterPaciente` | traz CPF, telefone e nascimento decifrados |
 | `POST /pacientes` | pacientes:escrever | (cadastro) | obrigatórios: `nome`, `telefone`; opcionais: `nomeSocial`, `cpf` (com DV), `nascimento` |
 | `PATCH /pacientes/:id` | pacientes:escrever | (edição) | `null` limpa campo opcional; paciente inativo dá 409 |
@@ -93,6 +93,21 @@ A paginação deixaria um usuário raspar a base inteira. Código: `apps/api/src
 - **Alerta:** um evento `anomaly_alert` por regra e janela na trilha da clínica (migração `0010_alerta_de_anomalia.sql`), com o próprio usuário como ator e metadata só `{rule, window_s, threshold, count}`. Nunca id de paciente, nome ou termo de busca (teste confere). Grava em transação própria, para ficar mesmo quando a resposta é 429. Log com marcador fixo `ALERTA_ANOMALIA regra=...` para o alarme de operação.
 - Store fora do ar: cai para memória; se mesmo assim falhar, a leitura segue com log `RATE_LIMIT_FAIL_OPEN` (mesma política do limite por IP).
 - Provas: `test/vigilancia-pacientes.rls.test.ts`.
+
+### 3b. Cursor de paginação assinado (R5 do parecer PR #76, rodada 26)
+
+Problema: a página seguinte era pedida por número e respondida com a clínica do cookie daquele momento. Se a sessão trocasse A→B→A durante a paginação (outra aba), páginas de B se misturavam à lista de A no cliente. A conferência de sessão do front fecha quase tudo; a correção completa é no servidor. Código: `apps/api/src/modules/patients/cursor-de-paginacao.ts`; contrato em `packages/shared/src/paginacao.ts` (`PaginaPorCursor`, `CURSOR_INVALIDO`).
+
+- **Primeira página:** sem `cursor` (e sem `pagina`, ou `pagina=1`, por compatibilidade). `pagina` > 1 = 400 `pagina`; `pagina` junto com `cursor` = 400 `pagina`.
+- **Próximas páginas:** `cursor` = `proximoCursor` da resposta anterior, com o **mesmo** `situacao`, `limite` e (na busca) o mesmo `busca`. `proximoCursor` é `null` quando `temMais` é false. A lista segue por keyset (`search_name`, `id`) a partir do último paciente da página anterior, então não repete nem pula quando entra paciente novo no meio.
+- **Formato:** `v1.<payload base64url>.<HMAC-SHA256 base64url>`, até 512 caracteres. Payload = `{c: clínica, u: usuário, e: validade (s), p: página, k: id do último paciente}`: só ids técnicos e posição. **Nenhum dado pessoal.** O filtro (situação, limite e o termo normalizado) entra só no HMAC, nunca no payload, então cursor de outra busca falha sem expor o termo. O escopo `pacientes` também entra no HMAC (cursor de uma lista não serve em outra).
+- **Validade:** 10 minutos a partir da emissão, renovada a cada página.
+- **Recusa:** cursor de outra clínica, de outro usuário, de outro filtro, vencido, adulterado, com âncora que não existe mais ou ilegível = **409 `{codigo: 'cursor_invalido'}`**, sem dados e sem dizer o motivo. O motivo vai só para o log, com marcador fixo `CURSOR_INVALIDO motivo=formato|assinatura|outra_clinica|outro_usuario|vencido`, sem id. O cursor é conferido antes de abrir a transação: recusa não lê nada nem grava auditoria de leitura.
+- **Vigilância (§3a):** a chamada conta no limite por usuário e no padrão de páginas **antes** da conferência do cursor. Cursor recusado também conta (não dá para usar 409 para fugir do limite).
+- **Segredo:** `PAGINATION_CURSOR_KEY` (≥ 32 bytes), obrigatório em produção (a API não sobe sem ele), igual em todas as instâncias, vindo do Secrets Manager. Fora de produção, sem a variável, usa um segredo aleatório do processo. Trocar o segredo só invalida cursores em uso (o cliente recomeça a lista).
+- **Cliente:** ao receber 409 `cursor_invalido`, descarta as páginas já juntadas (não guarda nem entrega) e recomeça da primeira página, depois de conferir a sessão.
+- **Agenda:** `GET /agendamentos` não pagina (janela `de`/`ate` ≤ 31 dias, teto de 1000 linhas com `truncado`), então não tem cursor.
+- Provas: `src/modules/patients/cursor-de-paginacao.test.ts` (unidade) e `test/pacientes-cursor.rls.test.ts` (caminho feliz, A→B→A, outro usuário, outro filtro, adulterado, vencido); a contagem na vigilância em `test/vigilancia-pacientes.rls.test.ts`.
 
 **Capacidade (AGD-01.5):** vagas do horário = menor entre a capacidade do profissional e a do tipo. Contam os agendamentos não cancelados e sem falta que se sobrepõem; a checagem roda sob trava por profissional (duas recepções ao mesmo tempo não estouram a vaga). Encaixe ignora a capacidade e fica marcado.
 

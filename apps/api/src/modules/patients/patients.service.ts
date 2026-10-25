@@ -1,8 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, eq, like, type SQL } from 'drizzle-orm';
+import { AuditAction, type PaginaPorCursor, type RequestContext, type TenantId } from '@plataforma/shared';
+import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { CURSOR_DE_PAGINACAO, CursorDePaginacao, CursorInvalidoError, type PosicaoDoCursor } from './cursor-de-paginacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -18,6 +19,7 @@ import { correcaoDeNascimentoExigeDocumento } from '../portal/portal-regras';
 import { documentoNaoConferido, exigirPerfilQueConfere, nascimentoVigente, recalcularSigiloDoPortal } from './nascimento-do-cadastro';
 import {
   normalizarBusca,
+  PAGINA_MAXIMA,
   type AlteracaoPaciente,
   type FiltroPacientes,
   type NovoPaciente,
@@ -42,12 +44,8 @@ export interface PacienteResumoDto {
   readonly ativo: boolean;
 }
 
-export interface PaginaDePacientes {
-  readonly itens: readonly PacienteResumoDto[];
-  readonly pagina: number;
-  readonly limite: number;
-  readonly temMais: boolean;
-}
+/** Página com `proximoCursor` opaco e assinado (R5 do parecer #76; contrato em `@plataforma/shared`). */
+export type PaginaDePacientes = PaginaPorCursor<PacienteResumoDto>;
 
 const SCOPE = 'patients';
 
@@ -70,15 +68,33 @@ export class PatientsService {
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
+    @Inject(CURSOR_DE_PAGINACAO) private readonly cursor: CursorDePaginacao,
   ) {
     this.indiceCpf = new IndiceCegoCpf(cipher);
   }
 
-  listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
+  /**
+   * Lista por keyset (nome de busca, id). A página 2 em diante só sai com cursor assinado desta sessão
+   * e deste filtro (R5 do parecer #76); o cursor é conferido ANTES de abrir a transação, então cursor
+   * recusado não lê nada nem grava auditoria de leitura (a vigilância já contou a chamada).
+   */
+  async listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
+    const amarra = { situacao: filtro.situacao, limite: filtro.limite, ...(filtro.busca !== undefined ? { busca: filtro.busca } : {}) };
+    const posicao: PosicaoDoCursor | undefined = filtro.cursor === undefined ? undefined : this.cursor.ler(ctx, amarra, filtro.cursor);
+    const pagina = posicao?.pagina ?? 1;
     return this.leitura(ctx, async (tx) => {
       const condicoes: SQL[] = [eq(patients.tenantId, ctx.tenantId)];
       if (filtro.situacao !== 'todos') condicoes.push(eq(patients.active, filtro.situacao === 'ativos'));
       if (filtro.busca) condicoes.push(like(patients.searchName, padraoContem(filtro.busca)));
+      if (posicao) {
+        // Âncora pelo id técnico (o nome nunca vai no cursor). Âncora sumida = cursor recusado.
+        const [ancora] = await tx
+          .select({ nome: patients.searchName, id: patients.id })
+          .from(patients)
+          .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, posicao.depoisDe)));
+        if (!ancora) throw new CursorInvalidoError();
+        condicoes.push(sql`(${patients.searchName}, ${patients.id}) > (${ancora.nome}, ${ancora.id}::uuid)`);
+      }
       const linhas = await tx
         .select({
           id: patients.id,
@@ -89,17 +105,18 @@ export class PatientsService {
         .from(patients)
         .where(and(...condicoes))
         .orderBy(asc(patients.searchName), asc(patients.id))
-        .limit(filtro.limite + 1)
-        .offset((filtro.pagina - 1) * filtro.limite);
-      const temMais = linhas.length > filtro.limite;
+        .limit(filtro.limite + 1);
       const itens = linhas.slice(0, filtro.limite);
+      // Limite de páginas como antes (PAGINA_MAXIMA): depois da última permitida não há cursor.
+      const temMais = linhas.length > filtro.limite && pagina < PAGINA_MAXIMA;
       // O termo de busca é nome de paciente: não entra na auditoria, só o fato de ter havido busca.
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE,
-        metadata: { count: itens.length, page: filtro.pagina, search: filtro.busca !== undefined },
+        metadata: { count: itens.length, page: pagina, search: filtro.busca !== undefined },
       });
-      return { itens, pagina: filtro.pagina, limite: filtro.limite, temMais };
+      const proximoCursor = temMais ? this.cursor.assinar(ctx, amarra, { pagina: pagina + 1, depoisDe: itens[itens.length - 1]!.id }) : null;
+      return { itens, pagina, limite: filtro.limite, temMais, proximoCursor };
     });
   }
 

@@ -24,6 +24,7 @@ import { createPortalAuthProvider, type PortalAuthProvider } from './modules/por
 import { PortalModule } from './modules/portal/portal.module';
 import { createPortalOtpSender, type PortalOtpSender } from './modules/portal/portal-otp';
 import { loadPortalLimites, type PortalLimites } from './modules/portal/portal-vigilancia';
+import { loadPaginationCursorKey } from './modules/patients/cursor-de-paginacao';
 import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
@@ -75,6 +76,8 @@ export class AppModule {
       store,
       fecharStore: adapters.rateLimitStore === undefined,
       hashKey: loadRateLimitHashKey(process.env),
+      // Segredo do cursor da lista (R5 do parecer #76); obrigatório em produção.
+      cursorKey: loadPaginationCursorKey(process.env),
       config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),
     });
     return {
