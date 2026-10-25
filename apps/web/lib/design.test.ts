@@ -3,12 +3,13 @@
  * de texto >= 7:1 (AAA) no claro e no escuro. O CSS final do build é conferido por
  * scripts/checar-cinza.mjs (roda no "pnpm build") e as telas renderizadas pelo Playwright.
  */
+import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { contraste, coresNaoCinza } from './cores.mjs';
 
-const raiz = new URL('..', import.meta.url).pathname;
+const raiz = fileURLToPath(new URL('..', import.meta.url));
 const css = readFileSync(join(raiz, 'app/globals.css'), 'utf8');
 
 function tokens(bloco: string): Record<string, string> {

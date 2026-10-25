@@ -2,11 +2,12 @@
  * O texto digitado no Ajudante é dado pessoal ("achar Maria Silva"). Ele NÃO pode ir para log,
  * analytics, console, armazenamento do navegador nem rede. Este teste varre o código do Ajudante.
  */
+import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const raiz = new URL('..', import.meta.url).pathname;
+const raiz = fileURLToPath(new URL('..', import.meta.url));
 const ARQUIVOS = [
   'components/app/ajudante.tsx',
   'components/app/executor.tsx',
