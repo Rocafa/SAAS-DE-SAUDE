@@ -983,6 +983,11 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   documentCheckedBy: uuid('document_checked_by'),
   documentCheckedAt: timestamp('document_checked_at', { withTimezone: true }),
   /**
+   * 0053: perfil de quem conferiu (`admin` | `profissional`), preenchido PELO GATILHO a partir de clinic_members
+   * (nunca pela API); imutável. Nulo em conferência anterior à 0053.
+   */
+  documentCheckedRole: text('document_checked_role').$type<'admin' | 'profissional'>(),
+  /**
    * 0052 (C1-b′): a correção de nascimento exige documento conferido? Decidido NA ABERTURA, contra a data
    * vigente naquele momento; imutável. Omitido na gravação: o gatilho preenche (falha fechada).
    */
