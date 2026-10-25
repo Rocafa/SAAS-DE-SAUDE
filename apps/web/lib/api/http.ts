@@ -14,9 +14,15 @@
  *   nascimento só chegam no detalhe (`obterPaciente`), que a API audita por paciente.
  * - Agenda sempre por período limitado: sem `de`/`ate`, usa a janela padrão (−30/+90 dias);
  *   períodos longos são quebrados em janelas de até 31 dias (limite da API), com teto de 180 dias.
+ * - Rodada 19+ (#73): a API conta lista/busca por usuário (429 `limite_por_usuario`, 60/min; alerta de
+ *   anomalia acima de 40 páginas em 10 min). Por isso o retrato de pacientes fica em memória por
+ *   `RETRATO_TTL_MS` e chamadas simultâneas compartilham a mesma ida ao servidor; cadastrar, alterar e
+ *   inativar invalidam o retrato. Mudar o nascimento pode exigir a conferência de documento (422
+ *   `documento_nao_conferido`; só admin ou profissional declara: 403 `conferencia_exige_perfil`).
  */
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import type {
+  AlteracaoPaciente,
   Agendamento,
   NovoAgendamento,
   NovoPaciente,
@@ -37,6 +43,7 @@ export type ApiHttpPacientesAgenda = Pick<
   | 'listarPacientes'
   | 'obterPaciente'
   | 'criarPaciente'
+  | 'alterarPaciente'
   | 'removerPaciente'
   | 'inativarPaciente'
   | 'reativarPaciente'
@@ -69,6 +76,8 @@ export interface OpcoesHttp {
   aoPerderSessao?: () => void;
   /** Para testes de data. */
   agora?: () => Date;
+  /** Para testes: validade do retrato de pacientes em memória, em ms (padrão `RETRATO_TTL_MS`). */
+  retratoTtlMs?: number;
 }
 
 /** Erro com mensagem pronta para a tela. Nunca carrega valor de campo nem corpo da resposta. */
@@ -93,6 +102,16 @@ export const MENSAGENS = {
   transicao: 'Não dá para mudar para esse estado agora. Atualize a tela e confira o horário.',
   conflito: 'Alguém mudou esse registro agora mesmo. Atualize a tela e tente de novo.',
   muitas: 'Muitas tentativas seguidas. Espere um minuto e tente de novo.',
+  limiteUsuario: 'Você abriu muitas listas de pacientes em pouco tempo. Espere um minuto e tente de novo.',
+  passado: 'Esse horário já passou. Escolha um horário a partir de agora.',
+  foraDoHorario:
+    'Só dá para mudar esse atendimento perto do horário da consulta. Para corrigir um registro antigo, fale com o administrador.',
+  documentoNaoConferido:
+    'Para mudar a data de nascimento, confira o documento original do paciente e marque “Conferi o documento original”. Só o administrador ou o profissional pode fazer isso.',
+  conferenciaPerfil: 'Só o administrador ou o profissional pode confirmar que conferiu o documento. Peça a um deles.',
+  perfilNaoRegistrado: 'Seu perfil não está registrado nesta clínica. Peça ao administrador para conferir seu acesso.',
+  regra: 'Falta cumprir uma regra antes de salvar. Confira os dados e tente de novo.',
+  nadaMudou: 'Nada mudou. Confira os dados e tente de novo.',
   indisponivel: 'O sistema está passando por manutenção. Tente de novo em alguns instantes.',
   servidor: 'Não conseguimos falar com o servidor.',
   rede: 'Não conseguimos falar com o servidor. Confira a internet e tente de novo.',
@@ -118,6 +137,7 @@ const NOMES_CAMPOS: Record<string, string> = {
   profissionalId: 'profissional',
   tipoId: 'tipo de atendimento',
   status: 'situação',
+  documentoConferido: 'conferência do documento',
   busca: 'busca',
   de: 'período',
   ate: 'período',
@@ -137,6 +157,8 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
   if (status === 401) return new ErroApi(MENSAGENS.sessao, 401);
   if (status === 403) {
     if (codigo === 'assinatura_bloqueia_escrita' || codigo === 'janela_de_saida_encerrada') return new ErroApi(MENSAGENS.assinatura, 403, codigo);
+    if (codigo === 'conferencia_exige_perfil') return new ErroApi(MENSAGENS.conferenciaPerfil, 403, codigo);
+    if (codigo === 'perfil_nao_registrado') return new ErroApi(MENSAGENS.perfilNaoRegistrado, 403, codigo);
     return new ErroApi(MENSAGENS.proibido, 403, codigo);
   }
   if (status === 404) return new ErroApi(MENSAGENS.naoEncontrado, 404);
@@ -144,9 +166,18 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
     if (codigo === 'horario_lotado') return new ErroApi(MENSAGENS.lotado, 409, codigo);
     if (codigo === 'paciente_inativo') return new ErroApi(MENSAGENS.inativo, 409, codigo);
     if (codigo === 'transicao_invalida' || codigo === 'status_nao_permite') return new ErroApi(MENSAGENS.transicao, 409, codigo);
+    if (codigo === 'horario_no_passado') return new ErroApi(MENSAGENS.passado, 409, codigo);
+    if (codigo === 'fora_do_horario') return new ErroApi(MENSAGENS.foraDoHorario, 409, codigo);
     return new ErroApi(MENSAGENS.conflito, 409, codigo);
   }
-  if (status === 429) return new ErroApi(MENSAGENS.muitas, 429);
+  if (status === 422) {
+    if (codigo === 'documento_nao_conferido') return new ErroApi(MENSAGENS.documentoNaoConferido, 422, codigo);
+    return new ErroApi(MENSAGENS.regra, 422, codigo);
+  }
+  if (status === 429) {
+    if (codigo === 'limite_por_usuario') return new ErroApi(MENSAGENS.limiteUsuario, 429, codigo);
+    return new ErroApi(MENSAGENS.muitas, 429);
+  }
   if (status === 503) return new ErroApi(MENSAGENS.indisponivel, 503);
   return new ErroApi(MENSAGENS.servidor, status);
 }
@@ -160,6 +191,11 @@ const PERIODO_MAXIMO_DIAS = 180;
 /** Retrato de pacientes: até 10 páginas de 100 (1000 nomes); a busca da tela vai ao servidor. */
 const PAGINAS_MAXIMAS_INDICE = 10;
 const LIMITE_PAGINA = 100;
+/**
+ * Validade do retrato de pacientes em memória (ms). Clínica com 1000 nomes = 10 páginas por retrato:
+ * no máximo 20 páginas em 10 min só com o retrato, abaixo do alerta de anomalia da API (40).
+ */
+export const RETRATO_TTL_MS = 5 * 60_000;
 
 function isoDia(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -227,6 +263,25 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
   const fazerFetch = opcoes.fetch ?? globalThis.fetch.bind(globalThis);
   const timeoutMs = opcoes.timeoutMs ?? 10_000;
   const agora = opcoes.agora ?? (() => new Date());
+  const retratoTtlMs = opcoes.retratoTtlMs ?? RETRATO_TTL_MS;
+  /** Retrato compartilhado: a promessa em andamento ou já resolvida, com o instante em que nasceu. */
+  let retrato: { promessa: Promise<Paciente[]>; desde: number } | null = null;
+  function invalidarRetrato() {
+    retrato = null;
+  }
+  function retratoDePacientes(): Promise<Paciente[]> {
+    const t = agora().getTime();
+    if (!retrato || t - retrato.desde >= retratoTtlMs) {
+      const atual = { promessa: paginasDePacientes(), desde: t };
+      retrato = atual;
+      // Falhou: não guarda o erro (a próxima tela tenta de novo).
+      atual.promessa.catch(() => {
+        if (retrato === atual) retrato = null;
+      });
+    }
+    // Cópia: uma tela não altera o retrato da outra.
+    return retrato.promessa.then((l) => l.map((p) => ({ ...p })));
+  }
   /** Séries criadas nesta aba (para o "Desfazer"): a API ainda não tem série. */
   const series = new Map<string, string[]>();
   let seqSerie = 0;
@@ -258,7 +313,10 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     if (!resposta.ok) {
       const corpoErro: unknown = await resposta.json().catch(() => null);
       const erro = mensagemDeErro(resposta.status, corpoErro);
-      if (resposta.status === 401) opcoes.aoPerderSessao?.();
+      if (resposta.status === 401) {
+        invalidarRetrato();
+        opcoes.aoPerderSessao?.();
+      }
       throw erro;
     }
     if (resposta.status === 204) return undefined as T;
@@ -350,7 +408,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       // O nome do usuário e da clínica chegam com o provedor real (D4).
       return { id: s.usuarioId, nome: 'Você', papel: papelDosPerfis(s.perfis), clinica: '', clinicaId: s.clinicaId };
     },
-    listarPacientes: () => paginasDePacientes(),
+    listarPacientes: retratoDePacientes,
     async buscarPacientes(termo: string) {
       const t = termo.trim().replace(/\s+/g, ' ');
       if (t.length < 2) return [];
@@ -371,15 +429,33 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       if (dados.nomeSocial?.trim()) corpo.nomeSocial = dados.nomeSocial.trim();
       if (dados.cpf?.trim()) corpo.cpf = dados.cpf.trim();
       if (dados.nascimento?.trim()) corpo.nascimento = dados.nascimento.trim();
-      return paraPaciente(await chamar<PacienteApi>('POST', '/pacientes', corpo));
+      const p = paraPaciente(await chamar<PacienteApi>('POST', '/pacientes', corpo));
+      invalidarRetrato();
+      return p;
+    },
+    async alterarPaciente(id, dados: AlteracaoPaciente) {
+      if (!UUID_RE.test(id)) throw new ErroApi(MENSAGENS.naoEncontrado, 404);
+      const corpo: Record<string, string | boolean | null> = {};
+      if (dados.telefone !== undefined) corpo.telefone = dados.telefone.trim();
+      if (dados.nascimento !== undefined) {
+        corpo.nascimento = dados.nascimento?.trim() || null;
+        // A API recusa `documentoConferido` sem `nascimento`; só vai quando a pessoa marcou.
+        if (dados.documentoConferido) corpo.documentoConferido = true;
+      }
+      if (!Object.keys(corpo).length) throw new ErroApi(MENSAGENS.nadaMudou, 400);
+      const p = paraPaciente(await chamar<PacienteApi>('PATCH', `/pacientes/${encodeURIComponent(id)}`, corpo));
+      invalidarRetrato();
+      return p;
     },
     // A API não apaga paciente (retenção, R4): o "Desfazer" do cadastro inativa.
     async removerPaciente(id) {
       await chamar('POST', `/pacientes/${encodeURIComponent(id)}/inativar`, {});
+      invalidarRetrato();
     },
     // O motivo ainda não é gravado pela API; fica só na tela.
     async inativarPaciente(id) {
       await chamar('POST', `/pacientes/${encodeURIComponent(id)}/inativar`, {});
+      invalidarRetrato();
     },
     reativarPaciente: () => Promise.reject(new ErroApi(MENSAGENS.semReativar, 501)),
     async listarProfissionais(): Promise<Profissional[]> {

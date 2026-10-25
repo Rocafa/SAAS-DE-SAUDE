@@ -1,4 +1,5 @@
 import type {
+  AlteracaoPaciente,
   Agendamento,
   Anexo,
   EventoLinhaTempo,
@@ -60,6 +61,11 @@ export interface ApiClinica {
   devolverEspera(item: ItemEspera): Promise<void>;
 
   criarPaciente(dados: NovoPaciente): Promise<Paciente>;
+  /**
+   * Corrige telefone e/ou nascimento. Mudar o nascimento pode exigir `documentoConferido` (só admin ou
+   * profissional): sem ela, erro com a mensagem de conferência (422 `documento_nao_conferido` na API).
+   */
+  alterarPaciente(id: string, dados: AlteracaoPaciente): Promise<Paciente>;
   removerPaciente(id: string): Promise<void>;
   inativarPaciente(id: string, motivo: string): Promise<void>;
   reativarPaciente(id: string): Promise<void>;

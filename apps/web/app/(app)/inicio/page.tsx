@@ -4,7 +4,7 @@ import { CalendarPlus, CheckCircle2, Clock, DoorOpen, ListChecks, Phone, UserChe
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useDados, useConsulta } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { useAcao, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
@@ -22,6 +22,7 @@ interface DadosHoje {
 export default function PaginaInicio() {
   const { api, atualizar } = useDados();
   const avisar = useAviso();
+  const acao = useAcao();
   const agora = new Date();
   const dia = paraIsoLocal(agora);
   const consulta = useConsulta<DadosHoje>(async (a) => {
@@ -39,15 +40,17 @@ export default function PaginaInicio() {
     };
   }, [dia]);
 
-  async function mudarStatus(a: Agendamento, status: StatusAgendamento, texto: string) {
-    const anterior = await api.alterarStatus(a.id, status);
-    atualizar();
-    avisar({
-      texto,
-      desfazer: async () => {
-        await api.alterarStatus(a.id, anterior);
-        atualizar();
-      },
+  function mudarStatus(a: Agendamento, status: StatusAgendamento, texto: string) {
+    return acao(async () => {
+      const anterior = await api.alterarStatus(a.id, status);
+      atualizar();
+      avisar({
+        texto,
+        desfazer: async () => {
+          await api.alterarStatus(a.id, anterior);
+          atualizar();
+        },
+      });
     });
   }
 

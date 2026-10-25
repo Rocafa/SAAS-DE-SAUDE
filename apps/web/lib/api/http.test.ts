@@ -4,7 +4,7 @@
  * NENHUM cabeçalho, query ou corpo leva tenant/clínica. Dados 100% fictícios.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { criarApiHttp, ErroApi, JANELA_PADRAO, MENSAGENS, mensagemDeErro } from './http';
+import { criarApiHttp, ErroApi, JANELA_PADRAO, MENSAGENS, mensagemDeErro, RETRATO_TTL_MS } from './http';
 import { criarApi, lerConfigApi, paraIndice } from './selecionar';
 
 const BASE = 'http://127.0.0.1:3333';
@@ -244,6 +244,80 @@ describe('adaptador HTTP: agenda', () => {
   });
 });
 
+describe('adaptador HTTP: rodada 19+ (retrato e correção de cadastro)', () => {
+  const PAC = { id: U(1), nome: 'Paciente Ficticio', nomeSocial: null, cpf: null, telefone: '11900000001', nascimento: '2000-01-01', ativo: true };
+
+  it('retrato de pacientes: telas simultâneas e seguidas dividem a mesma ida ao servidor (limite por usuário)', async () => {
+    let t = AGORA.getTime();
+    const { chamadas, fetch } = simular(() => respostaJson(200, { itens: [{ id: U(1), nome: 'A', nomeSocial: null, ativo: true }], temMais: false }));
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => new Date(t) });
+    const [a, b] = await Promise.all([api.listarPacientes(), api.listarPacientes()]);
+    await api.listarPacientes();
+    expect(chamadas).toHaveLength(1);
+    // Cópias: mexer numa não muda a outra.
+    a[0]!.nome = 'mudado';
+    expect(b[0]!.nome).toBe('A');
+    expect((await api.listarPacientes())[0]!.nome).toBe('A');
+    t += RETRATO_TTL_MS;
+    await api.listarPacientes();
+    expect(chamadas).toHaveLength(2);
+  });
+
+  it('cadastrar, alterar e inativar invalidam o retrato; erro não fica guardado', async () => {
+    let falhar = true;
+    const { chamadas, fetch } = simular((c) => {
+      if (c.metodo === 'GET' && c.url.pathname === '/pacientes') {
+        if (falhar) return respostaJson(503, {});
+        return respostaJson(200, { itens: [], temMais: false });
+      }
+      if (c.url.pathname.endsWith('/inativar')) return respostaJson(204, undefined);
+      return respostaJson(c.metodo === 'POST' ? 201 : 200, PAC);
+    });
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await expect(api.listarPacientes()).rejects.toThrow(MENSAGENS.indisponivel);
+    falhar = false;
+    await api.listarPacientes();
+    await api.criarPaciente({ nome: 'Paciente Ficticio', telefone: '(11) 90000-0001' });
+    await api.listarPacientes();
+    await api.alterarPaciente(U(1), { telefone: '(11) 90000-0002' });
+    await api.listarPacientes();
+    await api.inativarPaciente(U(1), 'Outro');
+    await api.listarPacientes();
+    expect(chamadas.filter((c) => c.metodo === 'GET' && c.url.pathname === '/pacientes')).toHaveLength(5);
+  });
+
+  it('alterarPaciente: PATCH com só o que mudou; conferência só acompanha o nascimento', async () => {
+    const { chamadas, fetch } = simular(() => respostaJson(200, PAC));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await api.alterarPaciente(U(1), { telefone: ' (11) 90000-0002 ', documentoConferido: true });
+    await api.alterarPaciente(U(1), { nascimento: '2015-03-04', documentoConferido: true });
+    await api.alterarPaciente(U(1), { nascimento: '' });
+    expect(chamadas.map((c) => [c.metodo, c.url.pathname])).toEqual([
+      ['PATCH', `/pacientes/${U(1)}`],
+      ['PATCH', `/pacientes/${U(1)}`],
+      ['PATCH', `/pacientes/${U(1)}`],
+    ]);
+    expect(chamadas.map((c) => c.corpo)).toEqual([
+      { telefone: '(11) 90000-0002' },
+      { nascimento: '2015-03-04', documentoConferido: true },
+      { nascimento: null },
+    ]);
+    for (const c of chamadas) expect(`${c.url.search} ${JSON.stringify(c.corpo)}`.toLowerCase()).not.toMatch(/tenant|clinica/);
+    await expect(api.alterarPaciente(U(1), {})).rejects.toThrow(MENSAGENS.nadaMudou);
+    await expect(api.alterarPaciente('p01', { telefone: '1' })).rejects.toThrow(MENSAGENS.naoEncontrado);
+    expect(chamadas).toHaveLength(3);
+  });
+
+  it('422 documento_nao_conferido chega à tela com a mensagem de conferência e o código', async () => {
+    const { fetch } = simular(() => respostaJson(422, { statusCode: 422, codigo: 'documento_nao_conferido', campos: ['documentoConferido'] }));
+    const erro = await criarApiHttp({ baseUrl: BASE, fetch })
+      .alterarPaciente(U(1), { nascimento: '2015-03-04' })
+      .catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ErroApi);
+    expect(erro).toMatchObject({ status: 422, codigo: 'documento_nao_conferido', message: MENSAGENS.documentoNaoConferido });
+  });
+});
+
 describe('adaptador HTTP: erros', () => {
   it.each([
     [401, {}, MENSAGENS.sessao],
@@ -253,6 +327,14 @@ describe('adaptador HTTP: erros', () => {
     [409, { codigo: 'horario_lotado' }, MENSAGENS.lotado],
     [409, { codigo: 'transicao_invalida' }, MENSAGENS.transicao],
     [409, { codigo: 'outro' }, MENSAGENS.conflito],
+    // Rodada 19+ (#73)
+    [409, { codigo: 'horario_no_passado' }, MENSAGENS.passado],
+    [409, { codigo: 'fora_do_horario' }, MENSAGENS.foraDoHorario],
+    [422, { codigo: 'documento_nao_conferido', campos: ['documentoConferido'] }, MENSAGENS.documentoNaoConferido],
+    [422, { codigo: 'outra_regra' }, MENSAGENS.regra],
+    [403, { codigo: 'conferencia_exige_perfil' }, MENSAGENS.conferenciaPerfil],
+    [403, { codigo: 'perfil_nao_registrado' }, MENSAGENS.perfilNaoRegistrado],
+    [429, { codigo: 'limite_por_usuario' }, MENSAGENS.limiteUsuario],
     [429, {}, MENSAGENS.muitas],
     [503, {}, MENSAGENS.indisponivel],
     [500, { message: 'stack interna' }, MENSAGENS.servidor],

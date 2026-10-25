@@ -5,13 +5,17 @@
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
+import { ErroApi, MENSAGENS } from './http';
+import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
 import type {
+  AlteracaoPaciente,
   Agendamento,
   Anexo,
   EventoLinhaTempo,
   ItemEspera,
   NovoPaciente,
   Pacote,
+  Papel,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -135,6 +139,8 @@ export interface OpcoesFake {
   agora?: Date;
   /** Para demonstrar os estados de tela: "erro", "vazio" ou "lento". */
   simular?: 'erro' | 'vazio' | 'lento';
+  /** Papel do usuário da demonstração (padrão: admin). */
+  papel?: Papel;
 }
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
@@ -193,7 +199,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
 
   return {
     usuarioAtual: () =>
-      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' }),
+      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: opcoes.papel ?? 'admin', clinica: 'Clínica Demonstração' }),
     listarPacientes: () => resposta(pacientes),
     obterPaciente: (id) => resposta(pacientes.find((p) => p.id === id) ?? null),
     listarProfissionais: () => resposta(PROFISSIONAIS),
@@ -340,6 +346,25 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       };
       if (dados.nomeSocial?.trim()) p.nomeSocial = dados.nomeSocial.trim();
       pacientes.push(p);
+      return resposta(p);
+    },
+    // Mesmas regras da API (rodada 19+): inativo não muda; nascimento que reduz a idade de quem tem 12+
+    // exige documento conferido, e só admin ou profissional confere.
+    async alterarPaciente(id, dados: AlteracaoPaciente) {
+      const p = pacientes.find((x) => x.id === id);
+      if (!p) throw new ErroApi(MENSAGENS.naoEncontrado, 404);
+      if (!p.ativo) throw new ErroApi(MENSAGENS.inativo, 409, 'paciente_inativo');
+      if (dados.telefone === undefined && dados.nascimento === undefined) throw new ErroApi(MENSAGENS.nadaMudou, 400);
+      const novoNascimento = dados.nascimento === undefined ? undefined : dados.nascimento?.trim() || '';
+      const mudou = novoNascimento !== undefined && novoNascimento !== p.nascimento;
+      if (mudou && mudancaDeNascimentoExigeDocumento(p.nascimento, novoNascimento, hojeIso) && dados.documentoConferido !== true) {
+        throw new ErroApi(MENSAGENS.documentoNaoConferido, 422, 'documento_nao_conferido');
+      }
+      if (mudou && dados.documentoConferido === true && !podeConferirDocumento(opcoes.papel ?? 'admin')) {
+        throw new ErroApi(MENSAGENS.conferenciaPerfil, 403, 'conferencia_exige_perfil');
+      }
+      if (dados.telefone !== undefined) p.telefone = dados.telefone.trim();
+      if (mudou) p.nascimento = novoNascimento;
       return resposta(p);
     },
     async removerPaciente(id) {

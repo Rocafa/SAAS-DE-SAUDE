@@ -117,6 +117,17 @@ test.describe('Pacientes', () => {
     await expect(page.getByText(/Saldo: 7 sessões/)).toBeVisible();
   });
 
+  test('corrigir nascimento que deixa o paciente mais novo pede a conferência do documento', async ({ page }) => {
+    await page.goto('/pacientes/p01');
+    await page.getByTestId('corrigir-dados').click();
+    await page.getByLabel('Data de nascimento').fill('2016-01-01');
+    await page.getByRole('button', { name: 'Salvar correção' }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Conferi o documento original' })).toBeVisible();
+    await page.getByRole('checkbox', { name: /Conferi o documento original/ }).check();
+    await page.getByRole('button', { name: 'Salvar correção' }).click();
+    await expect(page.getByText('Dados do paciente corrigidos.')).toBeVisible();
+  });
+
   test('inativar avisa que o prontuário fica guardado e pode ser desfeito', async ({ page }) => {
     await page.goto('/pacientes/p02');
     await page.getByRole('button', { name: 'Inativar paciente' }).click();

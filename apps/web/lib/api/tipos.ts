@@ -117,6 +117,18 @@ export interface NovoPaciente {
   responsavel?: { nome: string; parentesco: string; telefone: string };
 }
 
+/** Correção de dados do cadastro (PATCH /pacientes/:id). Só o que a ficha deixa mudar. */
+export interface AlteracaoPaciente {
+  telefone?: string;
+  /** AAAA-MM-DD; vazio ou null apaga a data. */
+  nascimento?: string | null;
+  /**
+   * "Conferi o documento original": exigido quando a data nova reduz a idade de paciente com 12 anos ou
+   * mais (ver `nascimento.ts`). Só admin ou profissional declara.
+   */
+  documentoConferido?: boolean;
+}
+
 export interface Repeticao {
   intervaloDias: 7 | 14;
   vezes: number;
