@@ -39,10 +39,10 @@ interface ContextoDados {
 
 const Ctx = createContext<ContextoDados | null>(null);
 
-function lerSimulacao(): 'erro' | 'vazio' | 'lento' | undefined {
+function lerSimulacao(): 'erro' | 'vazio' | 'lento' | 'lista_mudou' | undefined {
   if (typeof window === 'undefined') return undefined;
   const v = new URLSearchParams(window.location.search).get('demo');
-  return v === 'erro' || v === 'vazio' || v === 'lento' ? v : undefined;
+  return v === 'erro' || v === 'vazio' || v === 'lento' || v === 'lista_mudou' ? v : undefined;
 }
 
 /** Mesma pessoa na mesma clínica? Se não, o retrato anterior não pode sobreviver. */

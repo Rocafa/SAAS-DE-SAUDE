@@ -24,6 +24,12 @@
  *   `GET /sessao`. Antes de devolver a lista, o adaptador confere a sessão atual (o cookie vale para
  *   todas as abas: outra aba pode ter trocado de clínica ou de usuário); se mudou, descarta e busca de
  *   novo. `esquecerCache()` (chamado no `limpar()` do provedor) e o 401 também descartam.
+ * - Rodada 26 (#73, §3b de api-dominio.md): lista e busca paginam por CURSOR assinado. A primeira
+ *   página vai sem cursor; as seguintes levam o `proximoCursor` da anterior com o MESMO `situacao`,
+ *   `limite` e `busca` (`pagina` > 1 dá 400). O cursor é opaco: o adaptador não abre nem monta. Um 409
+ *   `cursor_invalido` (sessão trocou, filtro diferente, venceu) é tratado como `sessao_mudou`: descarta
+ *   as páginas já juntadas, não guarda, confere a sessão e recomeça da página 1 UMA vez; se falhar de
+ *   novo, a tela mostra erro.
  */
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import type {
@@ -108,6 +114,7 @@ export const MENSAGENS = {
   transicao: 'Não dá para mudar para esse estado agora. Atualize a tela e confira o horário.',
   conflito: 'Alguém mudou esse registro agora mesmo. Atualize a tela e tente de novo.',
   muitas: 'Muitas tentativas seguidas. Espere um minuto e tente de novo.',
+  listaMudou: 'A lista de pacientes mudou enquanto carregava. Atualize a tela e tente de novo.',
   limiteUsuario: 'Você abriu muitas listas de pacientes em pouco tempo. Espere um minuto e tente de novo.',
   passado: 'Esse horário já passou. Escolha um horário a partir de agora.',
   foraDoHorario:
@@ -188,6 +195,23 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
   return new ErroApi(MENSAGENS.servidor, status);
 }
 
+/**
+ * Código do 409 de cursor recusado. Espelha `CURSOR_INVALIDO` de `packages/shared/src/paginacao.ts`
+ * (#73); fica local para o front não depender do shared antes do merge.
+ */
+export const CURSOR_INVALIDO = 'cursor_invalido';
+/** Cursor que o adaptador aceita repassar: opaco, até 512 caracteres, só caracteres seguros de URL. */
+const CURSOR_RE = /^[A-Za-z0-9._~-]{1,512}$/;
+
+/** Erro final quando a lista recomeçou e o cursor foi recusado de novo (o fake usa o mesmo). */
+export function erroListaMudou(): ErroApi {
+  return new ErroApi(MENSAGENS.listaMudou, 409, 'sessao_mudou');
+}
+
+function cursorRecusado(e: unknown): boolean {
+  return e instanceof ErroApi && e.status === 409 && e.codigo === CURSOR_INVALIDO;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Janela da API (≤ 31 dias, contando os dois extremos). */
 const JANELA_API_DIAS = 31;
@@ -220,6 +244,13 @@ interface SessaoApi {
   usuarioId: string;
   clinicaId: string;
   perfis: string[];
+}
+
+/** Resposta da lista/busca (contrato `PaginaPorCursor` de `packages/shared/src/paginacao.ts`). */
+interface PaginaPacientesApi {
+  itens: PacienteApi[];
+  temMais: boolean;
+  proximoCursor?: string | null;
 }
 
 interface PacienteApi {
@@ -332,13 +363,16 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     return anotarSessao(await chamar<SessaoApi>('GET', '/sessao'));
   }
   /**
-   * Páginas da lista + conferência da sessão DEPOIS da última página (R5 do parecer #76): a paginação
-   * é por número, sem cursor ligado à sessão; se a sessão trocou no meio, as páginas podem misturar
-   * duas clínicas/usuários. Aí nada é guardado nem entregue (409 `sessao_mudou`).
+   * Páginas da lista + conferência da sessão DEPOIS da última página (R5 do parecer #76). O cursor
+   * assinado (#73) já impede o servidor de misturar sessões; a conferência no fim continua como segunda
+   * trava. Se a sessão mudou, nada é guardado nem entregue (409 `sessao_mudou`).
    */
   async function paginasConferidas(chave: string): Promise<Paciente[]> {
-    const lista = await paginasDePacientes();
-    if ((await sessaoFresca()) !== chave) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+    const conferir = async () => {
+      if ((await sessaoFresca()) !== chave) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+    };
+    const lista = await paginasComRecomeco(undefined, conferir);
+    await conferir();
     return lista;
   }
   /**
@@ -430,27 +464,54 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     return s ? `?${s}` : '';
   }
 
-  async function paginasDePacientes(busca?: string): Promise<Paciente[]> {
+  /**
+   * Uma passada pela lista (ou busca) seguindo o cursor: primeira página sem cursor, as seguintes com o
+   * `proximoCursor` da anterior e o mesmo filtro. Busca: termo SÓ no corpo de um POST (nome não pode ir
+   * para URL, logs de ALB/WAF ou histórico; veto do Guardião). A query do GET leva só situação, limite e
+   * o cursor opaco (sem dado pessoal, §3b).
+   */
+  async function passadaDePacientes(busca?: string): Promise<Paciente[]> {
     const todos: Paciente[] = [];
-    for (let pagina = 1; pagina <= PAGINAS_MAXIMAS_INDICE; pagina++) {
-      // Busca: termo SÓ no corpo de um POST (nome não pode ir para URL, logs de ALB/WAF ou
-      // histórico; veto do Guardião). A query de GET leva apenas paginação e situação.
+    let cursor: string | undefined;
+    for (let i = 0; i < PAGINAS_MAXIMAS_INDICE; i++) {
       const r =
         busca === undefined
-          ? await chamar<{ itens: PacienteApi[]; temMais: boolean }>(
-              'GET',
-              `/pacientes${qs({ situacao: 'todos', pagina, limite: LIMITE_PAGINA })}`,
-            )
-          : await chamar<{ itens: PacienteApi[]; temMais: boolean }>('POST', '/pacientes/busca', {
+          ? await chamar<PaginaPacientesApi>('GET', `/pacientes${qs({ situacao: 'todos', limite: LIMITE_PAGINA, cursor })}`)
+          : await chamar<PaginaPacientesApi>('POST', '/pacientes/busca', {
               busca,
               situacao: 'todos',
-              pagina,
               limite: LIMITE_PAGINA,
+              ...(cursor !== undefined ? { cursor } : {}),
             });
       todos.push(...r.itens.map(paraPaciente));
       if (!r.temMais) break;
+      // temMais sem cursor utilizável: não dá para seguir (o servidor recusa `pagina` > 1).
+      if (typeof r.proximoCursor !== 'string' || !CURSOR_RE.test(r.proximoCursor)) {
+        throw new ErroApi(MENSAGENS.servidor, 200, 'resposta_invalida');
+      }
+      cursor = r.proximoCursor;
     }
     return todos;
+  }
+
+  /**
+   * Passada com UM recomeço em 409 `cursor_invalido`: o que foi juntado é descartado (nunca guardado nem
+   * entregue), `conferir` checa a sessão (lança `sessao_mudou` se trocou) e a lista recomeça da página 1.
+   * Recusado de novo: erro para a tela (`erroListaMudou`).
+   */
+  async function paginasComRecomeco(busca: string | undefined, conferir: () => Promise<void>): Promise<Paciente[]> {
+    try {
+      return await passadaDePacientes(busca);
+    } catch (e) {
+      if (!cursorRecusado(e)) throw e;
+    }
+    await conferir();
+    try {
+      return await passadaDePacientes(busca);
+    } catch (e) {
+      if (cursorRecusado(e)) throw erroListaMudou();
+      throw e;
+    }
   }
 
   async function listarAgendamentos(filtro: FiltroAgenda = {}): Promise<Agendamento[]> {
@@ -513,7 +574,11 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     async buscarPacientes(termo: string) {
       const t = termo.trim().replace(/\s+/g, ' ');
       if (t.length < 2) return [];
-      return paginasDePacientes(t.slice(0, 80));
+      const antes = chaveSessao;
+      return paginasComRecomeco(t.slice(0, 80), async () => {
+        const chave = await sessaoFresca();
+        if (antes !== null && chave !== antes) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+      });
     },
     async obterPaciente(id) {
       if (!UUID_RE.test(id)) return null;

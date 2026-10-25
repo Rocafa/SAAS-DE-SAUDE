@@ -56,6 +56,10 @@ const listagens = (chamadas: Chamada[]) => chamadas.filter((c) => c.metodo === '
 
 const AGORA = new Date(2026, 9, 13, 10, 0);
 
+/** Cursor fictício (o real é `v1.<payload>.<hmac>`; o adaptador não abre). */
+const cursorDa = (pagina: number) => `v1.pagina${pagina}.assinaturaFicticia`;
+const paginaDoCursor = (cursor: string | null) => (cursor ? Number(/pagina(\d+)/.exec(cursor)![1]) : 1);
+
 describe('adaptador HTTP: sessão e clínica', () => {
   it('nunca envia tenant/clínica: só Accept, Content-Type e Authorization (dev); cookies incluídos', async () => {
     const { chamadas, fetch } = simular((c) => {
@@ -102,16 +106,162 @@ describe('adaptador HTTP: sessão e clínica', () => {
 describe('adaptador HTTP: pacientes', () => {
   it('lista pagina até temMais=false e devolve só a projeção da lista', async () => {
     const { chamadas, fetch } = simular((c) => {
-      const pagina = Number(c.url.searchParams.get('pagina'));
+      const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
       return respostaJson(200, {
         itens: [{ id: U(pagina), nome: `Paciente Ficticio ${pagina}`, nomeSocial: pagina === 2 ? 'Social' : null, ativo: true }],
         temMais: pagina < 3,
+        proximoCursor: pagina < 3 ? cursorDa(pagina + 1) : null,
       });
     });
     const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarPacientes();
     expect(lista).toHaveLength(3);
     expect(listagens(chamadas).map((c) => c.url.searchParams.get('limite'))).toEqual(['100', '100', '100']);
     expect(lista[1]).toMatchObject({ nomeSocial: 'Social', cpf: '', telefone: '', nascimento: '' });
+  });
+
+  it('cursor (#73 §3b): página 1 sem cursor nem pagina; as seguintes com o proximoCursor e o mesmo filtro', async () => {
+    const { chamadas, fetch } = simular((c) => {
+      const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
+      return respostaJson(200, {
+        itens: [{ id: U(pagina), nome: `Paciente Ficticio ${pagina}`, nomeSocial: null, ativo: true }],
+        pagina,
+        limite: 100,
+        temMais: pagina < 3,
+        proximoCursor: pagina < 3 ? cursorDa(pagina + 1) : null,
+      });
+    });
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarPacientes();
+    expect(lista.map((p) => p.id)).toEqual([U(1), U(2), U(3)]);
+    const qs = listagens(chamadas).map((c) => Object.fromEntries(c.url.searchParams));
+    expect(qs).toEqual([
+      { situacao: 'todos', limite: '100' },
+      { situacao: 'todos', limite: '100', cursor: cursorDa(2) },
+      { situacao: 'todos', limite: '100', cursor: cursorDa(3) },
+    ]);
+  });
+
+  it('cursor na busca: vai no corpo do POST com o mesmo termo, situação e limite', async () => {
+    const { chamadas, fetch } = simular((c) => {
+      const corpo = c.corpo as { cursor?: string };
+      const pagina = paginaDoCursor(corpo.cursor ?? null);
+      return respostaJson(200, {
+        itens: [{ id: U(pagina), nome: `Ana Ficticia ${pagina}`, nomeSocial: null, ativo: true }],
+        temMais: pagina < 2,
+        proximoCursor: pagina < 2 ? cursorDa(2) : null,
+      });
+    });
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).buscarPacientes!('ana');
+    expect(lista).toHaveLength(2);
+    const buscas = chamadas.filter((c) => c.url.pathname === '/pacientes/busca');
+    expect(buscas.map((c) => c.corpo)).toEqual([
+      { busca: 'ana', situacao: 'todos', limite: 100 },
+      { busca: 'ana', situacao: 'todos', limite: 100, cursor: cursorDa(2) },
+    ]);
+    expect(buscas.every((c) => c.url.search === '')).toBe(true);
+  });
+
+  it('temMais sem proximoCursor válido: erro de servidor (não inventa página nem entrega lista parcial)', async () => {
+    for (const proximoCursor of [null, undefined, '', 'tem espaço', 'x'.repeat(513)]) {
+      const { fetch } = simular(() =>
+        respostaJson(200, { itens: [{ id: U(1), nome: 'A', nomeSocial: null, ativo: true }], temMais: true, proximoCursor }),
+      );
+      await expect(criarApiHttp({ baseUrl: BASE, fetch }).listarPacientes()).rejects.toMatchObject({ codigo: 'resposta_invalida' });
+    }
+  });
+
+  it('409 cursor_invalido: descarta o que juntou, confere a sessão e recomeça da página 1 uma vez', async () => {
+    let recusar = true;
+    const { chamadas, fetch } = simular((c) => {
+      const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
+      if (pagina === 2 && recusar) {
+        recusar = false;
+        return respostaJson(409, { codigo: 'cursor_invalido' });
+      }
+      return respostaJson(200, {
+        itens: [{ id: U(pagina), nome: `Paciente Ficticio ${pagina}`, nomeSocial: null, ativo: true }],
+        temMais: pagina < 2,
+        proximoCursor: pagina < 2 ? cursorDa(2) : null,
+      });
+    });
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    const lista = await api.listarPacientes();
+    // Sem duplicar a página 1 da primeira tentativa.
+    expect(lista.map((p) => p.id)).toEqual([U(1), U(2)]);
+    const rota = chamadas.map((c) => `${c.url.pathname}${c.url.search ? `?cursor=${c.url.searchParams.get('cursor') ?? ''}` : ''}`);
+    expect(rota).toEqual([
+      '/sessao',
+      '/pacientes?cursor=',
+      `/pacientes?cursor=${cursorDa(2)}`, // 409
+      '/sessao', // confere antes de recomeçar
+      '/pacientes?cursor=',
+      `/pacientes?cursor=${cursorDa(2)}`,
+      '/sessao', // conferência do fim (R5)
+    ]);
+    // Guardou só a lista boa: a próxima leitura vem do retrato.
+    await api.listarPacientes();
+    expect(listagens(chamadas)).toHaveLength(4);
+  });
+
+  it('409 cursor_invalido de novo no recomeço: erro para a tela, nada guardado; não tenta uma terceira vez', async () => {
+    let falhar = true;
+    const { chamadas, fetch } = simular((c) => {
+      const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
+      if (pagina === 2 && falhar) return respostaJson(409, { codigo: 'cursor_invalido' });
+      return respostaJson(200, {
+        itens: [{ id: U(pagina), nome: `Paciente Ficticio ${pagina}`, nomeSocial: null, ativo: true }],
+        temMais: pagina < 2,
+        proximoCursor: pagina < 2 ? cursorDa(2) : null,
+      });
+    });
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    const erro = await api.listarPacientes().catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ErroApi);
+    expect(erro).toMatchObject({ status: 409, codigo: 'sessao_mudou', message: MENSAGENS.listaMudou });
+    expect(listagens(chamadas)).toHaveLength(4);
+    // Nada ficou guardado: a próxima carga baixa de novo.
+    falhar = false;
+    expect(await api.listarPacientes()).toHaveLength(2);
+    expect(listagens(chamadas)).toHaveLength(6);
+  });
+
+  it('409 cursor_invalido com a sessão trocada: não recomeça com a outra sessão, responde sessao_mudou', async () => {
+    let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
+    const { chamadas, fetch } = simular(
+      (c) => {
+        const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
+        if (pagina === 2) {
+          sessao = { ...sessao, clinicaId: U(902) }; // outra aba trocou de clínica
+          return respostaJson(409, { codigo: 'cursor_invalido' });
+        }
+        return respostaJson(200, {
+          itens: [{ id: U(1), nome: 'Fulano da 901', nomeSocial: null, ativo: true }],
+          temMais: true,
+          proximoCursor: cursorDa(2),
+        });
+      },
+      () => sessao,
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await expect(api.listarPacientes()).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou', message: MENSAGENS.conflito });
+    expect(listagens(chamadas)).toHaveLength(2);
+  });
+
+  it('409 cursor_invalido na busca: recomeça uma vez; falha repetida vira erro', async () => {
+    let falhas = 1;
+    const { chamadas, fetch } = simular((c) => {
+      const corpo = c.corpo as { cursor?: string };
+      if (corpo.cursor && falhas-- > 0) return respostaJson(409, { codigo: 'cursor_invalido' });
+      return respostaJson(200, {
+        itens: [{ id: U(corpo.cursor ? 2 : 1), nome: 'Ana Ficticia', nomeSocial: null, ativo: true }],
+        temMais: !corpo.cursor,
+        proximoCursor: corpo.cursor ? null : cursorDa(2),
+      });
+    });
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    expect((await api.buscarPacientes!('ana')).map((p) => p.id)).toEqual([U(1), U(2)]);
+    expect(chamadas.filter((c) => c.url.pathname === '/pacientes/busca')).toHaveLength(4);
+    falhas = 2;
+    await expect(api.buscarPacientes!('ana')).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou', message: MENSAGENS.listaMudou });
   });
 
   it('busca vai ao servidor (auditada) e termo curto não chama', async () => {
@@ -123,7 +273,7 @@ describe('adaptador HTTP: pacientes', () => {
     expect(chamadas[0]!.metodo).toBe('POST');
     expect(chamadas[0]!.url.pathname).toBe('/pacientes/busca');
     expect(chamadas[0]!.url.search).toBe('');
-    expect(chamadas[0]!.corpo).toMatchObject({ busca: 'ana paula', pagina: 1, limite: 100 });
+    expect(chamadas[0]!.corpo).toEqual({ busca: 'ana paula', situacao: 'todos', limite: 100 });
   });
 
   it('nenhuma URL leva nome, CPF ou telefone (só ids opacos, datas e paginação)', async () => {
@@ -408,13 +558,14 @@ describe('adaptador HTTP: retrato amarrado à sessão (veto B1 do #76)', () => {
     let sessao: SessaoFicticia = { usuarioId: U(1), clinicaId: U(901), perfis: ['recepcao'] };
     const { chamadas, fetch } = simular(
       (c) => {
-        const pagina = Number(c.url.searchParams.get('pagina'));
+        const pagina = paginaDoCursor(c.url.searchParams.get('cursor'));
         const clinica = sessao.clinicaId.slice(-3);
         // Outra aba troca a sessão de A para B enquanto a página 1 chega.
         if (pagina === 1) sessao = { ...sessao, clinicaId: U(902) };
         return respostaJson(200, {
           itens: [{ id: U(10 + pagina), nome: `Fulano ${pagina} da ${clinica}`, nomeSocial: null, ativo: true }],
           temMais: pagina < 2,
+          proximoCursor: pagina < 2 ? cursorDa(pagina + 1) : null,
         });
       },
       () => sessao,
@@ -423,7 +574,7 @@ describe('adaptador HTTP: retrato amarrado à sessão (veto B1 do #76)', () => {
     await expect(api.listarPacientes()).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou' });
     // A última chamada da carga foi a conferência nova de /sessao, depois da página 2.
     const ultimas = chamadas.slice(-2).map((c) => `${c.metodo} ${c.url.pathname}${c.url.search}`);
-    expect(ultimas[0]).toContain('pagina=2');
+    expect(ultimas[0]).toContain(`cursor=${cursorDa(2)}`);
     expect(ultimas[1]).toBe('GET /sessao');
     // Nada da lista misturada ficou guardado: a próxima carga baixa de novo, só com B.
     const depois = await api.listarPacientes();
@@ -554,5 +705,17 @@ describe('seleção do adaptador', () => {
       ficticio: true,
     });
     expect(p).toMatchObject({ cpf: '0191', nascimento: '', responsaveis: [] });
+  });
+});
+
+describe('adaptador falso: coerente com o cursor do HTTP', () => {
+  it('simular "lista_mudou" entrega o mesmo erro final do HTTP (sem lista parcial)', async () => {
+    const { criarApiFake } = await import('./fake');
+    await expect(criarApiFake({ simular: 'lista_mudou' }).listarPacientes()).rejects.toMatchObject({
+      status: 409,
+      codigo: 'sessao_mudou',
+      message: MENSAGENS.listaMudou,
+    });
+    expect((await criarApiFake().listarPacientes()).length).toBeGreaterThan(0);
   });
 });

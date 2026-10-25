@@ -5,7 +5,7 @@
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
-import { ErroApi, MENSAGENS, mensagemDeErro } from './http';
+import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
 import type {
   AlteracaoPaciente,
@@ -137,8 +137,11 @@ const SEMENTES: Semente[] = [
 
 export interface OpcoesFake {
   agora?: Date;
-  /** Para demonstrar os estados de tela: "erro", "vazio" ou "lento". */
-  simular?: 'erro' | 'vazio' | 'lento';
+  /**
+   * Para demonstrar os estados de tela: "erro", "vazio", "lento" ou "lista_mudou" (o cursor da lista
+   * foi recusado também no recomeço: mesmo erro que o adaptador HTTP entrega, `erroListaMudou`).
+   */
+  simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
   /** Papel do usuário da demonstração (padrão: admin). */
   papel?: Papel;
 }
@@ -200,7 +203,12 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   return {
     usuarioAtual: () =>
       resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: opcoes.papel ?? 'admin', clinica: 'Clínica Demonstração' }),
-    listarPacientes: () => resposta(pacientes),
+    // O fake não pagina (devolve tudo de uma vez), mas entrega o mesmo erro final do HTTP quando o
+    // recomeço por cursor recusado falha: nada parcial chega à tela.
+    listarPacientes: async () => {
+      if (opcoes.simular === 'lista_mudou') throw erroListaMudou();
+      return resposta(pacientes);
+    },
     obterPaciente: (id) => resposta(pacientes.find((p) => p.id === id) ?? null),
     listarProfissionais: () => resposta(PROFISSIONAIS),
     listarTiposAtendimento: () => resposta(TIPOS),
