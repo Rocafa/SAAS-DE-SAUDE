@@ -85,6 +85,8 @@ export interface ExportedPortal {
     birthDateProposed: string | null;
     documentCheckedBy: string | null;
     documentCheckedAt: string | null;
+    /** 0053: perfil de quem conferiu (`admin` | `profissional`); nulo antes da 0053. */
+    documentCheckedRole: string | null;
     documentRequired: boolean;
   }[];
 }
@@ -155,6 +157,7 @@ export async function exportarPortal(
       birthDateProposed: await dec(p.id, 'birth_date_proposed', p.birthDateProposedEnc),
       documentCheckedBy: p.documentCheckedBy,
       documentCheckedAt: iso(p.documentCheckedAt),
+      documentCheckedRole: p.documentCheckedRole,
       documentRequired: p.documentRequired,
     });
   }
