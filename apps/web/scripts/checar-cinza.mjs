@@ -6,9 +6,10 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { coresNaoCinza } from '../lib/cores.mjs';
 
-const raiz = new URL('../.next/static', import.meta.url).pathname;
+const raiz = fileURLToPath(new URL('../.next/static', import.meta.url));
 
 function arquivosCss(dir) {
   const out = [];

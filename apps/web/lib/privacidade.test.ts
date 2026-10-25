@@ -4,9 +4,10 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const raiz = new URL('..', import.meta.url).pathname;
+const raiz = fileURLToPath(new URL('..', import.meta.url));
 const ARQUIVOS = [
   'components/app/ajudante.tsx',
   'components/app/executor.tsx',
