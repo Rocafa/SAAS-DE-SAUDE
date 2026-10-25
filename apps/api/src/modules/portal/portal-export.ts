@@ -85,6 +85,7 @@ export interface ExportedPortal {
     birthDateProposed: string | null;
     documentCheckedBy: string | null;
     documentCheckedAt: string | null;
+    documentRequired: boolean;
   }[];
 }
 
@@ -154,6 +155,7 @@ export async function exportarPortal(
       birthDateProposed: await dec(p.id, 'birth_date_proposed', p.birthDateProposedEnc),
       documentCheckedBy: p.documentCheckedBy,
       documentCheckedAt: iso(p.documentCheckedAt),
+      documentRequired: p.documentRequired,
     });
   }
   const data: ExportedPortal = {
