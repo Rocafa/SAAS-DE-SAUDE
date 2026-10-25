@@ -67,8 +67,8 @@
 | Rodada 24.1: ✅ re-revisão dos vetos do front (#44 e #47 aprovados c/ ressalvas, #46 aprovado) | Maestro @Rocafa | 24/10/2026 | PRs #44/#46/#47 |
 | Rodada 24.2: ✅ Dependabot testados localmente + **PR #74** (multer/body-parser) | Maestro @Rocafa | 24/10/2026 | PR #74 |
 | Rodada 24.3: ✅ contrato **`ApiPortal`** em `packages/shared` + C1–C5 + documento obrigatório ao reduzir idade (0051/0052) — **adaptador HTTP do portal liberado** pelo Guardião | Maestro @Rocafa | 24/10/2026 | `eng/integracao-r19` |
-| Rodada 25.1: portal ligado ao backend real — **PR separado empilhado sobre o #47** (sem tocar na branch do @Lopesloro; ele aceita ou descarta) | Maestro @Rocafa (agente engenharia) | 25/10/2026 | `front/portal-adaptador-http` |
-| Rodada 25.2: ressalvas menores do portal (perfil de quem confere documento, erros unificados, atender pedido grava a data) (0053) | Maestro @Rocafa (agente engenharia) | 25/10/2026 | `eng/integracao-r19` |
+| Rodada 25.1: ✅ **PR #75** — portal ligado ao backend real, empilhado sobre o #47 (aprovado c/ ressalvas, R1–R4 corrigidas); aguarda @Lopesloro aceitar/descartar | Maestro @Rocafa | 25/10/2026 | PR #75 |
+| Rodada 25.2: ✅ ressalvas do portal (0053) — **APROVADO** | Maestro @Rocafa | 25/10/2026 | `eng/integracao-r19` |
 
 ## Livre (pegue colocando seu nome)
 
