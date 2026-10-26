@@ -15,8 +15,12 @@
  *   da posição da âncora (HMAC truncado do nome de busca, nunca o nome). Nunca nome, termo, CPF.
  * - O filtro (situação, limite e termo normalizado) e o escopo entram no AAD do GCM e no HMAC, não no
  *   payload: cursor de outro filtro falha sem expor o termo.
- * - Chaves de cifra e de assinatura são DISTINTAS, derivadas por HKDF-SHA256 do segredo
- *   `PAGINATION_CURSOR_KEY`. O HMAC é conferido antes de decifrar.
+ * - Chaves de cifra, de assinatura e da marca da âncora são DISTINTAS, derivadas por HKDF-SHA256 do
+ *   segredo `PAGINATION_CURSOR_KEY` com rótulos próprios. O HMAC é conferido antes de decifrar.
+ * - V2-a/V2-b (conferência de 26/10): a marca usa a chave `marca-ancora-v2` e cobre escopo, clínica, id
+ *   da âncora e nome normalizado. Mesmo com a chave vazada, a marca só confirma palpites sobre AQUELE
+ *   registro: não correlaciona homônimos nem clínicas. Cursores v2 emitidos antes disso dão 409
+ *   (`ancora_mudou`), como os de âncora renomeada; valiam no máximo 10 min.
  *
  * Qualquer falha (formato, assinatura, versão, outra clínica, outro usuário, vencido, âncora sumida ou
  * movida) vira a MESMA resposta 409 `cursor_invalido`, sem dados e sem dizer o motivo. O motivo vai só
@@ -67,6 +71,8 @@ export interface PosicaoLida {
   readonly pagina: number;
   readonly depoisDe: string;
   readonly marcaDaAncora: string;
+  /** Clínica do cursor (já conferida contra a sessão em `ler`); entra no cálculo da marca. */
+  readonly clinica: string;
 }
 
 interface Payload {
@@ -156,6 +162,8 @@ export class CursorDePaginacao {
   private readonly logger = new Logger('cursor');
   private readonly chaveCifra: Buffer;
   private readonly chaveMac: Buffer;
+  /** V2-a: chave só da marca da âncora, separada das de cifra e de HMAC do cursor. */
+  private readonly chaveMarca: Buffer;
 
   constructor(
     segredo: Uint8Array,
@@ -168,6 +176,7 @@ export class CursorDePaginacao {
     if (segredo.length < PAGINATION_CURSOR_KEY_MIN_BYTES) throw new Error('chave do cursor curta demais');
     this.chaveCifra = derivar(segredo, 'cifra-v2');
     this.chaveMac = derivar(segredo, 'assinatura-v2');
+    this.chaveMarca = derivar(segredo, 'marca-ancora-v2');
   }
 
   /** Emite o cursor da página `pagina` (a próxima), ancorado no último paciente da página atual. */
@@ -178,7 +187,7 @@ export class CursorDePaginacao {
       e: Math.floor((this.agora() + this.validadeMs) / 1000),
       p: posicao.pagina,
       k: posicao.depoisDe,
-      h: this.marca(posicao.nomeDaAncora),
+      h: this.marca(ctx.tenantId, posicao.depoisDe, posicao.nomeDaAncora),
     };
     const iv = randomBytes(IV_BYTES);
     const cifra = createCipheriv('aes-256-gcm', this.chaveCifra, iv);
@@ -230,7 +239,7 @@ export class CursorDePaginacao {
     if (p.c !== ctx.tenantId) return this.recusar('outra_clinica');
     if (p.u !== ctx.userId) return this.recusar('outro_usuario');
     if ((p.e as number) * 1000 <= this.agora()) return this.recusar('vencido');
-    return { pagina: p.p as number, depoisDe: p.k, marcaDaAncora: p.h };
+    return { pagina: p.p as number, depoisDe: p.k, marcaDaAncora: p.h, clinica: p.c };
   }
 
   /**
@@ -240,14 +249,15 @@ export class CursorDePaginacao {
    */
   conferirAncora(posicao: PosicaoLida, nomeAtual: string | undefined): void {
     if (nomeAtual === undefined) return this.recusar('ancora_sumiu');
-    const atual = Buffer.from(this.marca(nomeAtual), 'base64url');
+    const atual = Buffer.from(this.marca(posicao.clinica, posicao.depoisDe, nomeAtual), 'base64url');
     const emitida = Buffer.from(posicao.marcaDaAncora, 'base64url');
     if (atual.length !== emitida.length || !timingSafeEqual(atual, emitida)) return this.recusar('ancora_mudou');
   }
 
-  private marca(nome: string): string {
-    return createHmac('sha256', this.chaveMac)
-      .update(['ancora', this.escopo, nome].join('\u001f'))
+  /** V2-a/V2-b: HMAC (chave própria) de escopo + clínica + id da âncora + nome normalizado, truncado. */
+  private marca(clinica: string, idDaAncora: string, nome: string): string {
+    return createHmac('sha256', this.chaveMarca)
+      .update(['ancora', this.escopo, clinica, idDaAncora, nome].join('\u001f'))
       .digest()
       .subarray(0, MARCA_BYTES)
       .toString('base64url');

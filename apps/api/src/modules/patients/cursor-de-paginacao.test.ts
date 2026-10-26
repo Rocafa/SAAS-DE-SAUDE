@@ -1,6 +1,6 @@
 /** Cursor opaco, cifrado e assinado da lista de pacientes (R5 do parecer #76; R7–R9). Ids e nomes 100% fictícios. */
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { CursorDePaginacao, CursorInvalidoError, loadPaginationCursorKey, VALIDADE_DO_CURSOR_MS } from './cursor-de-paginacao';
 
@@ -112,6 +112,47 @@ describe('CursorDePaginacao', () => {
     // A marca não é o nome: só 16 bytes de HMAC.
     expect(posicao.marcaDaAncora).not.toContain('ficticio');
     expect(Buffer.from(posicao.marcaDaAncora, 'base64url')).toHaveLength(16);
+  });
+
+  it('V2-b: a marca muda entre clínicas e entre ids da âncora (mesmo nome); é estável para o mesmo registro', () => {
+    const c = new CursorDePaginacao(chave, 'pacientes');
+    const marca = (ctx: RequestContext, depoisDe: string) => c.ler(ctx, filtro, c.assinar(ctx, filtro, { ...pos, depoisDe })).marcaDaAncora;
+    const outroId = '00000000-0000-4000-8000-000000000456';
+    const base = marca(ctxA, pos.depoisDe);
+    expect(marca(ctxA, pos.depoisDe)).toBe(base);
+    expect(marca(ctxB, pos.depoisDe)).not.toBe(base);
+    expect(marca(ctxA, outroId)).not.toBe(base);
+    // A marca de um registro não confere outro: homônimo de outra clínica ou outro id = 409.
+    const posicao = c.ler(ctxA, filtro, c.assinar(ctxA, filtro, pos));
+    recusa(() => c.conferirAncora({ ...posicao, clinica: ctxB.tenantId }, pos.nomeDaAncora));
+    recusa(() => c.conferirAncora({ ...posicao, depoisDe: outroId }, pos.nomeDaAncora));
+  });
+
+  it('V2-a: cursor v2 emitido antes da mudança (marca com a chave de HMAC, sem clínica nem id) dá 409', () => {
+    // Reproduz o emissor anterior: mesmas chaves de cifra/assinatura, marca = HMAC(chave de assinatura, ancora|escopo|nome).
+    const derivar = (uso: string) => Buffer.from(hkdfSync('sha256', chave, 'plataforma-saude/cursor-de-paginacao', uso, 32));
+    const chaveCifra = derivar('cifra-v2');
+    const chaveMac = derivar('assinatura-v2');
+    const sep = '\u001f';
+    const amarra = [filtro.situacao, String(filtro.limite), '-'];
+    const hAntigo = createHmac('sha256', chaveMac).update(['ancora', 'pacientes', pos.nomeDaAncora].join(sep)).digest().subarray(0, 16).toString('base64url');
+    const payload = { c: ctxA.tenantId, u: ctxA.userId, e: Math.floor((Date.now() + 60_000) / 1000), p: pos.pagina, k: pos.depoisDe, h: hAntigo };
+    const iv = randomBytes(12);
+    const cifra = createCipheriv('aes-256-gcm', chaveCifra, iv);
+    cifra.setAAD(Buffer.from(['v2', 'pacientes', ...amarra].join(sep), 'utf8'));
+    const ct = Buffer.concat([cifra.update(JSON.stringify(payload), 'utf8'), cifra.final(), cifra.getAuthTag()]);
+    const ivB = iv.toString('base64url');
+    const ctB = ct.toString('base64url');
+    const mac = createHmac('sha256', chaveMac).update(['v2', 'pacientes', ivB, ctB, ...amarra].join(sep)).digest('base64url');
+    const antigo = `v2.${ivB}.${ctB}.${mac}`;
+
+    const c = new CursorDePaginacao(chave, 'pacientes');
+    // Assinatura e cifra continuam válidas (controle), mas a marca antiga não confere com a âncora intacta.
+    const posicao = c.ler(ctxA, filtro, antigo);
+    expect(posicao).toMatchObject(lida);
+    recusa(() => c.conferirAncora(posicao, pos.nomeDaAncora));
+    // A marca nova não é a antiga (chave própria + clínica + id).
+    expect(c.ler(ctxA, filtro, c.assinar(ctxA, filtro, pos)).marcaDaAncora).not.toBe(hAntigo);
   });
 
   it('segredo: obrigatório em produção, mínimo de 32 bytes, aleatório por processo fora de produção', () => {
