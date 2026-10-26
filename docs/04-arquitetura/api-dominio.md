@@ -2,6 +2,32 @@
 
 > 14/10/2026 · frente Engenharia · branches `eng/rotas-pacientes-agenda` e `eng/ressalvas-api-57` · **sem dado real** (testes geram dados fictícios a cada execução). Passa pelo Guardião LGPD antes do merge.
 
+## 0. O que a API exige para subir em produção (rodada 27)
+
+Com `NODE_ENV=production` (e qualquer valor fora de `development`/`test`), cada item abaixo é conferido no boot (`loadConfig` + `AppModule.forRoot`). Falta ou valor inválido: a API lança antes de abrir a porta, com mensagem que cita só **nomes** de variáveis, nunca valores. Teste: `src/boot-producao.test.ts` (configuração completa + stub de teste da D4 monta; sem cada item, recusa).
+
+| Item | Exigência no boot | De onde vem | Quem resolve | Situação |
+|---|---|---|---|---|
+| **Login real da clínica** (`createAuthProvider`) | provedor real de sessão; a sessão fictícia só existe em dev/test | adaptador a implementar depois da decisão | **Sócios (D4)** → ENG | **ÚNICO item de decisão. Bloqueia.** |
+| **Login e código do portal** (`createPortalAuthProvider`, `createPortalOtpSender`) | provedor real de sessão do paciente e de envio do código | idem | **Sócios (D4)** → ENG | **Bloqueia (parte da D4).** |
+| `DATABASE_URL` | definida (`loadConfig`) | segredo `banco-app-user` (Terraform #58, §4.5 de `infra-staging.md`) | DevOps | pronto no #58 |
+| `REDIS_URL` | obrigatória (ou `RATE_LIMIT_ALLOW_SINGLE_INSTANCE=1`, proibida na tarefa) | segredo `redis` | DevOps | pronto no #58 |
+| `PAGINATION_CURSOR_KEY`, `RATE_LIMIT_HASH_KEY` | obrigatórias, ≥ 32 bytes, segredos distintos | segredos `pagination-cursor-key`, `rate-limit-hash-key` | DevOps | pronto no #58 |
+| `AWS_REGION` (ou `AWS_DEFAULT_REGION`; iguais se as duas vierem) | obrigatória; só `sa-east-1` (lista fechada) | ambiente da tarefa | DevOps | **ajuste pedido no #58** (abaixo) |
+| Credencial do KMS | só a role da tarefa (cadeia padrão do SDK); `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_KMS` são recusadas | role `api_tarefa` (políticas `api_kek` e `api_pseudonimo`) | DevOps | pronto no #58; vedação sugerida abaixo |
+| Chave mestra por clínica (`createKeyProvider`, Portão A) | `KmsKeyProvider` com `@aws-sdk/client-kms` (`kms-client.ts`); `FIELD_KEYS_DEV_ROOT_SECRET` recusada | chaves nascem em execução (`kms-clinicas.tf`: ABAC por tag) | ENG (feito na rodada 27) | resolvido |
+| Pseudônimo do suporte (`createPseudonymSigner`, N1) | `SUPPORT_PSEUDONYM_KMS_KEY_ID` = ARN completo da chave HMAC, na região de `AWS_REGION`; `SUPPORT_PSEUDONYM_KEY` recusada | `aws_kms_key.pseudonimo_suporte.arn` (`api-ambiente.tf`) | ENG (feito) + DevOps (pronto) | resolvido |
+| `API_PORT`, `EXIT_WINDOW_DAYS`, `DB_*`, limites (`RATE_LIMIT_*`, `PATIENT_*`, `PORTAL_*`...) | inteiros válidos; ausentes = padrão do código | ambiente (só `API_PORT` é definido) | DevOps | pronto |
+| `WHATSAPP_PROVEDOR` | `desligado` ou `cloud_api` (com R17, WABA e as três credenciais); `falso` recusado | `var.whatsapp_provedor` | DevOps/Sócios (R17) | `desligado` em staging: não bloqueia |
+| `CORS_ALLOWED_ORIGINS` | sem curinga | `var.cors_origens` | DevOps | opcional |
+
+Fora da tabela: `API_TLS` (R6) ainda não é lido pela API, e o Terraform só o define com `tls_ate_a_tarefa = true` (ausente em staging); jobs sem Redis sobem **desligados** (aviso `JOBS_DESLIGADOS`), não derrubam o boot.
+
+**Ajuste de nomes pedido ao Terraform do #58** (não alterado aqui; branch `devops/terraform-staging-b`):
+1. `infra/terraform/staging/app.tf`, em `local.api_ambiente` (bloco com `HTTP_TRUST_PROXY_HOPS`/`SUPPORT_PSEUDONYM_KMS_KEY_ID`): acrescentar `{ name = "AWS_REGION", value = local.regiao }`, e incluir `"AWS_REGION"` em `local.api_ambiente_obrigatorio` (e na mensagem da precondição). Hoje a API dependeria da variável que o agente do Fargate injeta; explícita, o plano falha se sumir e a região fica conferível no `infra.yml`.
+2. Mesmo arquivo, `local.api_variaveis_proibidas`: acrescentar `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_KMS` (a API já recusa; a precondição pega antes do deploy). Atualizar a tabela da §4.5 de `infra-staging.md` e o item “Bloqueios do boot que o IaC NÃO resolve” (sobra só a D4 e o `API_TLS`).
+3. Nada muda nas políticas: a API chama exatamente as ações já liberadas em `api_kek` (`CreateKey`, `TagResource` na criação, `EnableKeyRotation`, `GenerateDataKey`, `Decrypt`, `ReEncrypt*`, `DescribeKey`, `ScheduleKeyDeletion` só em lote) e em `api_pseudonimo` (`GenerateMac`). **Atenção:** `KmsPseudonymSigner.verificarChave()` usa também `VerifyMac`, que a role não tem; por isso o boot **não** a chama. Se um dia virar sonda de readiness, a política `api_pseudonimo` precisa de `kms:VerifyMac` (decisão com o Guardião, porque a key policy nega `VerifyMac` a humanos de propósito).
+
 ## 1. Sessão e clínica (porta plugável)
 
 - `AuthProvider` (`apps/api/src/modules/auth/auth-context.ts`) é a porta: recebe os cabeçalhos da requisição e devolve `{ tenantId, userId, perfis }` **guardados no servidor**, ou `null` (401).
@@ -127,7 +153,7 @@ Problema: a página seguinte era pedida por número e respondida com a clínica 
 - Migração `0009_patients_sem_delete.sql` (R3): o runtime perdeu `DELETE`/`TRUNCATE` em `patients`; nenhuma tabela da clínica pode ser apagada pela API. A guarda de schema cobra a lista exata.
 - Migração `0008_auditoria_tipo_de_ator.sql`: `audit_log.actor_kind` e pseudônimo do suporte (ver [auditoria-encadeada.md](auditoria-encadeada.md) §4c); a trilha vai no pacote G2 (`schemaVersion` 1.2.0).
 - Migração `0010_alerta_de_anomalia.sql` (R5): ação `anomaly_alert` no CHECK de `audit_log.action` e no enum `AuditAction`. Migração posterior que redefinir esse CHECK precisa manter o valor.
-- **Pseudônimo do suporte fora do processo (N1):** porta `PseudonymSigner` (`ator-suporte.ts`). Staging/produção: `KmsPseudonymSigner`, HMAC-SHA256 por `GenerateMac` numa chave HMAC_256 do KMS (`SUPPORT_PSEUDONYM_KMS_KEY_ID`; política dá ao papel da API só `kms:GenerateMac`), com `verificarChave()` (`GenerateMac` + `VerifyMac` numa sonda fixa); a fórmula do pseudônimo não muda. `LocalPseudonymSigner` só em `development`/`test` (lista fechada). Fora deles, sem KMS a API **não sobe** e `SUPPORT_PSEUDONYM_KEY` é recusada. O cliente KMS (`@aws-sdk/client-kms`) entra no Portão A; até lá a interface `KmsMacApi` é mockada nos testes.
+- **Pseudônimo do suporte fora do processo (N1):** porta `PseudonymSigner` (`ator-suporte.ts`). Staging/produção: `KmsPseudonymSigner`, HMAC-SHA256 por `GenerateMac` numa chave HMAC_256 do KMS (`SUPPORT_PSEUDONYM_KMS_KEY_ID`; política dá ao papel da API só `kms:GenerateMac`), com `verificarChave()` (`GenerateMac` + `VerifyMac` numa sonda fixa); a fórmula do pseudônimo não muda. `LocalPseudonymSigner` só em `development`/`test` (lista fechada). Fora deles, sem KMS a API **não sobe** e `SUPPORT_PSEUDONYM_KEY` é recusada. O cliente KMS real (`@aws-sdk/client-kms`, `crypto/kms-client.ts`, rodada 27) é o mesmo da chave mestra; nos testes a interface `KmsMacApi` usa o KMS falso de `test/kms-falso.ts`. Requisitos de boot na §0.
 - `cpf_enc`, `phone_enc`, `birth_date_enc`: só o formato cifrado `v1:` do `FieldCipher` (chave da clínica, AAD amarrando clínica, tabela, coluna e linha). Um `CHECK` no banco recusa valor em claro. A primeira escrita cifrada provisiona a chave da clínica (auditado como `key_provision`).
 - Auditoria na mesma transação (sem registro, sem operação): `read`/`create`/`update` com escopo `patients`, `appointments`, `professionals`, `appointment_types`. O metadata leva só ids, contagens, página, nomes de colunas alteradas e transição de status. Nunca nome, CPF, telefone ou termo de busca (teste confere).
 - Política de assinatura: escrita segue G1 (bloqueada em `past_due`/`read_only`/`cancelled`); leitura, G4 (janela de saída).

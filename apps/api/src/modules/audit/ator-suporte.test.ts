@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -12,27 +12,10 @@ import {
   supportActorPseudonym,
   type KmsMacApi,
 } from './ator-suporte';
+import { kmsFalso } from '../../../test/kms-falso';
 
 const T1 = '6f1c2a10-0000-4000-8000-000000000001' as TenantId;
 const T2 = '6f1c2a10-0000-4000-8000-000000000002' as TenantId;
-
-/** KMS de mentira: HMAC-SHA256 com uma chave que só ele conhece (como o KMS real). */
-function kmsFalso(chave: Buffer, opcoes: { falhar?: boolean } = {}): KmsMacApi & { chamadas: string[] } {
-  const chamadas: string[] = [];
-  return {
-    chamadas,
-    generateMac(input) {
-      chamadas.push(`generate:${input.KeyId}`);
-      if (opcoes.falhar) return Promise.reject(new Error(`AccessDenied arn:aws:kms:sa-east-1:123:key/${input.KeyId}`));
-      return Promise.resolve({ Mac: createHmac('sha256', chave).update(input.Message).digest() });
-    },
-    verifyMac(input) {
-      chamadas.push(`verify:${input.KeyId}`);
-      const esperado = createHmac('sha256', chave).update(input.Message).digest();
-      return Promise.resolve({ MacValid: esperado.length === input.Mac.length && timingSafeEqual(esperado, input.Mac) });
-    },
-  };
-}
 
 describe('pseudônimo do atendente do suporte (Decisão 1, migração 0008)', () => {
   const chave = randomBytes(32);
@@ -120,10 +103,37 @@ describe('PseudonymSigner (N1: segredo fora do processo da API)', () => {
         String(NODE_ENV),
       ).toThrow(/proibida fora de development\/test/);
     }
-    // KMS configurado mas sem cliente ligado: também não sobe.
-    expect(() => createPseudonymSigner({ NODE_ENV: 'production', SUPPORT_PSEUDONYM_KMS_KEY_ID: 'alias/x' })).toThrow(/cliente KMS/);
-    const prod = createPseudonymSigner({ NODE_ENV: 'production', SUPPORT_PSEUDONYM_KMS_KEY_ID: 'alias/x' }, { kms: kmsFalso(randomBytes(32)) });
+    // Chave definida mas sem região do KMS: também não sobe (o cliente real não tem como ser montado).
+    const arn = 'arn:aws:kms:sa-east-1:000000000000:key/00000000-0000-4000-8000-000000000000';
+    expect(() => createPseudonymSigner({ NODE_ENV: 'production', SUPPORT_PSEUDONYM_KMS_KEY_ID: arn })).toThrow(/KMS não configurado.*AWS_REGION/);
+    const prod = createPseudonymSigner(
+      { NODE_ENV: 'production', AWS_REGION: 'sa-east-1', SUPPORT_PSEUDONYM_KMS_KEY_ID: arn },
+      { kms: kmsFalso(randomBytes(32)) },
+    );
     expect(prod.tipo).toBe('kms');
+  });
+
+  it('boot com o SDK real: cliente montado do ambiente (sem rede); ARN e região conferidos fora de dev/test', () => {
+    const arn = 'arn:aws:kms:sa-east-1:000000000000:key/00000000-0000-4000-8000-000000000000';
+    const base = { NODE_ENV: 'production', AWS_REGION: 'sa-east-1' };
+    // Sem deps: o adaptador do @aws-sdk/client-kms é criado; nenhuma chamada sai no boot.
+    expect(createPseudonymSigner({ ...base, SUPPORT_PSEUDONYM_KMS_KEY_ID: arn }).tipo).toBe('kms');
+    // Alias, id solto, ARN de outra região ou região fora da lista: recusa (mensagem sem o valor).
+    for (const id of ['alias/x', '00000000-0000-4000-8000-000000000000', arn.replace('sa-east-1', 'us-east-1')]) {
+      const erro = (() => {
+        try {
+          createPseudonymSigner({ ...base, SUPPORT_PSEUDONYM_KMS_KEY_ID: id });
+          return null;
+        } catch (e) {
+          return e as Error;
+        }
+      })();
+      expect(erro?.message, id).toMatch(/precisa ser o ARN/);
+      expect(erro?.message).not.toContain(id);
+    }
+    expect(() => createPseudonymSigner({ ...base, AWS_REGION: 'us-east-1', SUPPORT_PSEUDONYM_KMS_KEY_ID: arn })).toThrow(/lista permitida/);
+    // Em dev, alias é aceito (KMS de um sandbox pessoal), mas a região ainda é exigida.
+    expect(createPseudonymSigner({ NODE_ENV: 'development', AWS_REGION: 'sa-east-1', SUPPORT_PSEUDONYM_KMS_KEY_ID: 'alias/x' }).tipo).toBe('kms');
   });
 
   it('boot em development/test: local, com segredo da variável (≥ 32 bytes) ou aleatório do processo', async () => {

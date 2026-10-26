@@ -9,6 +9,7 @@ import { createAuthProvider } from './modules/auth/auth-provider.factory';
 import { AuthModule } from './modules/auth/auth.module';
 import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module';
 import type { KeyProvider } from './modules/crypto/key-provider';
+import type { KmsCliente } from './modules/crypto/kms-client';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { ImportsModule } from './modules/imports/imports.module';
@@ -35,6 +36,11 @@ export interface AppAdapters {
   readonly authProvider?: AuthProvider;
   readonly keyProvider?: KeyProvider;
   /**
+   * Cliente KMS da chave mestra e do pseudônimo (testes passam um falso). Sem ele, cada fábrica cria
+   * o seu com o SDK a partir do ambiente (AWS_REGION em sa-east-1; credencial = role da tarefa).
+   */
+  readonly kms?: KmsCliente;
+  /**
    * Store dos contadores por usuário (R5). O main.ts passa o MESMO store do rate limit por IP
    * (Redis com fallback); sem ele, cria um pelo ambiente e o fecha no shutdown.
    */
@@ -60,14 +66,15 @@ export interface AppAdapters {
 @Module({})
 export class AppModule {
   /**
-   * Sem adaptador explícito, escolhe pelo ambiente: em NODE_ENV=production sem provedor real de
-   * login (D4), sem KMS das chaves de dados ou sem KMS do pseudônimo do suporte (N1), lança aqui
-   * e a API não sobe.
+   * Sem adaptador explícito, escolhe pelo ambiente. Em NODE_ENV=production lança aqui (a API não
+   * sobe) sem provedor real de login e do portal (D4), sem a configuração do KMS (AWS_REGION,
+   * SUPPORT_PSEUDONYM_KMS_KEY_ID) ou sem os segredos obrigatórios. Tabela em api-dominio.md §0.
    */
   static forRoot(config: AppConfig, adapters: AppAdapters = {}): DynamicModule {
+    const kmsDeps = adapters.kms ? { kms: adapters.kms } : {};
     const authProvider = adapters.authProvider ?? createAuthProvider(process.env);
-    const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
-    const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
+    const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env, kmsDeps);
+    const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env, kmsDeps);
     const portalAuthProvider = adapters.portalAuthProvider ?? createPortalAuthProvider(process.env);
     const portalOtpSender = adapters.portalOtpSender ?? createPortalOtpSender(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);

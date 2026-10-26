@@ -5,8 +5,8 @@ import { KEY_PURPOSE_IMPORT_BATCH, KEY_PURPOSE_TENANT_DATA, type GeneratedDataKe
 
 /**
  * Subconjunto da API do AWS KMS usado aqui, com os nomes e formatos do SDK v3
- * (`new KMS({ region: 'sa-east-1' })` de `@aws-sdk/client-kms` deve satisfazer esta interface).
- * Mantido como interface para a API não depender do SDK até a infraestrutura existir (Portão A).
+ * O adaptador real é `createAwsKmsCliente` (kms-client.ts, `@aws-sdk/client-kms`).
+ * Mantido como interface para o provedor não depender do SDK (testes usam KMS falso).
  */
 export interface KmsApi {
   createKey(input: {

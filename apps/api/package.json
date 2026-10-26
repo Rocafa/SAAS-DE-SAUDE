@@ -18,6 +18,7 @@
     "serve:dast": "vitest run --config vitest.dast.config.mts"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "3.1149.0",
     "@nestjs/common": "^12.1.2",
     "@nestjs/core": "^12.1.2",
     "@nestjs/platform-express": "^12.1.2",

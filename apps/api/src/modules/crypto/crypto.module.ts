@@ -5,6 +5,8 @@ import { DisposableKeys } from './disposable-keys';
 import { FieldCipher } from './field-cipher';
 import { auditKeyEvents } from './key-audit';
 import type { KeyProvider } from './key-provider';
+import { createAwsKmsCliente, loadKmsConfig } from './kms-client';
+import { KmsKeyProvider, type KmsApi } from './kms-key-provider';
 import { LocalKeyProvider } from './local-key-provider';
 
 export const FIELD_CIPHER = Symbol('FIELD_CIPHER');
@@ -12,15 +14,23 @@ export const FIELD_CIPHER = Symbol('FIELD_CIPHER');
 export const DISPOSABLE_KEYS = Symbol('DISPOSABLE_KEYS');
 
 /**
- * Escolhe o provedor de chave mestra no boot. Em produção o KMS ainda não está ligado (Portão A):
- * a API recusa subir em vez de cifrar com chave local. Em dev, `FIELD_KEYS_DEV_ROOT_SECRET`
- * (base64, >= 32 bytes, opcional) mantém as chaves entre reinícios; sem ele, vivem só na memória.
+ * Escolhe o provedor de chave mestra no boot:
+ * - development/test: chave local. `FIELD_KEYS_DEV_ROOT_SECRET` (base64, >= 32 bytes, opcional) mantém
+ *   as chaves entre reinícios; sem ele, vivem só na memória;
+ * - qualquer outro NODE_ENV (production, staging, vazio...): AWS KMS, uma chave mestra por clínica
+ *   (Portão A). Sem a configuração do KMS (`loadKmsConfig`: AWS_REGION em sa-east-1, só a role da
+ *   tarefa), lança e a API não sobe; o segredo local de dev também é recusado ali.
+ * `deps.kms` injeta o cliente (o AppModule passa o mesmo do pseudônimo; testes passam um falso).
  */
-export function createKeyProvider(env: NodeJS.ProcessEnv = process.env): KeyProvider {
-  // Lista fechada: chave local só em development/test. Produção, staging, vazio ou qualquer outro
-  // valor recusam subir (o KMS ainda não está ligado — Portão A).
+export function createKeyProvider(env: NodeJS.ProcessEnv = process.env, deps: { readonly kms?: KmsApi } = {}): KeyProvider {
+  // Lista fechada: chave local só em development/test.
   if (env.NODE_ENV !== 'development' && env.NODE_ENV !== 'test') {
-    throw new Error(`KMS não configurado: o provedor de chave local é proibido fora de development/test, inclusive em produção e staging (NODE_ENV=${env.NODE_ENV ?? 'vazio'})`);
+    if (env.FIELD_KEYS_DEV_ROOT_SECRET?.trim()) {
+      throw new Error('FIELD_KEYS_DEV_ROOT_SECRET é proibida fora de development/test: a chave mestra fica no KMS');
+    }
+    // A configuração é conferida mesmo com cliente injetado: região e credencial valem para os dois.
+    const config = loadKmsConfig(env, 'chave mestra das clínicas');
+    return new KmsKeyProvider(deps.kms ?? createAwsKmsCliente(config));
   }
   const raiz = env.FIELD_KEYS_DEV_ROOT_SECRET;
   return new LocalKeyProvider({
