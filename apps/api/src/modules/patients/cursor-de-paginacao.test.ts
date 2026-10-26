@@ -1,4 +1,4 @@
-/** Cursor opaco e assinado da lista de pacientes (R5 do parecer #76). Ids 100% fictícios. */
+/** Cursor opaco, cifrado e assinado da lista de pacientes (R5 do parecer #76; R7–R9). Ids e nomes 100% fictícios. */
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +8,8 @@ const ctxA = { tenantId: '00000000-0000-4000-8000-00000000000a' as TenantId, use
 const ctxB = { ...ctxA, tenantId: '00000000-0000-4000-8000-00000000000b' as TenantId } as RequestContext;
 const outroUsuario = { ...ctxA, userId: '00000000-0000-4000-8000-0000000000a2' as UserId } as RequestContext;
 const filtro = { situacao: 'todos', limite: 10 };
-const pos = { pagina: 2, depoisDe: '00000000-0000-4000-8000-000000000123' };
+const pos = { pagina: 2, depoisDe: '00000000-0000-4000-8000-000000000123', nomeDaAncora: 'paciente ficticio ancora' };
+const lida = { pagina: pos.pagina, depoisDe: pos.depoisDe };
 
 function relogio(inicio = 1_800_000_000_000) {
   let t = inicio;
@@ -27,23 +28,35 @@ function recusa(fn: () => unknown) {
   expect((erro as CursorInvalidoError).getResponse()).toEqual({ statusCode: 409, message: 'Conflito', codigo: 'cursor_invalido' });
 }
 
+/** Segredo de teste gerado na hora (nunca valor fixo). */
+const base64Aleatorio = (n = 32) => randomBytes(n).toString('base64');
+
 describe('CursorDePaginacao', () => {
   const chave = randomBytes(32);
 
   it('caminho feliz: mesma sessão e mesmo filtro devolvem a posição', () => {
     const c = new CursorDePaginacao(chave, 'pacientes');
     const token = c.assinar(ctxA, filtro, pos);
-    expect(token).toMatch(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
-    expect(c.ler(ctxA, filtro, token)).toEqual(pos);
+    expect(token).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect(token.length).toBeLessThanOrEqual(512);
+    expect(c.ler(ctxA, filtro, token)).toMatchObject(lida);
   });
 
-  it('nenhum dado pessoal no cursor: payload só com ids técnicos, página e validade; termo de busca fica fora', () => {
+  it('R7: cifrado — nenhum UUID, nome ou termo legível no cursor (o log do ALB só vê bytes opacos)', () => {
     const c = new CursorDePaginacao(chave, 'pacientes');
     const token = c.assinar(ctxA, { ...filtro, busca: 'maria ficticia' }, pos);
-    const payload = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')) as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(['c', 'e', 'k', 'p', 'u']);
-    expect(token).not.toContain('maria');
-    expect(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')).not.toContain('maria');
+    const decodificado = token
+      .split('.')
+      .slice(1)
+      .map((p) => Buffer.from(p, 'base64url').toString('latin1'))
+      .join('|');
+    for (const visivel of [token, decodificado]) {
+      for (const segredo of [ctxA.tenantId, ctxA.userId, pos.depoisDe, '000000000123', 'maria', 'ficticio', 'ancora', '"c"', '"k"']) {
+        expect(visivel).not.toContain(segredo);
+      }
+    }
+    // Mesmo conteúdo, cursores diferentes (IV aleatório): não dá para correlacionar no log.
+    expect(c.assinar(ctxA, filtro, pos)).not.toBe(c.assinar(ctxA, filtro, pos));
   });
 
   it('cursor de outra clínica ou de outro usuário: 409 cursor_invalido', () => {
@@ -63,17 +76,21 @@ describe('CursorDePaginacao', () => {
     recusa(() => new CursorDePaginacao(chave, 'guias').ler(ctxA, { ...filtro, busca: 'ana' }, token));
   });
 
-  it('adulterado: payload trocado (outra clínica/página), assinatura trocada, chave de outro processo, lixo', () => {
+  it('adulterado: cifra trocada, IV trocado, assinatura trocada, versão antiga, chave de outro processo, lixo', () => {
     const c = new CursorDePaginacao(chave, 'pacientes');
     const token = c.assinar(ctxA, filtro, pos);
-    const [v, corpo, mac] = token.split('.') as [string, string, string];
-    const p = JSON.parse(Buffer.from(corpo, 'base64url').toString('utf8')) as Record<string, unknown>;
-    const forjado = Buffer.from(JSON.stringify({ ...p, c: ctxB.tenantId, p: 9 })).toString('base64url');
-    recusa(() => c.ler(ctxB, filtro, `${v}.${forjado}.${mac}`));
-    recusa(() => c.ler(ctxA, filtro, `${v}.${corpo}.${mac[0] === 'A' ? 'B' : 'A'}${mac.slice(1)}`));
-    recusa(() => c.ler(ctxA, filtro, `v2.${corpo}.${mac}`));
+    const [v, iv, ct, mac] = token.split('.') as [string, string, string, string];
+    const troca = (s: string) => `${s[0] === 'A' ? 'B' : 'A'}${s.slice(1)}`;
+    recusa(() => c.ler(ctxA, filtro, `${v}.${iv}.${troca(ct)}.${mac}`));
+    recusa(() => c.ler(ctxA, filtro, `${v}.${troca(iv)}.${ct}.${mac}`));
+    recusa(() => c.ler(ctxA, filtro, `${v}.${iv}.${ct}.${troca(mac)}`));
+    // Cursor de outro token colado (partes de dois cursores válidos): recusado.
+    const [, iv2, ct2] = c.assinar(ctxA, filtro, pos).split('.') as [string, string, string];
+    recusa(() => c.ler(ctxA, filtro, `${v}.${iv2}.${ct2}.${mac}`));
+    // Formato v1 (só assinado, payload legível) não é mais aceito.
+    recusa(() => c.ler(ctxA, filtro, `v1.${ct}.${mac}`));
     recusa(() => new CursorDePaginacao(randomBytes(32), 'pacientes').ler(ctxA, filtro, token));
-    for (const lixo of ['', 'v1', 'v1..', 'v1.a.b.c', 'v1.$$.%%', '2']) recusa(() => c.ler(ctxA, filtro, lixo));
+    for (const lixo of ['', 'v2', 'v2...', 'v2.a.b.c.d', 'v2.$$.%%.&&', '2']) recusa(() => c.ler(ctxA, filtro, lixo));
   });
 
   it('vencido: vale por 10 minutos a partir da emissão', () => {
@@ -81,9 +98,20 @@ describe('CursorDePaginacao', () => {
     const c = new CursorDePaginacao(chave, 'pacientes', r.agora);
     const token = c.assinar(ctxA, filtro, pos);
     r.avancar(VALIDADE_DO_CURSOR_MS - 1000);
-    expect(c.ler(ctxA, filtro, token)).toEqual(pos);
+    expect(c.ler(ctxA, filtro, token)).toMatchObject(lida);
     r.avancar(1000);
     recusa(() => c.ler(ctxA, filtro, token));
+  });
+
+  it('R9: âncora sumida ou com outro nome de busca = 409; mesma âncora segue', () => {
+    const c = new CursorDePaginacao(chave, 'pacientes');
+    const posicao = c.ler(ctxA, filtro, c.assinar(ctxA, filtro, pos));
+    expect(() => c.conferirAncora(posicao, pos.nomeDaAncora)).not.toThrow();
+    recusa(() => c.conferirAncora(posicao, undefined));
+    recusa(() => c.conferirAncora(posicao, 'paciente ficticio renomeado'));
+    // A marca não é o nome: só 16 bytes de HMAC.
+    expect(posicao.marcaDaAncora).not.toContain('ficticio');
+    expect(Buffer.from(posicao.marcaDaAncora, 'base64url')).toHaveLength(16);
   });
 
   it('segredo: obrigatório em produção, mínimo de 32 bytes, aleatório por processo fora de produção', () => {
@@ -92,5 +120,45 @@ describe('CursorDePaginacao', () => {
     expect(loadPaginationCursorKey({ PAGINATION_CURSOR_KEY: 'k'.repeat(32) }).length).toBe(32);
     expect(loadPaginationCursorKey({})).toBe(loadPaginationCursorKey({}));
     expect(() => new CursorDePaginacao(randomBytes(8), 'pacientes')).toThrow();
+  });
+
+  describe('R8: entropia mínima do segredo em produção', () => {
+    const prod = (PAGINATION_CURSOR_KEY: string, extra: Record<string, string> = {}) => () =>
+      loadPaginationCursorKey({ NODE_ENV: 'production', PAGINATION_CURSOR_KEY, ...extra });
+
+    it('aceita bytes aleatórios em base64, base64url ou hex (≥ 32 bytes decodificados) e usa os bytes', () => {
+      const bytes = randomBytes(32);
+      expect(prod(bytes.toString('base64'))()).toEqual(bytes);
+      expect(prod(bytes.toString('base64url'))()).toEqual(bytes);
+      expect(prod(bytes.toString('hex'))()).toEqual(bytes);
+      expect(prod(base64Aleatorio(48))()).toHaveLength(48);
+    });
+
+    it('recusa frase, texto com ≥ 32 caracteres mas sem codificação, ou poucos bytes decodificados', () => {
+      expect(prod('uma frase longa qualquer com mais de trinta e dois bytes')).toThrow(/base64 ou hex/);
+      expect(prod('k'.repeat(32))).toThrow(/32 bytes decodificados/); // 32 caracteres base64 = 24 bytes
+      expect(prod(base64Aleatorio(24))).toThrow(/32 bytes decodificados/);
+      expect(prod(randomBytes(31).toString('hex'))).toThrow(/32 bytes decodificados/);
+    });
+
+    it('recusa repetição e baixa variedade de bytes', () => {
+      expect(prod('Q'.repeat(44))).toThrow(/fraca ou de exemplo/);
+      expect(prod('0'.repeat(64))).toThrow(/fraca ou de exemplo/);
+      expect(prod(Buffer.alloc(48, 'ab').toString('base64'))).toThrow(/fraca ou de exemplo/);
+      expect(prod('ab'.repeat(32))).toThrow(/fraca ou de exemplo/);
+    });
+
+    it('recusa valores com cara de exemplo/placeholder', () => {
+      for (const sinal of ['exemplo', 'CHANGEME', 'troque', 'placeholder', 'secret']) {
+        const valor = `${sinal}${randomBytes(48).toString('base64url')}`.slice(0, 64);
+        expect(prod(valor), sinal).toThrow(/fraca ou de exemplo/);
+      }
+    });
+
+    it('recusa o mesmo valor de RATE_LIMIT_HASH_KEY (C1: dois segredos distintos)', () => {
+      const valor = base64Aleatorio();
+      expect(prod(valor, { RATE_LIMIT_HASH_KEY: valor })).toThrow(/RATE_LIMIT_HASH_KEY/);
+      expect(prod(valor, { RATE_LIMIT_HASH_KEY: base64Aleatorio() })).not.toThrow();
+    });
   });
 });

@@ -8,10 +8,12 @@
  */
 import { AuditAction, type TenantId } from '@plataforma/shared';
 import { and, eq } from 'drizzle-orm';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { CursorDePaginacao, loadPaginationCursorKey, VALIDADE_DO_CURSOR_MS } from '../src/modules/patients/cursor-de-paginacao';
+import { normalizarBusca } from '../src/modules/patients/patients.validation';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 const TOTAL = 5;
@@ -91,12 +93,23 @@ describe('cursor de paginação (R5 do parecer #76)', () => {
     expect(outro.body).toEqual(RECUSA);
   });
 
-  it('nenhum dado pessoal no cursor (só ids técnicos, página e validade)', async () => {
+  it('R7: cursor cifrado — nenhum id, nome ou termo legível no que vai para a query (log do ALB)', async () => {
     const r = await api.http().post('/pacientes/busca').set(cab(recepA)).send({ busca: 'cursor a', limite: 1 }).expect(200);
-    const cursor = (r.body as Pagina).proximoCursor!;
-    const payload = Buffer.from(cursor.split('.')[1]!, 'base64url').toString('utf8');
-    expect(payload).not.toMatch(/ficticio|cursor a/i);
-    expect(Object.keys(JSON.parse(payload) as object).sort()).toEqual(['c', 'e', 'k', 'p', 'u']);
+    const pag = r.body as Pagina;
+    const cursor = pag.proximoCursor!;
+    expect(cursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    const decodificado = cursor
+      .split('.')
+      .slice(1)
+      .map((p) => Buffer.from(p, 'base64url').toString('latin1'))
+      .join('|');
+    for (const visivel of [cursor, decodificado]) {
+      expect(visivel).not.toMatch(/ficticio|cursor a/i);
+      for (const id of [clinicaA, recepA.userId, pag.itens[0]!.id]) {
+        expect(visivel).not.toContain(id);
+        expect(visivel).not.toContain(id.replaceAll('-', ''));
+      }
+    }
   });
 
   it('A→B→A: o mesmo usuário troca de clínica no meio; a página com o cursor de A sob B é recusada sem dados', async () => {
@@ -129,12 +142,12 @@ describe('cursor de paginação (R5 do parecer #76)', () => {
     expect((await api.http().get('/pacientes').query({ limite: '2', cursor }).set(cab(recepA))).status).toBe(409);
   });
 
-  it('adulterado: payload com outra página ou outra âncora, assinatura trocada: 409', async () => {
+  it('adulterado: cifra trocada, assinatura trocada, formato v1 legível forjado: 409', async () => {
     const p1 = await api.http().get('/pacientes').query({ limite: '2', situacao: 'todos' }).set(cab(recepA)).expect(200);
-    const [v, corpo, mac] = (p1.body as Pagina).proximoCursor!.split('.') as [string, string, string];
-    const p = JSON.parse(Buffer.from(corpo, 'base64url').toString('utf8')) as Record<string, unknown>;
-    const forjado = Buffer.from(JSON.stringify({ ...p, p: 4, k: idsA[0] })).toString('base64url');
-    for (const cursor of [`${v}.${forjado}.${mac}`, `${v}.${corpo}.${mac[0] === 'A' ? 'B' : 'A'}${mac.slice(1)}`, 'qualquer-coisa']) {
+    const [v, iv, ct, mac] = (p1.body as Pagina).proximoCursor!.split('.') as [string, string, string, string];
+    const troca = (s: string) => `${s[0] === 'A' ? 'B' : 'A'}${s.slice(1)}`;
+    const v1Forjado = `v1.${Buffer.from(JSON.stringify({ c: clinicaA, u: recepA.userId, e: 9_999_999_999, p: 4, k: idsA[0] })).toString('base64url')}.${mac}`;
+    for (const cursor of [`${v}.${iv}.${troca(ct)}.${mac}`, `${v}.${iv}.${ct}.${troca(mac)}`, v1Forjado, 'qualquer-coisa']) {
       const r = await api.http().get('/pacientes').query({ limite: '2', situacao: 'todos', cursor }).set(cab(recepA));
       expect(r.status, cursor).toBe(409);
       expect(r.body).toEqual(RECUSA);
@@ -145,13 +158,14 @@ describe('cursor de paginação (R5 do parecer #76)', () => {
     // Mesmo segredo do processo e mesmo escopo, com o relógio 10 min + 1 s atrás: assinatura válida, validade vencida.
     const velho = new CursorDePaginacao(loadPaginationCursorKey(process.env), 'pacientes', () => Date.now() - VALIDADE_DO_CURSOR_MS - 1000);
     const ctx = { tenantId: clinicaA, userId: recepA.userId, roles: ['recepcao'] } as never;
-    const cursor = velho.assinar(ctx, { situacao: 'todos', limite: 2 }, { pagina: 2, depoisDe: idsA[0]! });
+    const ancora = { pagina: 2, depoisDe: idsA[0]!, nomeDaAncora: normalizarBusca('Paciente Ficticio Cursor A0 ') };
+    const cursor = velho.assinar(ctx, { situacao: 'todos', limite: 2 }, ancora);
     const r = await api.http().get('/pacientes').query({ limite: '2', situacao: 'todos', cursor }).set(cab(recepA));
     expect(r.status).toBe(409);
     expect(r.body).toEqual(RECUSA);
     // O mesmo cursor ainda dentro da validade passa (controle: só a validade mudou).
     const novo = new CursorDePaginacao(loadPaginationCursorKey(process.env), 'pacientes');
-    const ok = novo.assinar(ctx, { situacao: 'todos', limite: 2 }, { pagina: 2, depoisDe: idsA[0]! });
+    const ok = novo.assinar(ctx, { situacao: 'todos', limite: 2 }, ancora);
     await api.http().get('/pacientes').query({ limite: '2', situacao: 'todos', cursor: ok }).set(cab(recepA)).expect(200);
   });
 
@@ -160,5 +174,100 @@ describe('cursor de paginação (R5 do parecer #76)', () => {
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ statusCode: 400, message: 'Dados inválidos', campos: ['pagina'] });
     await api.http().post('/pacientes/busca').set(cab(recepA)).send({ busca: 'cursor', pagina: 2 }).expect(400);
+  });
+});
+
+/**
+ * R9 da conferência de 25/10: a âncora (último paciente da página anterior) muda entre as páginas.
+ * Comportamento (§3b do api-dominio): sumiu = 409 determinístico, sem leitura nem auditoria; mudou de
+ * nome de busca = 409 (a posição dela na ordem mudou); mudou só de situação = a paginação segue do
+ * mesmo ponto, sem pular nem repetir.
+ */
+describe('âncora sumida ou alterada entre as páginas (R9)', () => {
+  /** Clínica própria com N pacientes de nomes ordenados (`... R9 0`, `... R9 1`...); devolve ids na ordem. */
+  async function clinicaComPacientes(n: number) {
+    const clinica = await api.novaClinica();
+    const admin = api.sessao(clinica, 'admin');
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const r = await api.http().post('/pacientes').set(cab(admin)).send({ nome: `Paciente Ficticio R9 ${i}`, telefone: '11900000022' });
+      expect(r.status).toBe(201);
+      ids.push((r.body as { id: string }).id);
+    }
+    return { clinica, admin, ids };
+  }
+
+  function pagina(sessao: { Authorization: string }, situacao: string, cursor?: string) {
+    return api.http().get('/pacientes').query({ limite: '2', situacao, ...(cursor ? { cursor } : {}) }).set(cab(sessao));
+  }
+
+  /** Apaga o paciente com o papel de MIGRAÇÃO (o runtime não tem DELETE em patients, 0009): simula o descarte. */
+  async function apagar(clinica: TenantId, id: string): Promise<void> {
+    const url = process.env.DATABASE_MIGRATOR_URL;
+    if (!url) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para simular a âncora apagada');
+    const op = postgres(url, { max: 1, onnotice: () => undefined });
+    try {
+      await op.begin(async (t) => {
+        await t`select app_set_tenant(${clinica}::uuid)`;
+        const apagados = await t`delete from patients where id = ${id}::uuid returning id`;
+        expect(apagados).toHaveLength(1);
+      });
+    } finally {
+      await op.end({ timeout: 5 });
+    }
+  }
+
+  it('âncora apagada: 409 cursor_invalido, sem dados e sem auditoria de leitura; a lista recomeça inteira', async () => {
+    const { clinica, admin, ids } = await clinicaComPacientes(5);
+    const p1 = (await pagina(admin, 'todos')).body as Pagina;
+    expect(p1.itens.map((i) => i.id)).toEqual(ids.slice(0, 2));
+    await apagar(clinica, ids[1]!);
+    const antes = await leiturasAuditadas(clinica, admin.userId);
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      const r = await pagina(admin, 'todos', p1.proximoCursor!);
+      expect(r.status).toBe(409);
+      expect(r.body).toEqual(RECUSA);
+    }
+    expect(await leiturasAuditadas(clinica, admin.userId)).toBe(antes);
+    // Recomeço (o que o cliente faz no 409): lista inteira sem o apagado, sem repetir.
+    const vistos: string[] = [];
+    let pag = (await pagina(admin, 'todos')).body as Pagina;
+    vistos.push(...pag.itens.map((i) => i.id));
+    while (pag.proximoCursor) {
+      pag = (await pagina(admin, 'todos', pag.proximoCursor).expect(200)).body as Pagina;
+      vistos.push(...pag.itens.map((i) => i.id));
+    }
+    expect(vistos).toEqual(ids.filter((_, i) => i !== 1));
+  });
+
+  it('âncora inativada com filtro `ativos`: a página 2 segue do mesmo ponto, sem pular nem repetir', async () => {
+    const { admin, ids } = await clinicaComPacientes(5);
+    const p1 = (await pagina(admin, 'ativos')).body as Pagina;
+    expect(p1.itens.map((i) => i.id)).toEqual(ids.slice(0, 2));
+    await api.http().post(`/pacientes/${ids[1]}/inativar`).set(cab(admin)).expect(200);
+    const p2 = (await pagina(admin, 'ativos', p1.proximoCursor!).expect(200)).body as Pagina;
+    expect(p2.itens.map((i) => i.id)).toEqual(ids.slice(2, 4));
+    const p3 = (await pagina(admin, 'ativos', p2.proximoCursor!).expect(200)).body as Pagina;
+    expect(p3.itens.map((i) => i.id)).toEqual(ids.slice(4));
+    expect(p3.proximoCursor).toBeNull();
+  });
+
+  it('âncora inativada com filtro `todos`: segue do mesmo ponto (a situação não muda a ordem)', async () => {
+    const { admin, ids } = await clinicaComPacientes(4);
+    const p1 = (await pagina(admin, 'todos')).body as Pagina;
+    await api.http().post(`/pacientes/${ids[1]}/inativar`).set(cab(admin)).expect(200);
+    const p2 = (await pagina(admin, 'todos', p1.proximoCursor!).expect(200)).body as Pagina;
+    expect(p2.itens.map((i) => i.id)).toEqual(ids.slice(2, 4));
+  });
+
+  it('âncora renomeada (a posição dela na ordem mudou): 409 determinístico, sem auditoria de leitura', async () => {
+    const { clinica, admin, ids } = await clinicaComPacientes(4);
+    const p1 = (await pagina(admin, 'todos')).body as Pagina;
+    await api.http().patch(`/pacientes/${ids[1]}`).set(cab(admin)).send({ nome: 'Paciente Ficticio R9 9 Renomeado' }).expect(200);
+    const antes = await leiturasAuditadas(clinica, admin.userId);
+    const r = await pagina(admin, 'todos', p1.proximoCursor!);
+    expect(r.status).toBe(409);
+    expect(r.body).toEqual(RECUSA);
+    expect(await leiturasAuditadas(clinica, admin.userId)).toBe(antes);
   });
 });

@@ -3,7 +3,7 @@ import { AuditAction, type PaginaPorCursor, type RequestContext, type TenantId }
 import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
-import { CURSOR_DE_PAGINACAO, CursorDePaginacao, CursorInvalidoError, type PosicaoDoCursor } from './cursor-de-paginacao';
+import { CURSOR_DE_PAGINACAO, CursorDePaginacao, type PosicaoLida } from './cursor-de-paginacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -80,20 +80,21 @@ export class PatientsService {
    */
   async listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
     const amarra = { situacao: filtro.situacao, limite: filtro.limite, ...(filtro.busca !== undefined ? { busca: filtro.busca } : {}) };
-    const posicao: PosicaoDoCursor | undefined = filtro.cursor === undefined ? undefined : this.cursor.ler(ctx, amarra, filtro.cursor);
+    const posicao: PosicaoLida | undefined = filtro.cursor === undefined ? undefined : this.cursor.ler(ctx, amarra, filtro.cursor);
     const pagina = posicao?.pagina ?? 1;
     return this.leitura(ctx, async (tx) => {
       const condicoes: SQL[] = [eq(patients.tenantId, ctx.tenantId)];
       if (filtro.situacao !== 'todos') condicoes.push(eq(patients.active, filtro.situacao === 'ativos'));
       if (filtro.busca) condicoes.push(like(patients.searchName, padraoContem(filtro.busca)));
       if (posicao) {
-        // Âncora pelo id técnico (o nome nunca vai no cursor). Âncora sumida = cursor recusado.
+        // Âncora pelo id técnico (o nome nunca vai no cursor), sem filtrar situação: inativar a âncora não
+        // muda a posição dela na ordem. Sumiu ou mudou de nome de busca = 409, antes da auditoria (R9; §3b).
         const [ancora] = await tx
           .select({ nome: patients.searchName, id: patients.id })
           .from(patients)
           .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, posicao.depoisDe)));
-        if (!ancora) throw new CursorInvalidoError();
-        condicoes.push(sql`(${patients.searchName}, ${patients.id}) > (${ancora.nome}, ${ancora.id}::uuid)`);
+        this.cursor.conferirAncora(posicao, ancora?.nome);
+        condicoes.push(sql`(${patients.searchName}, ${patients.id}) > (${ancora!.nome}, ${ancora!.id}::uuid)`);
       }
       const linhas = await tx
         .select({
@@ -101,12 +102,16 @@ export class PatientsService {
           nome: patients.displayName,
           nomeSocial: patients.socialName,
           ativo: patients.active,
+          nomeDeBusca: patients.searchName,
         })
         .from(patients)
         .where(and(...condicoes))
         .orderBy(asc(patients.searchName), asc(patients.id))
         .limit(filtro.limite + 1);
-      const itens = linhas.slice(0, filtro.limite);
+      const daPagina = linhas.slice(0, filtro.limite);
+      // O nome de busca só serve para a marca da âncora; não sai na resposta.
+      const itens: PacienteResumoDto[] = daPagina.map(({ id, nome, nomeSocial, ativo }) => ({ id, nome, nomeSocial, ativo }));
+      const ultima = daPagina[daPagina.length - 1];
       // Limite de páginas como antes (PAGINA_MAXIMA): depois da última permitida não há cursor.
       const temMais = linhas.length > filtro.limite && pagina < PAGINA_MAXIMA;
       // O termo de busca é nome de paciente: não entra na auditoria, só o fato de ter havido busca.
@@ -115,7 +120,8 @@ export class PatientsService {
         scope: SCOPE,
         metadata: { count: itens.length, page: pagina, search: filtro.busca !== undefined },
       });
-      const proximoCursor = temMais ? this.cursor.assinar(ctx, amarra, { pagina: pagina + 1, depoisDe: itens[itens.length - 1]!.id }) : null;
+      const proximoCursor =
+        temMais && ultima ? this.cursor.assinar(ctx, amarra, { pagina: pagina + 1, depoisDe: ultima.id, nomeDaAncora: ultima.nomeDeBusca }) : null;
       return { itens, pagina, limite: filtro.limite, temMais, proximoCursor };
     });
   }

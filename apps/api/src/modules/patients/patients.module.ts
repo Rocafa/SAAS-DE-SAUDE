@@ -16,7 +16,7 @@ import {
 /**
  * Depende dos módulos globais: TenancyModule (banco), CryptoModule (cifra) e AuthModule (sessão).
  * A vigilância (limite por usuário e alerta de anomalia, R5) recebe o store do rate limit no boot.
- * O cursor da lista (R5 do parecer #76) recebe o segredo do HMAC (PAGINATION_CURSOR_KEY) no boot.
+ * O cursor da lista (R5 do parecer #76) recebe o segredo (PAGINATION_CURSOR_KEY; cifra + HMAC) no boot.
  */
 @Module({})
 export class PatientsModule {
