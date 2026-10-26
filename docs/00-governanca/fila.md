@@ -74,6 +74,10 @@
 | Rodada 26.2: ✅ RELATORIO-GERAL até a rodada 25; #74 logo depois do #72 | Maestro @Rocafa | 25/10/2026 | main |
 | Rodada 26.3: ✅ **PR #76** (pacientes/agenda alinhados ao backend r19+) — vetado e corrigido; **veto levantado**; R5/R6 feitas | Maestro @Rocafa | 25/10/2026 | PR #76 |
 
+| Rodada 27.1: Guardião confere segredos no Terraform (#58, af8a969) e cursor no front (#76, 40ba2fe) | Maestro @Rocafa (guardião) | 26/10/2026 | PRs #58/#76 |
+| Rodada 27.2: cursor — R7 (ids fora dos logs), R8 (entropia do segredo), R9 (âncora sumida) | Maestro @Rocafa (agente engenharia) | 26/10/2026 | `eng/integracao-r19` |
+| Rodada 27.3: boot em produção — KMS real (Portão A) e pseudônimo; **só a D4 deve impedir a subida** | Maestro @Rocafa (agente engenharia) | 26/10/2026 | `eng/integracao-r19` |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
