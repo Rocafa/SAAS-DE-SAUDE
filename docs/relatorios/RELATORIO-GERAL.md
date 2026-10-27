@@ -1,8 +1,8 @@
 # Relatório geral do projeto Plataforma Saúde
 
 > **Para quem:** os dois sócios (N0). Dá para entender o projeto inteiro só com este documento, sem abrir o resto.
-> **Autor:** Maestro (N1) · **Data de referência:** 25/10/2026 (atualizado até a rodada 25; versões anteriores: 15/10, 12/10 e 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
-> **Escopo:** rodadas 1 a 25. A `main` continua no código de 12/10 (migrações 0001 a 0006), porque o GitHub Actions está parado por cobrança desde então e a regra é não mergear código sem CI verde. Todo o resto está **pronto em PR**, testado só localmente: #43 a #47 e #75 (telas), #54 (economia de minutos), #56 (IA), #57, #60, #61, #62, #63, #65 e **#73** (API, que substitui #66 a #69), #58 (Terraform), #59 (Docker), #36 (PoC da D4, rascunho), #74 (multer) e os Dependabot #49, #51, #52, #70, #71 e #72. A §6 (rodada 5) fica como registro histórico.
+> **Autor:** Maestro (N1) · **Data de referência:** 27/10/2026 (atualizado até a rodada 27; versões anteriores: 25/10, 15/10, 12/10 e 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
+> **Escopo:** rodadas 1 a 27. A `main` continua no código de 12/10 (migrações 0001 a 0006), porque o GitHub Actions está parado por cobrança desde então e a regra é não mergear código sem CI verde. Todo o resto está **pronto em PR**, testado só localmente: #43 a #47, #75 e #76 (telas), #54 (economia de minutos), #56 (IA), #57, #60, #61, #62, #63, #65 e **#73** (API, que substitui #66 a #69), #58 (Terraform), #59 (Docker), #36 (PoC da D4, rascunho), #74 (multer) e os Dependabot #49, #51, #52, #70, #71 e #72. A §6 (rodada 5) fica como registro histórico.
 > **Números de teste:** são os últimos verificados localmente pelo Maestro. Nenhum passou pelo CI.
 >
 > **Legenda de estado:** ✅ pronto · 🛠️ em andamento ou aguardando merge · 📋 planejado (só no papel)
@@ -15,23 +15,25 @@
 
 **Por que pode dar certo.** É um mercado de **troca de sistema**: 92% dos estabelecimentos já usam sistema eletrônico [FATO, TIC Saúde, citado em [relatório executivo de mercado](../01-mercado/relatorio-executivo-mercado.md) §1]. As queixas mais comuns contra os concorrentes são prontuário bloqueado por inadimplência, cancelamento difícil, cobrança escondida e suporte lento. Nossa proposta é atacar exatamente essas dores, com garantias que o código faz cumprir.
 
-**Onde estamos (25/10/2026).** **O núcleo do MVP (primeira versão vendável) está escrito, testado localmente e aprovado pelo Guardião, mas nada de código entrou na `main` desde 12/10**, porque o GitHub Actions continua parado por falta de pagamento. Desde a última versão deste relatório (rodada 15):
+**Onde estamos (27/10/2026).** **O núcleo do MVP (primeira versão vendável) está escrito, testado localmente e aprovado pelo Guardião, mas nada de código entrou na `main` desde 12/10**, porque o GitHub Actions continua parado por falta de pagamento. Desde a última versão deste relatório (rodada 15):
 - o **financeiro** (#65) e o **prontuário** (#63) passaram de "aprovado com ressalvas" para **APROVADO** (rodada 20);
 - nasceram e foram aprovados o **importador** de dados dos concorrentes, os **responsáveis** do paciente (pais, representante legal, quem paga), o **backend do portal do paciente** e os **lembretes por WhatsApp**. Os quatro foram juntados num único PR, o **#73**, que o Guardião **APROVOU** em 23/10 (rodadas 17 a 19);
 - entrou o **agendador real das tarefas automáticas** (descarte de dados vencidos, revogação na maioridade, lembretes), que só pode ser mergeado depois de passar com um Redis real (rodada 20);
 - o **Terraform do staging** (#58) ganhou alarmes, IAM das chaves e uma trava de TLS no CI (rodadas 20 a 22);
-- os vetos das telas do front (#44, #46, #47) foram **levantados** e o **portal do paciente no navegador foi ligado ao backend real** (#75) (rodadas 24 e 25).
+- os vetos das telas do front (#44, #46, #47) foram **levantados** e o **portal do paciente no navegador foi ligado ao backend real** (#75) (rodadas 24 e 25);
+- foi feito um **ensaio local do merge completo** (todos os PRs juntos, na ordem) e as telas de pacientes e agenda foram alinhadas ao backend novo (**#76**) (rodada 26);
+- a **segurança das chaves** ficou mais forte: cada clínica tem uma chave que **só abre com a identificação da própria clínica**, um alarme avisa qualquer mudança nas regras das chaves, e a API sobe em produção com o cofre de chaves real da AWS — só falta o login (D4). O Terraform do staging (#58) foi **APROVADO** pelo Guardião (rodada 27).
 
-Ao todo, o Guardião vetou 4 entregas novas nessas rodadas (#66, #67, #68, #69). Todas foram corrigidas e reaprovadas antes de existir dado real. Fontes: [rodada 16](2026-10-15-rodada-16.md), [rodadas 17–19](2026-10-22-rodadas-17-a-19.md), [rodada 20](2026-10-23-rodada-20.md), [rodadas 21–22](2026-10-23-rodadas-21-22.md), [rodadas 24–25](2026-10-25-rodadas-24-25.md).
+Ao todo, o Guardião vetou 4 entregas novas nessas rodadas (#66, #67, #68, #69). Todas foram corrigidas e reaprovadas antes de existir dado real. Fontes: [rodada 16](2026-10-15-rodada-16.md), [rodadas 17–19](2026-10-22-rodadas-17-a-19.md), [rodada 20](2026-10-23-rodada-20.md), [rodadas 21–22](2026-10-23-rodadas-21-22.md), [rodadas 24–25](2026-10-25-rodadas-24-25.md), [rodada 26](2026-10-25-rodada-26.md), [rodada 27](2026-10-27-rodada-27.md).
 
 | Pronto | Falta |
 |---|---|
 | Pesquisa de mercado (11 segmentos) e recomendação de nicho | Confirmar o nicho com 5 a 10 entrevistas reais (D1) |
 | PRD, WBS (332 micropartes), roadmap, backlog do MVP (176 histórias, 898 pontos), garantias G1–G9 | Merge de tudo quando o CI voltar (§9.1) |
 | LGPD: RIPD da plataforma, da IA e do WhatsApp, minuta do DPA, proposta de retenção, plano de incidente, matriz de retenção por conselho e **mais de 25 pareceres do Guardião** | Advogado validar os itens ⚖️ (D8); nomear o encarregado (DPO); DPA assinado |
-| API pronta em PR: pacientes, agenda, vínculo de cuidado, guias, pacotes, prontuário, financeiro, importador, responsáveis, portal do paciente, WhatsApp e agendador de tarefas (**53 migrações**, `test:rls` **600/600** local) | Login, permissões por perfil (RBAC) e MFA: tudo depende da **D4** |
-| Telas do front: design system, Ajudante, Hoje, Agenda, Pacientes (#42 na `main`); demais telas e portal ligado ao backend em PR (#43 a #47, #60, #75) | Login real (D4) para usar no navegador; @Lopesloro aceitar ou descartar o #75 |
-| Infra em PR: Terraform do staging com alarmes e IAM das chaves (#58), imagem Docker (#59) | Orçamento (D13) e o primeiro *apply* (criação real) na AWS |
+| API pronta em PR: pacientes, agenda, vínculo de cuidado, guias, pacotes, prontuário, financeiro, importador, responsáveis, portal do paciente, WhatsApp e agendador de tarefas (**53 migrações**, `test:rls` **613/613** local) | Login, permissões por perfil (RBAC) e MFA: tudo depende da **D4** |
+| Telas do front: design system, Ajudante, Hoje, Agenda, Pacientes (#42 na `main`); demais telas e portal ligado ao backend em PR (#43 a #47, #60, #75, #76) | Login real (D4) para usar no navegador; @Lopesloro aceitar ou descartar o #75 |
+| Infra em PR: Terraform do staging com alarmes, IAM das chaves e alarme de administração do KMS (#58, **aprovado**), imagem Docker (#59) | Orçamento (D13) e o primeiro *apply* (criação real) na AWS |
 | 9 checks automáticos no CI, mais os que chegam com os PRs (§5) | **O GitHub Actions parou por falta de pagamento**: hoje nenhum CI roda ([fila.md](../00-governanca/fila.md)) |
 
 **As 3 decisões mais urgentes**
@@ -487,7 +489,7 @@ Um PR por vez, só com o CI verde. Regra da fila: quem abriu o PR faz o merge.
 4. **#43** (telas de agenda e pacientes).
 5. **#57** → **#61** → **#62** → **#63** → **#65** (API: pacientes e agenda, vínculo de cuidado, guias e pacotes, prontuário, financeiro).
 6. **#73** (integração, que **substitui #66, #67, #68 e #69**). Condição: os testes com Redis real verdes no CI, com a saída anexada.
-7. **#60** (telas na API real) → **#56** (golden sets da IA) → **#59** (imagem Docker) → **#58** (Terraform).
+7. **#60** (telas na API real) → **#76** (pacientes e agenda no backend novo; entra junto com o #73) → **#56** (golden sets da IA) → **#59** (imagem Docker) → **#58** (Terraform).
 8. Demais Dependabot, nesta ordem: **#70 + #71** juntos (CodeQL 4.39.0) → **#52** e **#51** (setup-node e upload-artifact) → **#49** (ioredis 6) por último. Antes do #49: pedir `@dependabot rebase` depois do #72, validar o BullMQ com Redis real e confirmar que o Redis da AWS (ElastiCache) está na versão 6 ou maior.
 
 
@@ -501,6 +503,7 @@ Um PR por vez, só com o CI verde. Regra da fila: quem abriu o PR faz o merge.
 | **Agendador com Redis real** | Os testes do agendador com Redis real precisam passar (condição do #73), e o primeiro ciclo no staging precisa rodar sem alarme. Sem o agendador, dados vencidos não são descartados nem acessos revogados na maioridade | Engenharia + DevOps |
 | **IAM e chaves KMS aplicados e validados** | As permissões das chaves (inclusive as de lote do importador) só se provam num *apply* real no staging, com uma chamada de cada tipo e uma chamada negada. Depende da D13 | DevOps + Sócios (D13) |
 | **R10 do importador** | Apagar a chave antiga `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte, antes da 1ª importação real. Junto: alarme `CHAVE_LOTE_PRESA` e CloudTrail ativos | DevOps (item livre na fila) |
+| **Provas do Guardião no staging** | Duas provas só possíveis com a AWS de verdade: (1) a chave de uma clínica não abre sem a identificação dela ou com a de outra (K-c3); (2) o alarme de mudança nas chaves dispara de fato (K-c5). Chaves criadas antes da regra nova não vão para o piloto | DevOps + Guardião |
 | **D4 (login real)** | Sem login não há RBAC, MFA, entrada real no portal nem uso das telas no navegador; o #63 pede login nominal por operador antes do lançamento | Sócios, depois Engenharia |
 | **Conta da Meta (WhatsApp Business)** | Os lembretes estão prontos, mas só com adaptador falso. Antes do 1º envio real: conta na Meta ou num parceiro oficial (BSP), nome de exibição neutro e a prova jurídica das cláusulas-padrão (R17, D8) | Sócios + Advogado |
 | **D8 + DPO** | Sem advogado e sem encarregado não há DPA, RIPD do piloto nem dado real | Sócios |
@@ -510,7 +513,7 @@ Um PR por vez, só com o CI verde. Regra da fila: quem abriu o PR faz o merge.
 ### 9.3 Próximas rodadas (até 3 agentes cada)
 
 - **Assim que o CI voltar:** o Maestro conduz os merges do §9.1, um por vez; `devops-ci` acompanha os jobs novos (Redis real, E2E, imagem, Terraform).
-- **Enquanto o CI não volta:** `devops-ci` com a R10 do importador e o reporte do bug do postgres.js 3.4.9 (itens livres na fila); ressalvas do #75 no próximo PR do portal.
+- **Enquanto o CI não volta:** kit do primeiro dia do staging (roteiro + scripts das provas K-c3/K-c5); novo ensaio do merge completo com os PRs da rodada 27; R10 do importador e o reporte do bug do postgres.js 3.4.9 (itens livres na fila).
 - **Depois da D4:** `engenharia` com login, RBAC e MFA conforme a D4; `qa-testes` com o E2E real do login à agenda, por perfil.
 
 ---

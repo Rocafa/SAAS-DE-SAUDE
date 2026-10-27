@@ -1,13 +1,13 @@
 # Contexto do projeto — leia primeiro
 
-> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 25, 25/10/2026): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
+> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 27, 27/10/2026): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
 >
 > 🚀 **O que falta para produção (rodada 7, 10/10/2026):** [checklist P0/P1/P2 + pesquisa regulatória atualizada](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
 >
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 25/10/2026 (rodadas 16–25: importador, responsáveis, portal, WhatsApp, agendador de tarefas, integração #73, vetos do front levantados e portal ligado ao backend no #75). Último relatório: [rodadas 24–25](docs/relatorios/2026-10-25-rodadas-24-25.md). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 27/10/2026 (rodadas 16–27: importador, responsáveis, portal, WhatsApp, agendador de tarefas, integração #73, vetos do front levantados e portal ligado ao backend no #75, ensaio do merge completo, pacientes/agenda no backend novo (#76), chave por clínica trancada à própria clínica e Terraform do staging aprovado). Último relatório: [rodada 27](docs/relatorios/2026-10-27-rodada-27.md). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -39,7 +39,7 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Garantias ao cliente** contra as queixas nº 1 do mercado (prontuário bloqueado, cancelamento difícil): [garantias-ao-cliente.md](docs/02-produto/garantias-ao-cliente.md).
 - **Backlog do MVP:** 24 épicos, 176 histórias, 898 pontos (M0+M1: 79 histórias, 377 pontos), incluindo controle de guia simples e pacotes no M1. Também prontos: definição de pronto, métricas e plano de piloto (30 clínicas).
 - **Nicho de entrada recomendado:** fisio/TO + psicólogos autônomos; TEA/ABA na onda 2 ([relatório executivo](docs/01-mercado/relatorio-executivo-mercado.md)).
-- **Telas (rodadas 8 a 25):** na `main` ainda com **dados fictícios** e **sem falar com a API**. Na `main` (PR #42): design system em cinza (alto contraste, letra grande), o **Ajudante** (busca e ações digitadas em português, processadas só no navegador), Hoje, Agenda e Pacientes. Em PR: agenda e pacientes completos (#43, pronto, parado sem CI); atendimento/prontuário/documentos (#44), financeiro/guias/mensagens (#45), configurações (#46) e portal do paciente (#47), com os **vetos do Guardião levantados em 24/10** ([re-revisão](docs/03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md)); e o portal ligado ao backend real (#75). Capturas em `docs/02-produto/telas/`; parecer em [front-r8](docs/03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md).
+- **Telas (rodadas 8 a 25):** na `main` ainda com **dados fictícios** e **sem falar com a API**. Na `main` (PR #42): design system em cinza (alto contraste, letra grande), o **Ajudante** (busca e ações digitadas em português, processadas só no navegador), Hoje, Agenda e Pacientes. Em PR: agenda e pacientes completos (#43, pronto, parado sem CI); atendimento/prontuário/documentos (#44), financeiro/guias/mensagens (#45), configurações (#46) e portal do paciente (#47), com os **vetos do Guardião levantados em 24/10** ([re-revisão](docs/03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md)); e o portal ligado ao backend real (#75); pacientes e agenda alinhados ao backend novo (#76, aprovado em 27/10). Capturas em `docs/02-produto/telas/`; parecer em [front-r8](docs/03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md).
   → [PRD](docs/02-produto/PRD.md) · [WBS](docs/02-produto/WBS-micropartes.md) · [roadmap](docs/02-produto/roadmap.md) · [jornadas](docs/02-produto/jornadas.md)
 
 ## 5. LGPD e regulação (inegociável)
