@@ -74,9 +74,12 @@
 | Rodada 26.2: ✅ RELATORIO-GERAL até a rodada 25; #74 logo depois do #72 | Maestro @Rocafa | 25/10/2026 | main |
 | Rodada 26.3: ✅ **PR #76** (pacientes/agenda alinhados ao backend r19+) — vetado e corrigido; **veto levantado**; R5/R6 feitas | Maestro @Rocafa | 25/10/2026 | PR #76 |
 
-| Rodada 27.1: Guardião confere segredos no Terraform (#58, af8a969) e cursor no front (#76, 40ba2fe) | Maestro @Rocafa (guardião) | 26/10/2026 | PRs #58/#76 |
-| Rodada 27.2: cursor — R7 (ids fora dos logs), R8 (entropia do segredo), R9 (âncora sumida) | Maestro @Rocafa (agente engenharia) | 26/10/2026 | `eng/integracao-r19` |
-| Rodada 27.3: boot em produção — KMS real (Portão A) e pseudônimo; **só a D4 deve impedir a subida** | Maestro @Rocafa (agente engenharia) | 26/10/2026 | `eng/integracao-r19` |
+| Rodada 27.1: ✅ Guardião conferiu segredos no Terraform (#58) e cursor no front (#76) — aprovados c/ condições (C1-b XFF, V2-a/b/c, K-a/b/c) | Maestro @Rocafa | 26/10/2026 | PRs #58/#76 |
+| Rodada 27.2: ✅ cursor v2 — R7/R8/R9 + V2-a/b (marca do nome com chave própria, escopo clínica+âncora; 8a5dee3); V2-c no ROPA (f5a2523) | Maestro @Rocafa | 26/10/2026 | `eng/integracao-r19` |
+| Rodada 27.3: ✅ boot em produção com KMS real e pseudônimo — só a D4 impede a subida | Maestro @Rocafa | 26/10/2026 | `eng/integracao-r19` |
+| Rodada 27.4: ✅ #58 — XFF append, R7 (logs do ALB), AWS_REGION, veto à cadeia de credenciais (K-a/b), contexto tenant_id no gestor e break-glass (K-c) (5dc085b, aaf2f32); **key policy das chaves por clínica aguarda decisão** | Maestro @Rocafa | 27/10/2026 | PR #58 |
+| Rodada 27.5: Guardião confere 27.4 e V2-a/b | Maestro @Rocafa (guardião) | 27/10/2026 | PR #58 / `eng/integracao-r19` |
+| Rodada 27.6: #76 — busca com checagem de sessão e aviso de truncamento acima de 1.000 | Maestro @Rocafa (agente engenharia) | 27/10/2026 | PR #76 |
 
 ## Livre (pegue colocando seu nome)
 
@@ -84,7 +87,6 @@
 |---|---|
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
-| **Backend (#76 R5 residual):** cursor da paginação de pacientes ligado à sessão no servidor (troca A→B→A durante a paginação) | parecer #76, 25/10/2026 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
