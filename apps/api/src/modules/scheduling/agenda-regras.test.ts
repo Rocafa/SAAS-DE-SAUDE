@@ -4,7 +4,12 @@ import { APPOINTMENT_STATUSES } from '../../db/schema';
 import { EntradaInvalidaError } from '../../common/validacao';
 import {
   capacidadeDoHorario,
+  dentroDaJanelaDeAtendimento,
+  JANELA_ATENDIMENTO_PADRAO,
+  loadJanelaDeAtendimento,
   exigeAtendimento,
+  exigeJanelaDeAtendimento,
+  motivoParaNaoRemarcar,
   janelaDeDias,
   noFusoDaClinica,
   paraInstante,
@@ -77,5 +82,70 @@ describe('validação da agenda', () => {
     expect(() => validarNovoAgendamento({ ...ids, data: '2030-03-04', hora: '24:00' })).toThrow(EntradaInvalidaError);
     expect(() => validarNovoAgendamento({ ...ids, data: '2030-03-04', hora: '09:00', encaixe: 'sim' })).toThrow(EntradaInvalidaError);
     expect(() => validarNovoAgendamento({ ...ids, pacienteId: 'p1', data: '2030-03-04', hora: '09:00' })).toThrow(EntradaInvalidaError);
+  });
+});
+
+describe('janela de atendimento (V1 do parecer #61)', () => {
+  const inicio = new Date('2030-03-04T12:00:00Z');
+  const fim = new Date('2030-03-04T12:50:00Z');
+  const min = 60_000;
+  const j = JANELA_ATENDIMENTO_PADRAO;
+
+  it('de 30 min antes do início até 60 min depois do fim, bordas incluídas', () => {
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(inicio.getTime() - 30 * min), j)).toBe(true);
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(inicio.getTime() - 31 * min), j)).toBe(false);
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(fim.getTime() + 60 * min), j)).toBe(true);
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(fim.getTime() + 61 * min), j)).toBe(false);
+  });
+
+  it('nunca para o dia seguinte nem para 100 dias atrás', () => {
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(inicio.getTime() - 86_400_000), j)).toBe(false);
+    expect(dentroDaJanelaDeAtendimento(inicio, fim, new Date(inicio.getTime() + 100 * 86_400_000), j)).toBe(false);
+  });
+
+  it('configurável pelo ambiente, com teto (2 h antes, 24 h depois); valor inválido derruba o boot', () => {
+    expect(loadJanelaDeAtendimento({})).toEqual(JANELA_ATENDIMENTO_PADRAO);
+    expect(
+      loadJanelaDeAtendimento({ ATTENDANCE_WINDOW_BEFORE_MIN: '60', ATTENDANCE_WINDOW_AFTER_MIN: '120', SELF_SCHEDULED_ALERT_PER_DAY: '3' }),
+    ).toEqual({ antesMin: 60, depoisMin: 120, alertaAutoagendadosPorDia: 3 });
+    for (const env of [
+      { ATTENDANCE_WINDOW_BEFORE_MIN: '121' },
+      { ATTENDANCE_WINDOW_AFTER_MIN: '1441' },
+      { ATTENDANCE_WINDOW_BEFORE_MIN: '-1' },
+      { ATTENDANCE_WINDOW_AFTER_MIN: 'abc' },
+    ]) {
+      expect(() => loadJanelaDeAtendimento(env)).toThrow();
+    }
+  });
+});
+
+describe('remarcação e voltas de status (V2 do parecer #61)', () => {
+  const agora = new Date('2030-03-04T12:00:00Z');
+  const j = JANELA_ATENDIMENTO_PADRAO;
+  const min = 60_000;
+
+  it('voltas que saem de status clínico ou de falta exigem a janela; as demais não', () => {
+    expect(exigeJanelaDeAtendimento('in_progress', 'checked_in')).toBe(true);
+    expect(exigeJanelaDeAtendimento('completed', 'in_progress')).toBe(true);
+    expect(exigeJanelaDeAtendimento('no_show', 'scheduled')).toBe(true);
+    expect(exigeJanelaDeAtendimento('no_show', 'confirmed')).toBe(true);
+    expect(exigeJanelaDeAtendimento('checked_in', 'in_progress')).toBe(true);
+    expect(exigeJanelaDeAtendimento('checked_in', 'scheduled')).toBe(false);
+    expect(exigeJanelaDeAtendimento('scheduled', 'cancelled')).toBe(false);
+    expect(exigeJanelaDeAtendimento('scheduled', 'no_show')).toBe(false);
+  });
+
+  it('não remarca o que já passou, o que está travado, nem para o passado', () => {
+    const futuro = new Date(agora.getTime() + 60 * min);
+    const base = { status: 'scheduled' as const, rescheduleLocked: false };
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro }, futuro, agora, j)).toBeNull();
+    // Até antesMin (30 min) antes de agora ainda vale (encaixe de quem chegou há pouco).
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: new Date(agora.getTime() - 29 * min) }, futuro, agora, j)).toBeNull();
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: new Date(agora.getTime() - 31 * min) }, futuro, agora, j)).toBe('status_nao_permite');
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro }, new Date(agora.getTime() - 31 * min), agora, j)).toBe('horario_no_passado');
+    expect(motivoParaNaoRemarcar({ ...base, startsAt: futuro, rescheduleLocked: true }, futuro, agora, j)).toBe('status_nao_permite');
+    for (const status of ['checked_in', 'in_progress', 'completed', 'no_show', 'cancelled'] as const) {
+      expect(motivoParaNaoRemarcar({ status, rescheduleLocked: false, startsAt: futuro }, futuro, agora, j), status).toBe('status_nao_permite');
+    }
   });
 });

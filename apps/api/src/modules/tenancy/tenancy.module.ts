@@ -19,8 +19,9 @@ export const DATABASE_HANDLE = Symbol('DATABASE_HANDLE');
 export class TenantDatabase implements OnApplicationShutdown {
   constructor(@Inject(DATABASE_HANDLE) private readonly handle: DatabaseHandle) {}
 
-  run<T>(tenantId: TenantId, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
-    return withTenant(this.handle.db, tenantId, fn);
+  /** `userId`: usuário da sessão, travado na transação (migração 0016). */
+  run<T>(tenantId: TenantId, fn: (tx: TenantTx) => Promise<T>, userId?: string): Promise<T> {
+    return withTenant(this.handle.db, tenantId, fn, userId);
   }
 
   async onApplicationShutdown(): Promise<void> {

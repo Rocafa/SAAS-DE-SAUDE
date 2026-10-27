@@ -1,4 +1,4 @@
-import { bigint, boolean, customType, foreignKey, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, foreignKey, integer, jsonb, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Espelho tipado das tabelas criadas em db/migrations/*.sql.
@@ -15,6 +15,8 @@ export const tenants = pgTable('tenants', {
   subscriptionStatus: text('subscription_status', { enum: SUBSCRIPTION_STATUSES }).notNull().default('active'),
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0013: janela de continuidade do vínculo de cuidado, em dias (1..180, padrão 90). */
+  careLinkDays: smallint('care_link_days').notNull().default(90),
 });
 
 export const patients = pgTable('patients', {
@@ -93,6 +95,30 @@ export const appointments = pgTable('appointments', {
   cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0013: usuário da sessão que criou (imutável). NULL em linhas anteriores à 0013. */
+  createdBy: uuid('created_by'),
+  /** Migração 0014: último usuário que remarcou (só muda junto com o horário; nunca volta a NULL). */
+  rescheduledBy: uuid('rescheduled_by'),
+  /** Migração 0014: trava permanente do horário depois de atendimento ou falta (o banco mantém). */
+  rescheduleLocked: boolean('reschedule_locked').notNull().default(false),
+});
+
+/**
+ * Histórico de remarcações (migração 0014): append-only, gravado SÓ pelo trigger de appointments a
+ * cada mudança de horário. O runtime lê; não insere, não altera, não apaga.
+ */
+export const appointmentReschedules = pgTable('appointment_reschedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  appointmentId: uuid('appointment_id').notNull(),
+  fromStartsAt: timestamp('from_starts_at', { withTimezone: true }).notNull(),
+  fromEndsAt: timestamp('from_ends_at', { withTimezone: true }).notNull(),
+  toStartsAt: timestamp('to_starts_at', { withTimezone: true }).notNull(),
+  toEndsAt: timestamp('to_ends_at', { withTimezone: true }).notNull(),
+  rescheduledBy: uuid('rescheduled_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
@@ -174,4 +200,5 @@ export const schema = {
   professionals,
   appointmentTypes,
   appointments,
+  appointmentReschedules,
 };

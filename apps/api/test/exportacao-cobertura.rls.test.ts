@@ -10,11 +10,11 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
-import { auditLog, patients, professionals, appointmentTypes, appointments } from '../src/db/schema';
+import { auditLog, patients, professionals, appointmentTypes, appointments, appointmentReschedules } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
-import { recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
+import { LocalPseudonymSigner, recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
 import { UTF8_BOM } from '../src/modules/exports/csv';
 import { ExportsService } from '../src/modules/exports/exports.module';
 import {
@@ -38,6 +38,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   professionals: 'professionals',
   appointment_types: 'appointmentTypes',
   appointments: 'appointments',
+  appointment_reschedules: 'appointmentReschedules',
   audit_log: 'auditEvents',
 };
 
@@ -83,6 +84,13 @@ beforeAll(async () => {
     hora: '08:00',
   });
   expect(ag.status).toBe(201);
+  // Uma remarcação (para o histórico da 0014 entrar no pacote).
+  await api
+    .http()
+    .post(`/agendamentos/${(ag.body as { id: string }).id}/remarcar`)
+    .set(cab(admin))
+    .send({ data: '2030-05-07', hora: '09:00' })
+    .expect(200);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -96,7 +104,7 @@ beforeAll(async () => {
     await withTenant(api.db.db, tenantId, (tx) =>
       recordSupportAudit(
         tx,
-        CHAVE_SUPORTE,
+        new LocalPseudonymSigner(CHAVE_SUPORTE, 'test'),
         { tenantId, atendenteId: ATENDENTE, chamado, motivo: 'pedido_da_clinica' },
         { action: 'read', scope: 'patients', metadata: { count: 1 } },
       ),
@@ -154,7 +162,9 @@ describe('G2 — conteúdo do pacote', () => {
   it('manifesto versionado com contagens iguais às do banco, só da clínica A', async () => {
     expect(pkg.json.manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     const noBanco = await withTenant(api.db.db, clinicaA, async (tx) => {
-      const n = async (t: typeof patients | typeof professionals | typeof appointmentTypes | typeof appointments) =>
+      const n = async (
+        t: typeof patients | typeof professionals | typeof appointmentTypes | typeof appointments | typeof appointmentReschedules,
+      ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
         tenants: 1,
@@ -162,12 +172,13 @@ describe('G2 — conteúdo do pacote', () => {
         professionals: await n(professionals),
         appointmentTypes: await n(appointmentTypes),
         appointments: await n(appointments),
+        appointmentReschedules: await n(appointmentReschedules),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
     });
     expect(pkg.json.manifest.counts).toEqual(noBanco);
-    expect(noBanco).toMatchObject({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    expect(noBanco).toMatchObject({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1, appointmentReschedules: 1 });
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');

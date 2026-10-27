@@ -5,7 +5,11 @@ import { AppModule } from '../../app.module';
 import { createKeyProvider } from '../crypto/crypto.module';
 import { createAuthProvider } from './auth-provider.factory';
 import { DevSessionProvider } from './dev-session.provider';
-import { PERFIS, PERMISSOES, podeLerConteudoClinico, temPermissao } from './perfis';
+import { PERFIS, PERMISSOES, podeLerConteudoClinico, temPermissao, type VinculoDeCuidado } from './perfis';
+
+/** Só para testar a regra pura: fora do teste, o vínculo vem de calcularVinculoDeCuidado. */
+const comVinculo = { temVinculo: true, base: 'atendimento' } as VinculoDeCuidado;
+const semVinculo = { temVinculo: false, base: null } as VinculoDeCuidado;
 
 const tenant = randomUUID();
 const usuario = randomUUID();
@@ -91,10 +95,10 @@ describe('perfis e permissões', () => {
   });
 
   it('conteúdo clínico exige perfil clínico E vínculo de cuidado', () => {
-    expect(podeLerConteudoClinico(['profissional'], { temVinculo: true })).toBe(true);
-    expect(podeLerConteudoClinico(['profissional'], { temVinculo: false })).toBe(false);
+    expect(podeLerConteudoClinico(['profissional'], comVinculo)).toBe(true);
+    expect(podeLerConteudoClinico(['profissional'], semVinculo)).toBe(false);
     for (const p of PERFIS.filter((x) => x !== 'profissional')) {
-      expect(podeLerConteudoClinico([p], { temVinculo: true }), p).toBe(false);
+      expect(podeLerConteudoClinico([p], comVinculo), p).toBe(false);
     }
   });
 

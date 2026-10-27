@@ -31,12 +31,12 @@ export interface RateLimitStore {
 }
 
 /**
- * Janela fixa em memória, por instância. É o fallback e o modo local/teste. O mapa é zerado a
- * cada janela, então a memória fica limitada ao número de IPs vistos numa janela.
+ * Janela fixa em memória, por instância. É o fallback e o modo local/teste. Cada tamanho de janela
+ * tem o próprio mapa, zerado a cada janela (o limite por IP e os limites por usuário convivem no
+ * mesmo store); a memória fica limitada às chaves vistas numa janela.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
-  private windowStart = Date.now();
-  private hits = new Map<string, number>();
+  private readonly windows = new Map<number, { start: number; hits: Map<string, number> }>();
 
   constructor(private readonly label: Extract<RateLimitMode, 'memoria' | 'instancia-unica'> = 'memoria') {}
 
@@ -46,13 +46,14 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   hit(key: string, windowMs: number): Promise<RateLimitHit> {
     const now = Date.now();
-    if (now - this.windowStart >= windowMs) {
-      this.windowStart = now;
-      this.hits = new Map();
+    let w = this.windows.get(windowMs);
+    if (!w || now - w.start >= windowMs) {
+      w = { start: now, hits: new Map() };
+      this.windows.set(windowMs, w);
     }
-    const count = (this.hits.get(key) ?? 0) + 1;
-    this.hits.set(key, count);
-    return Promise.resolve({ count, resetMs: this.windowStart + windowMs - now });
+    const count = (w.hits.get(key) ?? 0) + 1;
+    w.hits.set(key, count);
+    return Promise.resolve({ count, resetMs: w.start + windowMs - now });
   }
 
   close(): Promise<void> {

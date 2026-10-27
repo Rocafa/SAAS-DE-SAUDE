@@ -4,7 +4,7 @@
  */
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
-import { appointments, appointmentTypes, patients, professionals, type SubscriptionStatus } from '../../db/schema';
+import { appointmentReschedules, appointments, appointmentTypes, patients, professionals, tenants, type SubscriptionStatus } from '../../db/schema';
 import { withTenant, type Database, type TenantTx } from '../../db/tenant-transaction';
 import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../audit/audit-chain';
 import { recordAudit } from '../audit/audit-log';
@@ -21,8 +21,12 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.2.0: trilha de auditoria da clínica (`auditoria.jsonl`) com os campos da cadeia de hash e o JSON
  *        canônico, para a clínica verificar (Decisão 1 do Guardião, parecer PR #57); manifesto com a
  *        contagem e o último elo (`auditChain.head`).
+ * 1.3.0: `tenant.careLinkDays` (janela de continuidade do vínculo de cuidado) e
+ *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013.
+ * 1.4.0: `appointments[].rescheduledBy`/`rescheduleLocked` e o histórico de remarcações
+ *        (`appointmentReschedules`, contagem própria), da migração 0014.
  */
-export const EXPORT_SCHEMA_VERSION = '1.2.0';
+export const EXPORT_SCHEMA_VERSION = '1.4.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -31,7 +35,7 @@ export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv',
  * toda tabela de `public` com `tenant_id` precisa estar em EXPORTED_TABLES ou em EXPORT_EXCLUDED_TABLES
  * (com o motivo). Tabela nova sem decisão reprova o test:rls.
  */
-export const EXPORTED_TABLES = ['tenants', 'patients', 'professionals', 'appointment_types', 'appointments', 'audit_log'] as const;
+export const EXPORTED_TABLES = ['tenants', 'patients', 'professionals', 'appointment_types', 'appointments', 'appointment_reschedules', 'audit_log'] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
@@ -55,6 +59,7 @@ export interface ExportManifest {
     readonly professionals: number;
     readonly appointmentTypes: number;
     readonly appointments: number;
+    readonly appointmentReschedules: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -115,16 +120,35 @@ export interface ExportedAppointment {
   readonly cancelledAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Usuário que criou (0013); null em agendamentos anteriores à migração. */
+  readonly createdBy: string | null;
+  /** Último usuário que remarcou (0014); null se nunca remarcado. */
+  readonly rescheduledBy: string | null;
+  /** Horário travado depois de atendimento ou falta (0014). */
+  readonly rescheduleLocked: boolean;
+}
+
+/** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
+export interface ExportedAppointmentReschedule {
+  readonly id: string;
+  readonly appointmentId: string;
+  readonly fromStartsAt: string;
+  readonly fromEndsAt: string;
+  readonly toStartsAt: string;
+  readonly toEndsAt: string;
+  readonly rescheduledBy: string;
+  readonly createdAt: string;
 }
 
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
-    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string };
+    readonly tenant: { readonly id: string; readonly displayName: string; readonly createdAt: string; readonly careLinkDays: number };
     readonly patients: readonly ExportedPatient[];
     readonly professionals: readonly ExportedProfessional[];
     readonly appointmentTypes: readonly ExportedAppointmentType[];
     readonly appointments: readonly ExportedAppointment[];
+    readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
   };
 }
 
@@ -177,6 +201,8 @@ export async function exportInTransaction(
   const tenant = await loadTenantSubscription(tx, ctx.tenantId);
   // G1/G4: inadimplência nunca bloqueia; cancelado só fora da janela de saída.
   if (!canExport(tenant.status, tenant.cancelledAt, now, windowDays)) throw new ExitWindowClosedError();
+  const [config] = await tx.select({ careLinkDays: tenants.careLinkDays }).from(tenants).where(eq(tenants.id, ctx.tenantId));
+  if (!config) throw new Error('tenant não encontrado no contexto atual');
 
   const patientRows = soDaClinica(
     await tx.select().from(patients).where(eq(patients.tenantId, ctx.tenantId)).orderBy(asc(patients.createdAt), asc(patients.id)),
@@ -204,6 +230,15 @@ export async function exportInTransaction(
       .from(appointments)
       .where(eq(appointments.tenantId, ctx.tenantId))
       .orderBy(asc(appointments.startsAt), asc(appointments.id)),
+    ctx.tenantId,
+  );
+
+  const rescheduleRows = soDaClinica(
+    await tx
+      .select()
+      .from(appointmentReschedules)
+      .where(eq(appointmentReschedules.tenantId, ctx.tenantId))
+      .orderBy(asc(appointmentReschedules.createdAt), asc(appointmentReschedules.id)),
     ctx.tenantId,
   );
 
@@ -299,6 +334,19 @@ export async function exportInTransaction(
     cancelledAt: iso(a.cancelledAt),
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
+    createdBy: a.createdBy,
+    rescheduledBy: a.rescheduledBy,
+    rescheduleLocked: a.rescheduleLocked,
+  }));
+  const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
+    id: r.id,
+    appointmentId: r.appointmentId,
+    fromStartsAt: r.fromStartsAt.toISOString(),
+    fromEndsAt: r.fromEndsAt.toISOString(),
+    toStartsAt: r.toStartsAt.toISOString(),
+    toEndsAt: r.toEndsAt.toISOString(),
+    rescheduledBy: r.rescheduledBy,
+    createdAt: r.createdAt.toISOString(),
   }));
 
   const manifest: ExportManifest = {
@@ -320,6 +368,7 @@ export async function exportInTransaction(
       professionals: exportedProfessionals.length,
       appointmentTypes: exportedTypes.length,
       appointments: exportedAppointments.length,
+      appointmentReschedules: exportedReschedules.length,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -357,6 +406,7 @@ export async function exportInTransaction(
       professionals: manifest.counts.professionals,
       appointmentTypes: manifest.counts.appointmentTypes,
       appointments: manifest.counts.appointments,
+      appointmentReschedules: manifest.counts.appointmentReschedules,
       auditEvents: manifest.counts.auditEvents,
     },
   });
@@ -365,11 +415,17 @@ export async function exportInTransaction(
     json: {
       manifest,
       data: {
-        tenant: { id: tenant.id, displayName: tenant.displayName, createdAt: tenant.createdAt.toISOString() },
+        tenant: {
+          id: tenant.id,
+          displayName: tenant.displayName,
+          createdAt: tenant.createdAt.toISOString(),
+          careLinkDays: config.careLinkDays,
+        },
         patients: exportedPatients,
         professionals: exportedProfessionals,
         appointmentTypes: exportedTypes,
         appointments: exportedAppointments,
+        appointmentReschedules: exportedReschedules,
       },
     },
     patientsCsv,
@@ -384,5 +440,5 @@ export function exportTenantData(
   ctx: RequestContext,
   options: ExportOptions = {},
 ): Promise<TenantExportPackage> {
-  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options));
+  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId);
 }

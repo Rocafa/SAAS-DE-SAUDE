@@ -15,7 +15,7 @@ export function lerNaClinica<T>(db: TenantDatabase, ctx: RequestContext, fn: (tx
       const t = await loadTenantSubscription(tx, ctx.tenantId);
       if (!canRead(t.status, t.cancelledAt, new Date(), EXIT_WINDOW_DAYS)) throw new ExitWindowClosedError();
       return fn(tx);
-    }),
+    }, ctx.userId),
   );
 }
 
@@ -24,6 +24,6 @@ export function escreverNaClinica<T>(db: TenantDatabase, ctx: RequestContext, fn
     db.run(ctx.tenantId, async (tx) => {
       assertCanWrite((await loadTenantSubscription(tx, ctx.tenantId)).status);
       return fn(tx);
-    }),
+    }, ctx.userId),
   );
 }
