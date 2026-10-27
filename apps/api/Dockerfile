@@ -10,9 +10,9 @@
 # - certificado do RDS (sa-east-1) baixado no build com checksum SHA-256 conferido.
 
 # ---------------------------------------------------------------------------------------------
-# Estágio 1: build (Node 22 LTS, Debian bookworm slim) — compila shared + API e isola só a API.
+# Estágio 1: build (Node 22 LTS, Debian trixie slim) — compila shared + API e isola só a API.
 # ---------------------------------------------------------------------------------------------
-FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS build
+FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS build
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
@@ -45,8 +45,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 # ---------------------------------------------------------------------------------------------
 # Estágio 2: runtime distroless (sem shell, sem gerenciador de pacotes). Entrypoint: node.
+# Debian 13: a variante debian12 parou de ser republicada (fev/2026) e ficou com OpenSSL vulnerável.
 # ---------------------------------------------------------------------------------------------
-FROM gcr.io/distroless/nodejs22-debian12:nonroot@sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e AS runtime
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:10747a1323be68f206aed893599d43e6697ad67257e7c42703553f99fbce3d33 AS runtime
 
 # Cadeia de certificados do RDS para sa-east-1 (verify-full no Postgres). Se a AWS trocar o bundle,
 # o build falha de propósito: baixe o novo, confira e atualize o checksum aqui.

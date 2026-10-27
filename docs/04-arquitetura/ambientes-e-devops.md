@@ -104,7 +104,7 @@ docker run --read-only -e DATABASE_URL=... plataforma-api                       
 
 | Item | Como está |
 |---|---|
-| Bases | Build em `node:22-bookworm-slim`, runtime em `gcr.io/distroless/nodejs22-debian12:nonroot` (sem shell nem gerenciador de pacotes). As duas são fixadas por **digest**, e o Dependabot (`docker`, em `/apps/api`) abre PR com o digest novo |
+| Bases | Build em `node:22-trixie-slim`, runtime em `gcr.io/distroless/nodejs22-debian13:nonroot` (Debian 13; a debian12 parou de ser republicada em fev/2026 e ficou com OpenSSL vulnerável) (sem shell nem gerenciador de pacotes). As duas são fixadas por **digest**, e o Dependabot (`docker`, em `/apps/api`) abre PR com o digest novo |
 | Dependências | pnpm 9.12.0 via corepack; `pnpm fetch` (camada de cache) → `install --offline` filtrado em `@plataforma/api...` → build → `pnpm deploy --prod --prefer-offline` (o `deploy` do pnpm 9 precisa dos metadados do registro; `--offline` falha). Só a API e o `shared` entram, com o patch do `postgres@3.4.9` aplicado |
 | Conteúdo | `dist/`, `node_modules/` de produção, `db/migrations/` e `scripts/migrate.mjs` |
 | Usuário e disco | `USER 1000:1000` (o mesmo da task do ECS). O código pertence ao root e é só leitura, e a imagem roda com `--read-only` (no ECS: `readonlyRootFilesystem`) |
