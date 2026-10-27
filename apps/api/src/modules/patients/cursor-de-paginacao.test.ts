@@ -201,5 +201,20 @@ describe('CursorDePaginacao', () => {
       expect(prod(valor, { RATE_LIMIT_HASH_KEY: valor })).toThrow(/RATE_LIMIT_HASH_KEY/);
       expect(prod(valor, { RATE_LIMIT_HASH_KEY: base64Aleatorio() })).not.toThrow();
     });
+
+    it('compara pelos BYTES decodificados: os mesmos bytes em outra codificação também são recusados', () => {
+      const bytes = randomBytes(32);
+      for (const [cursor, rl] of [
+        [bytes.toString('base64'), bytes.toString('hex')],
+        [bytes.toString('hex'), bytes.toString('base64url')],
+        [bytes.toString('base64url'), bytes.toString('base64')],
+        [bytes.toString('base64'), ` ${bytes.toString('base64')} `],
+      ] as const) {
+        expect(prod(cursor, { RATE_LIMIT_HASH_KEY: rl }), `${cursor.length}/${rl.length}`).toThrow(/RATE_LIMIT_HASH_KEY/);
+      }
+      // O rate limit usa o texto como chave (UTF-8): se esse texto é exatamente os bytes do cursor, também é o mesmo segredo.
+      const imprimivel = Buffer.from(base64Aleatorio(48), 'utf8').subarray(0, 48);
+      expect(prod(imprimivel.toString('base64'), { RATE_LIMIT_HASH_KEY: imprimivel.toString('utf8') })).toThrow(/RATE_LIMIT_HASH_KEY/);
+    });
   });
 });

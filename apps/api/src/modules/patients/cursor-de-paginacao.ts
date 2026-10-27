@@ -104,6 +104,19 @@ function decodificarSegredo(raw: string): Buffer | undefined {
 }
 
 /**
+ * Observação do parecer #76: compara pelos BYTES, não pelo texto. Os mesmos bytes em outra codificação
+ * (base64 × hex × base64url) são o mesmo segredo; e o rate limit usa o texto como chave (UTF-8), então
+ * também conta se esse texto, em bytes, for igual aos bytes do cursor.
+ */
+function mesmoSegredoQueORateLimit(cursor: Buffer, rawCursor: string, rateLimit: string | undefined): boolean {
+  const rl = rateLimit?.trim();
+  if (!rl) return false;
+  if (rl === rawCursor) return true;
+  const rlDecodificado = decodificarSegredo(rl);
+  return (rlDecodificado !== undefined && rlDecodificado.equals(cursor)) || Buffer.from(rl, 'utf8').equals(cursor);
+}
+
+/**
  * Segredo do cursor (as chaves de cifra e de HMAC derivam dele). Em produção é obrigatório
  * (PAGINATION_CURSOR_KEY, do Secrets Manager) e igual em todas as instâncias (a página 2 pode cair em
  * outra instância).
@@ -130,7 +143,7 @@ export function loadPaginationCursorKey(env: NodeJS.ProcessEnv = process.env): B
       if (SINAIS_DE_EXEMPLO.some((s) => minusculo.includes(s)) || new Set(decodificado).size < MIN_BYTES_DISTINTOS) {
         throw new Error('PAGINATION_CURSOR_KEY fraca ou de exemplo: gere bytes aleatórios (openssl rand -base64 32)');
       }
-      if (env.RATE_LIMIT_HASH_KEY?.trim() === raw) {
+      if (mesmoSegredoQueORateLimit(decodificado, raw, env.RATE_LIMIT_HASH_KEY)) {
         throw new Error('PAGINATION_CURSOR_KEY não pode ser igual a RATE_LIMIT_HASH_KEY');
       }
       return decodificado;

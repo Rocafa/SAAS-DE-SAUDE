@@ -14,6 +14,8 @@ export interface KmsApi {
     KeyUsage: 'ENCRYPT_DECRYPT';
     KeySpec: 'SYMMETRIC_DEFAULT';
     Tags: { TagKey: string; TagValue: string }[];
+    /** K-c2: key policy própria (JSON). Nunca com `BypassPolicyLockoutSafetyCheck` (proibido). */
+    Policy: string;
   }): Promise<{ KeyMetadata?: { Arn?: string | undefined } | undefined }>;
   enableKeyRotation(input: { KeyId: string }): Promise<unknown>;
   generateDataKey(input: {
@@ -48,7 +50,16 @@ export const KMS_DELETION_WINDOW_DAYS = 7;
  * A DEK em claro nunca é gravada; a chave mestra nunca sai do KMS.
  */
 export class KmsKeyProvider implements KeyProvider {
-  constructor(private readonly kms: KmsApi) {}
+  /**
+   * `contaAws`: conta (12 dígitos) dona das chaves, para o statement padrão da key policy (K-c2). Vem do
+   * ARN da chave HMAC do pseudônimo (`SUPPORT_PSEUDONYM_KMS_KEY_ID`), já exigido no boot de produção.
+   */
+  constructor(
+    private readonly kms: KmsApi,
+    private readonly contaAws: string,
+  ) {
+    validarConta(contaAws);
+  }
 
   /**
    * R3-b: a chave do LOTE nasce com descrição própria e as tags `purpose=import_batch` e `batch_id` (só
@@ -69,6 +80,8 @@ export class KmsKeyProvider implements KeyProvider {
           { TagKey: 'purpose', TagValue: finalidade.purpose },
           ...(lote ? [{ TagKey: 'batch_id', TagValue: lote.batchId }] : []),
         ],
+        // K-c2: a chave do lote também guarda DEK com contexto da clínica, então leva a mesma política.
+        Policy: politicaDaChaveDaClinica(this.contaAws, tenantId),
       }),
     );
     const arn = out.KeyMetadata?.Arn;
@@ -143,6 +156,51 @@ export class KmsKeyProvider implements KeyProvider {
     await guard(() => this.kms.cancelKeyDeletion({ KeyId: masterKeyId }));
     await guard(() => this.kms.enableKey({ KeyId: masterKeyId }));
   }
+}
+
+/** Operações de dados negadas sem o contexto da clínica (K-c2). */
+const OPERACOES_DE_DADOS = ['kms:Encrypt', 'kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKey*'];
+const CONDICAO_TENANT = 'kms:EncryptionContext:tenant_id';
+
+function validarConta(conta: string): void {
+  if (!/^\d{12}$/.test(conta)) throw new Error('KmsKeyProvider: conta AWS inválida (12 dígitos, vinda do ARN da chave)');
+}
+
+/**
+ * K-c2 (parecer #76, 27/10): key policy da chave de uma clínica.
+ * (i) statement padrão da conta: a administração fica com a conta/IAM e ele satisfaz a trava de lockout
+ *     do KMS, sem `BypassPolicyLockoutSafetyCheck` (proibido);
+ * (ii) `Deny` para `"*"` nas operações de dados quando `kms:EncryptionContext:tenant_id` estiver AUSENTE
+ *     (`Null` — `StringNotEquals` sozinho não nega quando a chave de contexto falta) ou DIFERENTE do
+ *     tenant da chave. O tenant vai LITERAL (sem `${aws:ResourceTag/...}`): não depende da propagação da
+ *     tag nem de substituição de variável. A role da API não tem `PutKeyPolicy`: a política é imutável para ela.
+ */
+export function politicaDaChaveDaClinica(contaAws: string, tenantId: TenantId): string {
+  validarConta(contaAws);
+  if (!/^[A-Za-z0-9-]+$/.test(tenantId)) throw new Error('politicaDaChaveDaClinica: tenant_id inválido');
+  const negar = (Sid: string, Condition: Record<string, Record<string, string>>) => ({
+    Sid,
+    Effect: 'Deny',
+    Principal: '*',
+    Action: OPERACOES_DE_DADOS,
+    Resource: '*',
+    Condition,
+  });
+  return JSON.stringify({
+    Version: '2012-10-17',
+    Id: 'plataforma-saude-chave-da-clinica',
+    Statement: [
+      {
+        Sid: 'Enable IAM User Permissions',
+        Effect: 'Allow',
+        Principal: { AWS: `arn:aws:iam::${contaAws}:root` },
+        Action: 'kms:*',
+        Resource: '*',
+      },
+      negar('NegarSemContextoDaClinica', { Null: { [CONDICAO_TENANT]: 'true' } }),
+      negar('NegarContextoDeOutraClinica', { StringNotEquals: { [CONDICAO_TENANT]: tenantId } }),
+    ],
+  });
 }
 
 function context(tenantId: TenantId): Record<string, string> {

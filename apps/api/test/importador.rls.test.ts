@@ -28,6 +28,7 @@ import { TERMO_MIGRACAO_SHA256, TERMO_MIGRACAO_TEXTO } from '../src/modules/impo
 import { ImportacaoService, loadImportacaoConfig, PRAZO_INTENCAO_MINUTOS } from '../src/modules/imports/importacao.service';
 import { KmsKeyProvider, type KmsApi } from '../src/modules/crypto/kms-key-provider';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
+import { CONTA_DE_TESTE } from './kms-falso';
 
 type Sessao = { Authorization: string; userId: string };
 
@@ -765,7 +766,7 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     const logAviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void avisos.push(String(m)));
     const criar = vi
       .spyOn(provedor, 'createMasterKey')
-      .mockImplementationOnce((t: TenantId, f?: Parameters<KeyProvider['createMasterKey']>[1]) => new KmsKeyProvider(kmsFalso).createMasterKey(t, f));
+      .mockImplementationOnce((t: TenantId, f?: Parameters<KeyProvider['createMasterKey']>[1]) => new KmsKeyProvider(kmsFalso, CONTA_DE_TESTE).createMasterKey(t, f));
     try {
       expect((await enviar(adminA, 'pacientes', 'nome;telefone\nTimeout Ficticio;11900000314\n')).status).toBeGreaterThanOrEqual(400);
     } finally {
@@ -831,7 +832,7 @@ describe('R3 do #66: crypto-shredding por lote (chave própria do lote; descarta
     // KMS falso em que a chave já foi excluída: agendamento e describe dão NotFoundException.
     const naoExiste = () => Promise.reject(Object.assign(new Error('Key arn:aws:kms:sa-east-1:000000000000:key/x does not exist'), { name: 'NotFoundException' }));
     const kmsFalso = { scheduleKeyDeletion: naoExiste, describeKey: naoExiste } as unknown as KmsApi;
-    const kms = vi.spyOn(provedor, 'destroyMasterKey').mockImplementation((m: string) => new KmsKeyProvider(kmsFalso).destroyMasterKey(m));
+    const kms = vi.spyOn(provedor, 'destroyMasterKey').mockImplementation((m: string) => new KmsKeyProvider(kmsFalso, CONTA_DE_TESTE).destroyMasterKey(m));
     try {
       const r = await servico.expurgoDiario([clinicaA]);
       expect(kms).toHaveBeenCalled();

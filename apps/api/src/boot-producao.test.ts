@@ -113,7 +113,8 @@ describe('boot em NODE_ENV=production: só a D4 impede a subida', () => {
 
   it.each([
     ['AWS_REGION', /KMS não configurado.*AWS_REGION/],
-    ['SUPPORT_PSEUDONYM_KMS_KEY_ID', /KMS do pseudônimo do suporte não configurado/],
+    // A chave das clínicas (criada antes do signer) já recusa: a conta da key policy sai desse ARN (K-c2).
+    ['SUPPORT_PSEUDONYM_KMS_KEY_ID', /SUPPORT_PSEUDONYM_KMS_KEY_ID precisa ser o ARN.*conta/],
     ['PAGINATION_CURSOR_KEY', /PAGINATION_CURSOR_KEY é obrigatória/],
     ['RATE_LIMIT_HASH_KEY', /RATE_LIMIT_HASH_KEY é obrigatória/],
   ])('sem %s, recusa com mensagem clara', (nome, mensagem) => {
@@ -128,6 +129,11 @@ describe('boot em NODE_ENV=production: só a D4 impede a subida', () => {
       ['AWS_ACCESS_KEY_ID', 'AKIA' + randomBytes(8).toString('hex').toUpperCase(), /AWS_ACCESS_KEY_ID proibida/],
       ['AWS_SECRET_ACCESS_KEY', randomBytes(30).toString('base64'), /AWS_SECRET_ACCESS_KEY proibida/],
       ['AWS_ENDPOINT_URL_KMS', 'http://127.0.0.1:1', /AWS_ENDPOINT_URL_KMS proibida/],
+      // K-a1: lista igual à do Terraform + prefixo AWS_ENDPOINT_URL (o que viesse da imagem também é recusado).
+      ['AWS_ENDPOINT_URL_STS', 'http://127.0.0.1:2', /AWS_ENDPOINT_URL_STS proibida/],
+      ['AWS_CONTAINER_CREDENTIALS_FULL_URI', 'http://127.0.0.1:3/cred', /AWS_CONTAINER_CREDENTIALS_FULL_URI proibida/],
+      ['AWS_WEB_IDENTITY_TOKEN_FILE', '/tmp/token-de-teste', /AWS_WEB_IDENTITY_TOKEN_FILE proibida/],
+      ['KMS_ENDPOINT', 'http://127.0.0.1:4', /KMS_ENDPOINT proibida/],
       ['FIELD_KEYS_DEV_ROOT_SECRET', randomBytes(32).toString('base64'), /FIELD_KEYS_DEV_ROOT_SECRET é proibida/],
       ['SUPPORT_PSEUDONYM_KEY', randomBytes(32).toString('base64'), /SUPPORT_PSEUDONYM_KEY é proibida/],
       ['SUPPORT_PSEUDONYM_KMS_KEY_ID', 'alias/qualquer', /precisa ser o ARN/],

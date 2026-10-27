@@ -5,7 +5,7 @@ import { DisposableKeys } from './disposable-keys';
 import { FieldCipher } from './field-cipher';
 import { auditKeyEvents } from './key-audit';
 import type { KeyProvider } from './key-provider';
-import { createAwsKmsCliente, loadKmsConfig } from './kms-client';
+import { contaDoArnKms, createAwsKmsCliente, loadKmsConfig } from './kms-client';
 import { KmsKeyProvider, type KmsApi } from './kms-key-provider';
 import { LocalKeyProvider } from './local-key-provider';
 
@@ -19,7 +19,8 @@ export const DISPOSABLE_KEYS = Symbol('DISPOSABLE_KEYS');
  *   as chaves entre reinícios; sem ele, vivem só na memória;
  * - qualquer outro NODE_ENV (production, staging, vazio...): AWS KMS, uma chave mestra por clínica
  *   (Portão A). Sem a configuração do KMS (`loadKmsConfig`: AWS_REGION em sa-east-1, só a role da
- *   tarefa), lança e a API não sobe; o segredo local de dev também é recusado ali.
+ *   tarefa), lança e a API não sobe; o segredo local de dev também é recusado ali. A conta da key
+ *   policy (K-c2) sai do ARN de `SUPPORT_PSEUDONYM_KMS_KEY_ID`; sem ARN válido, também não sobe.
  * `deps.kms` injeta o cliente (o AppModule passa o mesmo do pseudônimo; testes passam um falso).
  */
 export function createKeyProvider(env: NodeJS.ProcessEnv = process.env, deps: { readonly kms?: KmsApi } = {}): KeyProvider {
@@ -30,7 +31,13 @@ export function createKeyProvider(env: NodeJS.ProcessEnv = process.env, deps: { 
     }
     // A configuração é conferida mesmo com cliente injetado: região e credencial valem para os dois.
     const config = loadKmsConfig(env, 'chave mestra das clínicas');
-    return new KmsKeyProvider(deps.kms ?? createAwsKmsCliente(config));
+    // K-c2: a key policy de cada chave nasce com o statement padrão da conta; a conta sai do ARN da
+    // chave HMAC do pseudônimo (já obrigatório fora de dev/test), sem variável nova.
+    const conta = contaDoArnKms(env.SUPPORT_PSEUDONYM_KMS_KEY_ID?.trim() ?? '');
+    if (!conta) {
+      throw new Error('KMS (chave mestra das clínicas): SUPPORT_PSEUDONYM_KMS_KEY_ID precisa ser o ARN de uma chave (arn:aws:kms:<região>:<conta>:key/<id>); a conta da key policy vem dele');
+    }
+    return new KmsKeyProvider(deps.kms ?? createAwsKmsCliente(config), conta);
   }
   const raiz = env.FIELD_KEYS_DEV_ROOT_SECRET;
   return new LocalKeyProvider({

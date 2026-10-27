@@ -1,11 +1,47 @@
 /**
  * KMS falsos compartilhados pelos testes (sem rede, sem segredo real): o de chave mestra imita o
  * contrato do AWS KMS (EncryptionContext obrigatório e igual) e o de MAC calcula HMAC-SHA256 com uma
- * chave que só ele conhece. Vieram de key-providers.test.ts e ator-suporte.test.ts (rodada 27).
+ * chave que só ele conhece. O de chave mestra também confere e aplica a key policy (K-c2/K-c3). Vieram de key-providers.test.ts e ator-suporte.test.ts (rodada 27).
  */
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { KmsMacApi } from '../src/modules/audit/ator-suporte';
 import type { KmsApi } from '../src/modules/crypto/kms-key-provider';
+
+/** Conta fictícia dos testes (12 zeros, igual à dos ARNs falsos). */
+export const CONTA_DE_TESTE = '000000000000';
+
+interface StatementFalso {
+  Effect?: string;
+  Principal?: unknown;
+  Action?: string | string[];
+  Condition?: Record<string, Record<string, string>>;
+}
+
+/**
+ * Confere a key policy como o KMS faria no essencial (K-c3, parte unitária): JSON válido, sem
+ * `BypassPolicyLockoutSafetyCheck` e com o statement de root da conta (senão o KMS recusa por lockout).
+ * Devolve o erro do KMS (sem lançar) ou o tenant literal da negação `StringNotEquals` (ou `null` se não houver), para aplicar a política.
+ */
+function conferirPolitica(input: { Policy?: unknown }): { tenant: string | null; exigeContexto: boolean } | Error {
+  const malformada = () => kmsErro('MalformedPolicyDocumentException');
+  if ('BypassPolicyLockoutSafetyCheck' in input) return malformada();
+  if (typeof input.Policy !== 'string') return malformada();
+  let doc: { Statement?: StatementFalso[] };
+  try {
+    doc = JSON.parse(input.Policy) as { Statement?: StatementFalso[] };
+  } catch {
+    return malformada();
+  }
+  const st = doc.Statement ?? [];
+  const root = st.some(
+    (s) => s.Effect === 'Allow' && JSON.stringify(s.Principal) === JSON.stringify({ AWS: `arn:aws:iam::${CONTA_DE_TESTE}:root` }) && s.Action === 'kms:*',
+  );
+  if (!root) return malformada();
+  const negacoes = st.filter((s) => s.Effect === 'Deny' && s.Principal === '*');
+  const tenant = negacoes.map((s) => s.Condition?.StringNotEquals?.['kms:EncryptionContext:tenant_id']).find((t) => t !== undefined) ?? null;
+  const exigeContexto = negacoes.some((s) => s.Condition?.Null?.['kms:EncryptionContext:tenant_id'] === 'true');
+  return { tenant, exigeContexto };
+}
 
 export type FakeKms = KmsApi & { calls: { op: string; input: unknown }[]; fail: boolean; excluir(keyId: string): void };
 
@@ -23,6 +59,15 @@ export function fakeKms(): FakeKms {
   const pendentes = new Set<string>();
   // Exclusão já feita pelo KMS (passou a janela de 7 dias): toda operação na chave dá NotFoundException.
   const excluidas = new Set<string>();
+  // Política de cada chave criada (K-c2): DEK sem contexto ou com outro tenant dá AccessDenied, como no KMS.
+  const politicas = new Map<string, { tenant: string | null; exigeContexto: boolean }>();
+  const negadoPelaPolitica = (keyId: string, ctx: Record<string, string>): boolean => {
+    const pol = politicas.get(keyId);
+    if (!pol) return false;
+    const t = ctx.tenant_id;
+    return (pol.exigeContexto && t === undefined) || (pol.tenant !== null && t !== undefined && t !== pol.tenant);
+  };
+  const negado = () => Promise.reject(kmsErro('AccessDeniedException', 'explicit deny in a resource-based policy', 400));
   const naoExiste = (keyId: string) => Promise.reject(kmsErro('NotFoundException', `Key '${keyId}' does not exist`, 400));
   const fake: FakeKms = {
     calls: [],
@@ -34,7 +79,11 @@ export function fakeKms(): FakeKms {
     createKey(input) {
       fake.calls.push({ op: 'createKey', input });
       if (fake.fail) return Promise.reject(kmsErro('AccessDeniedException', 'AccessDenied arn:aws:kms:sa-east-1:123456789012:key/segredo'));
-      return Promise.resolve({ KeyMetadata: { Arn: `arn:aws:kms:sa-east-1:000000000000:key/${randomUUID()}` } });
+      const pol = conferirPolitica(input);
+      if (pol instanceof Error) return Promise.reject(pol);
+      const arn = `arn:aws:kms:sa-east-1:${CONTA_DE_TESTE}:key/${randomUUID()}`;
+      politicas.set(arn, pol);
+      return Promise.resolve({ KeyMetadata: { Arn: arn } });
     },
     enableKeyRotation(input) {
       fake.calls.push({ op: 'enableKeyRotation', input });
@@ -42,6 +91,7 @@ export function fakeKms(): FakeKms {
     },
     generateDataKey(input) {
       fake.calls.push({ op: 'generateDataKey', input });
+      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext)) return negado();
       const plaintext = randomBytes(32);
       const blob = randomBytes(64);
       blobs.set(blob.toString('hex'), { plaintext: Buffer.from(plaintext), ctx: JSON.stringify(input.EncryptionContext) });
@@ -49,6 +99,7 @@ export function fakeKms(): FakeKms {
     },
     decrypt(input) {
       fake.calls.push({ op: 'decrypt', input });
+      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext)) return negado();
       // Como no KMS: chave com exclusão agendada não decifra (KMSInvalidStateException).
       if (pendentes.has(input.KeyId)) return Promise.reject(kmsErro('KMSInvalidStateException'));
       const b = blobs.get(Buffer.from(input.CiphertextBlob).toString('hex'));
@@ -59,6 +110,9 @@ export function fakeKms(): FakeKms {
     },
     reEncrypt(input) {
       fake.calls.push({ op: 'reEncrypt', input });
+      if (negadoPelaPolitica(input.SourceKeyId, input.SourceEncryptionContext) || negadoPelaPolitica(input.DestinationKeyId, input.DestinationEncryptionContext)) {
+        return negado();
+      }
       return Promise.resolve({ CiphertextBlob: Buffer.from(input.CiphertextBlob) });
     },
     scheduleKeyDeletion(input) {
