@@ -110,9 +110,6 @@ data "aws_iam_policy_document" "gestor_chaves" {
       "kms:GetKeyRotationStatus",
       "kms:EnableKey",
       "kms:CancelKeyDeletion",
-      # Rotação por suspeita (rotateMasterKey): ReEncrypt dentro do KMS, a DEK não sai em claro.
-      "kms:ReEncryptFrom",
-      "kms:ReEncryptTo",
     ]
     resources = ["*"]
     condition {
@@ -124,6 +121,34 @@ data "aws_iam_policy_document" "gestor_chaves" {
       test     = "Null"
       variable = "aws:ResourceTag/tenant_id"
       values   = ["false"]
+    }
+  }
+
+  # Rotação por suspeita (rotateMasterKey): ReEncrypt dentro do KMS, a DEK não sai em claro.
+  # K-c: como na API (DekDaClinica), o EncryptionContext { tenant_id } tem de ser IGUAL à tag.
+  statement {
+    sid       = "RecifrarDekDaClinica"
+    actions   = ["kms:ReEncryptFrom", "kms:ReEncryptTo"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/purpose"
+      values   = ["tenant_data"]
+    }
+    condition {
+      test     = "Null"
+      variable = "aws:ResourceTag/tenant_id"
+      values   = ["false"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:tenant_id"
+      values   = ["&{aws:ResourceTag/tenant_id}"]
+    }
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "kms:EncryptionContextKeys"
+      values   = ["tenant_id"]
     }
   }
 

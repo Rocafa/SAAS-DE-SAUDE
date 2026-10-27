@@ -106,13 +106,29 @@ data "aws_iam_policy_document" "break_glass" {
     resources = [for k in local.chaves_sem_humanos : aws_kms_key.this[k].arn]
   }
   statement {
-    sid       = "DecifrarKekDeClinica"
-    actions   = ["kms:Decrypt", "kms:DescribeKey"]
+    sid       = "DescreverKekDeClinica"
+    actions   = ["kms:DescribeKey"]
     resources = ["*"]
     condition {
       test     = "Null"
       variable = "aws:ResourceTag/tenant_id"
       values   = ["false"]
+    }
+  }
+  # K-c: mesmo em incidente, a DEK de uma clínica só abre com o contexto da própria clínica.
+  statement {
+    sid       = "DecifrarKekDeClinica"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "aws:ResourceTag/tenant_id"
+      values   = ["false"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:tenant_id"
+      values   = ["&{aws:ResourceTag/tenant_id}"]
     }
   }
   statement {

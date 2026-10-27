@@ -225,6 +225,9 @@ locals {
       { name = "IMPORTADOR_HABILITADO", value = tostring(var.importador_habilitado) },
       { name = "WHATSAPP_PROVEDOR", value = var.whatsapp_provedor },
       { name = "SUPPORT_PSEUDONYM_KMS_KEY_ID", value = aws_kms_key.pseudonimo_suporte.arn },
+      # Cliente KMS da API (kms-client.ts): região explícita, só sa-east-1 (lista fechada na API).
+      # Sem depender da variável que o agente do Fargate injeta; o plano falha se sumir.
+      { name = "AWS_REGION", value = local.regiao },
     ],
     length(var.cors_origens) > 0 ? [{ name = "CORS_ALLOWED_ORIGINS", value = join(",", var.cors_origens) }] : [],
     var.whatsapp_provedor == "cloud_api" ? [{ name = "WHATSAPP_WABA_ID", value = var.whatsapp_waba_id }] : [],
@@ -251,13 +254,24 @@ locals {
 
   # Contrato com a API (branch eng/integracao-r19): sem estes, a API não sobe com NODE_ENV=production.
   api_segredos_obrigatorios = ["DATABASE_URL", "REDIS_URL", "PAGINATION_CURSOR_KEY", "RATE_LIMIT_HASH_KEY"]
-  api_ambiente_obrigatorio  = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID"]
+  api_ambiente_obrigatorio  = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID", "AWS_REGION"]
   # Nunca na tarefa da API: credencial de migração/admin, segredo local de dev, chave do pseudônimo
   # fora do KMS, rate limit por instância, jobs desligados (§4.4), TLS sem validação.
   api_variaveis_proibidas = [
     "DATABASE_ADMIN_URL", "DATABASE_MIGRATOR_URL", "SUPPORT_PSEUDONYM_KEY", "FIELD_KEYS_DEV_ROOT_SECRET",
     "RATE_LIMIT_ALLOW_SINGLE_INSTANCE", "JOBS_HABILITADOS", "NODE_TLS_REJECT_UNAUTHORIZED", "AUTH_PROVIDER", "PORTAL_AUTH_PROVIDER",
   ]
+  # K-a/K-b (revisoes/2026-10-25-pr76.md, "Conferência cursor v2 e boot KMS"): a tarefa usa SÓ a
+  # role (cadeia padrão do SDK via AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, que o ECS injeta e fica
+  # permitida). Qualquer outra porta da cadeia de credenciais ou desvio de endpoint é vetada.
+  # Mais os prefixos AWS_ENDPOINT_URL* (precondição por startswith, abaixo).
+  api_variaveis_aws_proibidas = [
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_ARN", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+    "KMS_ENDPOINT",
+  ]
+  api_prefixos_aws_proibidos = ["AWS_ENDPOINT_URL"]
   api_nomes_ambiente = [for v in local.api_ambiente : v.name]
   api_nomes_segredos = [for s in local.api_segredos : s.name]
 }
@@ -328,7 +342,19 @@ resource "aws_ecs_task_definition" "api" {
     }
     precondition {
       condition     = length(setsubtract(local.api_ambiente_obrigatorio, local.api_nomes_ambiente)) == 0
-      error_message = "Falta variável obrigatória em `environment` da API (NODE_ENV, API_PORT, HTTP_TRUST_PROXY_HOPS, IMPORTADOR_HABILITADO, WHATSAPP_PROVEDOR, SUPPORT_PSEUDONYM_KMS_KEY_ID). Ver infra-staging.md §4.5."
+      error_message = "Falta variável obrigatória em `environment` da API (NODE_ENV, API_PORT, HTTP_TRUST_PROXY_HOPS, IMPORTADOR_HABILITADO, WHATSAPP_PROVEDOR, SUPPORT_PSEUDONYM_KMS_KEY_ID, AWS_REGION). Ver infra-staging.md §4.5."
+    }
+    precondition {
+      condition     = one([for v in local.api_ambiente : v.value if v.name == "AWS_REGION"]) == "sa-east-1"
+      error_message = "AWS_REGION da API precisa ser sa-east-1 (a API recusa outra região para o KMS). Ver infra-staging.md §4.5."
+    }
+    # K-a/K-b: só a role da tarefa; nada de credencial fixa, outra porta da cadeia do SDK ou endpoint alternativo.
+    precondition {
+      condition = length(setintersection(local.api_variaveis_aws_proibidas, concat(local.api_nomes_ambiente, local.api_nomes_segredos))) == 0 && length([
+        for n in concat(local.api_nomes_ambiente, local.api_nomes_segredos) : n
+        if anytrue([for p in local.api_prefixos_aws_proibidos : startswith(n, p)])
+      ]) == 0
+      error_message = "Credencial AWS fixa, outra porta da cadeia de credenciais (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_CONTAINER_CREDENTIALS_FULL_URI, arquivos de config...) ou endpoint alternativo (AWS_ENDPOINT_URL*, KMS_ENDPOINT, AWS_EC2_METADATA_SERVICE_ENDPOINT) na tarefa da API. A tarefa usa só a role. Ver infra-staging.md §4.5."
     }
     precondition {
       condition     = length(setintersection(local.api_variaveis_proibidas, concat(local.api_nomes_ambiente, local.api_nomes_segredos))) == 0
