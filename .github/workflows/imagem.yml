@@ -1,0 +1,159 @@
+name: Imagem da API
+
+# Build, scan e fumaça da imagem Docker da API. NÃO publica em registry: o push para o ECR
+# entra quando o Terraform do staging for aplicado (OIDC, sem chave estática).
+# Economia de minutos: só roda em PR que muda o que vai para dentro da imagem.
+on:
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.base.json'
+      - '.dockerignore'
+      - '.github/workflows/imagem.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: imagem-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGEM: plataforma-api:ci
+  HADOLINT_VERSAO: v2.15.1
+  HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+  TRIVY_VERSAO: 0.75.0
+  TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+
+jobs:
+  imagem:
+    name: Build, scan (Trivy), SBOM e fumaça
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: plataforma_saude
+          POSTGRES_USER: postgres
+          # Senha descartável do container efêmero de CI (sem dado algum). Não é segredo.
+          POSTGRES_PASSWORD: ci-efemero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d plataforma_saude"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPASSWORD: ci-efemero
+      POSTGRES_USER: postgres
+      POSTGRES_DB: plataforma_saude
+      POSTGRES_PASSWORD: ci-efemero
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: hadolint (binário oficial, checksum conferido)
+        run: |
+          curl -fsSL -o /tmp/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSAO}/hadolint-linux-x86_64"
+          echo "${HADOLINT_SHA256}  /tmp/hadolint" | sha256sum -c -
+          chmod +x /tmp/hadolint
+          /tmp/hadolint apps/api/Dockerfile
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build (cache do GitHub, sem push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.IMAGEM }}
+          provenance: false
+          cache-from: type=gha,scope=imagem-api
+          cache-to: type=gha,scope=imagem-api,mode=max
+
+      - name: Conferir usuário e entrypoint da imagem
+        run: |
+          usuario=$(docker image inspect --format '{{.Config.User}}' "$IMAGEM")
+          test "$usuario" = "1000:1000" || { echo "usuário inesperado: $usuario"; exit 1; }
+          docker image inspect --format '{{json .Config.Healthcheck}}' "$IMAGEM" | grep -q '/health'
+
+      - name: Instalar Trivy (binário oficial, checksum conferido)
+        run: |
+          arquivo="trivy_${TRIVY_VERSAO}_Linux-64bit.tar.gz"
+          curl -fsSL -o "/tmp/${arquivo}" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSAO}/${arquivo}"
+          echo "${TRIVY_SHA256}  /tmp/${arquivo}" | sha256sum -c -
+          mkdir -p /tmp/trivy && tar -xzf "/tmp/${arquivo}" -C /tmp/trivy trivy
+          /tmp/trivy/trivy --version
+
+      - name: Data do cache do banco de vulnerabilidades
+        id: hoje
+        run: echo "data=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.hoje.outputs.data }}
+          restore-keys: trivy-db-
+
+      - name: Scan da imagem (falha em CRITICAL/HIGH com correção disponível)
+        run: |
+          /tmp/trivy/trivy image --scanners vuln --severity CRITICAL,HIGH \
+            --ignore-unfixed --exit-code 1 --no-progress "$IMAGEM"
+
+      - name: SBOM (CycloneDX)
+        if: ${{ !cancelled() }}
+        run: /tmp/trivy/trivy image --format cyclonedx --output sbom-api.cdx.json --no-progress "$IMAGEM"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: sbom-api
+          path: sbom-api.cdx.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Fumaça: mesmo caminho do deploy (papéis separados, migração pela própria imagem).
+      - name: Criar papéis do banco
+        run: sh infra/local/postgres-init.sh
+
+      - name: Migrar com a imagem (papel app_migrator)
+        run: |
+          docker run --rm --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e DATABASE_MIGRATOR_URL=postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude \
+            "$IMAGEM" scripts/migrate.mjs
+
+      # D4: sem rota real de IA nem Redis no CI, então NODE_ENV=test (production recusa o fake).
+      - name: Subir a API (raiz só leitura, sem capabilities)
+        run: |
+          docker run -d --name api --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e NODE_ENV=test \
+            -e API_PORT=3333 \
+            -e DATABASE_URL=postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude \
+            "$IMAGEM"
+
+      - name: /health e /health/ready
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3333/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://localhost:3333/health
+          echo
+          curl -fsS http://localhost:3333/health/ready
+          echo
+
+      - name: Logs da API (em falha)
+        if: ${{ failure() }}
+        run: docker logs api || true
