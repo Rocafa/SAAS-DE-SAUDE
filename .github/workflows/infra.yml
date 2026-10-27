@@ -99,6 +99,49 @@ jobs:
               || { echo "::error::$t: exceção de TLS sem o comentário 'remover quando houver domínio'"; exit 1; }
           fi
 
+  scripts-staging:
+    # Provas K-c3/K-c5 (infra/scripts/staging): só checagem estática. Os scripts falam com a AWS e
+    # rodam à mão, com SSO, no primeiro dia do staging (runbook-primeiro-dia-staging.md); aqui NUNCA.
+    name: scripts de prova do staging (bash -n, shellcheck e travas)
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: bash -n, shellcheck e node --check
+        run: |
+          d=infra/scripts/staging
+          for f in "$d"/*.sh; do bash -n "$f"; done
+          # shellcheck vem instalado na imagem ubuntu-latest do GitHub.
+          shellcheck --version
+          shellcheck -x "$d"/*.sh
+          node --check "$d/politica-kc3.mjs"
+
+      - name: travas das provas
+        run: |
+          d=infra/scripts/staging
+          # Região fixa em sa-east-1, definida num lugar só.
+          grep -qx 'readonly REGIAO=sa-east-1' "$d/comum.sh"
+          if grep -nE -- '--region(=| )' "$d"/*.sh; then echo "::error::região fora do comum.sh"; exit 1; fi
+          for f in "$d"/prova-*.sh; do
+            grep -qx 'set -euo pipefail' "$f" || { echo "::error::$f sem set -euo pipefail"; exit 1; }
+            grep -q '^trap limpar EXIT INT TERM$' "$f" || { echo "::error::$f sem limpeza garantida (trap)"; exit 1; }
+            # Chave só some pela função que confere a tag prova=... e usa a janela mínima de 7 dias.
+            if grep -n 'schedule-key-deletion' "$f"; then echo "::error::$f: use agendar_exclusao_chave_de_prova"; exit 1; fi
+          done
+          [ "$(grep -c 'schedule-key-deletion' "$d/comum.sh")" -eq 1 ]
+          grep -q -- '--pending-window-in-days 7' "$d/comum.sh"
+          grep -q 'exigir_tag_prova_kms "$chave" "$valor" || return 1' "$d/comum.sh"
+          # Proibido (K-c2): pular a trava de lockout da key policy. Reativar chave dispara outro alerta.
+          if grep -nE -- '--bypass-policy-lockout-safety-check|enable-key|cancel-key-deletion' "$d"/*.sh; then
+            echo "::error::ação proibida nos scripts de prova"; exit 1
+          fi
+          # A K-c3 usa a política gerada pelo código da API, não uma cópia.
+          grep -q 'politicaDaChaveDaClinica' "$d/politica-kc3.mjs"
+          grep -q 'politica-kc3.mjs' "$d/prova-kc3.sh"
+
   terraform:
     name: fmt, validate, tflint e checkov
     needs: mudancas
