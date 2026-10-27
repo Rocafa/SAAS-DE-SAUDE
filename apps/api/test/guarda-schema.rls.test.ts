@@ -51,6 +51,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
   session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Troca do profissional do pacote (0023): append-only (trigger recusa UPDATE/DELETE/TRUNCATE).
+  package_professional_changes: { privilegios: ['SELECT', 'INSERT'] },
   // Prontuário (migração 0012): sem DELETE/TRUNCATE. Versões e adendos são append-only (sem UPDATE;
   // um trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel). Finalizar = UPDATE do atendimento
   // aberto (depois disso o trigger torna a linha terminal); nota privada é descartada, nunca apagada.
@@ -67,12 +69,25 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   note_custodies: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   clinic_members: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   clinical_notices: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Financeiro (migração 0018): sem DELETE/TRUNCATE. Recebimento, estorno, recibo e cancelamento de
+  // recibo são append-only (sem UPDATE; trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel).
+  // Cobrança e caixa mudam só pelos caminhos guardados por trigger (receber/cancelar; fechar).
+  finance_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  professional_fiscal_profiles: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  cash_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  charges: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  payments: { privilegios: ['SELECT', 'INSERT'] },
+  payment_reversals: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  receipts: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
 const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   schema_migrations: 'controle de migração; scripts/migrate.mjs revoga de app_user',
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
+  fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */

@@ -19,6 +19,7 @@ import {
   insurers,
   legalHolds,
   noteCustodies,
+  packageProfessionalChanges,
   packageSessions,
   patients,
   privateNotes,
@@ -31,6 +32,7 @@ import { withTenant, type Database, type TenantTx } from '../../db/tenant-transa
 import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../audit/audit-chain';
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -66,11 +68,19 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        `privateNotes[].custodyState`/`custodyDeadline`, da migração 0015 (B1, D1 e D2 do parecer #63).
  * 1.8.0: retenções legais (`legalHolds`, referência e motivo da retirada decifrados) e custódias das
  *        notas lacradas (`noteCustodies`), da migração 0017 (R2 e R12 do parecer #63).
- * 1.9.0: perfis da clínica (`clinicMembers`: usuário, perfil, concessão e revogação; 0020) e
- *        `tenant.founderUserId` (0022), pela R16 da re-revisão 3 do parecer #63: a tabela é dado pessoal da
- *        equipe da controladora e prova o controle de acesso (LGPD arts. 37 e 46).
+ * 1.9.0: financeiro (migração 0018): configuração, perfil fiscal do profissional PF (CPF decifrado),
+ *        caixas, cobranças (CPF do pagador decifrado), recebimentos, estornos, contador e recibos (retrato
+ *        decifrado) e cancelamentos de recibo, em `data.finance` e `manifest.counts.finance`.
+ * 1.10.0: `charges[].fiscalPurgedAt` e `receipts[].fiscalPurgedAt` (retenção fiscal, migração 0021, R7 do
+ *        parecer #65); recibo eliminado sai com `content: null`.
+ * 1.11.0: perfis da clínica (`clinicMembers`: usuário, perfil, concessão e revogação; 0020) e
+ *        `tenant.founderUserId` (0022), pela R16 da re-revisão 3 do parecer #63 (no ramo do prontuário saiu
+ *        como 1.9.0, renumerada no merge com o financeiro): dado pessoal da equipe da controladora e prova do
+ *        controle de acesso (LGPD arts. 37 e 46).
+ * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
+ *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
  */
-export const EXPORT_SCHEMA_VERSION = '1.9.0';
+export const EXPORT_SCHEMA_VERSION = '1.12.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -92,6 +102,7 @@ export const EXPORTED_TABLES = [
   'guide_session_signatures',
   'session_packages',
   'package_sessions',
+  'package_professional_changes',
   'clinical_settings',
   'encounters',
   'clinical_record_versions',
@@ -103,6 +114,16 @@ export const EXPORTED_TABLES = [
   'private_notes',
   'legal_holds',
   'note_custodies',
+  // Financeiro (0018): em data.finance.
+  'finance_settings',
+  'professional_fiscal_profiles',
+  'cash_sessions',
+  'charges',
+  'payments',
+  'payment_reversals',
+  'receipt_counters',
+  'receipts',
+  'receipt_cancellations',
   'clinic_members',
   'audit_log',
 ] as const;
@@ -137,6 +158,7 @@ export interface ExportManifest {
     readonly guideSessionSignatures: number;
     readonly sessionPackages: number;
     readonly packageSessions: number;
+    readonly packageProfessionalChanges: number;
     readonly clinicalSettings: number;
     readonly encounters: number;
     readonly clinicalRecordVersions: number;
@@ -148,6 +170,8 @@ export interface ExportManifest {
     readonly appointmentReschedules: number;
     readonly legalHolds: number;
     readonly noteCustodies: number;
+    /** Financeiro (0018), por tabela. */
+    readonly finance: FinanceCounts;
     readonly clinicMembers: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
@@ -297,6 +321,18 @@ export interface ExportedSessionPackage {
   readonly cancelledAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly professionalId: string | null;
+}
+
+/** Troca registrada do profissional do pacote (0023). */
+export interface ExportedPackageProfessionalChange {
+  readonly id: string;
+  readonly packageId: string;
+  readonly fromProfessionalId: string | null;
+  readonly toProfessionalId: string;
+  readonly reason: string;
+  readonly changedBy: string;
+  readonly changedAt: string;
 }
 
 export interface ExportedPackageSession {
@@ -421,6 +457,7 @@ export interface TenantExportDocument {
     readonly guideSessionSignatures: readonly ExportedGuideSessionSignature[];
     readonly sessionPackages: readonly ExportedSessionPackage[];
     readonly packageSessions: readonly ExportedPackageSession[];
+    readonly packageProfessionalChanges: readonly ExportedPackageProfessionalChange[];
     /** Sem linha = padrão da plataforma (`restrito_ao_autor`). */
     readonly clinicalSettings: readonly ExportedClinicalSettings[];
     readonly encounters: readonly ExportedEncounter[];
@@ -430,6 +467,8 @@ export interface TenantExportDocument {
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
     readonly legalHolds: readonly ExportedLegalHold[];
     readonly noteCustodies: readonly ExportedNoteCustody[];
+    /** Financeiro (0018). */
+    readonly finance: ExportedFinance;
     readonly clinicMembers: readonly ExportedClinicMember[];
   };
 }
@@ -553,6 +592,13 @@ export async function exportInTransaction(
       .where(eq(packageSessions.tenantId, ctx.tenantId))
       .orderBy(asc(packageSessions.consumedAt), asc(packageSessions.id)),
   );
+  const packageChangeRows = doTenant(
+    await tx
+      .select()
+      .from(packageProfessionalChanges)
+      .where(eq(packageProfessionalChanges.tenantId, ctx.tenantId))
+      .orderBy(asc(packageProfessionalChanges.changedAt), asc(packageProfessionalChanges.id)),
+  );
   const settingsRows = doTenant(await tx.select().from(clinicalSettings).where(eq(clinicalSettings.tenantId, ctx.tenantId)));
   const encounterRows = doTenant(
     await tx
@@ -656,6 +702,10 @@ export async function exportInTransaction(
     canonical: r.canonical,
   }));
   const auditHead = await auditChainHead(tx, ctx.tenantId);
+  const financeiro = await exportarFinanceiro(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -793,6 +843,16 @@ export async function exportInTransaction(
     cancelledAt: iso(p.cancelledAt),
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
+    professionalId: p.professionalId,
+  }));
+  const exportedPackageChanges: ExportedPackageProfessionalChange[] = packageChangeRows.map((c) => ({
+    id: c.id,
+    packageId: c.packageId,
+    fromProfessionalId: c.fromProfessionalId,
+    toProfessionalId: c.toProfessionalId,
+    reason: c.reason,
+    changedBy: c.changedBy,
+    changedAt: c.changedAt.toISOString(),
   }));
   const exportedPackageSessions: ExportedPackageSession[] = packageSessionRows.map((s) => ({
     id: s.id,
@@ -931,6 +991,7 @@ export async function exportInTransaction(
       guideSessions: exportedGuideSessions.length,
       guideSessionSignatures: exportedSignatures.length,
       sessionPackages: exportedPackages.length,
+      packageProfessionalChanges: exportedPackageChanges.length,
       packageSessions: exportedPackageSessions.length,
       clinicalSettings: exportedSettings.length,
       encounters: exportedEncounters.length,
@@ -941,6 +1002,7 @@ export async function exportInTransaction(
       appointmentReschedules: exportedReschedules.length,
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
+      finance: financeiro.counts,
       clinicMembers: exportedMembers.length,
       auditEvents: auditEvents.length,
     },
@@ -1012,6 +1074,7 @@ export async function exportInTransaction(
         guideSessions: exportedGuideSessions,
         guideSessionSignatures: exportedSignatures,
         sessionPackages: exportedPackages,
+        packageProfessionalChanges: exportedPackageChanges,
         packageSessions: exportedPackageSessions,
         clinicalSettings: exportedSettings,
         encounters: exportedEncounters,
@@ -1021,6 +1084,7 @@ export async function exportInTransaction(
         appointmentReschedules: exportedReschedules,
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
+        finance: financeiro.data,
         clinicMembers: exportedMembers,
       },
     },

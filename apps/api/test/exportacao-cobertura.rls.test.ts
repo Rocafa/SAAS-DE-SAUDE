@@ -23,6 +23,7 @@ import {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  packageProfessionalChanges,
   clinicalSettings,
   encounters,
   clinicalRecordVersions,
@@ -30,6 +31,15 @@ import {
   privateNotes,
   legalHolds,
   noteCustodies,
+  financeSettings,
+  professionalFiscalProfiles,
+  cashSessions,
+  charges,
+  payments,
+  paymentReversals,
+  receiptCounters,
+  receipts,
+  receiptCancellations,
   clinicMembers,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
@@ -65,6 +75,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guide_session_signatures: 'guideSessionSignatures',
   session_packages: 'sessionPackages',
   package_sessions: 'packageSessions',
+  package_professional_changes: 'packageProfessionalChanges',
   clinical_settings: 'clinicalSettings',
   encounters: 'encounters',
   clinical_record_versions: 'clinicalRecordVersions',
@@ -73,6 +84,15 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   appointment_reschedules: 'appointmentReschedules',
   legal_holds: 'legalHolds',
   note_custodies: 'noteCustodies',
+  finance_settings: 'finance.financeSettings',
+  professional_fiscal_profiles: 'finance.professionalFiscalProfiles',
+  cash_sessions: 'finance.cashSessions',
+  charges: 'finance.charges',
+  payments: 'finance.payments',
+  payment_reversals: 'finance.paymentReversals',
+  receipt_counters: 'finance.receiptCounters',
+  receipts: 'finance.receipts',
+  receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
   audit_log: 'auditEvents',
 };
@@ -169,6 +189,13 @@ beforeAll(async () => {
   const pacote = await api.http().post('/pacotes').set(cab(admin)).send({ pacienteId, nome: 'Pacote Ficticio Export', total: 4 });
   const pacoteId = (pacote.body as { id: string }).id;
   await api.http().post(`/pacotes/${pacoteId}/consumos`).set(cab(admin)).send({ agendamentoId: ag2Id }).expect(201);
+  // 0023 (R13 do #65): pacote antigo ganha o profissional por troca registrada.
+  await api
+    .http()
+    .post(`/pacotes/${pacoteId}/profissional`)
+    .set(cab(admin))
+    .send({ profissionalId: (prof.body as { id: string }).id, motivo: 'fixar_pacote_antigo' })
+    .expect(200);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -244,6 +271,38 @@ beforeAll(async () => {
   const cust = await api.http().post('/prontuario/custodias').set(cab(admin)).send({ autorProfissionalId: autorId.id, substitutoProfissionalId: substId.id });
   expect(cust.status).toBe(201);
   await api.http().post('/custodias/' + (cust.body as { id: string }).id + '/aceite').set(cab(psiSubst)).send({}).expect(200);
+  // Financeiro (0018): configuração, perfil fiscal, caixa, cobrança PF com pagador terceiro, dois
+  // recebimentos (um estornado, o que cancela o recibo dele) e recibos.
+  await api.http().put('/financeiro/configuracao').set(cab(admin)).send({ atendimentoPadrao: 'pf', emitenteNome: 'Clinica Ficticia Export' }).expect(200);
+  await api
+    .http()
+    .put(`/financeiro/profissionais/${(prof.body as { id: string }).id}/perfil-fiscal`)
+    .set(cab(admin))
+    .send({ cpf: cpfFicticio(8), registroConselho: 'CREFITO-0 00000-TO' })
+    .expect(200);
+  const caixa = await api.http().post('/financeiro/caixas').set(cab(admin)).send({ turno: 'unico', trocoInicialCentavos: 1000 });
+  expect(caixa.status, JSON.stringify(caixa.body)).toBe(201);
+  const cobranca = await api
+    .http()
+    .post('/financeiro/cobrancas')
+    .set(cab(admin))
+    .send({ agendamentoId: agId, valorCentavos: 10000, pagador: { nome: 'Responsavel Ficticio Export', cpf: cpfFicticio(9) } });
+  expect(cobranca.status, JSON.stringify(cobranca.body)).toBe(201);
+  const cobrancaId = (cobranca.body as { id: string }).id;
+  const p1 = await api.http().post(`/financeiro/cobrancas/${cobrancaId}/recebimentos`).set(cab(admin)).send({ valorCentavos: 4000, forma: 'dinheiro' });
+  expect(p1.status, JSON.stringify(p1.body)).toBe(201);
+  const p1Id = (p1.body as { id: string }).id;
+  await api.http().post(`/financeiro/recebimentos/${p1Id}/recibo`).set(cab(admin)).send({}).expect(200);
+  await api.http().post(`/financeiro/recebimentos/${p1Id}/estornar`).set(cab(admin)).send({ motivo: 'forma_errada' }).expect(200);
+  const p2 = await api.http().post(`/financeiro/cobrancas/${cobrancaId}/recebimentos`).set(cab(admin)).send({ forma: 'pix' });
+  expect(p2.status, JSON.stringify(p2.body)).toBe(201);
+  await api.http().post(`/financeiro/recebimentos/${(p2.body as { id: string }).id}/recibo`).set(cab(admin)).send({}).expect(200);
+  await api
+    .http()
+    .post(`/financeiro/caixas/${(caixa.body as { id: string }).id}/fechar`)
+    .set(cab(admin))
+    .send({ dinheiroContadoCentavos: 1000 })
+    .expect(200);
 
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
@@ -280,7 +339,10 @@ describe('G2 — cobertura da exportação contra o catálogo', () => {
         JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relname = ${tabela} AND a.attnum > 0 AND NOT a.attisdropped`;
       const chave = CHAVE_NO_PACOTE[tabela];
-      const dado = tabela === 'audit_log' ? pkg.auditEvents : (pkg.json.data as Record<string, unknown>)[chave];
+      const dado =
+        tabela === 'audit_log'
+          ? pkg.auditEvents
+          : chave.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], pkg.json.data);
       const item = (Array.isArray(dado) ? dado[0] : dado) as Record<string, unknown> | undefined;
       expect(item, `${tabela}: o pacote de teste precisa ter ao menos 1 item`).toBeDefined();
       for (const { coluna } of colunas) {
@@ -309,12 +371,22 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof guideSessionSignatures
           | typeof sessionPackages
           | typeof packageSessions
+          | typeof packageProfessionalChanges
           | typeof clinicalSettings
           | typeof encounters
           | typeof clinicalRecordVersions
           | typeof clinicalAddenda
           | typeof legalHolds
           | typeof noteCustodies
+          | typeof financeSettings
+          | typeof professionalFiscalProfiles
+          | typeof cashSessions
+          | typeof charges
+          | typeof payments
+          | typeof paymentReversals
+          | typeof receiptCounters
+          | typeof receipts
+          | typeof receiptCancellations
           | typeof clinicMembers,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
@@ -330,6 +402,7 @@ describe('G2 — conteúdo do pacote', () => {
         guideSessionSignatures: await n(guideSessionSignatures),
         sessionPackages: await n(sessionPackages),
         packageSessions: await n(packageSessions),
+        packageProfessionalChanges: await n(packageProfessionalChanges),
         clinicalSettings: await n(clinicalSettings),
         encounters: await n(encounters),
         clinicalRecordVersions: await n(clinicalRecordVersions),
@@ -341,6 +414,17 @@ describe('G2 — conteúdo do pacote', () => {
         appointmentReschedules: await n(appointmentReschedules),
         legalHolds: await n(legalHolds),
         noteCustodies: await n(noteCustodies),
+        finance: {
+          financeSettings: await n(financeSettings),
+          professionalFiscalProfiles: await n(professionalFiscalProfiles),
+          cashSessions: await n(cashSessions),
+          charges: await n(charges),
+          payments: await n(payments),
+          paymentReversals: await n(paymentReversals),
+          receiptCounters: await n(receiptCounters),
+          receipts: await n(receipts),
+          receiptCancellations: await n(receiptCancellations),
+        },
         clinicMembers: await n(clinicMembers),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
@@ -360,6 +444,7 @@ describe('G2 — conteúdo do pacote', () => {
       guideSessionSignatures: 1,
       sessionPackages: 1,
       packageSessions: 1,
+      packageProfessionalChanges: 1,
       clinicalSettings: 1,
       encounters: 1,
       clinicalRecordVersions: 2,
@@ -368,6 +453,17 @@ describe('G2 — conteúdo do pacote', () => {
       privateNotesWithheld: 1,
       legalHolds: 1,
       noteCustodies: 1,
+      finance: {
+        financeSettings: 1,
+        professionalFiscalProfiles: 1,
+        cashSessions: 1,
+        charges: 1,
+        payments: 2,
+        paymentReversals: 1,
+        receiptCounters: 1,
+        receipts: 2,
+        receiptCancellations: 1,
+      },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
     expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
@@ -420,6 +516,17 @@ describe('G2 — conteúdo do pacote', () => {
     expect(adendos[0]).toMatchObject({ text: TEXTO_ADENDO, encounterId: ats[0]?.id });
     expect(cfg).toEqual([expect.objectContaining({ psychCompartment: 'restrito_ao_autor' })]);
     for (const proibido of [TEXTO_CLINICO, TEXTO_ADENDO, NOTA_EXPORTAVEL, NOTA_RETIDA, 'Queixa v1']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('financeiro: CPFs e retrato do recibo decifrados; recibo do recebimento estornado cancelado; nada disso na trilha', () => {
+    const f = pkg.json.data.finance;
+    expect(f.professionalFiscalProfiles[0]).toMatchObject({ cpf: cpfFicticio(8), councilRegistration: 'CREFITO-0 00000-TO' });
+    expect(f.charges[0]).toMatchObject({ payerName: 'Responsavel Ficticio Export', payerCpf: cpfFicticio(9), paidCents: 10000, attendanceKind: 'pf' });
+    expect(f.receipts.map((r) => r.number)).toEqual([1, 2]);
+    expect(f.receipts[1]?.content).toMatchObject({ pagador: { cpf: cpfFicticio(9) }, beneficiario: { cpf: cpfFicticio(7) }, descricao: 'Atendimento' });
+    expect(f.receiptCancellations[0]).toMatchObject({ receiptId: f.receipts[0]?.id, reason: 'recebimento_estornado' });
+    expect(f.cashSessions[0]).toMatchObject({ status: 'closed', expectedCashCents: 1000, countedCashCents: 1000 });
+    for (const proibido of [cpfFicticio(8), cpfFicticio(9), 'Responsavel Ficticio']) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
   it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {

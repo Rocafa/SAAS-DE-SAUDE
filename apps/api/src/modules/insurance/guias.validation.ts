@@ -2,10 +2,12 @@ import { ehDataValida, EntradaInvalidaError, exigirObjeto, Validador } from '../
 import {
   GUIDE_OVERRIDE_REASONS,
   GUIDE_REVERSAL_REASONS,
+  PACKAGE_PROFESSIONAL_CHANGE_REASONS,
   PACKAGE_REVERSAL_REASONS,
   SIGNATURE_METHODS,
   type GuideOverrideReason,
   type GuideReversalReason,
+  type PackageProfessionalChangeReason,
   type PackageReversalReason,
   type SignatureMethod,
 } from '../../db/schema';
@@ -88,6 +90,8 @@ export interface NovoPacote {
   readonly total: number;
   readonly tipoId?: string;
   readonly validade?: string;
+  /** R13 do #65: profissional fixado na venda (consumo e cobrança seguem ele). */
+  readonly profissionalId?: string;
 }
 
 export interface FiltroPacotes {
@@ -288,14 +292,16 @@ export function validarAssinatura(corpo: unknown): { meio: SignatureMethod; disp
 }
 
 export function validarNovoPacote(corpo: unknown): NovoPacote {
-  const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'nome', 'total', 'tipoId', 'validade']));
+  const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'nome', 'total', 'tipoId', 'validade', 'profissionalId']));
   const pacienteId = v.uuid('pacienteId', true);
   const nome = v.texto('nome', { max: 100, obrigatorio: true });
   const total = v.inteiro('total', { min: 1, max: 200, obrigatorio: true });
   const tipoId = v.uuid('tipoId', false);
   const validade = data(v, 'validade');
+  const profissionalId = v.uuid('profissionalId', false);
   v.concluir();
   return {
+    ...(profissionalId ? { profissionalId } : {}),
     pacienteId: pacienteId as string,
     nome: nome,
     total: total as number,
@@ -325,6 +331,15 @@ export function validarEstornoPacote(corpo: unknown): PackageReversalReason {
   const motivo = v.umDe('motivo', PACKAGE_REVERSAL_REASONS, true);
   v.concluir();
   return motivo as PackageReversalReason;
+}
+
+/** Troca do profissional do pacote (R13 do #65): novo profissional e motivo (enum, nunca texto livre). */
+export function validarTrocaProfissionalPacote(corpo: unknown): { profissionalId: string; motivo: PackageProfessionalChangeReason } {
+  const v = new Validador(exigirObjeto(corpo, ['profissionalId', 'motivo']));
+  const profissionalId = v.uuid('profissionalId', true);
+  const motivo = v.umDe('motivo', PACKAGE_PROFESSIONAL_CHANGE_REASONS, true);
+  v.concluir();
+  return { profissionalId: profissionalId as string, motivo: motivo as PackageProfessionalChangeReason };
 }
 
 /** GET sem parâmetros: qualquer query é recusada (e dado pessoal na URL tem código próprio). */

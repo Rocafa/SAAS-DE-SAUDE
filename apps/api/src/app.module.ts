@@ -10,6 +10,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module';
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
+import { FinanceModule } from './modules/finance/finance.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
@@ -67,6 +68,8 @@ export class AppModule {
         InsuranceModule.forRoot(pacientes),
         // Prontuário: o histórico conta como ficha aberta na mesma vigilância (R5).
         RecordsModule.forRoot(pacientes),
+        // Financeiro: listas e recibos contam na mesma vigilância (R5).
+        FinanceModule.forRoot(pacientes),
       ],
     };
   }
