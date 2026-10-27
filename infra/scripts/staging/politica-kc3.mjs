@@ -19,8 +19,11 @@
 //                    (papeisHumanosExtraDoAmbiente + politicaDaChaveDaClinica): formato errado para aqui.
 //   KMS_PROVIDER_TS  caminho do kms-key-provider.ts (padrão: <raiz do repo>/apps/api/src/...)
 // Precisa do pacote `typescript` instalado (pnpm install na raiz do repositório).
-// Saída (stdout): JSON { politica, origem: { arquivo, sha256 } }. Nada de dado pessoal.
+// O .ts tem de estar versionado num checkout git limpo: a origem traz o commit (git rev-parse HEAD).
+// Saída (stdout): JSON { politica, papeis_humanos_extra, origem: { arquivo, sha256, commit,
+// commit_na_origin_main } }. Nada de dado pessoal.
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -58,6 +61,32 @@ for (const base of [arquivo, path.join(raiz, 'package.json'), path.join(process.
 if (!ts) {
   console.error('politica-kc3: pacote typescript não encontrado (rode pnpm install na raiz)');
   process.exit(4);
+}
+
+// Commit de onde sai o .ts (condição 2 da conferência de 27/10): o arquivo tem de estar versionado
+// num checkout git LIMPO (nenhuma mudança em arquivo versionado), senão o SHA não descreve o que
+// rodou. Arquivo não versionado também é recusado.
+const git = (...args) =>
+  execFileSync('git', ['-C', path.dirname(arquivo), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+let commit;
+let naMain = null;
+try {
+  git('ls-files', '--error-unmatch', '--', path.basename(arquivo));
+  const sujo = git('status', '--porcelain', '--untracked-files=no');
+  if (sujo) {
+    console.error(`politica-kc3: o checkout de ${arquivo} está sujo (mudanças não commitadas); recusado:\n${sujo}`);
+    process.exit(8);
+  }
+  commit = git('rev-parse', 'HEAD');
+  try {
+    git('merge-base', '--is-ancestor', 'HEAD', 'origin/main');
+    naMain = true;
+  } catch {
+    naMain = false;
+  }
+} catch (e) {
+  console.error(`politica-kc3: ${arquivo} não está num checkout git versionado (${e.message.split('\n')[0]}); recusado`);
+  process.exit(8);
 }
 
 const fonte = readFileSync(arquivo, 'utf8');
@@ -137,5 +166,11 @@ if (semExtra.length) {
 }
 
 process.stdout.write(
-  JSON.stringify({ politica, papeis_humanos_extra: extras, origem: { arquivo: path.relative(raiz, arquivo).split(path.sep).join('/'), sha256 } }),
+  JSON.stringify({ politica, papeis_humanos_extra: extras, origem: {
+    arquivo: path.relative(raiz, arquivo).split(path.sep).join('/'),
+    sha256,
+    commit,
+    // Informativo: o commit já está na origin/main local (depende do último fetch).
+    commit_na_origin_main: naMain,
+  } }),
 );

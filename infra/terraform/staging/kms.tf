@@ -19,17 +19,25 @@ locals {
 # R4 do PR #58: nenhum principal HUMANO (SSO, usuário IAM, root) abre dado com estas chaves, nem
 # administrador com kms:* por IAM. Só serviços e papéis de máquina (tarefa da API, RDS, Secrets
 # Manager a pedido da tarefa) e o papel break-glass (acesso-humano.tf), cujo uso gera alerta.
-# Só Decrypt e ReEncrypt: GenerateDataKey continua liberado para o apply gravar segredos
+# Decrypt, ReEncrypt e CreateGrant (este com exceção, abaixo): GenerateDataKey continua liberado para o apply gravar segredos
 # write-only. As KEKs das clínicas nascem fora do Terraform: a API monta o MESMO statement
-# (Sid HumanoNaoDecifra, mesmas ações) na key policy de cada chave de clínica e de lote, na função
+# (Sid HumanoNaoDecifra; CreateGrant chega na API pelo #73) na key policy de cada chave de clínica e de lote, na função
 # politicaDaChaveDaClinica (apps/api/src/modules/crypto/kms-key-provider.ts, #73 15e3303), a partir
 # dos 3 padrões fixos de local.principais_humanos + KMS_PAPEIS_HUMANOS_EXTRA (= papeis_humanos_extra,
-# injetada em app.tf). O CI ("Travas do projeto") compara os padrões fixos dos dois lados.
+# injetada em app.tf). O CI ("Travas do projeto") compara os padrões fixos e as ações dos dois lados.
+#
+# kms:CreateGrant (recomendação do Guardião, conferência de 27/10 no parecer do #76): sem ele, um
+# humano poderia dar Decrypt por grant a um papel de máquina que ele consegue assumir, e o grant não
+# casa com os padrões humanos. Exceção: grant pedido por um serviço integrado em nome do humano
+# (kms:GrantIsForAWSResource = true), que o apply feito com SSO precisa (o RDS e o AWS Backup criam
+# grants nas chaves "rds" e "backup" ao criar a instância e o cofre). O KMS só põe essa chave de
+# condição nos pedidos de grant; em Decrypt/ReEncrypt ela não existe, o BoolIfExists casa e o Deny
+# continua total. Todo CreateGrant segue alertando pela K-c5 (kms_administracao).
 data "aws_iam_policy_document" "kms_deny_humanos" {
   statement {
     sid       = "HumanoNaoDecifra"
     effect    = "Deny"
-    actions   = ["kms:Decrypt", "kms:ReEncrypt*"]
+    actions   = ["kms:Decrypt", "kms:ReEncrypt*", "kms:CreateGrant"]
     resources = ["*"]
     principals {
       type        = "AWS"
@@ -39,6 +47,11 @@ data "aws_iam_policy_document" "kms_deny_humanos" {
       test     = "ArnLike"
       variable = "aws:PrincipalArn"
       values   = local.principais_humanos
+    }
+    condition {
+      test     = "BoolIfExists"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["false"]
     }
   }
 }

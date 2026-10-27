@@ -100,11 +100,14 @@ CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias \
   infra/scripts/staging/prova-kc3.sh
 ```
 
-- **A política vem do código da API.** `politica-kc3.mjs` lê `apps/api/src/modules/crypto/kms-key-provider.ts`, separa pela AST do TypeScript a função `politicaDaChaveDaClinica`, a `papeisHumanosExtraDoAmbiente` e as constantes de que elas dependem, tira os tipos e a executa. Assim, a prova usa o JSON que a API passa no `CreateKey`, não uma cópia. Rode de um checkout com o #73 na `main`, ou aponte `KMS_PROVIDER_TS=<caminho do arquivo>`. A evidência traz o caminho e o SHA-256 do arquivo de origem.
+- **Quem roda: a sessão SSO do operador.** O script confere que o principal em uso é um papel `role/aws-reserved/sso.amazonaws.com/*` (`AWSReservedSSO_*`) da conta de staging e **recusa rodar** com qualquer outro (usuário IAM, papel comum, chave de longa duração), antes de criar qualquer recurso. Na evidência vai só o ARN do papel do permission set, nunca o nome da sessão (que pode ter e-mail).
+- **A política vem do código da API.** `politica-kc3.mjs` lê `apps/api/src/modules/crypto/kms-key-provider.ts`, separa pela AST do TypeScript a função `politicaDaChaveDaClinica`, a `papeisHumanosExtraDoAmbiente` e as constantes de que elas dependem, tira os tipos e a executa. Assim, a prova usa o JSON que a API passa no `CreateKey`, não uma cópia. Rode de um checkout com o #73 na `main`, ou aponte `KMS_PROVIDER_TS=<caminho do arquivo>`. O arquivo tem de estar **versionado num checkout git limpo** (nenhuma mudança em arquivo versionado): senão o script recusa. A evidência traz o caminho, o SHA-256 do arquivo, o **commit** (`git rev-parse HEAD` desse checkout) e se ele já está na `origin/main` local (faça `git fetch` antes).
+- **Política efetiva = política gerada.** Logo depois do `CreateKey`, o script lê `aws kms get-key-policy` da chave de prova e compara o SHA-256 do JSON canonicalizado (chaves ordenadas, sem espaços) com o da política gerada. Diferença reprova. Os dois hashes vão em `politica_efetiva`.
 - **Política aplicada** (formato da K-c2, com conta e tenant da prova): o statement padrão da conta (`kms:*` para `arn:aws:iam::<conta>:root`), mais `Deny` para `"*"` em `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*` e `kms:GenerateDataKey*` quando `kms:EncryptionContext:tenant_id` está ausente (`Null`) ou é diferente do tenant da chave (`StringNotEquals`). E, desde o #73 `15e3303` (R4 do #58), o `HumanoNaoDecifra`: `Deny` de `kms:Decrypt` e `kms:ReEncrypt*` quando `aws:PrincipalArn` casa (`ArnLike`) com SSO, usuário IAM, root ou um dos extras (`KMS_PAPEIS_HUMANOS_EXTRA`, lida e validada pelo código da API).
 - **Os principais com `kms:*` no IAM** são dois papéis temporários, com `kms:*` na chave de prova, que só o operador pode assumir: o de máquina (`prova-kc3-<id>`) e o "humano" (`prova-kc3-h-<id>`), cujo ARN exato entra na política como padrão humano extra de prova, depois dos extras reais. Nenhum extra real pode casar com `role/prova-kc3-*`, senão P2 cai.
-- **Casos:** primeiro os positivos, P1 (`GenerateDataKey`) e P2 (`Decrypt`) com o `tenant_id` da chave, que provam que o IAM do papel já vale. Depois, nove negativos (N1 a N9): `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `Decrypt`, `Encrypt` e `ReEncrypt`, sem contexto ou com o `tenant_id` de outra clínica. Todos têm de dar `AccessDeniedException`. Um `InvalidCiphertextException` reprova: significa que o KMS deixou passar e só a criptografia barrou. Por fim, o R4 com o papel humano e o contexto **certo**: H0 (`GenerateDataKeyWithoutPlaintext`, positivo, prova que o IAM dele vale) e os negativos H1 (`Decrypt`) e H2 (`ReEncrypt`), que têm de dar `AccessDeniedException`.
-- **Aprovada** quando P1, P2, N1 a N9, H0, H1 e H2 batem com o esperado. O campo `negacao_explicita_em_politica_de_recurso` mostra se a mensagem da AWS cita o `Deny` da key policy. É informativo e não reprova sozinho.
+- **Casos:** primeiro os positivos, P1 (`GenerateDataKey`) e P2 (`Decrypt`) com o `tenant_id` da chave, que provam que o IAM do papel já vale. Depois, nove negativos (N1 a N9): `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `Decrypt`, `Encrypt` e `ReEncrypt`, sem contexto ou com o `tenant_id` de outra clínica. Todos têm de dar `AccessDeniedException`. Um `InvalidCiphertextException` reprova: significa que o KMS deixou passar e só a criptografia barrou. Por fim, o R4 com o contexto **certo**: H0 (`GenerateDataKeyWithoutPlaintext` pelo papel humano, positivo, prova que o IAM dele vale), os negativos H1 (`Decrypt`) e H2 (`ReEncrypt`) pelo papel humano (caminho dos extras) e **H3** (`Decrypt`) pela **própria sessão SSO do operador** (caminho do padrão fixo `role/aws-reserved/sso.amazonaws.com/*`, o de verdade dos humanos).
+- **H1, H2 e H3 exigem a negação explícita da key policy.** Não basta `AccessDeniedException`: a mensagem tem de citar `explicit deny in a resource-based policy` (variações aceitas: "with an …"/"because of an …", com ou sem artigo). Sem ela, a falta de `kms:Decrypt` no permission set explicaria a negação e o caso **reprova**. Não valem "explicit deny in an identity-based policy", "… in a service control policy", "… in a session policy", "… in a permissions boundary" nem o formato antigo sem o tipo de política. Se a AWS responder num formato fora da lista, o caso reprova e o Guardião decide. Para N1 a N9, `negacao_explicita_em_politica_de_recurso` segue informativo.
+- **Aprovada** quando P1, P2, N1 a N9, H0 a H3 batem com o esperado, a política efetiva é igual à gerada, a limpeza não tem `FALHOU`/`RECUSADO` e a releitura do JSON passa (§6.3).
 
 ### 6.2 K-c5: o alerta de administração da chave chega ao tópico de segurança
 
@@ -115,21 +118,41 @@ CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias infra/scripts/staging/prova-kc5
 - Confere que a regra `plataforma-saude-staging-kms-administracao` está `ENABLED` e aponta para o tópico `alertas-seguranca`.
 - Cria uma fila SQS temporária que só aceita o tópico, assina a fila no tópico com filtro (só eventos `aws.kms` das quatro ações da regra), cria uma chave fictícia e provoca **`DisableKey`** e **`PutKeyPolicy`** (reaplica a mesma política padrão, sem mudança real).
 - Espera até 20 min (`PRAZO_MIN`): o caminho CloudTrail → EventBridge → SNS leva alguns minutos.
-- **Aprovada** quando os dois eventos dessa chave chegam pela fila com `TopicArn` igual ao tópico de segurança. A evidência traz o `eventID` do CloudTrail, o `MessageId` do SNS e os horários. Não grava `userIdentity`, IP nem user agent, porque o nome da sessão do SSO pode conter e-mail.
-- Quem assina o tópico por e-mail também recebe os alertas. Isso é bom, porque confirma o canal humano: anotar o horário em que chegou.
+- **Aprovada** quando os dois eventos dessa chave chegam pela fila com `TopicArn` igual ao tópico de segurança, a limpeza não tem `FALHOU`/`RECUSADO` e a releitura do JSON passa (§6.3). O bloco `eventos` traz, para `DisableKey` e `PutKeyPolicy`: o horário da ação (`acao_provocada_em`), o `eventID` e o `eventTime` do CloudTrail, o `MessageId` e o `Timestamp` do SNS e o horário de chegada na fila. Não grava `userIdentity`, IP nem user agent, porque o nome da sessão do SSO pode conter e-mail.
+- **Canal humano (condição 4): o operador anota o horário do e-mail.** Quem assina o tópico por e-mail recebe os alertas. Quando os dois chegarem, o operador pega o horário de cada um no cabeçalho do e-mail, converte para UTC e roda (não fala com a AWS, só preenche `eventos.<ação>.email_recebido_em` e relê o JSON):
+
+  ```bash
+  infra/scripts/staging/prova-kc5.sh --anotar-email /tmp/evidencias/prova-kc5-<data>.json \
+    <AAAA-MM-DDTHH:MM:SSZ do DisableKey> <AAAA-MM-DDTHH:MM:SSZ do PutKeyPolicy>
+  ```
+
+  O script recusa horário em outro formato ou anterior à própria ação. Sem o e-mail anotado, a K-c5 fica com a condição 4 pendente (o e-mail do assinante nunca entra no JSON, só o horário).
 
 ### 6.3 Se uma prova reprovar
 
 - **Não repetir até passar.** A evidência reprovada também vai para o Guardião.
 - K-c3 reprovada: o piloto continua bloqueado. A ENG revê `politicaDaChaveDaClinica`, e o Guardião decide o próximo passo.
 - K-c5 reprovada: conferir com `aws events describe-rule`, a política do tópico (`aws:SourceArn`) e a key policy da chave `alertas` (o EventBridge precisa poder cifrar no tópico). Corrigir no Terraform, com novo plano e apply.
-- Se a limpeza falhar (o log mostra `FALHOU`), apagar à mão o que ficou: agendar a exclusão da chave com 7 dias, apagar o papel, a fila e a assinatura. Conferir antes a tag `prova`.
+- Se a limpeza falhar (o log mostra `FALHOU`), apagar à mão o que ficou: agendar a exclusão da chave com 7 dias, apagar o papel, a fila e a assinatura. Conferir antes a tag `prova`. **A prova sai reprovada** (`aprovada = false`, motivo em `evidencia_reprovada_por`) mesmo com todos os casos certos; registrar a limpeza manual junto da evidência para o Guardião.
+- **Releitura automática da evidência.** Ao fim, os dois scripts releem o JSON gravado. Se acharem e-mail, token de sessão, AccessKeyId ou IP, trocam o valor por `[REMOVIDO:<tipo>]`, marcam `aprovada = false` e dizem o motivo em `evidencia_reprovada_por`. A reprovação **também é evidência**: anexar do mesmo jeito (§7), sem repetir a prova até passar.
+
+### 6.4 Passo pendente: condição 3 (depois da D4, antes do piloto)
+
+> ⏳ **Pendente.** A K-c3 deste kit prova o **formato** da key policy (gerada pelo código da API), não que a imagem da API que roda em staging usa esse formato.
+
+Quando a D4 estiver feita e a API estiver de pé em staging:
+
+1. Criar **pela própria API** uma clínica fictícia (staging só tem dado fictício) e anotar o `tenant_id` dela.
+2. Achar a chave dessa clínica pela tag (`aws kms list-resource-tags` com `tenant_id=<tenant fictício>`) e ler a política: `aws kms get-key-policy --key-id <chave> --policy-name default --query Policy --output text`.
+3. Conferir que ela contém o `HumanoNaoDecifra` (com os 3 padrões fixos e os extras de `KMS_PAPEIS_HUMANOS_EXTRA`) e os dois `Deny` de contexto (`NegarSemContextoDaClinica` e `NegarContextoDeOutraClinica`) com o **tenant literal** da clínica.
+4. Registrar na evidência só o **SHA-256 do JSON canonicalizado** dessa política (mesmo método da §6.1, `sha256_json_canonico` de `comum.sh`) e a **lista de `Sid`**. Nada de nome, e-mail ou dado da clínica.
+5. Anexar como na §7. O Guardião registra no parecer. Sem este passo, o piloto segue bloqueado.
 
 ## 7. Onde anexar a evidência (devops-ci → Guardião)
 
 1. O devops-ci abre um PR curto `devops/evidencias-staging-kc3-kc5` com os dois JSON em `docs/03-seguranca-lgpd/evidencias/` (são só ids técnicos, UUIDs fictícios e códigos de erro). Antes do commit, reler os arquivos para confirmar que não há e-mail, nome nem IP.
 2. O **Guardião** confere a evidência e escreve **o novo item no parecer** `revisoes/2026-10-25-pr76.md` ("Prova K-c3 de integração e K-c5 em staging"), com o resultado e o link para os JSON. Só o Guardião registra a aprovação; o devops-ci não edita o parecer.
-3. O piloto continua bloqueado até esse item aprovado **e** a D4.
+3. O piloto continua bloqueado até esse item aprovado, a D4 **e** a condição 3 (§6.4).
 
 ## 8. Rollback
 
@@ -144,6 +167,6 @@ CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias infra/scripts/staging/prova-kc5
 
 ## 9. Ponto encontrado ao escrever este runbook (resolvido)
 
-> ✅ **Resolvido no #73, commit `15e3303`:** a `politicaDaChaveDaClinica` passou a incluir o `HumanoNaoDecifra` na key policy de cada chave de clínica e de lote, com os 3 padrões fixos + `KMS_PAPEIS_HUMANOS_EXTRA`. O Terraform injeta essa variável na tarefa da API quando `papeis_humanos_extra` não é vazio, o CI compara os padrões fixos dos dois lados e a K-c3 prova o `Deny` com H0 a H2 (§6.1). Texto original abaixo, para histórico.
+> ✅ **Resolvido no #73, commit `15e3303`:** a `politicaDaChaveDaClinica` passou a incluir o `HumanoNaoDecifra` na key policy de cada chave de clínica e de lote, com os 3 padrões fixos + `KMS_PAPEIS_HUMANOS_EXTRA`. O Terraform injeta essa variável na tarefa da API quando `papeis_humanos_extra` não é vazio, o CI compara os padrões fixos dos dois lados e a K-c3 prova o `Deny` com H0 a H3 (§6.1; H3 pela sessão SSO real, desde 27/10). Texto original abaixo, para histórico.
 
 ~~O comentário de `kms.tf` e o output `kms_deny_humanos` dizem que o `KmsKeyProvider` inclui o statement `HumanoNaoDecifra` (R4 do #58) na key policy de cada KEK de clínica. A `politicaDaChaveDaClinica` do #73 **não** inclui esse statement: tem só o da conta e os dois `Deny` de contexto. A K-c3 prova o que a API faz hoje. Fica para a ENG e o Guardião decidir se o `Deny` de humanos entra na política da API ou se o comentário do Terraform deve ser corrigido.~~

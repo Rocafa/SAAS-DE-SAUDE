@@ -146,6 +146,22 @@ jobs:
           grep -q 'process.env.KMS_PAPEIS_HUMANOS_EXTRA' "$d/politica-kc3.mjs"
           grep -qF '"$DIR/politica-kc3.mjs" "$CONTA" "$TENANT" "$EXTRAS"' "$d/prova-kc3.sh"
           grep -q '^negativo H1 ' "$d/prova-kc3.sh" || { echo "::error::K-c3 sem o negativo do papel humano (H1)"; exit 1; }
+          # Conferência de 27/10 (parecer do #76): H3 pela sessão SSO real, negação explícita da key
+          # policy exigida em H1-H3, recusa de principal não SSO, hash da política efetiva e commit do .ts.
+          grep -q '^negativo H3 ' "$d/prova-kc3.sh" || { echo "::error::K-c3 sem o H3 (sessão SSO do operador)"; exit 1; }
+          awk '/^EXIGIR_EXPLICITA=sim$/{s=1} s&&/^negativo H[0-9] /{print $2} /^EXIGIR_EXPLICITA=nao$/{s=0}' "$d/prova-kc3.sh" \
+            | sort | tr '\n' ' ' | grep -qx 'H1 H2 H3 ' || { echo "::error::H1-H3 sem exigir a negação explícita"; exit 1; }
+          grep -qF 'role/aws-reserved/sso\.amazonaws\.com/' "$d/prova-kc3.sh"
+          grep -qF "grep -qiE 'explicit deny in (a |the )?resource[- ]based polic(y|ies)'" "$d/comum.sh"
+          grep -q 'sha256_json_canonico "$TMP/politica-efetiva.json"' "$d/prova-kc3.sh"
+          grep -q "'status', '--porcelain'" "$d/politica-kc3.mjs"
+          grep -q "'rev-parse', 'HEAD'" "$d/politica-kc3.mjs"
+          # As duas: limpeza com FALHOU reprova e a evidência é relida (e-mail, token, AccessKeyId, IP).
+          for f in "$d"/prova-kc3.sh "$d"/prova-kc5.sh; do
+            grep -q 'sanear_evidencia "$EVIDENCIA_ARQUIVO" || APROVADA=false' "$f" || { echo "::error::$f sem releitura da evidência"; exit 1; }
+            grep -q '^  if limpeza_falhou ' "$f" || { echo "::error::$f: limpeza com falha não reprova"; exit 1; }
+          done
+          grep -q 'email_recebido_em' "$d/prova-kc5.sh"
 
   terraform:
     name: fmt, validate, tflint e checkov
@@ -333,6 +349,15 @@ jobs:
             | sed -E 's#^arn:\$\{data\.aws_partition\.atual\.partition\}:iam::\$\{local\.conta\}:#arn:aws:iam::CONTA:#' | sort)
           [ "$(printf '%s\n' "$tf_humanos" | grep -c .)" -eq 3 ] \
             || { echo "local.principais_humanos: esperava 3 padrões fixos"; printf '%s\n' "$tf_humanos"; exit 1; }
+          # Ações do HumanoNaoDecifra no Terraform: Decrypt, ReEncrypt* e CreateGrant (recomendação do
+          # Guardião, 27/10), este só com a exceção de grant pedido por serviço integrado (apply com SSO).
+          tf_acoes=$(sed -n '/sid *= *"HumanoNaoDecifra"/,/resources/p' staging/kms.tf | grep 'actions' \
+            | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
+          [ "$tf_acoes" = "$(printf '%s\n' kms:CreateGrant kms:Decrypt 'kms:ReEncrypt*')" ] \
+            || { echo "kms.tf: HumanoNaoDecifra tem de negar kms:Decrypt, kms:ReEncrypt* e kms:CreateGrant"; printf '%s\n' "$tf_acoes"; exit 1; }
+          sed -n '/data "aws_iam_policy_document" "kms_deny_humanos"/,/^}/p' staging/kms.tf \
+            | grep -A2 'test *= *"BoolIfExists"' | grep -q 'variable *= *"kms:GrantIsForAWSResource"' \
+            || { echo "kms.tf: HumanoNaoDecifra sem a exceção BoolIfExists kms:GrantIsForAWSResource"; exit 1; }
           api_kms=../../apps/api/src/modules/crypto/kms-key-provider.ts
           # Antes do #73 o arquivo existe sem a key policy própria (K-c2): aí não há o que comparar.
           if [ -f "$api_kms" ] && grep -q 'export function politicaDaChaveDaClinica' "$api_kms"; then
@@ -343,6 +368,18 @@ jobs:
               echo "padrões humanos divergem: Terraform (acesso-humano.tf) x API (politicaDaChaveDaClinica)"
               diff <(printf '%s\n' "$tf_humanos") <(printf '%s\n' "$api_humanos") || true; exit 1; }
             grep -q "Sid: 'HumanoNaoDecifra'" "$api_kms" || { echo "API sem o statement HumanoNaoDecifra"; exit 1; }
+            # Ações do HumanoNaoDecifra: iguais dos dois lados. Transição: a API sem kms:CreateGrant
+            # (antes do commit do #73 que o inclui) só gera aviso; qualquer outra diferença reprova.
+            api_acoes=$(sed -n "/Sid: 'HumanoNaoDecifra'/,/Condition:/p" "$api_kms" | grep 'Action:' \
+              | grep -o "'kms:[^']*'" | tr -d "'" | sort)
+            if [ "$api_acoes" != "$tf_acoes" ]; then
+              if [ "$api_acoes" = "$(printf '%s\n' kms:Decrypt 'kms:ReEncrypt*')" ]; then
+                echo "::notice::HumanoNaoDecifra da API ainda sem kms:CreateGrant (chega com o #73); Terraform já nega"
+              else
+                echo "ações do HumanoNaoDecifra divergem: Terraform (kms.tf) x API (politicaDaChaveDaClinica)"
+                diff <(printf '%s\n' "$tf_acoes") <(printf '%s\n' "$api_acoes") || true; exit 1
+              fi
+            fi
           else
             echo "::notice::politicaDaChaveDaClinica ausente nesta árvore (chega com o #73); comparação dos padrões humanos pulada"
           fi

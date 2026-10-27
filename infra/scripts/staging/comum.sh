@@ -9,6 +9,9 @@ export AWS_PAGER=""
 
 falhar() {
   echo "ERRO: $*" >&2
+  # Lido pela limpeza (trap) para registrar o motivo da reprovação na evidência.
+  # shellcheck disable=SC2034
+  ULTIMO_ERRO="$*"
   exit 1
 }
 
@@ -84,4 +87,67 @@ agendar_exclusao_chave_de_prova() {
   fi
   aws kms schedule-key-deletion --key-id "$chave" --pending-window-in-days 7 \
     --query DeletionDate --output text >/dev/null
+}
+
+# Negação EXPLÍCITA por política de recurso (a key policy) na mensagem de erro da AWS CLI. Sem ela,
+# a falta de permissão no IAM (negação implícita) ou um Deny de SCP/permission set explicaria o
+# AccessDenied, e a prova do Deny da key policy não vale. Variações documentadas pela AWS
+# ("Access denied error messages"): "with an explicit deny in a resource-based policy" e
+# "because of an explicit deny in a resource-based policy" (com ou sem artigo, maiúsculas à parte).
+# NÃO aceita "explicit deny in an identity-based policy", "... in a service control policy",
+# "... in a session policy", "... in a permissions boundary" nem o formato antigo sem o tipo.
+negacao_explicita_da_key_policy() {
+  grep -qiE 'explicit deny in (a |the )?resource[- ]based polic(y|ies)' "$1"
+}
+
+# SHA-256 do JSON canonicalizado (chaves de objeto ordenadas, sem espaços; ordem dos arrays mantida),
+# lido do arquivo $1. O KMS pode devolver a política com outra formatação; o conteúdo tem de ser o mesmo.
+sha256_json_canonico() {
+  node -e '
+    const fs = require("node:fs");
+    const can = (v) => Array.isArray(v) ? v.map(can)
+      : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, can(v[k])])) : v;
+    const txt = JSON.stringify(can(JSON.parse(fs.readFileSync(process.argv[1], "utf8"))));
+    process.stdout.write(require("node:crypto").createHash("sha256").update(txt).digest("hex"));
+  ' "$1"
+}
+
+# Relê o JSON de evidência antes de anexar (§7 do runbook): não pode conter e-mail, token de sessão,
+# AccessKeyId nem IP. Se contiver, troca o valor por "[REMOVIDO:<tipo>]", marca aprovada=false com o
+# motivo em evidencia_reprovada_por e devolve 1. A reprovação continua sendo evidência anexável.
+sanear_evidencia() {
+  node -e '
+    const fs = require("node:fs");
+    const arq = process.argv[1];
+    let txt = fs.readFileSync(arq, "utf8");
+    const padroes = [
+      ["e-mail", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g],
+      ["AccessKeyId", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],
+      ["token de sessão", /\b(?:IQoJb3JpZ2lu|FwoGZXIvYXdz)[A-Za-z0-9+/=]*|[A-Za-z0-9+/]{100,}={0,2}/g],
+      ["IPv4", /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g],
+      ["IPv6", /\b[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{0,4}){4,7}\b/g],
+    ];
+    const achados = [];
+    for (const [tipo, re] of padroes) {
+      const n = (txt.match(re) || []).length;
+      if (n) { achados.push(`${tipo} (${n})`); txt = txt.replace(re, `[REMOVIDO:${tipo}]`); }
+    }
+    if (!achados.length) process.exit(0);
+    const ev = JSON.parse(txt);
+    ev.aprovada = false;
+    ev.evidencia_reprovada_por = [...(ev.evidencia_reprovada_por || []),
+      `a evidência continha ${achados.join(", ")}; valores removidos antes de gravar`];
+    fs.writeFileSync(arq, JSON.stringify(ev, null, 2) + "\n");
+    console.error(`RELEITURA: a evidência continha ${achados.join(", ")} (removido; prova REPROVADA)`);
+    process.exit(1);
+  ' "$1"
+}
+
+# Algum resultado de limpeza com FALHOU ou RECUSADO? Então a prova não sai aprovada.
+limpeza_falhou() {
+  local v
+  for v in "$@"; do
+    case "$v" in FALHOU* | RECUSADO*) return 0 ;; esac
+  done
+  return 1
 }

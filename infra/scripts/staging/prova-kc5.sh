@@ -11,10 +11,14 @@
 #   3. cria uma chave fictícia (tag prova=kc5, sem tenant_id: não é chave de clínica);
 #   4. faz DisableKey e PutKeyPolicy (reaplica a MESMA política padrão: nada muda de fato);
 #   5. lê a fila até achar os dois eventos DESSA chave (CloudTrail → EventBridge leva minutos);
-#   6. grava a evidência em JSON (ids do SNS e do CloudTrail, horários, latência). Não grava
-#      userIdentity, IP nem user agent: o nome da sessão do SSO pode conter e-mail;
+#   6. grava a evidência em JSON: para DisableKey e PutKeyPolicy, o horário da ação, o eventID e o
+#      eventTime do CloudTrail, o MessageId e o Timestamp do SNS e o horário de chegada na fila, mais
+#      o campo email_recebido_em (canal humano), que o OPERADOR preenche depois com --anotar-email.
+#      Não grava userIdentity, IP nem user agent: o nome da sessão do SSO pode conter e-mail. Relê o
+#      JSON ao fim e reprova se achar e-mail, token de sessão, AccessKeyId ou IP;
 #   7. limpa SEMPRE (trap): agenda a exclusão da chave (7 dias), cancela a assinatura e apaga a
 #      fila. Só toca recurso com a tag prova=kc5. A chave fica desabilitada: nunca EnableKey.
+#      Limpeza com FALHOU/RECUSADO reprova a prova.
 #
 # Pré-requisitos: AWS CLI v2, node 22+, credencial SSO de staging com permissão de KMS, SQS e
 # sns:Subscribe/Unsubscribe no tópico. NÃO roda no CI (não há credencial lá).
@@ -23,6 +27,10 @@
 #   EVIDENCIA_DIR  onde gravar o JSON (padrão: diretório atual)
 #   PRAZO_MIN      quanto esperar pelos alertas, em minutos (padrão: 20)
 #   NOME_BASE      prefixo dos recursos do Terraform (padrão: plataforma-saude-staging)
+#
+# Depois que os e-mails do tópico chegarem (horário do cabeçalho do e-mail, em UTC):
+#   infra/scripts/staging/prova-kc5.sh --anotar-email <evidência.json> <horário DisableKey> <horário PutKeyPolicy>
+#   (formato AAAA-MM-DDTHH:MM:SSZ; não fala com a AWS, só preenche email_recebido_em e relê o JSON)
 #
 # Efeito colateral esperado: os assinantes do tópico (e-mail de segurança) recebem 3 alertas:
 # DisableKey, PutKeyPolicy e o ScheduleKeyDeletion da limpeza. Avise antes de rodar.
@@ -33,6 +41,35 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$DIR/comum.sh"
 
 readonly PROVA=kc5
+
+# Modo --anotar-email: o operador registra quando o e-mail de cada alerta chegou (canal humano,
+# condição 4 da conferência de 27/10). Não cria nada nem fala com a AWS.
+if [ "${1:-}" = --anotar-email ]; then
+  [ $# -eq 4 ] || falhar "uso: $0 --anotar-email <evidência.json> <horário DisableKey> <horário PutKeyPolicy>"
+  [ -f "$2" ] || falhar "evidência $2 não existe"
+  node -e '
+    const fs = require("node:fs");
+    const [arq, tDisable, tPut] = process.argv.slice(1);
+    const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+    const ev = JSON.parse(fs.readFileSync(arq, "utf8"));
+    if (!ev.eventos) { console.error("evidência sem o bloco eventos (não é da prova-kc5 atual)"); process.exit(1); }
+    for (const [acao, t] of [["DisableKey", tDisable], ["PutKeyPolicy", tPut]]) {
+      if (!iso.test(t) || Number.isNaN(Date.parse(t))) { console.error(`${acao}: horário inválido (${t}); use AAAA-MM-DDTHH:MM:SSZ`); process.exit(1); }
+      const e = ev.eventos[acao];
+      if (!e || !e.sns_message_id) { console.error(`${acao}: a evidência não tem o alerta pelo SNS; nada a anotar`); process.exit(1); }
+      if (e.acao_provocada_em && Date.parse(t) < Date.parse(e.acao_provocada_em)) {
+        console.error(`${acao}: e-mail (${t}) antes da própria ação (${e.acao_provocada_em})`); process.exit(1);
+      }
+      e.email_recebido_em = t;
+    }
+    ev.email_anotado_pelo_operador_em = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    fs.writeFileSync(arq, JSON.stringify(ev, null, 2) + "\n");
+  ' "$2" "$3" "$4" || falhar "anotação recusada"
+  sanear_evidencia "$2" || falhar "a evidência continha dado proibido (removido; K-c5 REPROVADA)"
+  info "e-mail anotado em $2"
+  exit 0
+fi
+
 EVIDENCIA_DIR=${EVIDENCIA_DIR:-$PWD}
 PRAZO_MIN=${PRAZO_MIN:-20}
 NOME_BASE=${NOME_BASE:-plataforma-saude-staging}
@@ -53,6 +90,9 @@ T_PUT=""
 LIMPEZA_CHAVE="nada a limpar"
 LIMPEZA_FILA="nada a limpar"
 LIMPEZA_ASSINATURA="nada a limpar"
+ULTIMO_ERRO=""
+REPROVADA_POR=""
+EVIDENCIA_ARQUIVO=""
 INICIO=$(agora_utc)
 
 recusar_desvio_de_endpoint
@@ -95,7 +135,15 @@ limpar() {
       LIMPEZA_FILA="RECUSADO: fila sem a tag prova=$PROVA (não apagada)"
     fi
   fi
+  [ -z "$ULTIMO_ERRO" ] || REPROVADA_POR+="$ULTIMO_ERRO"$'\n'
+  if limpeza_falhou "$LIMPEZA_CHAVE" "$LIMPEZA_ASSINATURA" "$LIMPEZA_FILA"; then
+    APROVADA=false
+    REPROVADA_POR+="limpeza com FALHOU/RECUSADO (ver campo limpeza; registrar a limpeza manual)"$'\n'
+  fi
+  [ $rc -eq 0 ] || APROVADA=false
   gravar_evidencia
+  # Relê o JSON gravado: e-mail, token, AccessKeyId ou IP reprovam (o valor sai do arquivo).
+  sanear_evidencia "$EVIDENCIA_ARQUIVO" || APROVADA=false
   rm -rf "$TMP"
   info "limpeza: chave=[$LIMPEZA_CHAVE] assinatura=[$LIMPEZA_ASSINATURA] fila=[$LIMPEZA_FILA]"
   if [ "$APROVADA" = true ] && [ $rc -eq 0 ]; then
@@ -110,6 +158,8 @@ trap limpar EXIT INT TERM
 gravar_evidencia() {
   local arquivo
   arquivo="$EVIDENCIA_DIR/prova-kc5-$(date -u +%Y%m%dT%H%M%SZ).json"
+  EVIDENCIA_ARQUIVO="$arquivo"
+  REPROVADA_POR="$REPROVADA_POR" \
   INICIO="$INICIO" FIM="$(agora_utc)" CONTA="$CONTA" CHAVE_ARN="$CHAVE_ARN" TOPICO_ARN="$TOPICO_ARN" \
     REGRA="$REGRA" REGRA_ESTADO="$REGRA_ESTADO" REGRA_ALVO_OK="$REGRA_ALVO_OK" \
     T_DISABLE="$T_DISABLE" T_PUT="$T_PUT" APROVADA="$APROVADA" \
@@ -118,6 +168,20 @@ gravar_evidencia() {
       const fs = require("node:fs");
       const e = process.env;
       const eventos = fs.readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      // Um bloco por ação provocada: o 1º alerta dela vindo do tópico de segurança.
+      const resumo = (acao, t) => {
+        const a = eventos.find((x) => x.eventName === acao && x.sns && x.sns.do_topico_de_seguranca);
+        return {
+          acao_provocada_em: t || null,
+          do_topico_de_seguranca: !!a,
+          cloudtrail_event_id: a ? a.eventID || null : null,
+          cloudtrail_event_time: a ? a.eventTime || null : null,
+          sns_message_id: a ? a.sns.message_id || null : null,
+          sns_timestamp: a ? a.sns.timestamp || null : null,
+          recebido_na_fila: a ? a.recebido_na_fila : null,
+          email_recebido_em: null,
+        };
+      };
       const ev = {
         prova: "K-c5: DisableKey/PutKeyPolicy chegam ao tópico de segurança (regra kms_administracao)",
         parecer: "docs/03-seguranca-lgpd/revisoes/2026-10-25-pr76.md",
@@ -126,10 +190,13 @@ gravar_evidencia() {
         topico_arn: e.TOPICO_ARN,
         chave_ficticia_arn: e.CHAVE_ARN || null,
         acoes_provocadas: { DisableKey: e.T_DISABLE || null, PutKeyPolicy: e.T_PUT || null },
+        eventos: { DisableKey: resumo("DisableKey", e.T_DISABLE), PutKeyPolicy: resumo("PutKeyPolicy", e.T_PUT) },
+        email_recebido_em_como_preencher: "Operador: horário (UTC) do cabeçalho do e-mail de cada alerta, com prova-kc5.sh --anotar-email <este arquivo> <DisableKey> <PutKeyPolicy> (runbook §6.2). Sem e-mail anotado, a condição 4 fica pendente.",
         alertas_recebidos: eventos,
         aprovada: e.APROVADA === "true",
+        evidencia_reprovada_por: e.REPROVADA_POR.split("\n").filter(Boolean),
         limpeza: { chave: e.LIMPEZA_CHAVE, assinatura: e.LIMPEZA_ASSINATURA, fila: e.LIMPEZA_FILA },
-        observacao: "Sem dado pessoal: userIdentity, sourceIPAddress e userAgent do evento não são gravados."
+        observacao: "Sem dado pessoal: userIdentity, sourceIPAddress e userAgent do evento não são gravados. JSON relido ao fim (sem e-mail, token, AccessKeyId nem IP)."
       };
       fs.writeFileSync(process.argv[2], JSON.stringify(ev, null, 2) + "\n");
     ' "$EVENTOS" "$arquivo"
