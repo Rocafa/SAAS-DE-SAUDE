@@ -275,8 +275,8 @@ locals {
     "KMS_ENDPOINT",
   ]
   api_prefixos_aws_proibidos = ["AWS_ENDPOINT_URL"]
-  api_nomes_ambiente = [for v in local.api_ambiente : v.name]
-  api_nomes_segredos = [for s in local.api_segredos : s.name]
+  api_nomes_ambiente         = [for v in local.api_ambiente : v.name]
+  api_nomes_segredos         = [for s in local.api_segredos : s.name]
 }
 
 resource "aws_ecs_task_definition" "api" {
