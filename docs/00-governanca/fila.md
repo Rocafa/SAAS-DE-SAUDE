@@ -84,6 +84,10 @@
 | Rodada 27.8: ✅ #58 — R7-a, K-a2, K-c1 e registro da decisão K-c2 (6ba44ea, 96df2c9) — **APROVADO** (e320f95) | Maestro @Rocafa | 27/10/2026 | PR #58 |
 | Rodada 27.9: ✅ antes do piloto — K-c4a (verificarChave só com GenerateMac) + trava das listas AWS (#73); F-1 marcar consulta com busca (#76); K-c5 alarmes de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant (#58) — **APROVADOS** (c7c25e4) · [relatório](../relatorios/2026-10-27-rodada-27.md) | Maestro @Rocafa | 27/10/2026 | PRs #73/#76/#58 |
 
+| Rodada 28.1: ✅ kit do primeiro dia do staging — roteiro + scripts das provas K-c3/K-c5 (d81d995) | Maestro @Rocafa | 27/10/2026 | PR #58 |
+| Rodada 28.2: ✅ 2º ensaio do merge completo — 25 PRs, api 986, web 349, rls 618, E2E 223, audit limpo ([relatório](../relatorios/2026-10-27-ensaio-de-merge-2.md)); teste do adaptador web corrigido no #76 (f260a16) | Maestro @Rocafa | 27/10/2026 | main / PR #76 |
+| Rodada 28.3: R4 na key policy por clínica — `HumanoNaoDecifra` (humano não decifra fora do break-glass), achado pelo kit do staging | Maestro @Rocafa (agente engenharia) | 27/10/2026 | `eng/integracao-r19` |
+
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
