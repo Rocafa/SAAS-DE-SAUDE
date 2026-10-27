@@ -384,6 +384,10 @@ resource "aws_lb" "this" {
   security_groups            = [aws_security_group.alb.id]
   drop_invalid_header_fields = true
   enable_deletion_protection = true
+  # C1-b (revisoes/2026-10-25-pr76.md): explícito, sem depender do padrão da AWS. O ALB ACRESCENTA
+  # o IP de quem conectou ao fim do X-Forwarded-For; HTTP_TRUST_PROXY_HOPS=1 lê só esse salto.
+  # preserve = o cliente escolhe o IP do rate limit; remove = todos viram o mesmo IP. §4.5.
+  xff_header_processing_mode = "append"
 
   access_logs {
     bucket  = aws_s3_bucket.logs.id

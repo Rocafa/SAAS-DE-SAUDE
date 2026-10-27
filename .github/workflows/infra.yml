@@ -257,6 +257,15 @@ jobs:
           grep -A3 'variable "whatsapp_provedor"' staging/variables.tf | grep -Eq 'default += "desligado"'
           grep -A3 'variable "whatsapp_clausulas_padrao_assinadas"' staging/variables.tf | grep -Eq 'default += false'
           grep -q '{ name = "HTTP_TRUST_PROXY_HOPS", value = "1" }' staging/app.tf
+          # C1-b: o salto 1 só é o IP real se o ALB ACRESCENTAR ao X-Forwarded-For (append explícito).
+          alb=$(sed -n '/^resource "aws_lb" "this"/,/^}/p' staging/app.tf)
+          echo "$alb" | grep -Eq '^\s*xff_header_processing_mode\s*=\s*"append"' \
+            || { echo "aws_lb.this sem xff_header_processing_mode = \"append\" (§4.5)"; exit 1; }
+          echo "$alb" | grep -Eq '^\s*drop_invalid_header_fields\s*=\s*true' \
+            || { echo "aws_lb.this sem drop_invalid_header_fields = true"; exit 1; }
+          if grep -rEn --include='*.tf' 'xff_header_processing_mode\s*=\s*"(preserve|remove)"' .; then
+            echo "XFF preserve/remove deixa o IP do rate limit falsificável ou inútil (§4.5)"; exit 1
+          fi
           grep -q '{ name = "SUPPORT_PSEUDONYM_KMS_KEY_ID", value = aws_kms_key.pseudonimo_suporte.arn }' staging/app.tf
           # Segredo do WhatsApp nasce vazio: nenhuma versão com valor no IaC.
           if grep -rEn --include='*.tf' 'secret_id *= *aws_secretsmanager_secret.whatsapp' .; then
