@@ -95,14 +95,16 @@ Os dois scripts ficam em `infra/scripts/staging/`, usam a região fixa `sa-east-
 ### 6.1 K-c3 de integração: a chave da clínica só abre com o contexto certo
 
 ```bash
-CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias infra/scripts/staging/prova-kc3.sh
+CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias \
+  KMS_PAPEIS_HUMANOS_EXTRA="<mesmo valor da tarefa da API; omitir se papeis_humanos_extra = []>" \
+  infra/scripts/staging/prova-kc3.sh
 ```
 
-- **A política vem do código da API.** `politica-kc3.mjs` lê `apps/api/src/modules/crypto/kms-key-provider.ts`, separa pela AST do TypeScript a função `politicaDaChaveDaClinica` e as constantes de que ela depende, tira os tipos e a executa. Assim, a prova usa o JSON que a API passa no `CreateKey`, não uma cópia. Rode de um checkout com o #73 na `main`, ou aponte `KMS_PROVIDER_TS=<caminho do arquivo>`. A evidência traz o caminho e o SHA-256 do arquivo de origem.
-- **Política aplicada** (formato da K-c2, com conta e tenant da prova): o statement padrão da conta (`kms:*` para `arn:aws:iam::<conta>:root`), mais `Deny` para `"*"` em `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*` e `kms:GenerateDataKey*` quando `kms:EncryptionContext:tenant_id` está ausente (`Null`) ou é diferente do tenant da chave (`StringNotEquals`).
-- **O principal com `kms:*` no IAM** é um papel temporário (`prova-kc3-<id>`), com `kms:*` na chave de prova, que só o operador pode assumir.
-- **Casos:** primeiro os positivos, P1 (`GenerateDataKey`) e P2 (`Decrypt`) com o `tenant_id` da chave, que provam que o IAM do papel já vale. Depois, nove negativos (N1 a N9): `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `Decrypt`, `Encrypt` e `ReEncrypt`, sem contexto ou com o `tenant_id` de outra clínica. Todos têm de dar `AccessDeniedException`. Um `InvalidCiphertextException` reprova: significa que o KMS deixou passar e só a criptografia barrou.
-- **Aprovada** quando P1, P2 e N1 a N9 batem com o esperado. O campo `negacao_explicita_em_politica_de_recurso` mostra se a mensagem da AWS cita o `Deny` da key policy. É informativo e não reprova sozinho.
+- **A política vem do código da API.** `politica-kc3.mjs` lê `apps/api/src/modules/crypto/kms-key-provider.ts`, separa pela AST do TypeScript a função `politicaDaChaveDaClinica`, a `papeisHumanosExtraDoAmbiente` e as constantes de que elas dependem, tira os tipos e a executa. Assim, a prova usa o JSON que a API passa no `CreateKey`, não uma cópia. Rode de um checkout com o #73 na `main`, ou aponte `KMS_PROVIDER_TS=<caminho do arquivo>`. A evidência traz o caminho e o SHA-256 do arquivo de origem.
+- **Política aplicada** (formato da K-c2, com conta e tenant da prova): o statement padrão da conta (`kms:*` para `arn:aws:iam::<conta>:root`), mais `Deny` para `"*"` em `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*` e `kms:GenerateDataKey*` quando `kms:EncryptionContext:tenant_id` está ausente (`Null`) ou é diferente do tenant da chave (`StringNotEquals`). E, desde o #73 `15e3303` (R4 do #58), o `HumanoNaoDecifra`: `Deny` de `kms:Decrypt` e `kms:ReEncrypt*` quando `aws:PrincipalArn` casa (`ArnLike`) com SSO, usuário IAM, root ou um dos extras (`KMS_PAPEIS_HUMANOS_EXTRA`, lida e validada pelo código da API).
+- **Os principais com `kms:*` no IAM** são dois papéis temporários, com `kms:*` na chave de prova, que só o operador pode assumir: o de máquina (`prova-kc3-<id>`) e o "humano" (`prova-kc3-h-<id>`), cujo ARN exato entra na política como padrão humano extra de prova, depois dos extras reais. Nenhum extra real pode casar com `role/prova-kc3-*`, senão P2 cai.
+- **Casos:** primeiro os positivos, P1 (`GenerateDataKey`) e P2 (`Decrypt`) com o `tenant_id` da chave, que provam que o IAM do papel já vale. Depois, nove negativos (N1 a N9): `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `Decrypt`, `Encrypt` e `ReEncrypt`, sem contexto ou com o `tenant_id` de outra clínica. Todos têm de dar `AccessDeniedException`. Um `InvalidCiphertextException` reprova: significa que o KMS deixou passar e só a criptografia barrou. Por fim, o R4 com o papel humano e o contexto **certo**: H0 (`GenerateDataKeyWithoutPlaintext`, positivo, prova que o IAM dele vale) e os negativos H1 (`Decrypt`) e H2 (`ReEncrypt`), que têm de dar `AccessDeniedException`.
+- **Aprovada** quando P1, P2, N1 a N9, H0, H1 e H2 batem com o esperado. O campo `negacao_explicita_em_politica_de_recurso` mostra se a mensagem da AWS cita o `Deny` da key policy. É informativo e não reprova sozinho.
 
 ### 6.2 K-c5: o alerta de administração da chave chega ao tópico de segurança
 
@@ -140,6 +142,8 @@ CONTA_STAGING=<id> EVIDENCIA_DIR=/tmp/evidencias infra/scripts/staging/prova-kc5
 | Chave de prova esquecida | `aws kms schedule-key-deletion --pending-window-in-days 7` só depois de confirmar a tag `prova` | devops-ci |
 | Suspeita de vazamento de segredo | rotacionar na hora (§3 de `infra-staging.md`, "Rotação") e avisar o Guardião | devops-ci + Guardião |
 
-## 9. Ponto aberto encontrado ao escrever este runbook
+## 9. Ponto encontrado ao escrever este runbook (resolvido)
 
-O comentário de `kms.tf` e o output `kms_deny_humanos` dizem que o `KmsKeyProvider` inclui o statement `HumanoNaoDecifra` (R4 do #58) na key policy de cada KEK de clínica. A `politicaDaChaveDaClinica` do #73 **não** inclui esse statement: tem só o da conta e os dois `Deny` de contexto. A K-c3 prova o que a API faz hoje. Fica para a ENG e o Guardião decidir se o `Deny` de humanos entra na política da API ou se o comentário do Terraform deve ser corrigido.
+> ✅ **Resolvido no #73, commit `15e3303`:** a `politicaDaChaveDaClinica` passou a incluir o `HumanoNaoDecifra` na key policy de cada chave de clínica e de lote, com os 3 padrões fixos + `KMS_PAPEIS_HUMANOS_EXTRA`. O Terraform injeta essa variável na tarefa da API quando `papeis_humanos_extra` não é vazio, o CI compara os padrões fixos dos dois lados e a K-c3 prova o `Deny` com H0 a H2 (§6.1). Texto original abaixo, para histórico.
+
+~~O comentário de `kms.tf` e o output `kms_deny_humanos` dizem que o `KmsKeyProvider` inclui o statement `HumanoNaoDecifra` (R4 do #58) na key policy de cada KEK de clínica. A `politicaDaChaveDaClinica` do #73 **não** inclui esse statement: tem só o da conta e os dois `Deny` de contexto. A K-c3 prova o que a API faz hoje. Fica para a ENG e o Guardião decidir se o `Deny` de humanos entra na política da API ou se o comentário do Terraform deve ser corrigido.~~

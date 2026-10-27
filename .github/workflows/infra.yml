@@ -141,6 +141,11 @@ jobs:
           # A K-c3 usa a política gerada pelo código da API, não uma cópia.
           grep -q 'politicaDaChaveDaClinica' "$d/politica-kc3.mjs"
           grep -q 'politica-kc3.mjs' "$d/prova-kc3.sh"
+          # R4 (#73 15e3303): extras repassados à função da API e o negativo do papel humano presente.
+          grep -q "'papeisHumanosExtraDoAmbiente'" "$d/politica-kc3.mjs"
+          grep -q 'process.env.KMS_PAPEIS_HUMANOS_EXTRA' "$d/politica-kc3.mjs"
+          grep -qF '"$DIR/politica-kc3.mjs" "$CONTA" "$TENANT" "$EXTRAS"' "$d/prova-kc3.sh"
+          grep -q '^negativo H1 ' "$d/prova-kc3.sh" || { echo "::error::K-c3 sem o negativo do papel humano (H1)"; exit 1; }
 
   terraform:
     name: fmt, validate, tflint e checkov
@@ -329,7 +334,8 @@ jobs:
           [ "$(printf '%s\n' "$tf_humanos" | grep -c .)" -eq 3 ] \
             || { echo "local.principais_humanos: esperava 3 padrões fixos"; printf '%s\n' "$tf_humanos"; exit 1; }
           api_kms=../../apps/api/src/modules/crypto/kms-key-provider.ts
-          if [ -f "$api_kms" ]; then
+          # Antes do #73 o arquivo existe sem a key policy própria (K-c2): aí não há o que comparar.
+          if [ -f "$api_kms" ] && grep -q 'export function politicaDaChaveDaClinica' "$api_kms"; then
             api_humanos=$(sed -n '/^\s*const humanos = \[/,/^\s*\];/p' "$api_kms" \
               | grep -o '`arn:[^`]*`' | tr -d '`' \
               | sed -E 's#^arn:aws:iam::\$\{contaAws\}:#arn:aws:iam::CONTA:#' | sort)
@@ -338,7 +344,7 @@ jobs:
               diff <(printf '%s\n' "$tf_humanos") <(printf '%s\n' "$api_humanos") || true; exit 1; }
             grep -q "Sid: 'HumanoNaoDecifra'" "$api_kms" || { echo "API sem o statement HumanoNaoDecifra"; exit 1; }
           else
-            echo "::notice::$api_kms ausente nesta árvore (chega com o #73); comparação dos padrões humanos pulada"
+            echo "::notice::politicaDaChaveDaClinica ausente nesta árvore (chega com o #73); comparação dos padrões humanos pulada"
           fi
           # K-a/K-b: só a role da tarefa. Lista de portas da cadeia de credenciais e endpoints vetados.
           aws_proib=$(sed -n '/^\s*api_variaveis_aws_proibidas *= *\[/,/^\s*\]/p' staging/app.tf)
