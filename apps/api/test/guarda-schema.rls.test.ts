@@ -31,19 +31,63 @@ type Privilegio = (typeof PRIVILEGIOS)[number];
 const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: readonly Privilegio[] }>> = {
   // A aplicação não exclui clínicas (migração 0001 revoga DELETE).
   tenants: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
-  patients: { privilegios: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  // Retenção (migração 0009, R3 do parecer PR #57): inativar, nunca apagar.
+  patients: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Append-only (migração 0002): sem UPDATE, sem DELETE, sem TRUNCATE.
   audit_log: { privilegios: ['SELECT', 'INSERT'] },
   // Chaves por clínica (migração 0004): sem DELETE/TRUNCATE (a linha destruída fica como lápide);
   // UPDATE só nas colunas do ciclo de vida, por isso aparece via has_any_column_privilege.
   tenant_master_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   tenant_data_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Domínio de agenda (migração 0007): sem DELETE/TRUNCATE — inativar/cancelar, nunca apagar.
+  professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Guias e pacotes (migração 0011): sem DELETE/TRUNCATE — cancelar/estornar, nunca apagar.
+  insurers: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  insurance_guides: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  guide_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Assinatura do paciente por sessão é prova: append-only (sem UPDATE).
+  guide_session_signatures: { privilegios: ['SELECT', 'INSERT'] },
+  session_packages: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  package_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Troca do profissional do pacote (0023): append-only (trigger recusa UPDATE/DELETE/TRUNCATE).
+  package_professional_changes: { privilegios: ['SELECT', 'INSERT'] },
+  // Prontuário (migração 0012): sem DELETE/TRUNCATE. Versões e adendos são append-only (sem UPDATE;
+  // um trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel). Finalizar = UPDATE do atendimento
+  // aberto (depois disso o trigger torna a linha terminal); nota privada é descartada, nunca apagada.
+  clinical_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  encounters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinical_record_versions: { privilegios: ['SELECT', 'INSERT'] },
+  clinical_addenda: { privilegios: ['SELECT', 'INSERT'] },
+  private_notes: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Histórico de remarcações (migração 0014): append-only; o INSERT só passa vindo do trigger.
+  appointment_reschedules: { privilegios: ['SELECT', 'INSERT'] },
+  // Retenção legal, custódia e caixa de avisos (migração 0017): sem DELETE/TRUNCATE; os triggers só
+  // aceitam as transições do fluxo (pedido/aprovação por duas pessoas, aceite do substituto, lido).
+  legal_holds: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  note_custodies: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinic_members: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinical_notices: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Financeiro (migração 0018): sem DELETE/TRUNCATE. Recebimento, estorno, recibo e cancelamento de
+  // recibo são append-only (sem UPDATE; trigger recusa UPDATE/DELETE/TRUNCATE para qualquer papel).
+  // Cobrança e caixa mudam só pelos caminhos guardados por trigger (receber/cancelar; fechar).
+  finance_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  professional_fiscal_profiles: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  cash_sessions: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  charges: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  payments: { privilegios: ['SELECT', 'INSERT'] },
+  payment_reversals: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  receipts: { privilegios: ['SELECT', 'INSERT'] },
+  receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
 const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   schema_migrations: 'controle de migração; scripts/migrate.mjs revoga de app_user',
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
+  fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
@@ -249,5 +293,30 @@ describe('guarda de schema: cobertura no teste de isolamento', () => {
   it('toda tabela da aplicação tem espelho tipado em src/db/schema.ts', () => {
     const identificadores = identificadoresDoSchema();
     expect(Object.keys(TABELAS_DA_APLICACAO).filter((t) => !identificadores.has(t))).toEqual([]);
+  });
+});
+
+/**
+ * R11 do parecer #63: a função de expurgo das notas descartadas é SECURITY DEFINER com search_path fixo,
+ * e o dono não é superusuário, nem BYPASSRLS, nem o runtime. O runtime não tem DELETE em nenhuma tabela
+ * de nota ou de prontuário (o expurgo só passa pela função, e o trigger só deixa apagar linha elegível).
+ */
+describe('guarda de schema: expurgo das notas (R11)', () => {
+  it('app_purge_discarded_private_notes: SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
+    const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+      SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+      FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+      WHERE p.oid = 'public.app_purge_discarded_private_notes()'::regprocedure`;
+    expect(f?.secdef).toBe(true);
+    expect(f?.config ?? []).toContain('search_path=pg_catalog, public, pg_temp');
+    expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+    expect(f?.dono).not.toBe(RUNTIME_ROLE);
+  });
+
+  it('o runtime não tem DELETE nem TRUNCATE nas tabelas de notas e de prontuário', async () => {
+    for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
+      const tem = await privilegiosDoRuntime(tabela);
+      expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
   });
 });

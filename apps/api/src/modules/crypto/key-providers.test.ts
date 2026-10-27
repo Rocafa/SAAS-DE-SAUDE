@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { KeyUnavailableError } from './crypto-errors';
 import type { DataKey } from './data-key';
 import { KMS_DELETION_WINDOW_DAYS, KmsKeyProvider, type KmsApi } from './kms-key-provider';
+import { createKeyProvider } from './crypto.module';
 import { LocalKeyProvider } from './local-key-provider';
 
 const tenantA = randomUUID() as TenantId;
@@ -13,6 +14,14 @@ const bytesOf = (k: DataKey): Buffer => k.use((b) => Buffer.from(b));
 describe('LocalKeyProvider', () => {
   it('é recusado em produção', () => {
     expect(() => new LocalKeyProvider({ nodeEnv: 'production' })).toThrow(/produção/);
+  });
+
+  it('só aceita development/test (lista fechada): staging, vazio e variações são recusados', () => {
+    for (const nodeEnv of ['staging', 'homolog', 'prod', 'Production', '', undefined]) {
+      expect(() => new LocalKeyProvider({ nodeEnv })).toThrow();
+      expect(() => createKeyProvider({ NODE_ENV: nodeEnv })).toThrow(/KMS não configurado/);
+    }
+    expect(() => new LocalKeyProvider({ nodeEnv: 'development' })).not.toThrow();
   });
 
   it('gera DEK de 32 bytes que volta igual ao abrir; a cifrada não contém a chave', async () => {

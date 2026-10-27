@@ -1,10 +1,10 @@
 import { AuditAction, type UserId } from '@plataforma/shared';
 import type { TenantTx } from '../../db/tenant-transaction';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import type { KeyAuditor, KeyEventKind } from './field-cipher';
 
-/** Ator das rotinas do sistema (ex.: rotação automática por limite de uso). Não é um usuário. */
-export const SYSTEM_ACTOR_ID = '00000000-0000-0000-0000-000000000000' as UserId;
+/** Reexportado: o ator do sistema mora no módulo de auditoria (migração 0008, actor_kind = sistema). */
+export { SYSTEM_ACTOR_ID };
 
 /**
  * Auditor padrão das operações de chave: grava em `audit_log` na MESMA transação, então a operação

@@ -98,6 +98,23 @@ A migração só amplia o conjunto: as linhas antigas continuam válidas e o has
 
 **Prazo de guarda (D7, ORDEM-004):** default configurável de 20 anos para eventos de prontuário e 5 anos para os administrativos (proposta de `retencao-e-descarte.md`). A decisão final é dos sócios. O job de expurgo ainda não existe; quando existir, a classificação sai do `scope` e da ação.
 
+## 4c. Tipo de ator e pseudônimo do suporte (migração 0008)
+
+Decisão 1 do Guardião (parecer do PR #57): a trilha vai no pacote de exportação G2 com os campos da cadeia, para a clínica verificar. Reescrever o `actor_id` do suporte na saída quebraria o hash, então o ator interno é gravado **já pseudonimizado** no INSERT.
+
+| `actor_kind` | `actor_id` | Exigência no banco |
+|---|---|---|
+| `usuario_clinica` | id real do usuário da clínica | — |
+| `suporte_plataforma` | UUID v8 de HMAC-SHA256(segredo do operador, `tenant_id` + 0x1f + id do atendente), calculado pela porta `PseudonymSigner` (KMS `GenerateMac` em staging/prod) | `metadata.ticket` = `SUP-` + até 7 dígitos e `metadata.reason` em (`pedido_da_clinica`, `break_glass`) |
+| `sistema` | `00000000-0000-0000-0000-000000000000` | e só ele |
+
+- Pseudônimo **por clínica**: o mesmo atendente tem sempre o mesmo id dentro de uma clínica, e ids diferentes entre clínicas. O segredo é uma chave HMAC_256 do **KMS** (`SUPPORT_PSEUDONYM_KMS_KEY_ID`; N1 da re-revisão do #57): a API só pede `GenerateMac` e o segredo nunca entra no processo nem no banco. Segredo local (`SUPPORT_PSEUDONYM_KEY`) só em `development`/`test` (lista fechada); em qualquer outro ambiente, sem KMS, a API não sobe, e a variável local é recusada. A tabela de reidentificação (pseudônimo para pessoa) é do operador, com acesso restrito ao DPO e à segurança.
+- Código: `recordAudit` grava `usuario_clinica`/`sistema`; `recordSupportAudit` (`src/modules/audit/ator-suporte.ts`) grava o suporte. Ainda não há rota de suporte: o módulo existe para a regra valer desde o primeiro acesso.
+- **Sem reescrever o passado e sem quebrar a cadeia.** A coluna nasce nula e **sem DEFAULT** (um DEFAULT faria o Postgres devolvê-lo também nas linhas antigas). O JSON canônico ganha a **v2** (com `actor_kind`) só para linhas com `actor_kind` preenchido; linha com `actor_kind` nulo continua com o JSON **v1** da 0005, byte a byte, então o hash antigo confere e a primeira linha nova encadeia no hash da última antiga. Leitura das antigas: `actor_id` zero = sistema; qualquer outro = usuário da clínica (não existia acesso de suporte).
+- Toda linha nova tem tipo: a trigger da cadeia deduz `sistema`/`usuario_clinica` quando o INSERT não traz (SQL direto; nunca deduz suporte), e um CHECK `NOT VALID` recusa nulo dali em diante. Linha carregada com elos prontos (restauração) não é tocada.
+- Exportação (G2, `schemaVersion` 1.2.0): `auditoria.jsonl` com `seq`, `prevHash`, `hash`, o JSON canônico e `createdAt` com microssegundos; `verifyExportedAuditTrail` confere, sem banco, campo a campo contra o canônico, o SHA-256 e os elos (com âncora, também o corte do fim).
+- Provas: `test/exportacao-cobertura.rls.test.ts` (canônico v1 idêntico para linha sem tipo; CHECKs; pseudônimo por clínica; pacote verificável e adulteração detectada) e `src/modules/audit/ator-suporte.test.ts`. Atualização de banco com linhas antigas conferida localmente (0001 a 0007, linhas no formato antigo, 0008, linhas novas: hashes antigos iguais e cadeia contínua).
+
 ## 5. Linhas antigas
 
 Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-only impede reescrevê-las e o verificador as conta em `legacy`. Hoje só existem em ambientes de teste, porque não há produção.

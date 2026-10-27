@@ -80,7 +80,7 @@ Meta: **30 clínicas ativas** no fim (critério de GA do roadmap); recrutar ~40 
 | 5. Migração (**só a partir da onda 3 / M4**) | Importação assistida com *dry-run* e divergências (MIG-02), somente depois de: DPA aceito, termo de migração (MIG-02.4), canal de transferência cifrado e descarte evidenciado do arquivo bruto em até 7 dias | Time de migração | ≤ 5 dias úteis |
 | 6. Canais | Conexão do número WhatsApp oficial, templates, opt-in (COM-01) | CS + clínica | 3–10 dias (aprovação Meta) |
 | 7. Consentimentos | Modelos de termos aos pacientes (escriba, imagem, marketing) configurados (LGP-01.2) | Clínica (controladora) | 1 dia |
-| 8. Treinamento | 2 sessões de 1 h (recepção; profissionais) + central de ajuda (SUP-01.1) | CS | 1 semana |
+| 8. Treinamento | 2 sessões de 1 h (recepção; profissionais) + central de ajuda (SUP-01.1). Na sessão da recepção/financeiro, item obrigatório (R8 do parecer #65): **não descrever o atendimento na mensagem do Pix nem da transferência** (nada de "sessão de psicoterapia" ou especialidade) — o texto fica no extrato do banco, fora do sistema. O mesmo aviso aparece na tela de recebimento (`aviso` do recebimento Pix/transferência, `AVISO_PIX_MANUAL`) | CS | 1 semana |
 | 9. Go-live | Primeira semana com acompanhamento diário (*hypercare*) | CS + Engenharia de plantão | 1 semana |
 
 ## 6. Critérios de sucesso para GA

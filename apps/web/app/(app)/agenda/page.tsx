@@ -1,16 +1,25 @@
 'use client';
 
-/** Agenda do dia (versão do PR 1). Semana, por profissional, arrastar e lista de espera chegam no PR 2. */
+/** Agenda: dia, semana, por profissional e lista de espera. */
 import { CalendarPlus, ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import { useConsulta } from '@/components/app/dados';
+import { ListaEspera, VisaoDia, VisaoProfissional, VisaoSemana } from '@/components/app/agenda-visoes';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
-import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
+import { Carregando } from '@/components/ui/estados';
+import { diasDaSemana } from '@/lib/agenda';
 import { deIsoLocal, formatarDia, paraIsoLocal, somarDias } from '@/lib/ajudante/datas';
-import { nomeExibido } from '@/lib/api/tipos';
+import { cn } from '@/lib/utils';
+
+const VISOES = [
+  { id: 'dia', rotulo: 'Dia' },
+  { id: 'semana', rotulo: 'Semana' },
+  { id: 'profissional', rotulo: 'Por profissional' },
+  { id: 'espera', rotulo: 'Lista de espera' },
+] as const;
+type Visao = (typeof VISOES)[number]['id'];
 
 export default function PaginaAgenda() {
   return (
@@ -25,70 +34,80 @@ function Agenda() {
   const params = useSearchParams();
   const pedido = params.get('dia');
   const dia = pedido && /^\d{4}-\d{2}-\d{2}$/.test(pedido) ? pedido : paraIsoLocal(new Date());
-  const consulta = useConsulta(
-    async (a) => {
-      const [ags, pacientes, profissionais] = await Promise.all([
-        a.listarAgendamentos({ de: dia, ate: dia }),
-        a.listarPacientes(),
-        a.listarProfissionais(),
-      ]);
-      return { ags, pacientes: new Map(pacientes.map((p) => [p.id, p])), profissionais: new Map(profissionais.map((p) => [p.id, p])) };
-    },
-    [dia],
-  );
-  const ir = (d: number) => router.push(`/agenda?dia=${paraIsoLocal(somarDias(deIsoLocal(dia), d))}`);
-  const titulo = formatarDia(dia, new Date());
+  const verPedido = params.get('ver');
+  const ver: Visao = VISOES.some((v) => v.id === verPedido) ? (verPedido as Visao) : 'dia';
+  const passo = ver === 'semana' ? 7 : 1;
+  const url = (d: string, v: Visao = ver) => `/agenda?ver=${v}&dia=${d}`;
+  const ir = (n: number) => router.push(url(paraIsoLocal(somarDias(deIsoLocal(dia), n * passo))));
+
+  const semana = diasDaSemana(dia);
+  const titulo =
+    ver === 'espera'
+      ? 'Lista de espera'
+      : ver === 'semana'
+        ? `Semana de ${formatarDia(semana[0]!, new Date())} a ${formatarDia(semana[6]!, new Date())}`
+        : `Agenda de ${formatarDia(dia, new Date())}`;
 
   return (
     <>
-      <Titulo descricao={deIsoLocal(dia).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}>
-        Agenda de {titulo}
+      <Titulo
+        descricao={
+          ver === 'dia' || ver === 'profissional'
+            ? deIsoLocal(dia).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+            : undefined
+        }
+      >
+        {titulo}
       </Titulo>
-      <div className="mb-6 flex flex-wrap gap-2">
-        <Botao variante="contorno" onClick={() => ir(-1)}>
-          <ChevronLeft aria-hidden />
-          Dia anterior
-        </Botao>
-        <Botao variante="contorno" onClick={() => router.push('/agenda')}>
-          Hoje
-        </Botao>
-        <Botao variante="contorno" onClick={() => ir(1)}>
-          Próximo dia
-          <ChevronRight aria-hidden />
-        </Botao>
-        <Botao asChild className="sm:ml-auto">
-          <Link href="/agenda/marcar">
-            <CalendarPlus aria-hidden />
-            Marcar consulta
+
+      <nav aria-label="Jeito de ver a agenda" className="mb-4 flex flex-wrap gap-2">
+        {VISOES.map((v) => (
+          <Link
+            key={v.id}
+            href={url(dia, v.id)}
+            aria-current={ver === v.id ? 'page' : undefined}
+            className={cn(
+              'flex min-h-12 items-center rounded-md border-2 px-4 no-underline',
+              ver === v.id ? 'border-borda-forte bg-principal font-bold text-principal-texto' : 'border-borda',
+            )}
+          >
+            {v.rotulo}
           </Link>
-        </Botao>
-      </div>
-      <section data-assist-id="agenda-dia" aria-label={`Consultas de ${titulo}`}>
-        {consulta.estado === 'carregando' && <Carregando />}
-        {consulta.estado === 'erro' && <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />}
-        {consulta.estado === 'pronto' &&
-          (consulta.dados.ags.length === 0 ? (
-            <Vazio titulo={`Nenhuma consulta ${titulo === 'hoje' ? 'hoje' : `em ${titulo}`}`} oQueFazer="Aperte “Marcar consulta” para encher este dia." />
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {consulta.dados.ags.map((a) => {
-                const p = consulta.dados.pacientes.get(a.pacienteId);
-                return (
-                  <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-md border-2 border-borda p-3">
-                    <span className="w-16 text-lg font-bold tabular-nums">{a.hora}</span>
-                    <span className="flex min-w-40 flex-1 flex-col">
-                      <Link href={`/pacientes/${a.pacienteId}`} className="text-lg font-bold">
-                        {p ? nomeExibido(p) : 'Paciente'}
-                      </Link>
-                      <span className="text-[0.95rem] text-texto-suave">{consulta.dados.profissionais.get(a.profissionalId)?.nome}</span>
-                    </span>
-                    <Status status={a.status} />
-                  </li>
-                );
-              })}
-            </ul>
-          ))}
-      </section>
+        ))}
+      </nav>
+
+      {ver !== 'espera' && (
+        <div className="mb-6 flex flex-wrap gap-2">
+          <Botao variante="contorno" onClick={() => ir(-1)}>
+            <ChevronLeft aria-hidden />
+            {ver === 'semana' ? 'Semana anterior' : 'Dia anterior'}
+          </Botao>
+          <Botao variante="contorno" onClick={() => router.push(url(paraIsoLocal(new Date())))}>
+            Hoje
+          </Botao>
+          <Botao variante="contorno" onClick={() => ir(1)}>
+            {ver === 'semana' ? 'Próxima semana' : 'Próximo dia'}
+            <ChevronRight aria-hidden />
+          </Botao>
+          <Botao asChild className="sm:ml-auto">
+            <Link href="/agenda/marcar">
+              <CalendarPlus aria-hidden />
+              Marcar consulta
+            </Link>
+          </Botao>
+          <Botao asChild variante="contorno">
+            <Link href={`/agenda/marcar?encaixe=1&dia=${dia}`}>
+              <CalendarPlus aria-hidden />
+              Encaixe
+            </Link>
+          </Botao>
+        </div>
+      )}
+
+      {ver === 'dia' && <VisaoDia dia={dia} />}
+      {ver === 'semana' && <VisaoSemana dia={dia} />}
+      {ver === 'profissional' && <VisaoProfissional dia={dia} />}
+      {ver === 'espera' && <ListaEspera />}
     </>
   );
 }
