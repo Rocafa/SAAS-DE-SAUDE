@@ -5,16 +5,67 @@
  * aplicação real (mesma cifra da API) e confere conteúdo, contagens, CSV e auditoria.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
-import { auditLog, patients, professionals, appointmentTypes, appointments } from '../src/db/schema';
+import {
+  auditLog,
+  patients,
+  professionals,
+  appointmentTypes,
+  appointments,
+  appointmentReschedules,
+  insurers,
+  insuranceGuides,
+  guideSessions,
+  guideSessionSignatures,
+  sessionPackages,
+  packageSessions,
+  packageProfessionalChanges,
+  clinicalSettings,
+  encounters,
+  clinicalRecordVersions,
+  clinicalAddenda,
+  privateNotes,
+  legalHolds,
+  noteCustodies,
+  financeSettings,
+  professionalFiscalProfiles,
+  cashSessions,
+  charges,
+  payments,
+  paymentReversals,
+  receiptCounters,
+  receipts,
+  receiptCancellations,
+  clinicMembers,
+  portalConsents,
+  portalInvites,
+  portalLinks,
+  portalRightsRequests,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
+  importBatches,
+  importBatchRecords,
+  tenants,
+  whatsappInbound,
+  whatsappOptIns,
+  whatsappOutbox,
+  whatsappSettings,
+} from '../src/db/schema';
+import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
+import type { FieldCipher } from '../src/modules/crypto/field-cipher';
+import type { TenantTx } from '../src/db/tenant-transaction';
+import { cifrarCampoPortal } from '../src/modules/portal/portal-fields';
+import { hashDoCodigo } from '../src/modules/portal/portal-otp';
+import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
-import { recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
+import { LocalPseudonymSigner, recordSupportAudit, supportActorPseudonym } from '../src/modules/audit/ator-suporte';
 import { UTF8_BOM } from '../src/modules/exports/csv';
 import { ExportsService } from '../src/modules/exports/exports.module';
 import {
@@ -38,6 +89,44 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   professionals: 'professionals',
   appointment_types: 'appointmentTypes',
   appointments: 'appointments',
+  insurers: 'insurers',
+  insurance_guides: 'insuranceGuides',
+  guide_sessions: 'guideSessions',
+  guide_session_signatures: 'guideSessionSignatures',
+  session_packages: 'sessionPackages',
+  package_sessions: 'packageSessions',
+  package_professional_changes: 'packageProfessionalChanges',
+  clinical_settings: 'clinicalSettings',
+  encounters: 'encounters',
+  clinical_record_versions: 'clinicalRecordVersions',
+  clinical_addenda: 'clinicalAddenda',
+  private_notes: 'privateNotes',
+  appointment_reschedules: 'appointmentReschedules',
+  legal_holds: 'legalHolds',
+  note_custodies: 'noteCustodies',
+  finance_settings: 'finance.financeSettings',
+  professional_fiscal_profiles: 'finance.professionalFiscalProfiles',
+  cash_sessions: 'finance.cashSessions',
+  charges: 'finance.charges',
+  payments: 'finance.payments',
+  payment_reversals: 'finance.paymentReversals',
+  receipt_counters: 'finance.receiptCounters',
+  receipts: 'finance.receipts',
+  receipt_cancellations: 'finance.receiptCancellations',
+  clinic_members: 'clinicMembers',
+  portal_invites: 'portal.invites',
+  portal_links: 'portal.links',
+  portal_consents: 'portal.consents',
+  portal_rights_requests: 'portal.rightsRequests',
+  guardians: 'guardians.guardians',
+  patient_guardians: 'guardians.patientGuardians',
+  patient_guardian_history: 'guardians.patientGuardianHistory',
+  import_batches: 'imports.batches',
+  import_batch_records: 'imports.batchRecords',
+  whatsapp_settings: 'whatsapp.whatsappSettings',
+  whatsapp_opt_ins: 'whatsapp.whatsappOptIns',
+  whatsapp_outbox: 'whatsapp.whatsappOutbox',
+  whatsapp_inbound: 'whatsapp.whatsappInbound',
   audit_log: 'auditEvents',
 };
 
@@ -46,6 +135,11 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.subscription_status': 'vai no manifesto (subscription.status)',
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
+  'patients.cpf_bidx': 'índice cego do CPF (HMAC com chave interna da clínica, 0046/R9); o CPF sai decifrado em cpf',
+  'patients.cpf_bidx_version': 'versão da chave interna do índice cego do CPF (0046/R9); não é dado da clínica',
+  'portal_invites.token_hash': 'hash do token de uso único do convite: credencial, não sai (0027)',
+  'whatsapp_opt_ins.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone',
+  'whatsapp_outbox.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone enquanto não passa a retenção',
 };
 
 const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -59,6 +153,21 @@ const FORMULA = '=HYPERLINK("http://exemplo.test")';
 /** Segredo do pseudônimo do suporte: gerado a cada execução, nunca fixo no código. */
 const CHAVE_SUPORTE = randomBytes(32);
 const ATENDENTE = 'atendente-ficticio-01';
+/** Identificadores fictícios da guia (não são de operadora nenhuma). */
+const GUIA_NUMERO = 'FIC-EXP-0001';
+const GUIA_SENHA = 'SENHAEXP9';
+const GUIA_CARTEIRINHA = 'CART-EXP-42';
+/** Textos clínicos fictícios: no pacote decifrados; nunca na trilha. */
+const TEXTO_CLINICO = 'Evolucao ficticia exportavel QZX7731';
+const TEXTO_ADENDO = 'Adendo ficticio exportavel QZX7732';
+const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
+const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
+const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
+const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
+const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
+const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
+/** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
+const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -66,7 +175,7 @@ beforeAll(async () => {
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
   const admin = api.sessao(clinicaA, 'admin', 'profissional');
-  const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'TO' });
+  const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'Terapia ocupacional', usuarioId: admin.userId });
   const tipo = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Avaliacao', minutos: 40 });
   const pac = await api
     .http()
@@ -83,6 +192,52 @@ beforeAll(async () => {
     hora: '08:00',
   });
   expect(ag.status).toBe(201);
+  // Uma remarcação (para o histórico da 0014 entrar no pacote).
+  await api
+    .http()
+    .post(`/agendamentos/${(ag.body as { id: string }).id}/remarcar`)
+    .set(cab(admin))
+    .send({ data: '2030-05-07', hora: '09:00' })
+    .expect(200);
+  // Guias e pacotes (0011): convênio, guia com campos cifrados, consumo + confirmação, pacote + consumo.
+  const pacienteId = (pac.body as { id: string }).id;
+  const agId = (ag.body as { id: string }).id;
+  await api.http().post(`/agendamentos/${agId}/check-in`).set(cab(admin)).expect(200);
+  const conv = await api.http().post('/convenios').set(cab(admin)).send({ nome: 'Operadora Ficticia Export', exigeAssinatura: true });
+  const guia = await api.http().post('/guias').set(cab(admin)).send({
+    pacienteId,
+    convenioId: (conv.body as { id: string }).id,
+    numero: GUIA_NUMERO,
+    senha: GUIA_SENHA,
+    carteirinha: GUIA_CARTEIRINHA,
+    sessoesAutorizadas: 5,
+    validade: '2099-12-31',
+  });
+  expect(guia.status).toBe(201);
+  const guiaId = (guia.body as { id: string }).id;
+  const consumo = await api.http().post(`/guias/${guiaId}/consumos`).set(cab(admin)).send({ agendamentoId: agId });
+  expect(consumo.status).toBe(201);
+  const consumoId = (consumo.body as { consumoId: string }).consumoId;
+  await api.http().post(`/guias/${guiaId}/consumos/${consumoId}/assinatura`).set(cab(admin)).send({ meio: 'tela' }).expect(201);
+  const ag2 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-07',
+    hora: '08:00',
+  });
+  const ag2Id = (ag2.body as { id: string }).id;
+  await api.http().post(`/agendamentos/${ag2Id}/check-in`).set(cab(admin)).expect(200);
+  const pacote = await api.http().post('/pacotes').set(cab(admin)).send({ pacienteId, nome: 'Pacote Ficticio Export', total: 4 });
+  const pacoteId = (pacote.body as { id: string }).id;
+  await api.http().post(`/pacotes/${pacoteId}/consumos`).set(cab(admin)).send({ agendamentoId: ag2Id }).expect(201);
+  // 0023 (R13 do #65): pacote antigo ganha o profissional por troca registrada.
+  await api
+    .http()
+    .post(`/pacotes/${pacoteId}/profissional`)
+    .set(cab(admin))
+    .send({ profissionalId: (prof.body as { id: string }).id, motivo: 'fixar_pacote_antigo' })
+    .expect(200);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -96,20 +251,236 @@ beforeAll(async () => {
     await withTenant(api.db.db, tenantId, (tx) =>
       recordSupportAudit(
         tx,
-        CHAVE_SUPORTE,
+        new LocalPseudonymSigner(CHAVE_SUPORTE, 'test'),
         { tenantId, atendenteId: ATENDENTE, chamado, motivo: 'pedido_da_clinica' },
         { action: 'read', scope: 'patients', metadata: { count: 1 } },
       ),
     );
   }
 
+  // Prontuário (0012): atendimento com 2 versões, finalizado, com adendo; sigilo configurado; duas
+  // notas privadas, só UMA com a decisão do autor de exportar.
+  const ag3 = randomUUID();
+  const recepcao = randomUUID();
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(appointments).values({
+      createdBy: recepcao,
+      id: ag3,
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      professionalId: (prof.body as { id: string }).id,
+      appointmentTypeId: (tipo.body as { id: string }).id,
+      startsAt: new Date(Date.now() - 10 * 60_000),
+      endsAt: new Date(Date.now() + 30 * 60_000),
+      status: 'checked_in',
+    }),
+  recepcao);
+  const at = await api.http().post('/atendimentos').set(cab(admin)).send({ agendamentoId: ag3 });
+  expect(at.status).toBe(200);
+  const atId = (at.body as { id: string }).id;
+  await api.http().put(`/atendimentos/${atId}/registro`).set(cab(admin)).send({ versaoBase: 0, conteudo: { queixa: 'Queixa v1' } }).expect(200);
+  await api
+    .http()
+    .put(`/atendimentos/${atId}/registro`)
+    .set(cab(admin))
+    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', medidas: [{ tipo: 'eva', valor: 4 }] } })
+    .expect(200);
+  await api.http().post(`/atendimentos/${atId}/finalizar`).set(cab(admin)).send({}).expect(200);
+  await api.http().post(`/atendimentos/${atId}/adendos`).set(cab(admin)).send({ texto: TEXTO_ADENDO }).expect(201);
+  await api.http().put('/prontuario/configuracao').set(cab(admin)).send({ psicologia: 'restrito_ao_autor' }).expect(200);
+  await api
+    .http()
+    .post(`/pacientes/${pacienteId}/notas-privadas`)
+    .set(cab(admin))
+    .send({ texto: NOTA_EXPORTAVEL, incluirNaExportacao: true })
+    .expect(201);
+  await api.http().post(`/pacientes/${pacienteId}/notas-privadas`).set(cab(admin)).send({ texto: NOTA_RETIDA }).expect(201);
+
+  // Retenção legal (0017): marcada, pedida a retirada por um admin e aprovada por OUTRO.
+  const admin2 = api.sessao(clinicaA, 'admin');
+  await api.membro(clinicaA, admin, 'admin');
+  await api.membro(clinicaA, admin2, 'admin');
+  await api.http().put('/prontuario/pacientes/' + pacienteId + '/retencao-legal').set(cab(admin)).send({ referencia: REFERENCIA_RETENCAO }).expect(200);
+  await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada').set(cab(admin)).send({ motivo: MOTIVO_RETIRADA }).expect(200);
+  await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada/aprovacao').set(cab(admin2)).send({}).expect(200);
+  // Custódia (0017): psicólogo autor e substituto; designada e aceita.
+  const psiAutor = api.sessao(clinicaA, 'profissional');
+  const psiSubst = api.sessao(clinicaA, 'profissional');
+  await api.membro(clinicaA, psiAutor, 'psicologo');
+  await api.membro(clinicaA, psiSubst, 'psicologo');
+  const autorId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Autor Ficticio', especialidade: 'Psicologia', usuarioId: psiAutor.userId })).body as { id: string };
+  const substId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Subst Ficticio', especialidade: 'Psicologia', usuarioId: psiSubst.userId })).body as { id: string };
+  const cust = await api.http().post('/prontuario/custodias').set(cab(admin)).send({ autorProfissionalId: autorId.id, substitutoProfissionalId: substId.id });
+  expect(cust.status).toBe(201);
+  await api.http().post('/custodias/' + (cust.body as { id: string }).id + '/aceite').set(cab(psiSubst)).send({}).expect(200);
+  // Financeiro (0018): configuração, perfil fiscal, caixa, cobrança PF com pagador terceiro, dois
+  // recebimentos (um estornado, o que cancela o recibo dele) e recibos.
+  await api.http().put('/financeiro/configuracao').set(cab(admin)).send({ atendimentoPadrao: 'pf', emitenteNome: 'Clinica Ficticia Export' }).expect(200);
+  await api
+    .http()
+    .put(`/financeiro/profissionais/${(prof.body as { id: string }).id}/perfil-fiscal`)
+    .set(cab(admin))
+    .send({ cpf: cpfFicticio(8), registroConselho: 'CREFITO-0 00000-TO' })
+    .expect(200);
+  const caixa = await api.http().post('/financeiro/caixas').set(cab(admin)).send({ turno: 'unico', trocoInicialCentavos: 1000 });
+  expect(caixa.status, JSON.stringify(caixa.body)).toBe(201);
+  const cobranca = await api
+    .http()
+    .post('/financeiro/cobrancas')
+    .set(cab(admin))
+    .send({ agendamentoId: agId, valorCentavos: 10000, pagador: { nome: 'Responsavel Ficticio Export', cpf: cpfFicticio(9) } });
+  expect(cobranca.status, JSON.stringify(cobranca.body)).toBe(201);
+  const cobrancaId = (cobranca.body as { id: string }).id;
+  const p1 = await api.http().post(`/financeiro/cobrancas/${cobrancaId}/recebimentos`).set(cab(admin)).send({ valorCentavos: 4000, forma: 'dinheiro' });
+  expect(p1.status, JSON.stringify(p1.body)).toBe(201);
+  const p1Id = (p1.body as { id: string }).id;
+  await api.http().post(`/financeiro/recebimentos/${p1Id}/recibo`).set(cab(admin)).send({}).expect(200);
+  await api.http().post(`/financeiro/recebimentos/${p1Id}/estornar`).set(cab(admin)).send({ motivo: 'forma_errada' }).expect(200);
+  const p2 = await api.http().post(`/financeiro/cobrancas/${cobrancaId}/recebimentos`).set(cab(admin)).send({ forma: 'pix' });
+  expect(p2.status, JSON.stringify(p2.body)).toBe(201);
+  await api.http().post(`/financeiro/recebimentos/${(p2.body as { id: string }).id}/recibo`).set(cab(admin)).send({}).expect(200);
+  await api
+    .http()
+    .post(`/financeiro/caixas/${(caixa.body as { id: string }).id}/fechar`)
+    .set(cab(admin))
+    .send({ dinheiroContadoCentavos: 1000 })
+    .expect(200);
+
+  // Portal do paciente (0027), direto pelo banco: convite da clínica, resgate pela conta, consentimento e
+  // pedido do titular (detalhe cifrado) na sessão do portal.
+  const contaPortal = randomUUID();
+  const tokenPortal = randomBytes(32).toString('base64url');
+  const tokenHash = createHash('sha256').update(tokenPortal).digest('hex');
+  // 0033 (A2 do #68): o resgate exige o código enviado ao telefone do cadastro (aqui, um código fictício).
+  const codigoHash = hashDoCodigo(tokenPortal, '123456');
+  await withTenant(
+    api.db.db,
+    clinicaA,
+    (tx) =>
+      tx.insert(portalInvites).values({
+        tenantId: clinicaA,
+        patientId: pacienteId,
+        tokenHash,
+        actingAs: 'titular',
+        expiresAt: sql`now() + interval '1 day'`,
+        createdBy: admin.userId,
+      }),
+    admin.userId,
+  );
+  const vinculo = await api.db.db.transaction(async (tx) => {
+    const d = await tx.execute(sql`select invite_id from app_portal_invite_challenge(${contaPortal}::uuid, ${tokenHash}, ${codigoHash})`);
+    expect(d).toHaveLength(1);
+    return null;
+  }).then(() => api.db.db.transaction(async (tx) => {
+    const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${contaPortal}::uuid, ${tokenHash}, ${codigoHash}) as v`);
+    return r[0]?.v ?? null;
+  }));
+  expect(vinculo).toMatch(/^[0-9a-f-]{36}$/);
+  const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+  await api.db.db.transaction(async (tx) => {
+    await tx.execute(sql`select app_set_portal_session(${contaPortal}::uuid, ${vinculo}::uuid)`);
+    await tx.insert(portalConsents).values({
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      purpose: 'escriba_ia',
+      response: 'nao',
+      actingAs: 'titular',
+      textVersion: 'teste-1',
+      textHash: 'a'.repeat(64),
+    });
+    const id = randomUUID();
+    await tx.insert(portalRightsRequests).values({
+      id,
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      kind: 'acesso',
+      actingAs: 'titular',
+      protocol: '20301231-ABCDEF01',
+      detailEnc: await cifrarCampoPortal(cifra, tx, clinicaA, null, id, 'detail', PEDIDO_DETALHE),
+    });
+  });
+  // Responsáveis (0028): pessoa + vínculo pagador, troca do telefone (valor anterior no histórico) e encerramento.
+  const resp = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/responsaveis`)
+    .set(cab(admin))
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
+  expect(resp.status, JSON.stringify(resp.body)).toBe(201);
+  const vinculoId = (resp.body as { id: string }).id;
+  await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
+  await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
+
+  // Importador (0024): um lote de pacientes aplicado (1 paciente criado), com o aceite do termo.
+  const lote = await api
+    .http()
+    .post(`/importacoes?tipo=pacientes&termo=${TERMO_MIGRACAO_VERSAO}`)
+    .set(cab(admin))
+    .set('Content-Type', 'text/csv; charset=utf-8')
+    .send('nome;telefone\nPaciente Ficticio Importado;11900000077\n');
+  expect(lote.status, JSON.stringify(lote.body)).toBe(201);
+  const loteId = (lote.body as { id: string }).id;
+  await api.http().put(`/importacoes/${loteId}/mapeamento`).set(cab(admin)).send({ mapeamento: { nome: 0, telefone: 1 } }).expect(200);
+  await api.http().post(`/importacoes/${loteId}/validar`).set(cab(admin)).send({}).expect(200);
+  const sim = await api.http().post(`/importacoes/${loteId}/simular`).set(cab(admin)).send({}).expect(200);
+  await api
+    .http()
+    .post(`/importacoes/${loteId}/aplicar`)
+    .set(cab(admin))
+    .send({
+      resumoHash: (sim.body as { resumoHash: string }).resumoHash,
+      // R6: confirmação da clínica de origem (nome da clínica).
+      clinicaConfirmada: (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ nome: tenants.displayName }).from(tenants)))[0]?.nome,
+    })
+    .expect(200);
+  // WhatsApp (0032): canal, opt-in com prova, um envio (modelo da plataforma) e uma resposta (do webhook = sistema).
+  const ag4 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-08',
+    hora: '10:00',
+  });
+  expect(ag4.status).toBe(201);
+  const ag4Body = ag4.body as { id: string; inicio: string };
+  // Opt-in pela rota (grava o número que consentiu, cifrado e com HMAC; V1 do parecer #69).
+  const opt = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/whatsapp/opt-in`)
+    .set(cab(admin))
+    .send({ destinatario: 'paciente', meio: 'formulario_assinado', comprovante: 'Termo ficticio export 1' });
+  expect(opt.status, JSON.stringify(opt.body)).toBe(201);
+  const envioId = await withTenant(
+    api.db.db,
+    clinicaA,
+    async (tx) => {
+      await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
+      const [o] = await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, (opt.body as { id: string }).id));
+      const [e] = await tx
+        .insert(whatsappOutbox)
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', recipientPhoneHash: o?.recipientPhoneHash ?? '', createdBy: admin.userId })
+        .returning();
+      return e?.id ?? '';
+    },
+    admin.userId,
+  );
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(whatsappInbound).values({ tenantId: clinicaA, providerMessageId: 'wamid.EXPORT1', outboxId: envioId, interpretation: 'outro', outcome: 'sem_acao' }),
+  );
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
 
 afterAll(async () => {
-  await sqlCat?.end({ timeout: 5 });
-  await api?.fechar();
+  try {
+    await sqlCat?.end({ timeout: 5 });
+  } finally {
+    await api?.fechar();
+  }
 });
 
 describe('G2 — cobertura da exportação contra o catálogo', () => {
@@ -138,7 +509,10 @@ describe('G2 — cobertura da exportação contra o catálogo', () => {
         JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relname = ${tabela} AND a.attnum > 0 AND NOT a.attisdropped`;
       const chave = CHAVE_NO_PACOTE[tabela];
-      const dado = tabela === 'audit_log' ? pkg.auditEvents : (pkg.json.data as Record<string, unknown>)[chave];
+      const dado =
+        tabela === 'audit_log'
+          ? pkg.auditEvents
+          : chave.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], pkg.json.data);
       const item = (Array.isArray(dado) ? dado[0] : dado) as Record<string, unknown> | undefined;
       expect(item, `${tabela}: o pacote de teste precisa ter ao menos 1 item`).toBeDefined();
       for (const { coluna } of colunas) {
@@ -154,7 +528,48 @@ describe('G2 — conteúdo do pacote', () => {
   it('manifesto versionado com contagens iguais às do banco, só da clínica A', async () => {
     expect(pkg.json.manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     const noBanco = await withTenant(api.db.db, clinicaA, async (tx) => {
-      const n = async (t: typeof patients | typeof professionals | typeof appointmentTypes | typeof appointments) =>
+      const n = async (
+        t:
+          | typeof patients
+          | typeof professionals
+          | typeof appointmentTypes
+          | typeof appointments
+          | typeof appointmentReschedules
+          | typeof insurers
+          | typeof insuranceGuides
+          | typeof guideSessions
+          | typeof guideSessionSignatures
+          | typeof sessionPackages
+          | typeof packageSessions
+          | typeof packageProfessionalChanges
+          | typeof clinicalSettings
+          | typeof encounters
+          | typeof clinicalRecordVersions
+          | typeof clinicalAddenda
+          | typeof legalHolds
+          | typeof noteCustodies
+          | typeof financeSettings
+          | typeof professionalFiscalProfiles
+          | typeof cashSessions
+          | typeof charges
+          | typeof payments
+          | typeof paymentReversals
+          | typeof receiptCounters
+          | typeof receipts
+          | typeof receiptCancellations
+          | typeof clinicMembers
+          | typeof portalInvites
+          | typeof portalLinks
+          | typeof portalConsents
+          | typeof portalRightsRequests
+          | typeof guardians
+          | typeof patientGuardians
+          | typeof patientGuardianHistory
+          | typeof whatsappSettings
+          | typeof whatsappOptIns
+          | typeof whatsappOutbox
+          | typeof whatsappInbound,
+      ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
         tenants: 1,
@@ -162,12 +577,116 @@ describe('G2 — conteúdo do pacote', () => {
         professionals: await n(professionals),
         appointmentTypes: await n(appointmentTypes),
         appointments: await n(appointments),
+        insurers: await n(insurers),
+        insuranceGuides: await n(insuranceGuides),
+        guideSessions: await n(guideSessions),
+        guideSessionSignatures: await n(guideSessionSignatures),
+        sessionPackages: await n(sessionPackages),
+        packageSessions: await n(packageSessions),
+        packageProfessionalChanges: await n(packageProfessionalChanges),
+        clinicalSettings: await n(clinicalSettings),
+        encounters: await n(encounters),
+        clinicalRecordVersions: await n(clinicalRecordVersions),
+        clinicalAddenda: await n(clinicalAddenda),
+        // Só as notas com decisão do autor saem; as outras aparecem SÓ como contagem.
+        privateNotes: (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, true)))[0]?.n ?? -1,
+        privateNotesWithheld:
+          (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, false)))[0]?.n ?? -1,
+        appointmentReschedules: await n(appointmentReschedules),
+        legalHolds: await n(legalHolds),
+        noteCustodies: await n(noteCustodies),
+        finance: {
+          financeSettings: await n(financeSettings),
+          professionalFiscalProfiles: await n(professionalFiscalProfiles),
+          cashSessions: await n(cashSessions),
+          charges: await n(charges),
+          payments: await n(payments),
+          paymentReversals: await n(paymentReversals),
+          receiptCounters: await n(receiptCounters),
+          receipts: await n(receipts),
+          receiptCancellations: await n(receiptCancellations),
+        },
+        guardians: {
+          guardians: await n(guardians),
+          patientGuardians: await n(patientGuardians),
+          patientGuardianHistory: await n(patientGuardianHistory),
+        },
+        whatsapp: {
+          whatsappSettings: await n(whatsappSettings),
+          whatsappOptIns: await n(whatsappOptIns),
+          whatsappOutbox: await n(whatsappOutbox),
+          whatsappInbound: await n(whatsappInbound),
+        },
+        clinicMembers: await n(clinicMembers),
+        portal: {
+          invites: await n(portalInvites),
+          links: await n(portalLinks),
+          consents: await n(portalConsents),
+          rightsRequests: await n(portalRightsRequests),
+        },
+        imports: {
+          batches: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatches))[0]?.n ?? -1,
+          batchRecords: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatchRecords))[0]?.n ?? -1,
+        },
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
     });
     expect(pkg.json.manifest.counts).toEqual(noBanco);
-    expect(noBanco).toMatchObject({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    expect(noBanco).toMatchObject({
+      tenants: 1,
+      patients: 3,
+      imports: { batches: 1, batchRecords: 1 },
+      professionals: 3,
+      appointmentTypes: 1,
+      appointments: 4,
+      appointmentReschedules: 1,
+      insurers: 1,
+      insuranceGuides: 1,
+      guideSessions: 1,
+      guideSessionSignatures: 1,
+      sessionPackages: 1,
+      packageSessions: 1,
+      packageProfessionalChanges: 1,
+      clinicalSettings: 1,
+      encounters: 1,
+      clinicalRecordVersions: 2,
+      clinicalAddenda: 1,
+      privateNotes: 1,
+      privateNotesWithheld: 1,
+      legalHolds: 1,
+      noteCustodies: 1,
+      portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
+      finance: {
+        financeSettings: 1,
+        professionalFiscalProfiles: 1,
+        cashSessions: 1,
+        charges: 1,
+        payments: 2,
+        paymentReversals: 1,
+        receiptCounters: 1,
+        receipts: 2,
+        receiptCancellations: 1,
+      },
+      // 0028: 1 pessoa, 1 vínculo; histórico = criação da pessoa, do vínculo, troca do telefone e encerramento.
+      guardians: {
+        guardians: 1,
+        patientGuardians: 1,
+        patientGuardianHistory: 4,
+      },
+      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
+    });
+    // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
+    expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
+    const fundador = api.fundador(clinicaA);
+    expect(pkg.json.data.tenant.founderUserId).toBe(fundador);
+    expect(pkg.json.data.clinicMembers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: fundador, role: 'admin', grantedBy: fundador, revokedAt: null })]),
+    );
+    // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
+    expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
+    expect(pkg.auditJsonl).not.toContain('QZX7735');
+    expect(pkg.auditJsonl).not.toContain('QZX7736');
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
@@ -187,6 +706,69 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.patientsCsv).not.toContain('v1:');
   });
 
+  it('guia sai com número, senha e carteirinha decifrados; consumo, confirmação e pacote no pacote', () => {
+    const { insuranceGuides: guias, guideSessions: consumos, guideSessionSignatures: assinaturas, sessionPackages: pacotes } = pkg.json.data;
+    expect(guias[0]).toMatchObject({ number: GUIA_NUMERO, authorizationCode: GUIA_SENHA, cardNumber: GUIA_CARTEIRINHA, usedSessions: 1 });
+    expect(consumos[0]).toMatchObject({ guideId: guias[0]?.id, reversedAt: null });
+    expect(assinaturas[0]).toMatchObject({ guideSessionId: consumos[0]?.id, method: 'tela' });
+    expect(assinaturas[0]?.recordHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(pacotes[0]).toMatchObject({ name: 'Pacote Ficticio Export', totalSessions: 4, usedSessions: 1 });
+    // A trilha exportada não traz os identificadores da guia.
+    for (const proibido of [GUIA_NUMERO, GUIA_SENHA, GUIA_CARTEIRINHA]) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('prontuário: todas as versões e o adendo saem decifrados; finalização com hash; nada clínico na trilha', () => {
+    const { encounters: ats, clinicalRecordVersions: versoes, clinicalAddenda: adendos, clinicalSettings: cfg } = pkg.json.data;
+    expect(ats[0]).toMatchObject({ status: 'signed', currentVersion: 2, signedVersion: 2, template: 'to', compartment: 'geral', aiConsent: 'nao_informado' });
+    expect(ats[0]?.signedHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(versoes.map((v) => v.version)).toEqual([1, 2]);
+    expect(versoes[0]?.content).toEqual({ queixa: 'Queixa v1' });
+    expect(versoes[1]?.content).toMatchObject({ queixa: TEXTO_CLINICO, medidas: [{ tipo: 'eva', valor: 4 }] });
+    expect(adendos[0]).toMatchObject({ text: TEXTO_ADENDO, encounterId: ats[0]?.id });
+    expect(cfg).toEqual([expect.objectContaining({ psychCompartment: 'restrito_ao_autor' })]);
+    for (const proibido of [TEXTO_CLINICO, TEXTO_ADENDO, NOTA_EXPORTAVEL, NOTA_RETIDA, 'Queixa v1']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('financeiro: CPFs e retrato do recibo decifrados; recibo do recebimento estornado cancelado; nada disso na trilha', () => {
+    const f = pkg.json.data.finance;
+    expect(f.professionalFiscalProfiles[0]).toMatchObject({ cpf: cpfFicticio(8), councilRegistration: 'CREFITO-0 00000-TO' });
+    expect(f.charges[0]).toMatchObject({ payerName: 'Responsavel Ficticio Export', payerCpf: cpfFicticio(9), paidCents: 10000, attendanceKind: 'pf' });
+    expect(f.receipts.map((r) => r.number)).toEqual([1, 2]);
+    expect(f.receipts[1]?.content).toMatchObject({ pagador: { cpf: cpfFicticio(9) }, beneficiario: { cpf: cpfFicticio(7) }, descricao: 'Atendimento' });
+    expect(f.receiptCancellations[0]).toMatchObject({ receiptId: f.receipts[0]?.id, reason: 'recebimento_estornado' });
+    expect(f.cashSessions[0]).toMatchObject({ status: 'closed', expectedCashCents: 1000, countedCashCents: 1000 });
+    for (const proibido of [cpfFicticio(8), cpfFicticio(9), 'Responsavel Ficticio']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('portal: convite sem o hash do token, vínculo, consentimento e pedido do titular decifrado; nada disso na trilha', () => {
+    const p = pkg.json.data.portal;
+    expect(p.invites[0]).toMatchObject({ actingAs: 'titular', redeemedAccountId: p.links[0]?.accountId, linkId: p.links[0]?.id });
+    expect(JSON.stringify(p.invites)).not.toMatch(/tokenHash|[0-9a-f]{64}/);
+    expect(p.consents[0]).toMatchObject({ purpose: 'escriba_ia', response: 'nao', channel: 'portal' });
+    expect(p.rightsRequests[0]).toMatchObject({ kind: 'acesso', status: 'aberta', detail: PEDIDO_DETALHE, answer: null });
+    expect(pkg.auditJsonl).not.toContain(PEDIDO_DETALHE);
+  });
+
+  it('responsáveis (0028): pessoa decifrada, vínculo com vigência e histórico com o valor anterior; nada disso na trilha', () => {
+    const g = pkg.json.data.guardians;
+    expect(g.guardians[0]).toMatchObject({ name: RESP_NOME, cpf: cpfFicticio(10), phone: '11900000011' });
+    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: false, endReason: 'maioridade', clinicalInfoBasis: null, annulReason: null });
+    expect(g.patientGuardians[0]?.payerPatientAwareAt).toBeTruthy();
+    expect(g.patientGuardians[0]?.validUntil).toBe(g.patientGuardians[0]?.validFrom);
+    expect(g.patientGuardianHistory.map((h) => h.event)).toEqual(['responsavel_criado', 'vinculo_criado', 'responsavel_alterado', 'vinculo_encerrado']);
+    expect(g.patientGuardianHistory[2]).toMatchObject({ changedFields: 'phone', prevPhone: '11900000010', prevCpf: null });
+    for (const proibido of [cpfFicticio(10), 'QZX7737', '11900000010', '11900000011']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {
+    const notas = pkg.json.data.privateNotes;
+    expect(notas).toHaveLength(1);
+    expect(notas[0]).toMatchObject({ content: NOTA_EXPORTAVEL, exportConsent: true, discardedAt: null });
+    expect(JSON.stringify(pkg.json)).not.toContain('QZX7734');
+    expect(pkg.json.manifest.counts).toMatchObject({ privateNotes: 1, privateNotesWithheld: 1 });
+    expect(pkg.patientsCsv).not.toContain('QZX7734');
+  });
+
   it('CSV neutraliza fórmula nas colunas novas; o JSON mantém o valor original', () => {
     expect(pkg.patientsCsv).toContain(`"'${FORMULA.replaceAll('"', '""')}"`);
     expect(pkg.patientsCsv).not.toContain(`,"${FORMULA.replaceAll('"', '""')}"`);
@@ -194,12 +776,13 @@ describe('G2 — conteúdo do pacote', () => {
 
   it('auditoria da exportação: 1 linha com contagens, sem conteúdo', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))).orderBy(sql`seq`),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    // 3 pacientes (2 do cadastro + 1 do lote importado) e 4 agendamentos (3 + o do WhatsApp).
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
-    for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
+    for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
     }
   });
@@ -240,7 +823,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
       expect(auditJsonl).not.toContain(proibido);
     }
-    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma']));
+    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma', 'paciente_portal']));
   });
 
   it('o atendente do suporte sai pseudonimizado por clínica, com chamado e motivo', async () => {
@@ -254,7 +837,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     expect(JSON.stringify(pkg)).not.toContain(ATENDENTE);
     // Na clínica B, o mesmo atendente tem outro pseudônimo: o id não liga as duas clínicas.
     const linhasB = await withTenant(api.db.db, clinicaB, (tx) =>
-      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')),
+      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')).orderBy(sql`seq`),
     );
     expect(linhasB.map((l) => l.actorId)).toEqual([supportActorPseudonym(CHAVE_SUPORTE, clinicaB, ATENDENTE)]);
     expect(linhasB[0]?.actorId).not.toBe(pseudoA);

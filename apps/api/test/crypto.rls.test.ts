@@ -198,7 +198,7 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
     // A destruição (e o provisionamento) ficaram na trilha de auditoria, com o ator.
     const eventos = await withTenant(h.db, tenantA, (tx) =>
       tx.execute<{ action: string; scope: string; actor_id: string }>(
-        sql`select action, scope, actor_id from audit_log where scope like 'crypto.key.%' order by created_at`,
+        sql`select action, scope, actor_id from audit_log where scope like 'crypto.key.%' order by seq`,
       ),
     );
     // Ações próprias de chave (0006), não create/update genéricos.
@@ -275,6 +275,9 @@ describe('ordem das travas: trilha de auditoria (0005) × chaves (0004)', () => 
       await new Promise((r) => setTimeout(r, 300));
       return cifraComContador.encrypt(tx, ref(tenantC), TEXTO);
     });
+    // Se A falhar antes de auditar, o portão abre mesmo assim: o teste falha com o erro de A, sem ficar
+    // pendurado até o timeout com a transação de B nunca iniciada.
+    void a.finally(() => auditou()).catch(() => undefined);
     // B: gira a DEK (trava as chaves e audita). Na ordem antiga travava a linha da DEK e esperava a
     // trilha, enquanto A segurava a trilha e esperava a linha: deadlock (40P01).
     await auditouPromise;

@@ -10,6 +10,7 @@ import {
   type TipoAtendimentoDto,
 } from './scheduling.service';
 import {
+  validarAreaSensivel,
   validarFiltroAgenda,
   validarNovoAgendamento,
   validarNovoProfissional,
@@ -91,6 +92,12 @@ export class CadastrosAgendaController {
   @Permissao('cadastros:gerir')
   criarProfissional(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ProfissionalDto> {
     return this.service.criarProfissional(paraRequestContext(auth), validarNovoProfissional(corpo));
+  }
+
+  @Post('profissionais/:id/area-sensivel')
+  @Permissao('cadastros:gerir')
+  marcarAreaSensivel(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ProfissionalDto> {
+    return this.service.marcarAreaSensivel(paraRequestContext(auth), exigirUuid(id), validarAreaSensivel(corpo));
   }
 
   @Get('tipos-atendimento')

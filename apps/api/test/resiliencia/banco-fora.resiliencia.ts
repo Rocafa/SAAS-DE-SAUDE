@@ -41,12 +41,13 @@ afterAll(async () => {
 });
 
 
-/** Corpo do /health/ready: só `status` e o rótulo do modo do rate limit — nada de detalhe de erro. */
+/** Corpo do /health/ready: só `status` e os rótulos do rate limit e do agendador — nada de detalhe de erro. */
 function expectReadiness(body: string, status: 'ok' | 'indisponivel'): void {
   const parsed = JSON.parse(body) as Record<string, unknown>;
-  expect(Object.keys(parsed).sort()).toEqual(['rateLimit', 'status']);
+  expect(Object.keys(parsed).sort()).toEqual(['jobs', 'rateLimit', 'status']);
   expect(parsed.status).toBe(status);
   expect(parsed.rateLimit).toMatch(/^(compartilhado|fallback|memoria|instancia-unica|desligado)$/);
+  expect(parsed.jobs).toMatch(/^(bullmq|memoria|desligado|nao_iniciado)$/);
 }
 
 describe('estado normal', () => {

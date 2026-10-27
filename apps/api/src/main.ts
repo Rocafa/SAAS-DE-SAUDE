@@ -9,9 +9,11 @@ import { createRateLimitStore } from './security/rate-limit-store';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
-  const app = await NestFactory.create(AppModule.forRoot(config));
   // REDIS_URL: rate limit compartilhado entre instâncias; sem ela, só memória (por instância).
+  // O mesmo store conta por IP (borda) e por usuário (lista/busca de pacientes, R5).
   const rateLimitStore = createRateLimitStore();
+  // rawBody: o webhook do WhatsApp confere o HMAC sobre os bytes EXATOS recebidos (0032).
+  const app = await NestFactory.create(AppModule.forRoot(config, { rateLimitStore }), { rawBody: true });
   applyHttpSecurity(app, undefined, rateLimitStore);
   // Sem esperar, as primeiras requisições contariam só em memória (fallback) até o Redis conectar.
   if (rateLimitStore.ready && !(await rateLimitStore.ready())) {

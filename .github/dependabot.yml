@@ -23,3 +23,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Bases da imagem da API fixadas por digest (apps/api/Dockerfile): PR semanal com o digest novo.
+  - package-ecosystem: docker
+    directory: /apps/api
+    schedule:
+      interval: weekly
