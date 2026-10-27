@@ -27,6 +27,8 @@ export interface NovoProfissional {
   readonly especialidade: string;
   readonly capacidade: number;
   readonly usuarioId?: string;
+  /** R2 do #68: área sensível (psicologia, psiquiatria, saúde mental). Especialidade que pareça sensível liga sozinha. */
+  readonly areaSensivel?: boolean;
 }
 
 export interface NovoTipoAtendimento {
@@ -101,13 +103,22 @@ export function validarStatus(corpo: unknown): StatusFront {
 }
 
 export function validarNovoProfissional(corpo: unknown): NovoProfissional {
-  const v = new Validador(exigirObjeto(corpo, ['nome', 'especialidade', 'capacidade', 'usuarioId']));
+  const v = new Validador(exigirObjeto(corpo, ['nome', 'especialidade', 'capacidade', 'usuarioId', 'areaSensivel']));
   const nome = v.texto('nome', { max: 200, obrigatorio: true });
   const especialidade = v.texto('especialidade', { max: 100, obrigatorio: true });
   const capacidade = v.inteiro('capacidade', { min: 1, max: 20 }) ?? 1;
   const usuarioId = v.uuid('usuarioId', false);
+  const areaSensivel = v.booleano('areaSensivel');
   v.concluir();
-  return { nome: nome, especialidade: especialidade, capacidade, ...(usuarioId ? { usuarioId } : {}) };
+  return { nome: nome, especialidade: especialidade, capacidade, ...(usuarioId ? { usuarioId } : {}), ...(areaSensivel !== undefined ? { areaSensivel } : {}) };
+}
+
+export function validarAreaSensivel(corpo: unknown): boolean {
+  const v = new Validador(exigirObjeto(corpo, ['areaSensivel']));
+  const areaSensivel = v.booleano('areaSensivel');
+  if (areaSensivel === undefined) v.falhar('areaSensivel');
+  v.concluir();
+  return areaSensivel as boolean;
 }
 
 export function validarNovoTipo(corpo: unknown): NovoTipoAtendimento {

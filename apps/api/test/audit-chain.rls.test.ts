@@ -75,8 +75,11 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  await h?.close();
-  await owner?.end({ timeout: 5 });
+  try {
+    await h?.close();
+  } finally {
+    await owner?.end({ timeout: 5 });
+  }
 });
 
 describe('cadeia de auditoria (0005)', () => {

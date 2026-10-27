@@ -74,7 +74,7 @@ describe('vigilância de leitura nas rotas de guias e pacotes', () => {
     const recep = api.sessao(clinica, 'recepcao');
     for (const g of guias) expect((await api.http().get(`/guias/${g}`).set(cab(recep))).status).toBe(200);
     const alertas = await withTenant(api.db.db, clinica, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), eq(auditLog.actorId, recep.userId))),
+      tx.select().from(auditLog).where(and(eq(auditLog.action, 'anomaly_alert'), eq(auditLog.actorId, recep.userId))).orderBy(sql`seq`),
     );
     expect(alertas.map((a) => a.metadata.rule)).toEqual(['fichas_distintas']);
     const serial = JSON.stringify(alertas);

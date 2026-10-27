@@ -1,8 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, eq, like, type SQL } from 'drizzle-orm';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { AuditAction, type PaginaPorCursor, type RequestContext, type TenantId } from '@plataforma/shared';
+import { and, asc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { CURSOR_DE_PAGINACAO, CursorDePaginacao, type PosicaoLida } from './cursor-de-paginacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -11,9 +12,14 @@ import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { IndiceCegoCpf } from './cpf-indice-cego';
 import { patientFieldRef, type PatientEncryptedColumn } from './patient-fields';
+import { hojeNaClinica } from '../insurance/guias-regras';
+import { correcaoDeNascimentoExigeDocumento } from '../portal/portal-regras';
+import { documentoNaoConferido, exigirPerfilQueConfere, nascimentoVigente, recalcularSigiloDoPortal } from './nascimento-do-cadastro';
 import {
   normalizarBusca,
+  PAGINA_MAXIMA,
   type AlteracaoPaciente,
   type FiltroPacientes,
   type NovoPaciente,
@@ -38,12 +44,8 @@ export interface PacienteResumoDto {
   readonly ativo: boolean;
 }
 
-export interface PaginaDePacientes {
-  readonly itens: readonly PacienteResumoDto[];
-  readonly pagina: number;
-  readonly limite: number;
-  readonly temMais: boolean;
-}
+/** Página com `proximoCursor` opaco e assinado (R5 do parecer #76; contrato em `@plataforma/shared`). */
+export type PaginaDePacientes = PaginaPorCursor<PacienteResumoDto>;
 
 const SCOPE = 'patients';
 
@@ -59,37 +61,68 @@ function padraoContem(termo: string): string {
  */
 @Injectable()
 export class PatientsService {
+  private readonly logger = new Logger('PatientsService');
+  /** Índice cego do CPF por clínica (0046, R9 do importador): gravado junto com o CPF cifrado. */
+  readonly indiceCpf: IndiceCegoCpf;
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
-  ) {}
+    @Inject(CURSOR_DE_PAGINACAO) private readonly cursor: CursorDePaginacao,
+  ) {
+    this.indiceCpf = new IndiceCegoCpf(cipher);
+  }
 
-  listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
+  /**
+   * Lista por keyset (nome de busca, id). A página 2 em diante só sai com cursor assinado desta sessão
+   * e deste filtro (R5 do parecer #76); o cursor é conferido ANTES de abrir a transação, então cursor
+   * recusado não lê nada nem grava auditoria de leitura (a vigilância já contou a chamada).
+   */
+  async listar(ctx: RequestContext, filtro: FiltroPacientes): Promise<PaginaDePacientes> {
+    const amarra = { situacao: filtro.situacao, limite: filtro.limite, ...(filtro.busca !== undefined ? { busca: filtro.busca } : {}) };
+    const posicao: PosicaoLida | undefined = filtro.cursor === undefined ? undefined : this.cursor.ler(ctx, amarra, filtro.cursor);
+    const pagina = posicao?.pagina ?? 1;
     return this.leitura(ctx, async (tx) => {
       const condicoes: SQL[] = [eq(patients.tenantId, ctx.tenantId)];
       if (filtro.situacao !== 'todos') condicoes.push(eq(patients.active, filtro.situacao === 'ativos'));
       if (filtro.busca) condicoes.push(like(patients.searchName, padraoContem(filtro.busca)));
+      if (posicao) {
+        // Âncora pelo id técnico (o nome nunca vai no cursor), sem filtrar situação: inativar a âncora não
+        // muda a posição dela na ordem. Sumiu ou mudou de nome de busca = 409, antes da auditoria (R9; §3b).
+        const [ancora] = await tx
+          .select({ nome: patients.searchName, id: patients.id })
+          .from(patients)
+          .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, posicao.depoisDe)));
+        this.cursor.conferirAncora(posicao, ancora?.nome);
+        condicoes.push(sql`(${patients.searchName}, ${patients.id}) > (${ancora!.nome}, ${ancora!.id}::uuid)`);
+      }
       const linhas = await tx
         .select({
           id: patients.id,
           nome: patients.displayName,
           nomeSocial: patients.socialName,
           ativo: patients.active,
+          nomeDeBusca: patients.searchName,
         })
         .from(patients)
         .where(and(...condicoes))
         .orderBy(asc(patients.searchName), asc(patients.id))
-        .limit(filtro.limite + 1)
-        .offset((filtro.pagina - 1) * filtro.limite);
-      const temMais = linhas.length > filtro.limite;
-      const itens = linhas.slice(0, filtro.limite);
+        .limit(filtro.limite + 1);
+      const daPagina = linhas.slice(0, filtro.limite);
+      // O nome de busca só serve para a marca da âncora; não sai na resposta.
+      const itens: PacienteResumoDto[] = daPagina.map(({ id, nome, nomeSocial, ativo }) => ({ id, nome, nomeSocial, ativo }));
+      const ultima = daPagina[daPagina.length - 1];
+      // Limite de páginas como antes (PAGINA_MAXIMA): depois da última permitida não há cursor.
+      const temMais = linhas.length > filtro.limite && pagina < PAGINA_MAXIMA;
       // O termo de busca é nome de paciente: não entra na auditoria, só o fato de ter havido busca.
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE,
-        metadata: { count: itens.length, page: filtro.pagina, search: filtro.busca !== undefined },
+        metadata: { count: itens.length, page: pagina, search: filtro.busca !== undefined },
       });
-      return { itens, pagina: filtro.pagina, limite: filtro.limite, temMais };
+      const proximoCursor =
+        temMais && ultima ? this.cursor.assinar(ctx, amarra, { pagina: pagina + 1, depoisDe: ultima.id, nomeDaAncora: ultima.nomeDeBusca }) : null;
+      return { itens, pagina, limite: filtro.limite, temMais, proximoCursor };
     });
   }
 
@@ -110,16 +143,7 @@ export class PatientsService {
     return this.escrita(ctx, async (tx) => {
       const id = randomUUID();
       const nomeSocial = dados.nomeSocial ?? null;
-      await tx.insert(patients).values({
-        id,
-        tenantId: ctx.tenantId,
-        displayName: dados.nome,
-        socialName: nomeSocial,
-        searchName: normalizarBusca(`${dados.nome} ${nomeSocial ?? ''}`),
-        cpfEnc: await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf),
-        phoneEnc: await this.cifrar(tx, ctx, id, 'phone', dados.telefone),
-        birthDateEnc: await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento),
-      });
+      await tx.insert(patients).values(await this.prepararInsercao(tx, ctx, id, dados));
       await recordAudit(tx, ctx, { action: AuditAction.Create, scope: SCOPE, metadata: { patient_id: id } });
       return {
         id,
@@ -148,15 +172,33 @@ export class PatientsService {
         if (dados.nome !== undefined) campos.push('name');
         if (dados.nomeSocial !== undefined) campos.push('social_name');
       }
-      if (dados.cpf !== undefined) {
+      // R9 (0046): o índice cego anda junto com o CPF; mesmo CPF não reescreve nada (nem a cifra nem o índice).
+      if (dados.cpf !== undefined && (dados.cpf ?? null) !== (await this.decifrar(tx, ctx.tenantId, id, 'cpf', atual.cpfEnc))) {
         mudancas.cpfEnc = await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf ?? undefined);
+        const indice = dados.cpf ? await this.indiceCpf.indexar(tx, ctx, dados.cpf) : null;
+        mudancas.cpfBidx = indice?.cpfBidx ?? null;
+        mudancas.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
         campos.push('cpf');
       }
       if (dados.telefone !== undefined) {
         mudancas.phoneEnc = await this.cifrar(tx, ctx, id, 'phone', dados.telefone);
         campos.push('phone');
       }
-      if (dados.nascimento !== undefined) {
+      // R1/R3 do #73: só reescreve a data cifrada (e recalcula o sigilo do portal) quando a data MUDOU de fato.
+      // Data vigente ilegível (Conferência 0052, ressalva 2): conta como desconhecida e como mudança.
+      const antes = dados.nascimento !== undefined ? await nascimentoVigente(this.cipher, tx, ctx.tenantId, id, atual.birthDateEnc) : null;
+      const nascimentoAntes = antes?.valor ?? null;
+      const nascimentoMudou = dados.nascimento !== undefined && (antes?.ilegivel === true || (dados.nascimento ?? null) !== nascimentoAntes);
+      // C1-b′ (conferência de 24/10): reduzir a idade de paciente com 12 anos ou mais (ou de data atual
+      // desconhecida/ilegível) exige documento conferido, com a MESMA regra (e o mesmo 422) do pedido de
+      // correção pelo portal. Apagar a data não exige (o recálculo fecha: sigilo liga, representação acaba).
+      // 0053: só admin ou profissional declara a conferência (403 `conferencia_exige_perfil`; o banco confere).
+      const exigeDocumento =
+        nascimentoMudou && typeof dados.nascimento === 'string' && correcaoDeNascimentoExigeDocumento(nascimentoAntes, dados.nascimento, hojeNaClinica());
+      if (exigeDocumento && dados.documentoConferido !== true) throw documentoNaoConferido();
+      const documentoConferido = nascimentoMudou && dados.documentoConferido === true;
+      if (documentoConferido) exigirPerfilQueConfere(ctx);
+      if (nascimentoMudou) {
         mudancas.birthDateEnc = await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento ?? undefined);
         campos.push('birth_date');
       }
@@ -170,8 +212,24 @@ export class PatientsService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { patient_id: id, changed: campos.join(',') },
+        metadata: {
+          patient_id: id,
+          changed: campos.join(','),
+          ...(nascimentoMudou
+            ? { document_required: exigeDocumento, document_checked: documentoConferido, ...(antes?.ilegivel ? { birth_date_unreadable: true } : {}) }
+            : {}),
+        },
       });
+      if (nascimentoMudou) {
+        // A marca de conferência vai na marca da mudança da data desta transação (0052/0053): o recálculo do banco
+        // recusa empurrar o sigilo de quem já tinha 12+ sem ela. A função grava a trilha com o usuário e o perfil.
+        await recalcularSigiloDoPortal(tx, this.logger, {
+          pacienteId: id,
+          nascimento: dados.nascimento ?? null,
+          emancipadoEm: atual.emancipatedOn,
+          documentoConferido,
+        });
+      }
       return this.paraDto(tx, ctx.tenantId, linha);
     });
   }
@@ -193,6 +251,28 @@ export class PatientsService {
       }
       return { id, ativo: false as const };
     });
+  }
+
+  /**
+   * Linha de `patients` pronta para INSERT, com as MESMAS regras do cadastro: nome de busca normalizado e
+   * CPF/telefone/nascimento cifrados com a chave da clínica (provisionada na primeira escrita). Usada pelo
+   * cadastro e pelo importador (inserção em lote na transação do chamador, que audita). `dados` já validado.
+   */
+  async prepararInsercao(tx: TenantTx, ctx: RequestContext, id: string, dados: NovoPaciente): Promise<typeof patients.$inferInsert> {
+    const nomeSocial = dados.nomeSocial ?? null;
+    const indice = dados.cpf ? await this.indiceCpf.indexar(tx, ctx, dados.cpf) : null;
+    return {
+      id,
+      cpfBidx: indice?.cpfBidx ?? null,
+      cpfBidxVersion: indice?.cpfBidxVersion ?? null,
+      tenantId: ctx.tenantId,
+      displayName: dados.nome,
+      socialName: nomeSocial,
+      searchName: normalizarBusca(`${dados.nome} ${nomeSocial ?? ''}`),
+      cpfEnc: await this.cifrarOpcional(tx, ctx, id, 'cpf', dados.cpf),
+      phoneEnc: await this.cifrar(tx, ctx, id, 'phone', dados.telefone),
+      birthDateEnc: await this.cifrarOpcional(tx, ctx, id, 'birth_date', dados.nascimento),
+    };
   }
 
   private async travar(tx: TenantTx, ctx: RequestContext, id: string): Promise<typeof patients.$inferSelect> {

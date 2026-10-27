@@ -4,7 +4,7 @@
  * 0010) e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
 import { AuditAction, type TenantId } from '@plataforma/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
@@ -25,7 +25,7 @@ async function alertas(tenantId: TenantId, userId: string) {
     tx
       .select({ actorId: auditLog.actorId, actorKind: auditLog.actorKind, scope: auditLog.scope, metadata: auditLog.metadata })
       .from(auditLog)
-      .where(and(eq(auditLog.action, AuditAction.AnomalyAlert), eq(auditLog.actorId, userId))),
+      .where(and(eq(auditLog.action, AuditAction.AnomalyAlert), eq(auditLog.actorId, userId))).orderBy(sql`seq`),
   );
 }
 
@@ -62,6 +62,18 @@ describe('R5 — limite por usuário na lista/busca de pacientes', () => {
     // Outro usuário (mesmo IP do supertest) continua lendo: o limite é por usuário.
     const outro = api.sessao(clinica, 'recepcao');
     expect((await api.http().get('/pacientes').set(cab(outro))).status).toBe(200);
+  });
+
+  it('cursor recusado (409 cursor_invalido) também conta no limite por usuário (R5 do parecer #76)', async () => {
+    const recep = api.sessao(clinica, 'recepcao');
+    for (let i = 0; i < LIMITE; i++) {
+      const r = await api.http().get('/pacientes').query({ cursor: `v1.forjado${i}.assinatura` }).set(cab(recep));
+      expect(r.status).toBe(409);
+      expect(r.body).toEqual({ statusCode: 409, message: 'Conflito', codigo: 'cursor_invalido' });
+    }
+    expect((await api.http().get('/pacientes').query({ cursor: 'v1.x.y' }).set(cab(recep))).status).toBe(429);
+    const regras = (await alertas(clinica, recep.userId)).map((l) => l.metadata.rule);
+    expect(regras).toContain('limite_por_usuario');
   });
 
   it('o mesmo usuário em outra clínica não compartilha o contador (chave por clínica + usuário)', async () => {

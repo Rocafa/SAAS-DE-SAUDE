@@ -13,7 +13,7 @@ import {
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
-import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_RECIBO, campoFinanceiroRef, type CampoFinanceiro } from './finance-fields';
+import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_PAGADOR_DO_RECEBIMENTO, CAMPO_RECIBO, campoFinanceiroRef, type CampoFinanceiro } from './finance-fields';
 
 /**
  * Financeiro no pacote G2 (migração 0018, schemaVersion 1.9.0): todas as tabelas, com CPFs e o retrato
@@ -83,6 +83,13 @@ export interface ExportedFinance {
     amountCents: number;
     receivedAt: string;
     receivedBy: string;
+    /** 0031: responsável pagador congelado no recebimento (vínculo + retrato decifrado). */
+    guardianPayerLinkId: string | null;
+    guardianPayer: { nome: string; cpf: string | null } | null;
+    guardianPayerPurgedAt: string | null;
+    /** 0034: saneamento do pagador pelo financeiro (R2 do 2º parecer do #67). */
+    guardianPayerResolvedBy: string | null;
+    guardianPayerResolvedAt: string | null;
   }[];
   readonly paymentReversals: readonly {
     id: string;
@@ -225,15 +232,25 @@ export async function exportarFinanceiro(
         fiscalPurgedAt: iso(c.fiscalPurgedAt),
       })),
     ),
-    payments: recebimentos.map((p) => ({
-      id: p.id,
-      chargeId: p.chargeId,
-      cashSessionId: p.cashSessionId,
-      method: p.method,
-      amountCents: p.amountCents,
-      receivedAt: p.receivedAt.toISOString(),
-      receivedBy: p.receivedBy,
-    })),
+    payments: await Promise.all(
+      recebimentos.map(async (p) => {
+        const pagador = await dec(p.id, CAMPO_PAGADOR_DO_RECEBIMENTO, p.guardianPayerEnc);
+        return {
+          id: p.id,
+          chargeId: p.chargeId,
+          cashSessionId: p.cashSessionId,
+          method: p.method,
+          amountCents: p.amountCents,
+          receivedAt: p.receivedAt.toISOString(),
+          receivedBy: p.receivedBy,
+          guardianPayerLinkId: p.guardianPayerLinkId,
+          guardianPayer: pagador === null ? null : (JSON.parse(pagador) as { nome: string; cpf: string | null }),
+          guardianPayerPurgedAt: iso(p.guardianPayerPurgedAt),
+          guardianPayerResolvedBy: p.guardianPayerResolvedBy,
+          guardianPayerResolvedAt: iso(p.guardianPayerResolvedAt),
+        };
+      }),
+    ),
     paymentReversals: estornos.map((e) => ({
       id: e.id,
       paymentId: e.paymentId,

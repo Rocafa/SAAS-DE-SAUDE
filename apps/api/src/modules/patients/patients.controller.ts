@@ -21,7 +21,10 @@ export class PatientsController {
     @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
   ) {}
 
-  /** Lista e busca contam no limite por usuário e no padrão de páginas (R5); 429 acima do limite. */
+  /**
+   * Lista e busca contam no limite por usuário e no padrão de páginas (R5); 429 acima do limite.
+   * A vigilância conta ANTES de conferir o cursor: cursor recusado (409 `cursor_invalido`) também conta.
+   */
   @Get()
   @Permissao('pacientes:ler')
   async listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<PaginaDePacientes> {

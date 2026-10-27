@@ -33,6 +33,10 @@ import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../au
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { exportarFinanceiro, type ExportedFinance, type FinanceCounts } from '../finance/finance-export';
+import { exportarPortal, type ExportedPortal, type PortalCounts } from '../portal/portal-export';
+import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
+import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
+import { exportarWhatsapp, type ExportedWhatsapp, type WhatsappCounts } from '../messaging/whatsapp-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -79,8 +83,36 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        controle de acesso (LGPD arts. 37 e 46).
  * 1.12.0: `sessionPackages[].professionalId` (profissional fixado na venda) e as trocas registradas
  *        (`packageProfessionalChanges`), da migração 0023 (R13 da re-revisão do parecer #65).
+ * 1.13.0: responsáveis do paciente (migração 0028): pessoas (nome, CPF e telefone decifrados), vínculos
+ *        com vigência, pagador e informação clínica, e o histórico (valores anteriores decifrados), em
+ *        `data.guardians` e `manifest.counts.guardians`.
+ * 1.14.0: correções do parecer #67 (migração 0031): `patients[].emancipation*`, `payments[].guardianPayer*`
+ *        (pagador congelado no recebimento, decifrado), decisão clínica, curatela, ciência do paciente e
+ *        anulação nos vínculos (decifrados) e `guardians[].discardedAt`. Contém CPF de terceiros (responsáveis).
+ * 1.15.0: portal do paciente (migrações 0027 e 0033): convites (sem o hash do token), vínculos conta↔paciente
+ *        (com o responsável que agiu), histórico de consentimentos e pedidos do titular (detalhe e resposta
+ *        decifrados), em `data.portal` e `manifest.counts.portal`; `actorKind` da trilha ganha `paciente_portal`.
+ * 1.16.0: ressalvas do 2º parecer do #67 (migração 0034): `payments[].guardianPayerResolvedBy/At`
+ *        (saneamento do pagador pelo financeiro) e, nos vínculos, `eliminatedAt` e `recordRetentionUntil`
+ *        (responsáveis na guarda de 20 anos do prontuário, A4); `professionals[].sensitiveArea` (R2 do #68, 0033).
+ *        Integração (rodada 19): 1.15.0 era usado pelo portal e pela 0034 em paralelo; o pacote junta os dois em 1.16.0.
+ * 1.17.0: integração da rodada 19 (importador e WhatsApp juntos numa versão só, maior que as anteriores):
+ *        - importador (migrações 0024 e 0026): lotes de importação (aceite do termo de migração e hash do
+ *          texto, mapeamento, contagens, hash da simulação, confirmação da clínica de origem, evidência do
+ *          descarte do arquivo bruto) e o livro do lote, em `data.imports` e `manifest.counts.imports`;
+ *          `patients[].importBatchId` e `appointments[].importBatchId` (marca imutável do lote, V1). Arquivo
+ *          bruto e divergências ficam fora (motivo em EXPORT_EXCLUDED_TABLES). No ramo do importador saiu
+ *          como 1.13.0/1.14.0, que colidiam com responsáveis e portal.
+ *        - WhatsApp (migração 0032): configuração do canal, opt-ins com a prova (referência decifrada),
+ *          fila de envios (com o modelo da PLATAFORMA usado; a clínica não cria modelo) e respostas (só
+ *          interpretação e resultado; R1 do #69); número e texto do ENVIO decifrados enquanto não passam os
+ *          30 dias da retenção, depois `null` com `contentPurgedAt`, em `data.whatsapp` e
+ *          `manifest.counts.whatsapp`. No ramo do WhatsApp saiu como 1.13.0. Na integração (0037),
+ *          `whatsappOptIns[].phonePurgedAt` (número e HMAC apagados com a eliminação do paciente).
+ * 1.18.0: responsáveis no importador (migração 0048, R5 do parecer do importador): `guardians[].importBatchId`
+ *        e `patientGuardians[].importBatchId` (marca imutável do lote que criou a pessoa/o vínculo).
  */
-export const EXPORT_SCHEMA_VERSION = '1.12.0';
+export const EXPORT_SCHEMA_VERSION = '1.18.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -125,14 +157,50 @@ export const EXPORTED_TABLES = [
   'receipts',
   'receipt_cancellations',
   'clinic_members',
+  // Portal do paciente (0027): em data.portal. portal_invites sai sem token_hash (credencial).
+  'portal_invites',
+  'portal_links',
+  'portal_consents',
+  'portal_rights_requests',
+  // Responsáveis do paciente (0028): em data.guardians.
+  'guardians',
+  'patient_guardians',
+  'patient_guardian_history',
+  // Importador (0024): em data.imports. Arquivo bruto e divergências ficam fora (EXPORT_EXCLUDED_TABLES).
+  'import_batches',
+  'import_batch_records',
+  // WhatsApp (0032): em data.whatsapp. Histórico de mensagens é dado do paciente: sai inteiro.
+  'whatsapp_settings',
+  'whatsapp_opt_ins',
+  'whatsapp_outbox',
+  'whatsapp_inbound',
   'audit_log',
 ] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
+  portal_invite_lookup: 'índice interno token -> clínica do convite (0027); o convite sai em portal_invites',
+  portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
+  portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',
+  whatsapp_routes: 'tabela interna da rota do webhook (número de negócio -> clínica); o número sai em whatsappSettings',
+  job_tenant_index: 'índice interno das clínicas para o agendador de jobs (0043): só o id da própria clínica, que já sai no pacote',
+  founder_fix_requests:
+    'pedido interno de correção do fundador sob incidente (0044): controle operacional do runbook (só ids e chamado), sem dado de paciente; o fato sai em audit_log (founder_fix_requested/founder_fixed) e em clinic_members',
+  portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); apagada no mesmo COMMIT (só guarda, durante a transação, a cifra anterior e os valores de antes do recálculo: 0039)',
+  whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
-    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção), sem dado de paciente; o fato está em audit_log e em clinic_members/legal_holds, que saem no pacote',
+    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção, transição do sigilo do portal), sem dado de paciente além do id; o fato está em audit_log, clinic_members, legal_holds e portal_links, que saem no pacote',
+  import_raw_files:
+    'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
+  patient_cpf_index_keys:
+    'chave interna (cifrada) do índice cego do CPF (0046, R9); o CPF sai decifrado em patients e o índice (cpf_bidx) é derivado dele',
+  import_batch_keys:
+    'chave interna e transitória do lote de importação (0046, R3): só a DEK embrulhada do arquivo bruto, apagada no descarte; não é dado da clínica (o bruto nem sai no pacote) e a evidência do descarte está em import_batches',
+  import_batch_key_intents:
+    'controle interno da chave de lote no provedor (0049): só id do lote, ARN e situação, para nenhuma chave ficar órfã no KMS; não é dado da clínica e não tem dado pessoal',
+  import_issues:
+    'divergências da validação/simulação (0024): diagnóstico refeito a cada rodada, só linha, campo e código (sem valor); os totais estão em import_batches, que sai no pacote',
 };
 
 export interface ExportManifest {
@@ -172,7 +240,15 @@ export interface ExportManifest {
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
     readonly finance: FinanceCounts;
+    /** Responsáveis do paciente (0028), por tabela. */
+    readonly guardians: GuardiansCounts;
+    /** WhatsApp (0032), por tabela. */
+    readonly whatsapp: WhatsappCounts;
     readonly clinicMembers: number;
+    /** Portal do paciente (0027), por tabela. */
+    readonly portal: PortalCounts;
+    /** Importador (0024): lotes e livro do lote. */
+    readonly imports: ImportCounts;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
   };
@@ -200,6 +276,13 @@ export interface ExportedPatient {
   readonly updatedAt: string;
   /** Retenção legal desde (0015); null se não houver. */
   readonly legalHoldSince: string | null;
+  /** Emancipação (0031): data, documento decifrado, quem e quando registrou. */
+  readonly emancipatedOn: string | null;
+  readonly emancipationRef: string | null;
+  readonly emancipationRecordedBy: string | null;
+  readonly emancipationRecordedAt: string | null;
+  /** Lote de importação que criou o paciente (0026); null se cadastrado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 export interface ExportedProfessional {
@@ -207,6 +290,7 @@ export interface ExportedProfessional {
   readonly userId: string | null;
   readonly displayName: string;
   readonly specialty: string;
+  readonly sensitiveArea: boolean;
   readonly capacity: number;
   readonly active: boolean;
   readonly createdAt: string;
@@ -241,6 +325,8 @@ export interface ExportedAppointment {
   readonly rescheduledBy: string | null;
   /** Horário travado depois de atendimento ou falta (0014). */
   readonly rescheduleLocked: boolean;
+  /** Lote de importação que criou o agendamento (0026); null se marcado de outro modo. */
+  readonly importBatchId: string | null;
 }
 
 /** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
@@ -469,7 +555,15 @@ export interface TenantExportDocument {
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
     readonly finance: ExportedFinance;
+    /** Responsáveis do paciente (0028). */
+    readonly guardians: ExportedGuardians;
+    /** WhatsApp (0032). */
+    readonly whatsapp: ExportedWhatsapp;
     readonly clinicMembers: readonly ExportedClinicMember[];
+    /** Portal do paciente (0027). */
+    readonly portal: ExportedPortal;
+    /** Importador (0024). */
+    readonly imports: ExportedImports;
   };
 }
 
@@ -706,6 +800,20 @@ export async function exportInTransaction(
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
+  const responsaveis = await exportarResponsaveis(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+
+  const portal = await exportarPortal(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+  const importacoes = await exportarImportacoes(tx, ctx.tenantId);
+  const whatsapp = await exportarWhatsapp(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
 
   const decrypt = async (rowId: string, column: PatientEncryptedColumn, value: string | null): Promise<string | null> => {
     if (value === null) return null;
@@ -727,6 +835,11 @@ export async function exportInTransaction(
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       legalHoldSince: iso(r.legalHoldSince),
+      emancipatedOn: r.emancipatedOn,
+      emancipationRef: await decrypt(r.id, 'emancipation_ref', r.emancipationRefEnc),
+      emancipationRecordedBy: r.emancipationRecordedBy,
+      emancipationRecordedAt: iso(r.emancipationRecordedAt),
+      importBatchId: r.importBatchId,
     });
   }
   const exportedProfessionals: ExportedProfessional[] = professionalRows.map((p) => ({
@@ -734,6 +847,7 @@ export async function exportInTransaction(
     userId: p.userId,
     displayName: p.displayName,
     specialty: p.specialty,
+    sensitiveArea: p.sensitiveArea,
     capacity: p.capacity,
     active: p.active,
     createdAt: p.createdAt.toISOString(),
@@ -762,6 +876,7 @@ export async function exportInTransaction(
     createdBy: a.createdBy,
     rescheduledBy: a.rescheduledBy,
     rescheduleLocked: a.rescheduleLocked,
+    importBatchId: a.importBatchId,
   }));
   const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
     id: r.id,
@@ -1003,7 +1118,11 @@ export async function exportInTransaction(
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
+      guardians: responsaveis.counts,
+      whatsapp: whatsapp.counts,
       clinicMembers: exportedMembers.length,
+      portal: portal.counts,
+      imports: importacoes.counts,
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
@@ -1085,7 +1204,11 @@ export async function exportInTransaction(
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,
+        guardians: responsaveis.data,
+        whatsapp: whatsapp.data,
         clinicMembers: exportedMembers,
+        portal: portal.data,
+        imports: importacoes.data,
       },
     },
     patientsCsv,

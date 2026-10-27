@@ -24,7 +24,7 @@ describe('provedor de autenticação plugável', () => {
     expect(() => createAuthProvider({ NODE_ENV: 'production' })).toThrow(/produção/);
     expect(() => createAuthProvider({ NODE_ENV: 'production', AUTH_PROVIDER: 'dev' })).toThrow(/produção/);
     expect(() => new DevSessionProvider('production')).toThrow();
-    expect(() => createKeyProvider({ NODE_ENV: 'production' })).toThrow(/produção/);
+    expect(() => createKeyProvider({ NODE_ENV: 'production' })).toThrow(/KMS não configurado/);
   });
 
   it('o AppModule não monta em NODE_ENV=production (falha no boot, antes de abrir porta)', () => {

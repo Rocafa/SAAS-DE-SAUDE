@@ -11,11 +11,14 @@ import type { FieldRef } from '../crypto/field-format';
 export type CampoFinanceiro =
   | { readonly table: 'charges'; readonly column: 'payer_cpf' }
   | { readonly table: 'professional_fiscal_profiles'; readonly column: 'cpf' }
-  | { readonly table: 'receipts'; readonly column: 'content' };
+  | { readonly table: 'receipts'; readonly column: 'content' }
+  | { readonly table: 'payments'; readonly column: 'guardian_payer' };
 
 export const CAMPO_CPF_PAGADOR: CampoFinanceiro = { table: 'charges', column: 'payer_cpf' };
 export const CAMPO_CPF_PROFISSIONAL: CampoFinanceiro = { table: 'professional_fiscal_profiles', column: 'cpf' };
 export const CAMPO_RECIBO: CampoFinanceiro = { table: 'receipts', column: 'content' };
+/** 0031 (V1 do #67): retrato JSON { nome, cpf } do responsável pagador congelado no recebimento. */
+export const CAMPO_PAGADOR_DO_RECEBIMENTO: CampoFinanceiro = { table: 'payments', column: 'guardian_payer' };
 
 export function campoFinanceiroRef(tenantId: TenantId, rowId: string, campo: CampoFinanceiro): FieldRef {
   return { tenantId, table: campo.table, column: campo.column, rowId };

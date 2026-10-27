@@ -28,10 +28,13 @@ import {
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { RetencaoFiscalService } from '../src/modules/finance/retencao-fiscal';
+import { mascararCpf } from '../src/modules/patients/responsaveis.service';
 import { cab, cpfFicticio, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 
+/** UUID aleatório: tirado do texto antes de procurar marcador numérico (só dígitos casariam com ele). */
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 let api: ApiDeTeste;
 let clinicaA: TenantId;
 let clinicaB: TenantId;
@@ -110,7 +113,8 @@ beforeAll(async () => {
   clinicaB = await api.novaClinica();
   adminA = api.sessao(clinicaA, 'admin');
   recepA = api.sessao(clinicaA, 'recepcao');
-  finA = api.sessao(clinicaA, 'financeiro');
+  // R19 do #65 (0041): estornar sessão de pacote exige o perfil registrado no banco.
+  finA = await api.membro(clinicaA, api.sessao(clinicaA, 'financeiro'), 'financeiro');
   profA = api.sessao(clinicaA, 'profissional');
   adminB = api.sessao(clinicaB, 'admin');
 
@@ -223,16 +227,27 @@ describe('estorno e recibo', () => {
     expect((p as unknown as { aviso: string | null }).aviso).toContain('mensagem do Pix');
     const r = await post(recepA, `/financeiro/recebimentos/${p.id}/recibo`);
     expect(r.status).toBe(200);
+    const comum = { situacao: 'emitido', descricao: 'Atendimento', valorCentavos: 20000, forma: 'pix_manual', pendencias: [] };
+    // 2º parecer do #67: a recepção emite e entrega, mas vê os CPFs mascarados (pagador, beneficiário, emitente PF).
     expect(r.body).toMatchObject({
-      situacao: 'emitido',
-      descricao: 'Atendimento',
-      valorCentavos: 20000,
-      forma: 'pix_manual',
-      emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: cpfFicticio(302), registroConselho: null },
-      pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
-      beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: cpfFicticio(301) },
-      pendencias: [],
+      ...comum,
+      cpfMascarado: true,
+      emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: mascararCpf(cpfFicticio(302)), registroConselho: null },
+      pagador: { nome: PAGADOR, cpf: mascararCpf(cpfFicticio(303)) },
+      beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: mascararCpf(cpfFicticio(301)) },
     });
+    for (const cpf of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303)]) expect(JSON.stringify(r.body)).not.toContain(cpf);
+    expect((await get(recepA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ cpfMascarado: true, pagador: { cpf: mascararCpf(cpfFicticio(303)) } });
+    // Financeiro e admin: o mesmo recibo com os CPFs completos (o retrato gravado é o completo).
+    for (const s of [finA, adminA]) {
+      expect((await get(s, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({
+        ...comum,
+        cpfMascarado: false,
+        emitente: { tipo: 'pf', nome: 'Profissional Ficticia Autonoma', documento: cpfFicticio(302), registroConselho: null },
+        pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+        beneficiario: { nome: 'Paciente Ficticio Financeiro', cpf: cpfFicticio(301) },
+      });
+    }
     const serial = JSON.stringify(r.body);
     for (const proibido of [TIPO_SENSIVEL, ESPECIALIDADE, CONSELHO, 'Psico']) expect(serial).not.toContain(proibido);
     // O cadastro muda depois; o recibo emitido não.
@@ -478,7 +493,8 @@ describe('auditoria sem dado pessoal nem valores', () => {
       ),
     );
     expect(new Set(fin.map((l) => l.scope)).size).toBeGreaterThanOrEqual(8);
-    const serial = JSON.stringify(fin);
+    // Sem os UUIDs: um id aleatório como "8a180008-..." contém "18000" e dava falso negativo.
+    const serial = JSON.stringify(fin).replace(UUID_RE, '<uuid>');
     for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR, 'Paciente Ficticio', 'Atendimento', CONSELHO, TIPO_SENSIVEL, '20000', '18000']) {
       expect(serial).not.toContain(proibido);
     }
@@ -743,6 +759,54 @@ describe('R14 e R15 do #65: cobrança PF de pacote só com sessões do emitente;
     expect((await post(finA, `/pacotes/${pacoteId}/consumos/${deX!.id}/estornar`, { motivo: 'status_corrigido' })).status).toBeLessThan(300);
     expect(await sqlstate(upd(deX!.id, { reversedAt: new Date(), reversedBy: finA.userId, reversalReason: 'pacote_errado' }, finA.userId))).toContain('42501');
   });
+
+  it('R18: o estorno grava a hora do banco, não a enviada pelo cliente (0029)', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R18', total: 4 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    const [sessao] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const antes = Date.now();
+    // Estorno válido (usuário da sessão, motivo da lista), mas com data antiga vinda do cliente.
+    await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) => tx.update(packageSessions).set({ reversedAt: new Date(0), reversedBy: finA.userId, reversalReason: 'lancamento_errado' }).where(eq(packageSessions.id, sessao!.id)),
+      finA.userId,
+    );
+    const [gravada] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, sessao!.id)));
+    expect(gravada).toMatchObject({ reversedBy: finA.userId, reversalReason: 'lancamento_errado' });
+    // Hora do banco: recente (folga de relógio entre o processo do teste e o Postgres local).
+    expect(gravada!.reversedAt!.getTime()).toBeGreaterThan(antes - 60_000);
+    expect(gravada!.reversedAt!.getTime()).toBeLessThan(Date.now() + 60_000);
+  });
+
+  it('R19: estornar em nome próprio por SQL exige perfil autorizado registrado no banco (0041)', async () => {
+    const pacoteId = id(await post(recepA, '/pacotes', { pacienteId: pacienteA, nome: 'Pacote Ficticio R19', total: 6 }));
+    await consumir(pacoteId, await agendamento({ prof: profissionalA }));
+    const [viva] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.packageId, pacoteId)));
+    const estornoDireto = (quem: string) =>
+      withTenant(
+        api.db.db,
+        clinicaA,
+        (tx) => tx.update(packageSessions).set({ reversedAt: new Date(), reversedBy: quem, reversalReason: 'lancamento_errado' }).where(eq(packageSessions.id, viva!.id)),
+        quem,
+      );
+    // Perfil só no token (sem clinic_members), perfil fora da lista (psicólogo) e usuário de outra clínica: 42501.
+    const soToken = api.sessao(clinicaA, 'financeiro');
+    const psicologo = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'psicologo');
+    const deOutraClinica = await api.membro(clinicaB, api.sessao(clinicaB, 'financeiro'), 'financeiro');
+    for (const s of [soToken, psicologo, deOutraClinica]) expect(await sqlstate(estornoDireto(s.userId))).toContain('42501');
+    // Pela API, o perfil do token sem registro no banco vira 403 explicável, sem estornar.
+    const api403 = await post(soToken, `/pacotes/${pacoteId}/consumos/${viva!.id}/estornar`, { motivo: 'lancamento_errado' });
+    expect(api403.status).toBe(403);
+    expect(api403.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
+    const [intacta] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, viva!.id)));
+    expect(intacta).toMatchObject({ reversedAt: null, reversedBy: null });
+    // Perfil autorizado registrado (recepção) estorna em nome próprio.
+    const recepRegistrada = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    await estornoDireto(recepRegistrada.userId);
+    const [estornada] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(packageSessions).where(eq(packageSessions.id, viva!.id)));
+    expect(estornada).toMatchObject({ reversedBy: recepRegistrada.userId, reversalReason: 'lancamento_errado' });
+  });
 });
 
 describe('R2 do #65: registro no conselho escolhido por recibo', () => {
@@ -918,5 +982,67 @@ describe('R9 e R10 do #65: o banco garante paid_cents e a numeração', () => {
         withTenant(api.db.db, clinicaA, (tx) => tx.update(receiptCounters).set({ lastNumber: sql`${receiptCounters.lastNumber} + 1` }).where(eq(receiptCounters.tenantId, clinicaA)), recepA.userId),
       ),
     ).toContain('23514');
+  });
+});
+
+describe('N2 da conferência do #67: via oficial do recibo (IR) e via de conferência da recepção', () => {
+  it('a recepção entrega a via de conferência ("não vale para IR"); a oficial, completa e auditada, só admin e financeiro', async () => {
+    await api.http().put(`/financeiro/profissionais/${profissionalPfA}/perfil-fiscal`).set(cab(finA)).send({ cpf: cpfFicticio(302) }).expect(200);
+    const c = await cobranca(recepA, {
+      agendamentoId: await agendamento({ prof: profissionalPfA }),
+      valorCentavos: 15000,
+      atendimentoPor: 'pf',
+      pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+    });
+    const p = await receber(recepA, c.id, { forma: 'dinheiro' });
+    const r = await post(recepA, `/financeiro/recebimentos/${p.id}/recibo`);
+    expect(r.status).toBe(200);
+    // Via de conferência: CPF mascarado e o aviso explícito de que não vale para o IR.
+    expect(r.body).toMatchObject({ via: 'conferencia', cpfMascarado: true, pagador: { cpf: mascararCpf(cpfFicticio(303)) } });
+    expect((r.body as { aviso: string }).aviso).toMatch(/via de conferência, não vale para IR/i);
+    expect((await get(recepA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ via: 'conferencia', cpfMascarado: true });
+    // A leitura do financeiro também é conferência (a via oficial é um ato próprio, auditado).
+    expect((await get(finA, `/financeiro/recibos/${id(r)}`)).body).toMatchObject({ via: 'conferencia', cpfMascarado: false });
+
+    // Recepção e profissional não emitem a via oficial (403, sem CPF na resposta).
+    for (const s of [recepA, profA]) {
+      const neg = await post(s, `/financeiro/recibos/${id(r)}/via-oficial`);
+      expect(neg.status).toBe(403);
+      expect(JSON.stringify(neg.body)).not.toContain(cpfFicticio(303));
+    }
+    // Admin e financeiro: CPFs completos (pagador, beneficiário, emitente PF), sem o aviso de conferência.
+    for (const s of [finA, adminA]) {
+      const of = await post(s, `/financeiro/recibos/${id(r)}/via-oficial`);
+      expect(of.status, JSON.stringify(of.body)).toBe(200);
+      expect(of.body).toMatchObject({
+        via: 'oficial',
+        cpfMascarado: false,
+        numero: (r.body as { numero: number }).numero,
+        emitente: { tipo: 'pf', documento: cpfFicticio(302) },
+        pagador: { nome: PAGADOR, cpf: cpfFicticio(303) },
+        beneficiario: { cpf: cpfFicticio(301) },
+      });
+      expect((of.body as { aviso: string }).aviso).not.toMatch(/não vale/i);
+    }
+    // Corpo com campo: 400; recibo de outra clínica: 404.
+    expect((await post(finA, `/financeiro/recibos/${id(r)}/via-oficial`, { cpf: cpfFicticio(303) })).status).toBe(400);
+    expect((await post(adminB, `/financeiro/recibos/${id(r)}/via-oficial`)).status).toBe(404);
+
+    // Trilha: uma exportação por via oficial emitida, só ids e número (sem CPF, nome ou valor).
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(eq(auditLog.tenantId, clinicaA)));
+    const oficiais = trilha.filter(
+      (l) => l.scope === 'receipts' && (l.metadata as { op?: string }).op === 'official_copy' && (l.metadata as { receipt_id?: string }).receipt_id === id(r),
+    );
+    expect(oficiais).toHaveLength(2);
+    expect(oficiais.map((l) => l.action)).toEqual(['export', 'export']);
+    expect(new Set(oficiais.map((l) => l.actorId))).toEqual(new Set([finA.userId, adminA.userId]));
+    // Sem os UUIDs (receipt_id etc.): um id aleatório pode conter "15000"; o valor só conta como número inteiro.
+    const serial = JSON.stringify(oficiais.map((l) => l.metadata)).replace(UUID_RE, '<uuid>');
+    for (const proibido of [cpfFicticio(301), cpfFicticio(302), cpfFicticio(303), PAGADOR]) expect(serial).not.toContain(proibido);
+    expect(serial).not.toMatch(/(?<!\w)15000(?!\w)/);
+
+    // Recibo cancelado não tem via oficial.
+    await post(finA, `/financeiro/recibos/${id(r)}/cancelar`, { motivo: 'dados_incorretos' }).expect(200);
+    expect((await post(finA, `/financeiro/recibos/${id(r)}/via-oficial`)).body).toMatchObject({ codigo: 'recibo_cancelado' });
   });
 });

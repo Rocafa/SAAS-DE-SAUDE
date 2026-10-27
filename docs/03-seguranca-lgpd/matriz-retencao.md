@@ -52,6 +52,11 @@ Estes prazos são diferentes dos do prontuário, e é justamente por isso que a 
 | **Consentimento e registro de recusa de IA** | enquanto durar o tratamento **+ prazo de prova** | LGPD arts. 37 e 42; Res. CFM 2.454/2026 arts. 5º §3º e 11 | O registro da recusa precisa sobreviver mais que a sessão: é a prova de que não usamos IA sobre quem recusou. Tratar como registro do prontuário. |
 | **Contador de rate limit** | TTL igual à janela | LGPD art. 6º, III (necessidade) | Ver a linha correspondente no ROPA ([bases-legais-e-consentimento.md](bases-legais-e-consentimento.md)). |
 | **Documentos fiscais e financeiros** | **5 anos** ⚖️ | CTN art. 174; efeitos da LC 214/2025 ainda por confirmar | Fora do escopo do Guardião; confirmar com contador. |
+| **WhatsApp — conteúdo do lembrete** (texto renderizado e número de destino, cifrados) | **30 dias** do envio | LGPD art. 6º, III (necessidade); parecer do #69 (prazo aprovado) | Job da clínica `app_whatsapp_content_retention_run()` (0032), com o relógio do banco; o banco recusa limpar antes e recusa reescrever. O texto é reconstituível pelo modelo da plataforma + a consulta. |
+| **WhatsApp — linha presa na fila** | `agendado` de consulta já começada: cancelada na próxima limpeza; `enviando` há mais de **24 h**: `falhou` com fallback | R2 do parecer #69 | Assim nenhuma linha fica fora da limpeza de 30 dias. |
+| **WhatsApp — metadado** (status, datas, códigos, HMAC do número na fila; resposta só com interpretação e resultado) | **acompanha o cadastro do paciente**: sai com a eliminação/anonimização dele | R3 do parecer #69; LGPD art. 16 | Prova do que foi combinado com o paciente (confirmou/cancelou). Não há texto nem número em claro. A eliminação junto com a do paciente entra no fluxo de eliminação do titular (pendente na engenharia, antes do piloto). |
+| **WhatsApp — resposta livre do paciente** | **não é guardada** | R1 do parecer #69; LGPD art. 6º, III | Sem inbox com leitor, o texto é descartado e o paciente recebe a orientação fixa de ligar para a clínica. O prazo de 12 meses do RIPD-whatsapp vale só quando existir o inbox. |
+| **WhatsApp — opt-in e prova** (meio, comprovante, número que consentiu, quem registrou, revogação) | **enquanto vigente + 5 anos após a revogação** (PROPOSTA) ⚖️ | LGPD arts. 8º §2º e 37 (ônus da prova do consentimento); prazo prescricional a confirmar | Pergunta ao advogado: o prazo prescricional aplicável à prova do consentimento (5 anos, CDC art. 27? 3 anos, CC art. 206 §3º, V?). |
 | **Backups** | igual ao dado de origem | LGPD art. 46; [requisitos-tecnicos-seguranca.md](requisitos-tecnicos-seguranca.md) | Exclusão em produção se reflete no backup pelo ciclo de expiração, não por edição de backup. Documentar isso ao titular. |
 
 ## 4. Requisito técnico para a engenharia
@@ -96,4 +101,5 @@ A matriz vira **um** requisito, com sete propriedades. Nenhuma é opcional, e qu
 
 | Data | Mudança |
 |---|---|
+| 2026-10-22 | Rodada 19 (#69, R3): prazos do WhatsApp — conteúdo 30 dias, linhas presas, metadado com o cadastro, resposta livre não guardada, opt-in vigente + 5 anos (proposta ⚖️). |
 | 2026-10-11 | Criada na rodada 8 (J13). Lidas no texto oficial: Lei 13.787/2018, Res. CFP 001/2009, Res. COFFITO 414/2012, Res. CFO-SEC-91/2009, Res. CFN 594/2017. Res. CFFa 777/2025 lida em compilação de terceiro. |

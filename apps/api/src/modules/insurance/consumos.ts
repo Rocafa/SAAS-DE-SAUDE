@@ -1,6 +1,7 @@
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { NaoEncontradoError } from '../../common/erros-dominio';
+import { NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
+import { dbErrorCode } from '../../db/db-errors';
 import { appointments, guideSessions, insuranceGuides, packageSessions, sessionPackages } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
@@ -52,6 +53,20 @@ export async function consumoAtivoDoAgendamento(
 }
 
 /**
+ * R21 do #65: o estorno (0041 para pacote, 0042 para guia) exige perfil ativo em clinic_members. Sem o
+ * registro, o banco devolve 42501; aqui vira 403 `perfil_nao_registrado` em vez de 500 genérico. O erro
+ * derruba a transação inteira (inclusive a mudança de status da agenda): nada fica gravado pela metade.
+ */
+async function comPerfilRegistrado(op: PromiseLike<unknown>): Promise<void> {
+  try {
+    await op;
+  } catch (e) {
+    if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_nao_registrado');
+    throw e;
+  }
+}
+
+/**
  * Estorno automático quando o status do agendamento deixa de ser "sessão realizada" (ex.: atendido
  * corrigido para faltou ou cancelado — HU-CNV-003 "Estorno ao desfazer"). Roda na transação da agenda,
  * com o agendamento JÁ travado; devolve quantos consumos foram estornados.
@@ -68,10 +83,12 @@ export async function estornarConsumosDoAgendamento(tx: TenantTx, ctx: RequestCo
         .from(insuranceGuides)
         .where(and(eq(insuranceGuides.tenantId, ctx.tenantId), eq(insuranceGuides.id, consumo.guideId)))
         .for('update');
-      await tx
-        .update(guideSessions)
-        .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: 'status_corrigido' })
-        .where(and(eq(guideSessions.tenantId, ctx.tenantId), eq(guideSessions.id, consumo.id)));
+      await comPerfilRegistrado(
+        tx
+          .update(guideSessions)
+          .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: 'status_corrigido' })
+          .where(and(eq(guideSessions.tenantId, ctx.tenantId), eq(guideSessions.id, consumo.id))),
+      );
       await tx
         .update(insuranceGuides)
         .set({ usedSessions: sql`${insuranceGuides.usedSessions} - 1`, updatedAt: agora })
@@ -92,10 +109,12 @@ export async function estornarConsumosDoAgendamento(tx: TenantTx, ctx: RequestCo
         .from(sessionPackages)
         .where(and(eq(sessionPackages.tenantId, ctx.tenantId), eq(sessionPackages.id, consumo.packageId)))
         .for('update');
-      await tx
-        .update(packageSessions)
-        .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: 'status_corrigido' })
-        .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.id, consumo.id)));
+      await comPerfilRegistrado(
+        tx
+          .update(packageSessions)
+          .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: 'status_corrigido' })
+          .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.id, consumo.id))),
+      );
       await tx
         .update(sessionPackages)
         .set({ usedSessions: sql`${sessionPackages.usedSessions} - 1`, updatedAt: agora })
