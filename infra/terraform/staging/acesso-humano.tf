@@ -214,7 +214,11 @@ data "aws_iam_policy_document" "alertas_seguranca" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [aws_cloudwatch_event_rule.papeis_de_excecao.arn, aws_cloudwatch_event_rule.kms_reativacao.arn]
+      values = [
+        aws_cloudwatch_event_rule.papeis_de_excecao.arn,
+        aws_cloudwatch_event_rule.kms_reativacao.arn,
+        aws_cloudwatch_event_rule.kms_administracao.arn,
+      ]
     }
   }
   # Alarme de DDL sensível no banco (auditoria-banco.tf, R11 do PR #61) e alarmes do

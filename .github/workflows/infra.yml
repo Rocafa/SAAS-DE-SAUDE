@@ -423,6 +423,15 @@ jobs:
           # Alerta de CancelKeyDeletion/EnableKey no tópico de segurança.
           grep -q 'eventName   = \["CancelKeyDeletion", "EnableKey"\]' "$k"
           grep -q 'aws_cloudwatch_event_rule.kms_reativacao.arn' staging/acesso-humano.tf
+          # K-c5: alerta de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant no tópico de
+          # segurança, em todas as chaves (o EventBridge não filtra pela tag da chave).
+          grep -q 'eventName   = \["PutKeyPolicy", "ScheduleKeyDeletion", "DisableKey", "CreateGrant"\]' "$k" \
+            || { echo "$k: regra kms_administracao sem as 4 ações da K-c5"; exit 1; }
+          grep -A3 'resource "aws_cloudwatch_event_target" "kms_administracao"' "$k" \
+            | grep -q 'arn *= *aws_sns_topic.alertas_seguranca.arn' \
+            || { echo "$k: alvo de kms_administracao não é o tópico de segurança (K-c5)"; exit 1; }
+          grep -q 'aws_cloudwatch_event_rule.kms_administracao.arn' staging/acesso-humano.tf \
+            || { echo "acesso-humano.tf: tópico de segurança não aceita a regra kms_administracao (K-c5)"; exit 1; }
           # Região: somente sa-east-1.
           if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
             echo "Região fora de sa-east-1."; exit 1

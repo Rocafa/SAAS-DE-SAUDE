@@ -484,3 +484,32 @@ resource "aws_cloudwatch_event_target" "kms_reativacao" {
   rule = aws_cloudwatch_event_rule.kms_reativacao.name
   arn  = aws_sns_topic.alertas_seguranca.arn
 }
+
+# --- Alerta: PutKeyPolicy / ScheduleKeyDeletion / DisableKey / CreateGrant (K-c5) -------------
+# Risco residual da K-c2: o statement da conta na key policy deixa um administrador humano com
+# kms:PutKeyPolicy remover o Deny de contexto. É administração por desenho, mas tem de ser visível.
+# O evento do CloudTrail traz só o ARN da chave (resources[].ARN / requestParameters.keyId), sem as
+# tags, e o EventBridge não consulta a tag do recurso: NÃO dá para filtrar por tenant_id/purpose.
+# Por isso o alerta vale para TODAS as chaves da conta; a triagem confere a tag pelo ARN.
+# Disparos ESPERADOS (o alerta dispara mesmo assim, porque é registro):
+#   - ScheduleKeyDeletion do gestor na eliminação da clínica (G3, destroyTenantKeys);
+#   - ScheduleKeyDeletion da API na chave de lote do importador (purpose=import_batch, ≤ 7 dias);
+#   - CreateGrant feito por serviço AWS (userIdentity.invokedBy, ex.: RDS) em chave de infra.
+# PutKeyPolicy e DisableKey não têm fluxo normal: qualquer disparo é incidente até prova contrária.
+resource "aws_cloudwatch_event_rule" "kms_administracao" {
+  name        = "${local.nome}-kms-administracao"
+  description = "PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant em qualquer chave (K-c5)."
+  event_pattern = jsonencode({
+    source        = ["aws.kms"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["kms.amazonaws.com"]
+      eventName   = ["PutKeyPolicy", "ScheduleKeyDeletion", "DisableKey", "CreateGrant"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "kms_administracao" {
+  rule = aws_cloudwatch_event_rule.kms_administracao.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
