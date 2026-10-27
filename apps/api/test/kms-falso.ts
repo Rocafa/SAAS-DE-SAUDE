@@ -81,6 +81,11 @@ export type FakeKms = KmsApi & {
   excluir(keyId: string): void;
   /** `aws:PrincipalArn` de quem chama (padrão: role da API). Trocar simula humano/break-glass (R4). */
   principalArn: string;
+  /**
+   * Só para teste da key policy: a API e o gestor NÃO usam CreateGrant (fora de `KmsApi`). Aplica apenas o
+   * Deny por principal (`HumanoNaoDecifra`): CreateGrant não está nas operações com condição de contexto.
+   */
+  createGrant(input: { KeyId: string; GranteePrincipal: string; Operations: string[] }): Promise<{ GrantId: string }>;
 };
 
 /** Erro como o SDK v3 lança: o tipo vem em `name`; a mensagem pode trazer ARN e conta. */
@@ -104,11 +109,11 @@ export function fakeKms(): FakeKms {
     if (!pol) return false;
     const t = ctx.tenant_id;
     if ((pol.exigeContexto && t === undefined) || (pol.tenant !== null && t !== undefined && t !== pol.tenant)) return true;
-    // R4: Deny explícito por principal vale mesmo com o contexto certo.
-    return pol.porPrincipal.some(
-      (n) => n.acoes.some((a) => curinga(a).test(acao)) && n.padroes.some((p) => arnLike(fake.principalArn, p)),
-    );
+    return negadoPorPrincipal(pol, acao);
   };
+  // R4: Deny explícito por principal vale mesmo com o contexto certo.
+  const negadoPorPrincipal = (pol: PoliticaFalsa, acao: string): boolean =>
+    pol.porPrincipal.some((n) => n.acoes.some((a) => curinga(a).test(acao)) && n.padroes.some((p) => arnLike(fake.principalArn, p)));
   const negado = () => Promise.reject(kmsErro('AccessDeniedException', 'explicit deny in a resource-based policy', 400));
   const naoExiste = (keyId: string) => Promise.reject(kmsErro('NotFoundException', `Key '${keyId}' does not exist`, 400));
   const fake: FakeKms = {
@@ -182,6 +187,12 @@ export function fakeKms(): FakeKms {
     enableKey(input) {
       fake.calls.push({ op: 'enableKey', input });
       return Promise.resolve({});
+    },
+    createGrant(input) {
+      fake.calls.push({ op: 'createGrant', input });
+      const pol = politicas.get(input.KeyId);
+      if (pol && negadoPorPrincipal(pol, 'kms:CreateGrant')) return negado();
+      return Promise.resolve({ GrantId: randomUUID() });
     },
   };
   return fake;

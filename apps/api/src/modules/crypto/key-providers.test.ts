@@ -177,12 +177,12 @@ describe('R4 (parecer #58): HumanoNaoDecifra na key policy da chave da clínica 
   ];
   const EXTRA = `arn:aws:iam::${CONTA}:role/idp-externo-*`;
 
-  it('tem o statement igual ao do Terraform (kms_deny_humanos): Deny Decrypt/ReEncrypt* por ArnLike aws:PrincipalArn', () => {
+  it('Deny Decrypt/ReEncrypt*/CreateGrant por ArnLike aws:PrincipalArn (CreateGrant: parecer #76, 27/10)', () => {
     expect(ler().Statement.find((x) => x.Sid === 'HumanoNaoDecifra')).toEqual({
       Sid: 'HumanoNaoDecifra',
       Effect: 'Deny',
       Principal: { AWS: '*' },
-      Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
+      Action: ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:CreateGrant'],
       Resource: '*',
       Condition: { ArnLike: { 'aws:PrincipalArn': PADROES } },
     });
@@ -277,6 +277,20 @@ describe('R4 (parecer #58): HumanoNaoDecifra na key policy da chave da clínica 
       await expect(p.rewrapDataKey(g, arn, tenantA), principal).rejects.toMatchObject({ kind: 'acesso_negado' });
       // GenerateDataKey fica fora do Deny (igual ao Terraform).
       await expect(p.generateDataKey(arn, tenantA), principal).resolves.toBeDefined();
+    }
+  });
+
+  it('KMS falso: humano não cria grant (nem para um papel de máquina que assume); API, gestor e break-glass não são atingidos', async () => {
+    const kms = fakeKms();
+    const arn = await new KmsKeyProvider(kms, CONTA, [EXTRA]).createMasterKey(tenantA);
+    const grant = { KeyId: arn, GranteePrincipal: ROLE_API, Operations: ['Decrypt'] };
+    for (const principal of [...HUMANOS, `arn:aws:iam::${CONTA}:role/idp-externo-medico`]) {
+      kms.principalArn = principal;
+      await expect(kms.createGrant(grant), principal).rejects.toMatchObject({ name: 'AccessDeniedException' });
+    }
+    for (const principal of [ROLE_API, ROLE_GESTOR, ROLE_BREAK_GLASS]) {
+      kms.principalArn = principal;
+      await expect(kms.createGrant(grant), principal).resolves.toBeDefined();
     }
   });
 });

@@ -178,9 +178,11 @@ function validarConta(conta: string): void {
  *     (`Null` — `StringNotEquals` sozinho não nega quando a chave de contexto falta) ou DIFERENTE do
  *     tenant da chave. O tenant vai LITERAL (sem `${aws:ResourceTag/...}`): não depende da propagação da
  *     tag nem de substituição de variável. A role da API não tem `PutKeyPolicy`: a política é imutável para ela;
- * (iii) R4 (parecer #58): `HumanoNaoDecifra`, o mesmo statement de `kms_deny_humanos` do Terraform — `Deny`
- *     de `kms:Decrypt`/`kms:ReEncrypt*` quando `aws:PrincipalArn` casa (ArnLike) com SSO, usuário IAM, root
- *     ou um dos `papeisHumanosExtra`. Role da API, gestor de chaves e break-glass ficam fora dos padrões.
+ * (iii) R4 (parecer #58): `HumanoNaoDecifra`, base em `kms_deny_humanos` do Terraform — `Deny`
+ *     de `kms:Decrypt`/`kms:ReEncrypt*`/`kms:CreateGrant` quando `aws:PrincipalArn` casa (ArnLike) com SSO,
+ *     usuário IAM, root ou um dos `papeisHumanosExtra`. CreateGrant (parecer #76, 27/10): sem ele, um humano
+ *     daria Decrypt por grant a um papel de máquina que assume. A API e o gestor não usam grants.
+ *     Role da API, gestor de chaves e break-glass ficam fora dos padrões.
  *
  * Tudo que a função usa fica nela, em OPERACOES_DE_DADOS, CONDICAO_TENANT ou validarConta: o
  * `infra/scripts/staging/politica-kc3.mjs` (#58) extrai só essas declarações pela AST.
@@ -228,7 +230,7 @@ export function politicaDaChaveDaClinica(contaAws: string, tenantId: TenantId, p
         Sid: 'HumanoNaoDecifra',
         Effect: 'Deny',
         Principal: { AWS: '*' },
-        Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
+        Action: ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:CreateGrant'],
         Resource: '*',
         Condition: { ArnLike: { 'aws:PrincipalArn': humanos } },
       },
