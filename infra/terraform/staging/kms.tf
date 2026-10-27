@@ -14,12 +14,17 @@ locals {
 
   # Chaves que guardam dado de clínica ou credencial: humano não decifra (R4 do PR #58).
   chaves_sem_humanos = ["rds", "s3", "exportacoes", "segredos", "backup"]
+
+  # Das chaves sem humanos, as únicas em que um serviço integrado cria grant no apply feito com SSO
+  # (condição 1 do Guardião, conferência de 27/10 no parecer do #76). Só nelas o Deny de CreateGrant
+  # tem a exceção kms:GrantIsForAWSResource; nas demais ele é puro, igual ao da API. O CI confere.
+  chaves_grant_de_servico = ["rds", "backup"]
 }
 
 # R4 do PR #58: nenhum principal HUMANO (SSO, usuário IAM, root) abre dado com estas chaves, nem
 # administrador com kms:* por IAM. Só serviços e papéis de máquina (tarefa da API, RDS, Secrets
 # Manager a pedido da tarefa) e o papel break-glass (acesso-humano.tf), cujo uso gera alerta.
-# Decrypt, ReEncrypt e CreateGrant (este com exceção, abaixo): GenerateDataKey continua liberado para o apply gravar segredos
+# Decrypt, ReEncrypt e CreateGrant (este com exceção só em rds/backup, abaixo): GenerateDataKey continua liberado para o apply gravar segredos
 # write-only. As KEKs das clínicas nascem fora do Terraform: a API monta o MESMO statement
 # (Sid HumanoNaoDecifra; CreateGrant chega na API pelo #73) na key policy de cada chave de clínica e de lote, na função
 # politicaDaChaveDaClinica (apps/api/src/modules/crypto/kms-key-provider.ts, #73 15e3303), a partir
@@ -28,12 +33,35 @@ locals {
 #
 # kms:CreateGrant (recomendação do Guardião, conferência de 27/10 no parecer do #76): sem ele, um
 # humano poderia dar Decrypt por grant a um papel de máquina que ele consegue assumir, e o grant não
-# casa com os padrões humanos. Exceção: grant pedido por um serviço integrado em nome do humano
-# (kms:GrantIsForAWSResource = true), que o apply feito com SSO precisa (o RDS e o AWS Backup criam
-# grants nas chaves "rds" e "backup" ao criar a instância e o cofre). O KMS só põe essa chave de
-# condição nos pedidos de grant; em Decrypt/ReEncrypt ela não existe, o BoolIfExists casa e o Deny
-# continua total. Todo CreateGrant segue alertando pela K-c5 (kms_administracao).
+# casa com os padrões humanos. Dois documentos, escolhidos por chave em "kms" abaixo:
+# - kms_deny_humanos: Deny PURO, sem exceção. Referência da API (output kms_deny_humanos) e o que vale
+#   em s3, exportacoes e segredos (S3 e Secrets Manager chamam o KMS com a credencial de quem pede;
+#   não há grant de serviço a preservar).
+# - kms_deny_humanos_grant_servico: o mesmo statement com a exceção de grant pedido por um serviço
+#   integrado em nome do humano (kms:GrantIsForAWSResource = true), que o apply feito com SSO precisa
+#   (o RDS e o AWS Backup criam grants nas chaves "rds" e "backup" ao criar a instância e o cofre).
+#   Só em local.chaves_grant_de_servico. O KMS só põe essa chave de condição nos pedidos de grant; em
+#   Decrypt/ReEncrypt ela não existe, o BoolIfExists casa e o Deny continua total.
+# Todo CreateGrant segue alertando pela K-c5 (kms_administracao).
 data "aws_iam_policy_document" "kms_deny_humanos" {
+  statement {
+    sid       = "HumanoNaoDecifra"
+    effect    = "Deny"
+    actions   = ["kms:Decrypt", "kms:ReEncrypt*", "kms:CreateGrant"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values   = local.principais_humanos
+    }
+  }
+}
+
+data "aws_iam_policy_document" "kms_deny_humanos_grant_servico" {
   statement {
     sid       = "HumanoNaoDecifra"
     effect    = "Deny"
@@ -62,7 +90,12 @@ data "aws_iam_policy_document" "kms" {
   #checkov:skip=CKV_AWS_356:Key policy: "*" significa esta chave; administração fica com a conta (padrão da AWS).
   for_each = local.chaves_kms
 
-  source_policy_documents = contains(local.chaves_sem_humanos, each.key) ? [data.aws_iam_policy_document.kms_deny_humanos.json] : []
+  # Sem humanos: Deny puro, salvo rds/backup (exceção de grant de serviço; condição 1 do Guardião).
+  source_policy_documents = (
+    !contains(local.chaves_sem_humanos, each.key) ? [] :
+    contains(local.chaves_grant_de_servico, each.key) ? [data.aws_iam_policy_document.kms_deny_humanos_grant_servico.json] :
+    [data.aws_iam_policy_document.kms_deny_humanos.json]
+  )
 
   statement {
     sid       = "AdministracaoPelaConta"

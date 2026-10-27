@@ -54,7 +54,7 @@ output "bucket_documentos" {
 }
 
 output "kms_deny_humanos" {
-  description = "Referência (JSON) do statement HumanoNaoDecifra (R4 do PR #58). A API monta o mesmo statement na key policy de cada chave de clínica (politicaDaChaveDaClinica, #73 15e3303) com os padrões fixos + KMS_PAPEIS_HUMANOS_EXTRA."
+  description = "Referência (JSON) do statement HumanoNaoDecifra (R4 do PR #58), na versão SEM exceção (Deny puro de Decrypt, ReEncrypt* e CreateGrant; a exceção de grant de serviço vale só nas chaves rds e backup). A API monta o mesmo statement na key policy de cada chave de clínica (politicaDaChaveDaClinica, #73 15e3303) com os padrões fixos + KMS_PAPEIS_HUMANOS_EXTRA."
   value       = data.aws_iam_policy_document.kms_deny_humanos.json
 }
 

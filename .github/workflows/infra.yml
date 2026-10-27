@@ -350,14 +350,46 @@ jobs:
           [ "$(printf '%s\n' "$tf_humanos" | grep -c .)" -eq 3 ] \
             || { echo "local.principais_humanos: esperava 3 padrões fixos"; printf '%s\n' "$tf_humanos"; exit 1; }
           # Ações do HumanoNaoDecifra no Terraform: Decrypt, ReEncrypt* e CreateGrant (recomendação do
-          # Guardião, 27/10), este só com a exceção de grant pedido por serviço integrado (apply com SSO).
-          tf_acoes=$(sed -n '/sid *= *"HumanoNaoDecifra"/,/resources/p' staging/kms.tf | grep 'actions' \
-            | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
-          [ "$tf_acoes" = "$(printf '%s\n' kms:CreateGrant kms:Decrypt 'kms:ReEncrypt*')" ] \
-            || { echo "kms.tf: HumanoNaoDecifra tem de negar kms:Decrypt, kms:ReEncrypt* e kms:CreateGrant"; printf '%s\n' "$tf_acoes"; exit 1; }
-          sed -n '/data "aws_iam_policy_document" "kms_deny_humanos"/,/^}/p' staging/kms.tf \
-            | grep -A2 'test *= *"BoolIfExists"' | grep -q 'variable *= *"kms:GrantIsForAWSResource"' \
-            || { echo "kms.tf: HumanoNaoDecifra sem a exceção BoolIfExists kms:GrantIsForAWSResource"; exit 1; }
+          # Guardião, 27/10), nos dois documentos: kms_deny_humanos (Deny puro, referência da API) e
+          # kms_deny_humanos_grant_servico (CreateGrant com a exceção de grant de serviço integrado).
+          doc_puro=$(sed -n '/^data "aws_iam_policy_document" "kms_deny_humanos" {/,/^}/p' staging/kms.tf)
+          doc_servico=$(sed -n '/^data "aws_iam_policy_document" "kms_deny_humanos_grant_servico" {/,/^}/p' staging/kms.tf)
+          acoes_esperadas=$(printf '%s\n' kms:CreateGrant kms:Decrypt 'kms:ReEncrypt*')
+          for doc in puro servico; do
+            if [ "$doc" = puro ]; then corpo=$doc_puro; else corpo=$doc_servico; fi
+            [ "$(printf '%s\n' "$corpo" | grep -cE '^\s*statement *\{')" -eq 1 ] \
+              && printf '%s\n' "$corpo" | grep -qE '^\s*sid *= *"HumanoNaoDecifra"' \
+              || { echo "kms.tf: kms_deny_humanos ($doc) tem de ter um único statement, Sid HumanoNaoDecifra"; exit 1; }
+            acoes=$(printf '%s\n' "$corpo" | grep -E '^\s*actions *=' | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
+            [ "$acoes" = "$acoes_esperadas" ] \
+              || { echo "kms.tf: HumanoNaoDecifra ($doc) tem de negar kms:Decrypt, kms:ReEncrypt* e kms:CreateGrant"; printf '%s\n' "$acoes"; exit 1; }
+          done
+          tf_acoes=$(printf '%s\n' "$doc_puro" | grep -E '^\s*actions *=' | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
+          # Condição 1 do Guardião (27/10, parecer do #76): a exceção BoolIfExists kms:GrantIsForAWSResource
+          # só nas chaves rds e backup. Nas demais sem humanos (s3, exportacoes, segredos...) o Deny é puro.
+          if printf '%s\n' "$doc_puro" | grep -q 'GrantIsForAWSResource'; then
+            echo "kms.tf: kms_deny_humanos (referência da API; s3/exportacoes/segredos) tem de ser Deny puro, sem GrantIsForAWSResource"; exit 1
+          fi
+          printf '%s\n' "$doc_servico" | grep -A2 'test *= *"BoolIfExists"' | grep -q 'variable *= *"kms:GrantIsForAWSResource"' \
+            && printf '%s\n' "$doc_servico" | grep -A3 'test *= *"BoolIfExists"' | grep -q 'values *= *\["false"\]' \
+            || { echo "kms.tf: kms_deny_humanos_grant_servico sem a exceção BoolIfExists kms:GrantIsForAWSResource = false (rds/backup)"; exit 1; }
+          [ "$(grep -rhE --include='*.tf' '^\s*variable *= *"kms:GrantIsForAWSResource"' . | wc -l)" -eq 1 ] \
+            || { echo "GrantIsForAWSResource só pode aparecer em kms_deny_humanos_grant_servico (condição 1 do Guardião)"; exit 1; }
+          grant_chaves=$(grep -E '^\s*chaves_grant_de_servico *=' staging/kms.tf | grep -o '"[^"]*"' | tr -d '"' | sort | paste -sd' ')
+          [ "$grant_chaves" = "backup rds" ] \
+            || { echo "kms.tf: a exceção de grant de serviço vale só em rds e backup; chaves_grant_de_servico = [$grant_chaves]"; exit 1; }
+          sem_humanos=$(grep -E '^\s*chaves_sem_humanos *=' staging/kms.tf | grep -o '"[^"]*"' | tr -d '"')
+          for c in rds backup; do
+            printf '%s\n' "$sem_humanos" | grep -qx "$c" || { echo "kms.tf: $c fora de chaves_sem_humanos"; exit 1; }
+          done
+          # Escolha por chave: sem humanos e fora de rds/backup → Deny puro; rds/backup → com a exceção.
+          sed -n '/^data "aws_iam_policy_document" "kms" {/,/^}/p' staging/kms.tf | tr -s ' \n' ' ' \
+            | grep -qF 'source_policy_documents = ( !contains(local.chaves_sem_humanos, each.key) ? [] : contains(local.chaves_grant_de_servico, each.key) ? [data.aws_iam_policy_document.kms_deny_humanos_grant_servico.json] : [data.aws_iam_policy_document.kms_deny_humanos.json] )' \
+            || { echo "kms.tf: source_policy_documents de \"kms\" fora do padrão (puro nas sem humanos, exceção só em chaves_grant_de_servico)"; exit 1; }
+          [ "$(grep -rhF --include='*.tf' 'data.aws_iam_policy_document.kms_deny_humanos_grant_servico.json' . | wc -l)" -eq 1 ] \
+            || { echo "kms_deny_humanos_grant_servico usado fora da escolha por chave de kms.tf"; exit 1; }
+          grep -qE '^\s*value *= *data\.aws_iam_policy_document\.kms_deny_humanos\.json$' staging/outputs.tf \
+            || { echo "outputs.tf: kms_deny_humanos tem de apontar para o Deny puro"; exit 1; }
           api_kms=../../apps/api/src/modules/crypto/kms-key-provider.ts
           # Antes do #73 o arquivo existe sem a key policy própria (K-c2): aí não há o que comparar.
           if [ -f "$api_kms" ] && grep -q 'export function politicaDaChaveDaClinica' "$api_kms"; then
