@@ -270,10 +270,10 @@ describe('adaptador HTTP: pacientes', () => {
     expect(await api.buscarPacientes!('a')).toEqual([]);
     expect(chamadas).toHaveLength(0);
     await api.buscarPacientes!('  ana   paula ');
-    expect(chamadas[0]!.metodo).toBe('POST');
-    expect(chamadas[0]!.url.pathname).toBe('/pacientes/busca');
-    expect(chamadas[0]!.url.search).toBe('');
-    expect(chamadas[0]!.corpo).toEqual({ busca: 'ana paula', situacao: 'todos', limite: 100 });
+    const busca = chamadas.find((c) => c.url.pathname === '/pacientes/busca')!;
+    expect(busca.metodo).toBe('POST');
+    expect(busca.url.search).toBe('');
+    expect(busca.corpo).toEqual({ busca: 'ana paula', situacao: 'todos', limite: 100 });
   });
 
   it('nenhuma URL leva nome, CPF ou telefone (só ids opacos, datas e paginação)', async () => {
@@ -717,5 +717,100 @@ describe('adaptador falso: coerente com o cursor do HTTP', () => {
       message: MENSAGENS.listaMudou,
     });
     expect((await criarApiFake().listarPacientes()).length).toBeGreaterThan(0);
+  });
+});
+
+describe('adaptador HTTP: ressalvas do Guardião no #76 (busca sem sessão guardada e teto de 1.000)', () => {
+  it('busca sem sessão guardada confere a sessão ANTES da primeira página (como a lista)', async () => {
+    const { chamadas, fetch } = simular(() => respostaJson(200, { itens: [], temMais: false }));
+    await criarApiHttp({ baseUrl: BASE, fetch }).buscarPacientes!('ana');
+    expect(chamadas.map((c) => `${c.metodo} ${c.url.pathname}`)).toEqual(['GET /sessao', 'POST /pacientes/busca']);
+  });
+
+  it('busca sem sessão guardada: sessão trocou no recomeço por cursor recusado → sessao_mudou, nada entregue', async () => {
+    let sessao = SESSAO_PADRAO;
+    const { chamadas, fetch } = simular(
+      (c) => {
+        const corpo = c.corpo as { cursor?: string };
+        if (corpo.cursor) {
+          sessao = { ...SESSAO_PADRAO, clinicaId: U(9002) };
+          return respostaJson(409, { codigo: 'cursor_invalido' });
+        }
+        return respostaJson(200, { itens: [{ id: U(1), nome: 'Ana Ficticia', nomeSocial: null, ativo: true }], temMais: true, proximoCursor: cursorDa(2) });
+      },
+      () => sessao,
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await expect(api.buscarPacientes!('ana')).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou' });
+    // Não recomeçou a busca na sessão nova: só a página 1 e a página 2 recusada.
+    expect(chamadas.filter((c) => c.url.pathname === '/pacientes/busca')).toHaveLength(2);
+  });
+
+  it('busca: esquecerCache() no meio (limpar do provedor) → não entrega o resultado', async () => {
+    let soltar: (() => void) | null = null;
+    const { fetch } = simular(
+      () =>
+        new Promise<Response>((r) => {
+          soltar = () => r(respostaJson(200, { itens: [{ id: U(1), nome: 'Ana Ficticia', nomeSocial: null, ativo: true }], temMais: false }));
+        }),
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    const busca = api.buscarPacientes!('ana');
+    await vi.waitFor(() => expect(soltar).not.toBeNull());
+    api.esquecerCache!();
+    soltar!();
+    await expect(busca).rejects.toMatchObject({ status: 409, codigo: 'sessao_mudou' });
+  });
+
+  /** Servidor com mais de 1.000 nomes: toda página vem cheia e com temMais. */
+  function semFim() {
+    return simular((c) => {
+      const cursor = c.metodo === 'GET' ? c.url.searchParams.get('cursor') : ((c.corpo as { cursor?: string }).cursor ?? null);
+      const pagina = paginaDoCursor(cursor);
+      return respostaJson(200, {
+        itens: Array.from({ length: 100 }, (_, i) => ({ id: U(pagina * 1000 + i), nome: `Paciente Ficticio ${pagina}-${i}`, nomeSocial: null, ativo: true })),
+        temMais: true,
+        proximoCursor: cursorDa(pagina + 1),
+      });
+    });
+  }
+
+  it('lista com mais de 1.000: para no teto e sinaliza truncado (sem erro)', async () => {
+    const { chamadas, fetch } = semFim();
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarPacientes();
+    expect(lista).toHaveLength(1000);
+    expect(lista.truncado).toBe(true);
+    expect(listagens(chamadas)).toHaveLength(10);
+  });
+
+  it('busca com mais de 1.000: sinaliza truncado', async () => {
+    const { fetch } = semFim();
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).buscarPacientes!('paciente');
+    expect(lista).toHaveLength(1000);
+    expect(lista.truncado).toBe(true);
+  });
+
+  it('lista que cabe no teto não vem marcada como truncada', async () => {
+    const { fetch } = simular(() => respostaJson(200, { itens: [{ id: U(1), nome: 'Ana Ficticia', nomeSocial: null, ativo: true }], temMais: false }));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    expect((await api.listarPacientes()).truncado).toBeFalsy();
+    expect((await api.buscarPacientes!('ana')).truncado).toBeFalsy();
+  });
+
+  it('o aviso de truncado sobrevive ao retrato em memória e à atualização depois de cadastrar', async () => {
+    const base = semFim();
+    const fetch = vi.fn(async (entrada: RequestInfo | URL, init: RequestInit = {}) => {
+      if (init.method === 'POST' && new URL(String(entrada)).pathname === '/pacientes')
+        return respostaJson(201, { id: U(1), nome: 'Bia Ficticia', nomeSocial: null, cpf: null, telefone: '11900000002', nascimento: null, ativo: true });
+      return base.fetch(entrada, init);
+    }) as unknown as typeof globalThis.fetch;
+    const api = criarApiHttp({ baseUrl: BASE, fetch, agora: () => AGORA });
+    await api.listarPacientes();
+    expect((await api.listarPacientes()).truncado).toBe(true);
+    await api.criarPaciente({ nome: 'Bia Ficticia', telefone: '(11) 90000-0002' });
+    const depois = await api.listarPacientes();
+    expect(depois.truncado).toBe(true);
+    expect(depois).toHaveLength(1001);
+    expect(listagens(base.chamadas)).toHaveLength(10);
   });
 });
