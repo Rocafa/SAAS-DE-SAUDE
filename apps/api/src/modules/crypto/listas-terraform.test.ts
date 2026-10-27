@@ -3,8 +3,8 @@
  * (`VARIAVEIS_AWS_PROIBIDAS`/`PREFIXOS_AWS_PROIBIDOS`) têm de ser IGUAIS às do Terraform
  * (`api_variaveis_aws_proibidas`/`api_prefixos_aws_proibidos` em infra/terraform/staging/app.tf).
  *
- * O Terraform está noutro PR (#58): enquanto `app.tf` não existir neste repositório, a comparação
- * é pulada (`skipIf`); passa a valer sozinha no CI depois do merge do #58. O parser é testado sempre.
+ * O Terraform entrou com o #58: se `app.tf` sumir ou mudar de lugar, o teste FALHA (antes era pulado),
+ * para a trava não ficar desligada sem ninguém ver.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,7 +12,6 @@ import { describe, expect, it } from 'vitest';
 import { PREFIXOS_AWS_PROIBIDOS, VARIAVEIS_AWS_PROIBIDAS } from './kms-client';
 
 const APP_TF = fileURLToPath(new URL('../../../../../infra/terraform/staging/app.tf', pathToFileURL(__filename)));
-const existe = existsSync(APP_TF);
 
 /** Strings da lista HCL `<nome> = [ ... ]` (ignora comentários `#` e `//`). Lança se a lista não existir. */
 function listaDoHcl(hcl: string, nome: string): string[] {
@@ -37,7 +36,8 @@ describe('trava das listas AWS proibidas: API × Terraform', () => {
     expect(() => listaDoHcl(hcl, 'outra')).toThrow(/não encontrada/);
   });
 
-  it.skipIf(!existe)('app.tf do staging (após o merge do #58): listas iguais às da API', () => {
+  it('app.tf do staging: listas iguais às da API', () => {
+    expect(existsSync(APP_TF), `app.tf não encontrado em ${APP_TF}: a trava API × Terraform ficaria sem efeito`).toBe(true);
     const hcl = readFileSync(APP_TF, 'utf8');
     expect(listaDoHcl(hcl, 'api_variaveis_aws_proibidas').sort()).toEqual([...VARIAVEIS_AWS_PROIBIDAS].sort());
     expect(listaDoHcl(hcl, 'api_prefixos_aws_proibidos').sort()).toEqual([...PREFIXOS_AWS_PROIBIDOS].sort());
