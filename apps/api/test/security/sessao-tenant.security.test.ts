@@ -91,8 +91,102 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/agendamentos/${id}/cancelar`],
       [RequestMethod.GET, '/profissionais'],
       [RequestMethod.POST, '/profissionais'],
+      [RequestMethod.POST, `/profissionais/${id}/area-sensivel`],
       [RequestMethod.GET, '/tipos-atendimento'],
       [RequestMethod.POST, '/tipos-atendimento'],
+      // Guias e pacotes (0011).
+      [RequestMethod.GET, '/convenios'],
+      [RequestMethod.POST, '/convenios'],
+      [RequestMethod.PATCH, `/convenios/${id}`],
+      [RequestMethod.POST, `/convenios/${id}/inativar`],
+      [RequestMethod.GET, `/convenios/${id}/relatorio`],
+      [RequestMethod.GET, '/guias'],
+      [RequestMethod.GET, '/guias/alertas'],
+      [RequestMethod.POST, '/guias'],
+      [RequestMethod.GET, `/guias/${id}`],
+      [RequestMethod.PATCH, `/guias/${id}`],
+      [RequestMethod.POST, `/guias/${id}/cancelar`],
+      [RequestMethod.GET, `/guias/${id}/consumos`],
+      [RequestMethod.POST, `/guias/${id}/consumos`],
+      [RequestMethod.POST, `/guias/${id}/consumos/${id}/estornar`],
+      [RequestMethod.POST, `/guias/${id}/consumos/${id}/assinatura`],
+      [RequestMethod.GET, '/pacotes'],
+      [RequestMethod.POST, '/pacotes'],
+      [RequestMethod.GET, `/pacotes/${id}`],
+      [RequestMethod.GET, `/pacotes/${id}/historico`],
+      [RequestMethod.POST, `/pacotes/${id}/cancelar`],
+      [RequestMethod.POST, `/pacotes/${id}/consumos`],
+      [RequestMethod.POST, `/pacotes/${id}/consumos/${id}/estornar`],
+      // Prontuário (rodada 14.1).
+      [RequestMethod.POST, '/atendimentos'],
+      [RequestMethod.GET, `/atendimentos/${id}`],
+      [RequestMethod.PUT, `/atendimentos/${id}/registro`],
+      [RequestMethod.GET, `/atendimentos/${id}/versoes`],
+      [RequestMethod.POST, `/atendimentos/${id}/finalizar`],
+      [RequestMethod.POST, `/atendimentos/${id}/adendos`],
+      [RequestMethod.GET, `/pacientes/${id}/prontuario`],
+      [RequestMethod.GET, `/pacientes/${id}/notas-privadas`],
+      [RequestMethod.POST, `/pacientes/${id}/notas-privadas`],
+      [RequestMethod.GET, `/notas-privadas/${id}`],
+      [RequestMethod.PATCH, `/notas-privadas/${id}`],
+      [RequestMethod.POST, `/notas-privadas/${id}/descartar`],
+      [RequestMethod.GET, '/prontuario/configuracao'],
+      [RequestMethod.PUT, '/prontuario/configuracao'],
+      [RequestMethod.POST, '/prontuario/notas-privadas/ciclo'],
+      [RequestMethod.POST, `/prontuario/profissionais/${id}/desligamento`],
+      [RequestMethod.PUT, `/prontuario/pacientes/${id}/retencao-legal`],
+      // Financeiro (rodada 15.2).
+      [RequestMethod.GET, '/financeiro/configuracao'],
+      [RequestMethod.PUT, '/financeiro/configuracao'],
+      [RequestMethod.GET, `/financeiro/profissionais/${id}/perfil-fiscal`],
+      [RequestMethod.PUT, `/financeiro/profissionais/${id}/perfil-fiscal`],
+      [RequestMethod.POST, '/financeiro/cobrancas'],
+      [RequestMethod.GET, '/financeiro/contas-a-receber'],
+      [RequestMethod.GET, `/financeiro/cobrancas/${id}`],
+      [RequestMethod.POST, `/financeiro/cobrancas/${id}/cancelar`],
+      [RequestMethod.POST, `/financeiro/cobrancas/${id}/recebimentos`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/estornar`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/recibo`],
+      [RequestMethod.POST, `/financeiro/recebimentos/${id}/pagador-responsavel`],
+      [RequestMethod.POST, '/financeiro/caixas'],
+      [RequestMethod.GET, '/financeiro/caixas'],
+      [RequestMethod.GET, `/financeiro/caixas/${id}`],
+      [RequestMethod.POST, `/financeiro/caixas/${id}/fechar`],
+      [RequestMethod.GET, '/financeiro/recibos'],
+      [RequestMethod.GET, `/financeiro/recibos/${id}`],
+      [RequestMethod.POST, `/financeiro/recibos/${id}/cancelar`],
+      [RequestMethod.POST, '/financeiro/receita-saude/lotes'],
+      // Portal: lado da clínica (rodada 18.1).
+      [RequestMethod.POST, '/clinica/portal/convites'],
+      [RequestMethod.POST, `/clinica/portal/convites/${id}/revogar`],
+      [RequestMethod.GET, `/clinica/portal/pacientes/${id}/vinculos`],
+      [RequestMethod.POST, `/clinica/portal/vinculos/${id}/revogar`],
+      [RequestMethod.GET, `/clinica/portal/pacientes/${id}/consentimentos`],
+      [RequestMethod.GET, '/clinica/portal/solicitacoes'],
+      [RequestMethod.GET, `/clinica/portal/solicitacoes/${id}`],
+      [RequestMethod.POST, `/clinica/portal/solicitacoes/${id}/situacao`],
+      // Responsáveis do paciente (0028).
+      [RequestMethod.GET, `/pacientes/${id}/responsaveis`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis`],
+      [RequestMethod.PATCH, `/pacientes/${id}/responsaveis/${id}`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/pagador`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/encerrar`],
+      [RequestMethod.GET, `/pacientes/${id}/responsaveis/${id}/historico`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/${id}/anular`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/emancipacao`],
+      [RequestMethod.POST, `/responsaveis/descarte`],
+      [RequestMethod.POST, `/pacientes/${id}/responsaveis/eliminacao`],
+      // WhatsApp (0032). O webhook não tem sessão: é autenticado pelo HMAC (test/whatsapp.rls.test.ts).
+      [RequestMethod.GET, '/whatsapp/configuracao'],
+      [RequestMethod.PUT, '/whatsapp/configuracao'],
+      [RequestMethod.GET, '/whatsapp/modelos'],
+      [RequestMethod.POST, '/whatsapp/modelos'],
+      [RequestMethod.GET, '/whatsapp/envios'],
+      [RequestMethod.POST, '/whatsapp/lembretes/execucao'],
+      [RequestMethod.POST, '/whatsapp/retencao/execucao'],
+      [RequestMethod.GET, `/pacientes/${id}/whatsapp/opt-in`],
+      [RequestMethod.POST, `/pacientes/${id}/whatsapp/opt-in`],
+      [RequestMethod.POST, `/pacientes/${id}/whatsapp/opt-in/revogar`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
@@ -100,7 +194,58 @@ describe('toda rota de domínio exige sessão', () => {
       for (const auth of [undefined, 'Bearer invalido', `Bearer ${'a'.repeat(43)}`, efemera.Authorization]) {
         const http = api.http();
         const req =
-          metodo === RequestMethod.GET ? http.get(rota) : metodo === RequestMethod.PATCH ? http.patch(rota) : http.post(rota);
+          metodo === RequestMethod.GET
+            ? http.get(rota)
+            : metodo === RequestMethod.PATCH
+              ? http.patch(rota)
+              : metodo === RequestMethod.PUT
+                ? http.put(rota)
+                : http.post(rota);
+        if (auth) void req.set('Authorization', auth);
+        const res = await req.set('x-tenant-id', clinicaA).send({});
+        expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);
+        expect(res.body).toEqual({ statusCode: 401, message: 'Não autenticado' });
+      }
+    }
+  });
+});
+
+/**
+ * Portal do paciente (veto B3 do front-r8): toda rota /portal/* exige a sessão do PORTAL. Sem sessão,
+ * token inválido, sessão encerrada ou sessão da CLÍNICA (mesmo de admin): 401 genérico.
+ */
+describe('toda rota do portal exige a sessão do portal', () => {
+  it('sem sessão, token inválido, encerrado ou da clínica: 401', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const rotas: [RequestMethod, string][] = [
+      [RequestMethod.GET, '/portal/vinculos'],
+      [RequestMethod.GET, '/portal/sessao'],
+      [RequestMethod.POST, '/portal/sessao/vinculo'],
+      [RequestMethod.POST, '/portal/convites/resgate'],
+      [RequestMethod.POST, '/portal/convites/resgate/confirmar'],
+      [RequestMethod.GET, '/portal/consultas'],
+      [RequestMethod.POST, `/portal/consultas/${id}/confirmar`],
+      [RequestMethod.POST, `/portal/consultas/${id}/desfazer-confirmacao`],
+      [RequestMethod.POST, `/portal/consultas/${id}/cancelar`],
+      [RequestMethod.GET, '/portal/recibos'],
+      [RequestMethod.GET, `/portal/recibos/${id}`],
+      [RequestMethod.GET, '/portal/documentos'],
+      [RequestMethod.GET, '/portal/meus-dados'],
+      [RequestMethod.POST, '/portal/meus-dados/correcao'],
+      [RequestMethod.GET, '/portal/solicitacoes'],
+      [RequestMethod.POST, '/portal/solicitacoes'],
+      [RequestMethod.GET, '/portal/privacidade/consentimentos'],
+      [RequestMethod.POST, '/portal/privacidade/consentimentos/escriba_ia'],
+      [RequestMethod.POST, '/portal/privacidade/consentimentos/escriba_ia/desfazer'],
+      [RequestMethod.GET, '/portal/privacidade/consentimentos/escriba_ia/historico'],
+    ];
+    const efemera = api.sessaoPortal();
+    api.portal.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
+    const daClinica = api.sessao(clinicaA, 'admin');
+    for (const [metodo, rota] of rotas) {
+      for (const auth of [undefined, 'Bearer invalido', `Bearer ptl_${'a'.repeat(43)}`, efemera.Authorization, daClinica.Authorization]) {
+        const http = api.http();
+        const req = metodo === RequestMethod.GET ? http.get(rota) : http.post(rota);
         if (auth) void req.set('Authorization', auth);
         const res = await req.set('x-tenant-id', clinicaA).send({});
         expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);

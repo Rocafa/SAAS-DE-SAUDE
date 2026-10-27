@@ -68,5 +68,7 @@ export const AuditAction = {
   AiRefusal: 'ai_refusal',
   /** Acesso de emergência fora da permissão normal (break-glass). Exige revisão posterior. */
   BreakGlass: 'break_glass',
+  /** Padrão de leitura anômalo de um usuário (ex.: muitas fichas em pouco tempo). Só regra e contagens. */
+  AnomalyAlert: 'anomaly_alert',
 } as const;
 export type AuditAction = ValueOf<typeof AuditAction>;

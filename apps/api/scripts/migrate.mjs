@@ -33,6 +33,11 @@ try {
     const body = await readFile(join(dir, file), 'utf8');
     await sql.begin(async (tx) => {
       await tx.unsafe(body);
+      // R11 do importador (0035): toda migração passa pela regra das FK do desfazer, na mesma transação.
+      // Se ela criar FK para patients/appointments em CASCADE/SET NULL fora de app_import_batch_blockers,
+      // falha aqui e nada dela fica gravado.
+      const [{ regra }] = await tx`SELECT to_regprocedure('public.app_assert_regra_fk_desfazer()') IS NOT NULL AS regra`;
+      if (regra) await tx`SELECT public.app_assert_regra_fk_desfazer()`;
       await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
     });
     console.log(`migração aplicada: ${file}`);

@@ -4,6 +4,7 @@ import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { PatientsService, type PacienteDto, type PaginaDePacientes } from './patients.service';
 import { validarAlteracaoPaciente, validarBuscaPacientes, validarFiltroPacientes, validarNovoPaciente } from './patients.validation';
+import { VigilanciaDeLeituraService } from './vigilancia-de-leitura';
 
 /**
  * Pacientes (cadastro). Semântica de `listarPacientes`/`obterPaciente` da ApiClinica, mais buscar,
@@ -15,26 +16,43 @@ import { validarAlteracaoPaciente, validarBuscaPacientes, validarFiltroPacientes
 @Controller('pacientes')
 @UseGuards(SessaoGuard)
 export class PatientsController {
-  constructor(@Inject(PatientsService) private readonly service: PatientsService) {}
+  constructor(
+    @Inject(PatientsService) private readonly service: PatientsService,
+    @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+  ) {}
 
+  /**
+   * Lista e busca contam no limite por usuário e no padrão de páginas (R5); 429 acima do limite.
+   * A vigilância conta ANTES de conferir o cursor: cursor recusado (409 `cursor_invalido`) também conta.
+   */
   @Get()
   @Permissao('pacientes:ler')
-  listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<PaginaDePacientes> {
-    return this.service.listar(paraRequestContext(auth), validarFiltroPacientes(query));
+  async listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<PaginaDePacientes> {
+    const filtro = validarFiltroPacientes(query);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.listagem(ctx);
+    return this.service.listar(ctx, filtro);
   }
 
   /** Busca por nome: idempotente e sem efeito colateral além da auditoria, por isso 200. */
   @Post('busca')
   @HttpCode(200)
   @Permissao('pacientes:ler')
-  buscar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<PaginaDePacientes> {
-    return this.service.listar(paraRequestContext(auth), validarBuscaPacientes(corpo));
+  async buscar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<PaginaDePacientes> {
+    const filtro = validarBuscaPacientes(corpo);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.listagem(ctx);
+    return this.service.listar(ctx, filtro);
   }
 
+  /** Ficha: conta fichas distintas abertas pelo usuário (alerta de anomalia, R5). */
   @Get(':id')
   @Permissao('pacientes:ler')
-  obter(@Sessao() auth: AuthContext, @Param('id') id: string): Promise<PacienteDto> {
-    return this.service.obter(paraRequestContext(auth), exigirUuid(id));
+  async obter(@Sessao() auth: AuthContext, @Param('id') id: string): Promise<PacienteDto> {
+    const alvo = exigirUuid(id);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.ficha(ctx, alvo);
+    return this.service.obter(ctx, alvo);
   }
 
   @Post()

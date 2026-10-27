@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, count, eq, gt, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
@@ -7,18 +7,28 @@ import { appointments, appointmentTypes, patients, professionals, type Appointme
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { temPermissao, type Perfil } from '../auth/perfis';
+import { autoagendadoPor } from '../auth/vinculo-de-cuidado';
+import { estornarConsumosDoAgendamento } from '../insurance/consumos';
+import { statusConsome } from '../insurance/guias-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
   capacidadeDoHorario,
+  dentroDaJanelaDeAtendimento,
   exigeAtendimento,
+  exigeJanelaDeAtendimento,
+  horarioJaPassou,
   janelaDeDias,
+  motivoParaNaoRemarcar,
   noFusoDaClinica,
   paraInstante,
+  STATUS_CLINICOS,
   STATUS_QUE_OCUPAM,
-  STATUS_REMARCAVEIS,
   statusParaDb,
   statusParaFront,
+  transicaoPeloPaciente,
   transicaoPermitida,
+  type AcaoDoPaciente,
+  type JanelaDeAtendimento,
   type StatusFront,
 } from './agenda-regras';
 import {
@@ -50,6 +60,8 @@ export interface ProfissionalDto {
   readonly nome: string;
   readonly especialidade: string;
   readonly capacidade: number;
+  /** R2 do #68: área sensível (sigilo do adolescente no portal). */
+  readonly areaSensivel: boolean;
 }
 
 export interface TipoAtendimentoDto {
@@ -60,6 +72,10 @@ export interface TipoAtendimentoDto {
 }
 
 const SCOPE = 'appointments';
+const DIA_MS = 86_400_000;
+
+/** Janela de atendimento e limiar do alerta de autoagendamento (provida pelo SchedulingModule). */
+export const JANELA_DE_ATENDIMENTO = Symbol('JANELA_DE_ATENDIMENTO');
 
 function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
   const { data, hora } = noFusoDaClinica(a.startsAt);
@@ -86,7 +102,12 @@ function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
  */
 @Injectable()
 export class SchedulingService {
-  constructor(@Inject(TenantDatabase) private readonly db: TenantDatabase) {}
+  private readonly logger = new Logger('agenda');
+
+  constructor(
+    @Inject(TenantDatabase) private readonly db: TenantDatabase,
+    @Inject(JANELA_DE_ATENDIMENTO) private readonly janela: JanelaDeAtendimento,
+  ) {}
 
   listar(ctx: RequestContext, filtro: FiltroAgenda): Promise<{ itens: AgendamentoDto[]; truncado: boolean }> {
     return this.leitura(ctx, async (tx) => {
@@ -116,64 +137,91 @@ export class SchedulingService {
   }
 
   criar(ctx: RequestContext, dados: NovoAgendamento): Promise<AgendamentoDto> {
-    return this.escrita(ctx, async (tx) => {
-      const [paciente] = await tx
-        .select({ ativo: patients.active })
-        .from(patients)
-        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, dados.pacienteId)));
-      if (!paciente) throw new NaoEncontradoError();
-      if (!paciente.ativo) throw new ConflitoError('paciente_inativo');
-      const profissional = await this.profissionalAtivo(tx, ctx, dados.profissionalId);
-      const [tipo] = await tx
-        .select()
-        .from(appointmentTypes)
-        .where(
-          and(
-            eq(appointmentTypes.tenantId, ctx.tenantId),
-            eq(appointmentTypes.id, dados.tipoId),
-            eq(appointmentTypes.active, true),
-          ),
-        );
-      if (!tipo) throw new NaoEncontradoError();
-
-      const inicio = paraInstante(dados.data, dados.hora);
-      const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
-      await this.travarAgenda(tx, ctx, profissional.id);
-      if (!dados.encaixe) {
-        const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
-        if (ocupados >= capacidadeDoHorario(profissional.capacity, tipo.capacity)) {
-          throw new ConflitoError('horario_lotado');
-        }
-      }
-      const [linha] = await tx
-        .insert(appointments)
-        .values({
-          tenantId: ctx.tenantId,
-          patientId: dados.pacienteId,
-          professionalId: profissional.id,
-          appointmentTypeId: tipo.id,
-          startsAt: inicio,
-          endsAt: fim,
-          isWalkIn: dados.encaixe,
-        })
-        .returning();
-      if (!linha) throw new Error('falha ao criar agendamento');
-      await recordAudit(tx, ctx, {
-        action: AuditAction.Create,
-        scope: SCOPE,
-        metadata: { appointment_id: linha.id, patient_id: linha.patientId, walk_in: linha.isWalkIn },
-      });
-      return paraDto(linha);
-    });
+    return this.escrita(ctx, (tx) => this.criarNaTransacao(tx, ctx, dados));
   }
 
-  /** Devolve dia e hora anteriores (para o "Desfazer" do front). */
+  /**
+   * Marcação com TODAS as regras (paciente ativo, profissional e tipo ativos, não no passado, capacidade
+   * sob trava por profissional, quem criou) e auditoria, na transação do chamador. Usada pela rota e pelo
+   * importador de agenda (`importBatchId` vai na auditoria).
+   */
+  async criarNaTransacao(tx: TenantTx, ctx: RequestContext, dados: NovoAgendamento, importBatchId?: string): Promise<AgendamentoDto> {
+    const [paciente] = await tx
+      .select({ ativo: patients.active })
+      .from(patients)
+      .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, dados.pacienteId)));
+    if (!paciente) throw new NaoEncontradoError();
+    if (!paciente.ativo) throw new ConflitoError('paciente_inativo');
+    const profissional = await this.profissionalAtivo(tx, ctx, dados.profissionalId);
+    const [tipo] = await tx
+      .select()
+      .from(appointmentTypes)
+      .where(
+        and(
+          eq(appointmentTypes.tenantId, ctx.tenantId),
+          eq(appointmentTypes.id, dados.tipoId),
+          eq(appointmentTypes.active, true),
+        ),
+      );
+    if (!tipo) throw new NaoEncontradoError();
+
+    const inicio = paraInstante(dados.data, dados.hora);
+    // R7 da re-revisão do #61: não se marca no passado (a folga é a mesma da janela de atendimento).
+    if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
+    const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
+    await this.travarAgenda(tx, ctx, profissional.id);
+    if (!dados.encaixe) {
+      const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
+      if (ocupados >= capacidadeDoHorario(profissional.capacity, tipo.capacity)) {
+        throw new ConflitoError('horario_lotado');
+      }
+    }
+    const [linha] = await tx
+      .insert(appointments)
+      .values({
+        tenantId: ctx.tenantId,
+        patientId: dados.pacienteId,
+        professionalId: profissional.id,
+        appointmentTypeId: tipo.id,
+        startsAt: inicio,
+        endsAt: fim,
+        isWalkIn: dados.encaixe,
+        // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
+        // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
+        createdBy: ctx.userId,
+        // 0026 (V1 do importador): marca imutável do lote; o desfazer só apaga o que a tem.
+        ...(importBatchId ? { importBatchId } : {}),
+      })
+      .returning();
+    if (!linha) throw new Error('falha ao criar agendamento');
+    await recordAudit(tx, ctx, {
+      action: AuditAction.Create,
+      scope: SCOPE,
+      metadata: {
+        appointment_id: linha.id,
+        patient_id: linha.patientId,
+        walk_in: linha.isWalkIn,
+        self_scheduled: profissional.userId === ctx.userId,
+        ...(importBatchId ? { import_batch_id: importBatchId } : {}),
+      },
+    });
+    return paraDto(linha);
+  }
+
+  /**
+   * Devolve dia e hora anteriores (para o "Desfazer" do front). V2 da re-revisão do #61: o que já
+   * passou (ou já teve atendimento ou falta) não se remarca e não se remarca para o passado (409);
+   * quem remarca fica gravado em `rescheduled_by` e, se for o próprio profissional do agendamento, o
+   * agendamento passa a contar como AUTOAGENDAMENTO no vínculo de cuidado e no alerta. O horário
+   * anterior fica no histórico append-only `appointment_reschedules` (trigger da 0014).
+   */
   remarcar(ctx: RequestContext, id: string, novo: { data: string; hora: string }): Promise<{ data: string; hora: string }> {
     return this.escrita(ctx, async (tx) => {
       const atual = await this.travarAgendamento(tx, ctx, id);
-      if (!STATUS_REMARCAVEIS.includes(atual.status)) throw new ConflitoError('status_nao_permite');
       const duracao = atual.endsAt.getTime() - atual.startsAt.getTime();
       const inicio = paraInstante(novo.data, novo.hora);
+      const motivo = motivoParaNaoRemarcar(atual, inicio, new Date(), this.janela);
+      if (motivo) throw new ConflitoError(motivo);
       const fim = new Date(inicio.getTime() + duracao);
       await this.travarAgenda(tx, ctx, atual.professionalId);
       if (!atual.isWalkIn) {
@@ -193,12 +241,16 @@ export class SchedulingService {
       }
       await tx
         .update(appointments)
-        .set({ startsAt: inicio, endsAt: fim, updatedAt: new Date() })
+        .set({ startsAt: inicio, endsAt: fim, rescheduledBy: ctx.userId, updatedAt: new Date() })
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+      const [profissional] = await tx
+        .select({ userId: professionals.userId })
+        .from(professionals)
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, atual.professionalId)));
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { appointment_id: id, op: 'reschedule' },
+        metadata: { appointment_id: id, op: 'reschedule', self_rescheduled: profissional?.userId === ctx.userId },
       });
       return noFusoDaClinica(atual.startsAt);
     });
@@ -227,6 +279,13 @@ export class SchedulingService {
         if (!profissional?.userId || profissional.userId !== ctx.userId) throw new ProibidoError();
       }
       const agora = new Date();
+      // V1 do parecer #61: "em atendimento"/"atendido" só dentro da janela do horário. Consulta do
+      // futuro ou de muito tempo atrás não vira atendimento (e, portanto, não vira vínculo).
+      // V2: as voltas que saem de status clínico ou de falta também (o "Desfazer" é do momento, não
+      // uma forma de reaproveitar um agendamento antigo).
+      if (exigeJanelaDeAtendimento(atual.status, novo) && !dentroDaJanelaDeAtendimento(atual.startsAt, atual.endsAt, agora, this.janela)) {
+        throw new ConflitoError('fora_do_horario');
+      }
       await tx
         .update(appointments)
         .set({
@@ -242,8 +301,46 @@ export class SchedulingService {
         scope: SCOPE,
         metadata: { appointment_id: id, op: 'status', from: atual.status, to: novo },
       });
+      // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
+      // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
+      if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
+      // Autoagendamento: criado OU remarcado (em qualquer momento) pelo próprio usuário (V1, V2-c e R8 do #61).
+      if (STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status) && (await this.autoagendado(tx, ctx, id))) {
+        await this.alertarAutoagendamento(tx, ctx, atual.professionalId, agora);
+      }
       return { statusAnterior: statusParaFront(atual.status) };
     });
+  }
+
+  /**
+   * Resposta do paciente pelo canal (WhatsApp "1"/"2"), na transação do CHAMADOR (a do webhook, que
+   * grava a resposta junto). Usa as regras da agenda para o paciente (`transicaoPeloPaciente`), não a
+   * transição genérica da recepção: só agendado -> confirmado e agendado/confirmado -> cancelado, antes
+   * do início. Trava o agendamento como as demais escritas da agenda e audita com `via: 'whatsapp'`.
+   */
+  async respostaDoPaciente(
+    tx: TenantTx,
+    ctx: RequestContext,
+    id: string,
+    acao: AcaoDoPaciente,
+    agora: Date,
+  ): Promise<'confirmado' | 'cancelado' | 'ja_estava' | 'status_nao_permite'> {
+    const atual = await this.travarAgendamento(tx, ctx, id);
+    const r = transicaoPeloPaciente(atual.status, acao, atual.startsAt, agora);
+    if (r.tipo !== 'mudar') return r.tipo;
+    if (!transicaoPermitida(atual.status, r.para)) return 'status_nao_permite';
+    await tx
+      .update(appointments)
+      .set({ status: r.para, updatedAt: agora, ...(r.para === 'cancelled' ? { cancelledAt: agora } : {}) })
+      .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+    await recordAudit(tx, ctx, {
+      action: AuditAction.Update,
+      scope: SCOPE,
+      metadata: { appointment_id: id, op: 'status', from: atual.status, to: r.para, via: 'whatsapp' },
+    });
+    // Agendado/confirmado não consomem guia nem pacote; a chamada fica pela simetria com alterarStatus.
+    if (statusConsome(atual.status) && !statusConsome(r.para)) await estornarConsumosDoAgendamento(tx, ctx, id);
+    return r.para === 'confirmed' ? 'confirmado' : 'cancelado';
   }
 
   listarProfissionais(ctx: RequestContext): Promise<ProfissionalDto[]> {
@@ -253,7 +350,7 @@ export class SchedulingService {
         .from(professionals)
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.active, true)))
         .orderBy(asc(professionals.displayName), asc(professionals.id));
-      return linhas.map((p) => ({ id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity }));
+      return linhas.map((p) => this.profissionalDto(p));
     });
   }
 
@@ -267,12 +364,34 @@ export class SchedulingService {
           specialty: dados.especialidade,
           capacity: dados.capacidade,
           userId: dados.usuarioId ?? null,
+          sensitiveArea: dados.areaSensivel ?? false,
         })
         .returning();
       if (!p) throw new Error('falha ao criar profissional');
-      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'professionals', metadata: { professional_id: p.id } });
-      return { id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity };
+      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'professionals', metadata: { professional_id: p.id, sensitive_area: p.sensitiveArea } });
+      return this.profissionalDto(p);
     });
+  }
+
+  /**
+   * Marca de área sensível do profissional (R2 do #68): estruturada, decide o sigilo do adolescente no portal.
+   * Desligar não vence a especialidade: se ela parecer de área sensível, o banco mantém a marca ligada.
+   */
+  marcarAreaSensivel(ctx: RequestContext, id: string, areaSensivel: boolean): Promise<ProfissionalDto> {
+    return this.escrita(ctx, async (tx) => {
+      const [p] = await tx
+        .update(professionals)
+        .set({ sensitiveArea: areaSensivel })
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .returning();
+      if (!p) throw new NaoEncontradoError();
+      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'professionals', metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea } });
+      return this.profissionalDto(p);
+    });
+  }
+
+  private profissionalDto(p: typeof professionals.$inferSelect): ProfissionalDto {
+    return { id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity, areaSensivel: p.sensitiveArea };
   }
 
   listarTipos(ctx: RequestContext): Promise<TipoAtendimentoDto[]> {
@@ -326,6 +445,11 @@ export class SchedulingService {
     return a;
   }
 
+  /** Para a simulação do importador: vagas já ocupadas no horário (mesma regra da marcação). */
+  vagasOcupadas(tx: TenantTx, ctx: RequestContext, profissionalId: string, inicio: Date, fim: Date): Promise<number> {
+    return this.ocupados(tx, ctx, profissionalId, inicio, fim);
+  }
+
   /** Agendamentos que ocupam vaga e se sobrepõem a [inicio, fim) para o profissional. */
   private async ocupados(
     tx: TenantTx,
@@ -345,6 +469,44 @@ export class SchedulingService {
     if (exceto) condicoes.push(ne(appointments.id, exceto));
     const [r] = await tx.select({ n: count() }).from(appointments).where(and(...condicoes));
     return r?.n ?? 0;
+  }
+
+  /**
+   * Autoagendamento atendido: o vínculo de cuidado nasce de um agendamento que o próprio profissional
+   * criou para si (V1 do parecer #61). Grava `anomaly_alert` (regra `vinculo_autoagendado`) na MESMA
+   * transação da mudança de status quando o número de pacientes distintos atendidos assim nas últimas
+   * 24 h passa do limiar (padrão 0: todo caso alerta). Só regra, janela, limiar e contagem.
+   */
+  private async alertarAutoagendamento(tx: TenantTx, ctx: RequestContext, profissionalId: string, agora: Date): Promise<void> {
+    const [linha] = await tx
+      .select({ pacientes: sql<number>`count(distinct ${appointments.patientId})::int` })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.tenantId, ctx.tenantId),
+          eq(appointments.professionalId, profissionalId),
+          autoagendadoPor(ctx.userId),
+          inArray(appointments.status, [...STATUS_CLINICOS]),
+          gte(appointments.startsAt, new Date(agora.getTime() - DIA_MS)),
+        ),
+      );
+    const contagem = linha?.pacientes ?? 0;
+    const limiar = this.janela.alertaAutoagendadosPorDia;
+    if (contagem <= limiar) return;
+    this.logger.warn('ALERTA_ANOMALIA regra=vinculo_autoagendado');
+    await recordAudit(tx, ctx, {
+      action: AuditAction.AnomalyAlert,
+      scope: SCOPE,
+      metadata: { rule: 'vinculo_autoagendado', window_s: DIA_MS / 1000, threshold: limiar, count: contagem },
+    });
+  }
+
+  private async autoagendado(tx: TenantTx, ctx: RequestContext, id: string): Promise<boolean> {
+    const [r] = await tx
+      .select({ sim: sql<number>`(${autoagendadoPor(ctx.userId)})::int` })
+      .from(appointments)
+      .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
+    return Number(r?.sim) === 1;
   }
 
   private leitura<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
