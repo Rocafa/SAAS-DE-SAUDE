@@ -51,7 +51,7 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 
 - **Pilha do front do @Lopesloro (#44 → #45 → #46 → #47) e #75 em cima dela:** cada branch precisa receber a main. O #44
   pede decisão dele no `fake.ts`. Passo a passo comentado no #44.
-- **#49 (ioredis 6):** rebase pedido ao Dependabot. O CI de Segurança roda com Redis real (`JOBS_REDIS_TESTE=1`) e decide.
+- **#49 (ioredis 6): entrou.** No CI de Segurança, com Redis real (`JOBS_REDIS_TESTE=1`), `agendador-redis` e `rate-limit-redis` rodaram e passaram (88/88, nenhum pulado).
 - **#54:** fora da fila. O motivo (billing) sumiu e ele reduziria a cobertura.
 - **#55 e #36 (@Lopesloro):** antigos, sem relação com a fila. Ficam com ele.
 - **Recomendação aos sócios:** ligar a proteção da `main` (PR obrigatório e checks verdes). Agora é grátis, e com o
