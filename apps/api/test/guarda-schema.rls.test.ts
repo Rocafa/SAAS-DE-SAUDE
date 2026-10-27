@@ -81,13 +81,54 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   receipt_counters: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   receipts: { privilegios: ['SELECT', 'INSERT'] },
   receipt_cancellations: { privilegios: ['SELECT', 'INSERT'] },
+  // Portal do paciente (migração 0027): sem DELETE/TRUNCATE. Convite: a clínica emite e revoga (o resgate é
+  // da função SECURITY DEFINER). Vínculo: nasce só do resgate (sem INSERT para o runtime); a clínica revoga.
+  // Consentimento: append-only. Pedido do titular: o portal abre; a clínica muda a situação.
+  portal_invites: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  portal_links: { privilegios: ['SELECT', 'UPDATE'] },
+  portal_consents: { privilegios: ['SELECT', 'INSERT'] },
+  portal_rights_requests: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Responsáveis do paciente (migração 0028): sem DELETE/TRUNCATE (encerrar a vigência, nunca apagar);
+  // o histórico é append-only e só os triggers do cadastro gravam nele.
+  guardians: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  patient_guardians: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  patient_guardian_history: { privilegios: ['SELECT', 'INSERT'] },
+  // Importador (migração 0024): sem DELETE/TRUNCATE. O lote muda só pelas transições guardadas por
+  // trigger; arquivo bruto (cifrado), divergências e livro do lote o runtime só lê e insere. O descarte
+  // do arquivo bruto e o desfazer passam SÓ pelas funções SECURITY DEFINER (ver bloco no fim).
+  import_batches: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  import_raw_files: { privilegios: ['SELECT', 'INSERT'] },
+  // R3 (0046): chave própria do lote; o ciclo de vida anda só pelas funções do expurgo.
+  import_batch_keys: { privilegios: ['SELECT', 'INSERT'] },
+  // Observação 1 da conferência R3-a/R3-b (0049): intenção da chave de lote; anda só pelas funções do importador.
+  import_batch_key_intents: { privilegios: ['SELECT', 'INSERT'] },
+  // R9 (0046): chave do índice cego do CPF; UPDATE só nas transições active -> retired -> destroyed (trigger).
+  patient_cpf_index_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  import_issues: { privilegios: ['SELECT', 'INSERT'] },
+  import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
+  // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
+  // anda para a frente e resposta só perde o conteúdo pela retenção de 30 dias (triggers).
+  whatsapp_settings: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Chave do HMAC de comparação de número (V1 do #69): só nasce, nunca muda.
+  whatsapp_phone_keys: { privilegios: ['SELECT', 'INSERT'] },
+  whatsapp_opt_ins: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  whatsapp_outbox: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Resposta: só metadado, nasce e não muda (R1 do #69).
+  whatsapp_inbound: { privilegios: ['SELECT', 'INSERT'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */
 const TABELAS_INTERNAS: Readonly<Record<string, string>> = {
   schema_migrations: 'controle de migração; scripts/migrate.mjs revoga de app_user',
   tenant_context: 'contexto de tenant travado por txid; só as funções SECURITY DEFINER acessam',
+  portal_invite_lookup: 'índice token do convite -> clínica (0027); só as funções SECURITY DEFINER do portal leem/gravam',
+  portal_link_index: 'índice vínculo do portal -> conta/clínica/paciente (0027); só as funções SECURITY DEFINER do portal leem/gravam',
+  portal_invite_otp: 'hash do código de resgate do convite (0033, A2 do #68); só as funções SECURITY DEFINER do portal leem/gravam',
   fiscal_retention_policy: 'política de retenção fiscal da plataforma (0021, R7 do #65); muda só por migração; o runtime lê pelas funções SECURITY DEFINER',
+  whatsapp_routes: 'número de negócio -> clínica para o webhook sem sessão (0032); só app_whatsapp_tenant_for_number (SECURITY DEFINER) lê e o trigger da configuração grava',
+  portal_birth_date_changes: 'marca "a data de nascimento mudou nesta transação" (0038, R1 do #73); só os gatilhos de patients e o recálculo do sigilo (SECURITY DEFINER) gravam/consomem',
+  job_tenant_index: 'ids das clínicas para o agendador de jobs (0043); só o gatilho de tenants grava e app_job_tenants (SECURITY DEFINER, fora de contexto) lê',
+  founder_fix_requests: 'pedido de correção do fundador (0044, O-R17c do #63); só as funções do runbook, com o papel app_migrator, gravam e leem: o runtime não forja o pedido',
 };
 
 /** Raiz do app: o vitest roda com cwd em apps/api (vitest.rls.config.mts). */
@@ -317,6 +358,177 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
     for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
       const tem = await privilegiosDoRuntime(tabela);
       expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
+  });
+});
+
+/**
+ * Portal do paciente (0027): na sessão do portal, cada tabela da clínica ou mostra só as linhas do
+ * próprio paciente (`portal_titular`), ou nenhuma (`portal_fora`), ou é liberada por decisão registrada
+ * (`portal_liberada*`: profissionais e a LEITURA das chaves de dados; 0033: a trilha virou `portal_fora_select`
+ * e o gatilho da cadeia lê o último elo por função SECURITY DEFINER; chave só leitura). Tabela nova
+ * com tenant_id sem uma dessas policies RESTRITIVAS reprova: o padrão do portal é não ver.
+ */
+/** WhatsApp (0032): tabelas da clínica fora da sessão do portal. */
+const PORTAL_FORA_WHATSAPP: readonly string[] = [
+  'whatsapp_settings',
+  'whatsapp_phone_keys',
+  'whatsapp_opt_ins',
+  'whatsapp_outbox',
+  'whatsapp_inbound',
+];
+
+describe('guarda de schema: portal do paciente (0027)', () => {
+  it('toda tabela da aplicação com tenant_id tem policy restritiva do portal', async () => {
+    const restritivas = await sql<{ tabela: string; policy: string }[]>`
+      SELECT tablename AS tabela, policyname AS policy FROM pg_policies
+       WHERE schemaname = 'public' AND permissive = 'RESTRICTIVE' AND policyname ~ '^portal_(titular|fora|liberada)'`;
+    const comPolicy = new Set(restritivas.map((r) => r.tabela));
+    const semPolicy = tabelas
+      .filter((t) => t.tem_tenant_id && t.tabela in TABELAS_DA_APLICACAO && !comPolicy.has(t.tabela))
+      .map((t) => t.tabela);
+    expect(semPolicy, 'tabela com tenant_id sem decisão do portal: crie portal_fora (padrão) ou portal_titular').toEqual([]);
+  });
+
+  /**
+   * R4 do #73: a `portal_fora` que o laço da 0033 criou em `whatsapp_routes` cegou o webhook. Tabela INTERNA
+   * (lista fechada: TABELAS_INTERNAS, espelhada no banco por `app_internal_tables()`, que os laços dinâmicos
+   * usam como exclusão) não pode ter NENHUMA policy do portal: a única permitida é `<tabela>_definer_only`
+   * (TO CURRENT_USER, só o dono).
+   */
+  it('tabela interna não tem policy do portal; a lista do banco é a mesma da guarda', async () => {
+    const [lista] = await sql<{ tabelas: string[] }[]>`SELECT app_internal_tables() AS tabelas`;
+    expect([...(lista?.tabelas ?? [])].sort()).toEqual(Object.keys(TABELAS_INTERNAS).sort());
+    const policies = await sql<{ tabela: string; policy: string; papeis: string[] }[]>`
+      SELECT tablename AS tabela, policyname AS policy, roles::text[] AS papeis FROM pg_policies
+       WHERE schemaname = 'public' AND tablename = ANY(${Object.keys(TABELAS_INTERNAS)})`;
+    const fora = policies.filter((p) => p.policy !== `${p.tabela}_definer_only`).map((p) => `${p.tabela}.${p.policy}`);
+    expect(fora, 'tabela interna com policy além de <tabela>_definer_only (ex.: portal_fora de um laço dinâmico): exclua app_internal_tables() do laço').toEqual([]);
+    for (const p of policies) expect(p.papeis, `${p.tabela}.${p.policy}`).not.toContain(RUNTIME_ROLE);
+  });
+
+  it('funções do portal: SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
+    for (const assinatura of [
+      'public.app_set_portal_session(uuid,uuid)',
+      'public.app_portal_links_of_account(uuid)',
+      'public.app_portal_redeem_invite(uuid,text,text)',
+      'public.app_portal_invite_challenge(uuid,text,text)',
+      'public.app_portal_patient()',
+      'public.app_portal_account()',
+      'public.app_portal_link()',
+      // 0033 (V2 do #68): o gatilho da cadeia lê o último elo por aqui; a sessão do portal não lê a trilha.
+      'public.app_audit_chain_tail(uuid)',
+    ]) {
+      const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+        SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+        FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+        WHERE p.oid = ${assinatura}::regprocedure`;
+      expect(f?.secdef, assinatura).toBe(true);
+      expect(f?.config ?? [], assinatura).toContain('search_path=pg_catalog, public, pg_temp');
+      expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+      expect(f?.dono).not.toBe(RUNTIME_ROLE);
+    }
+  });
+
+  /**
+   * Integração da rodada 19: as tabelas que nasceram em ramos paralelos ao portal (importador 0024/0026,
+   * responsáveis 0028, WhatsApp 0032) recebem `portal_fora` pelos laços dinâmicos da 0027/0033. A decisão
+   * fica DECLARADA aqui: se alguém trocar uma delas para `portal_titular`/`portal_liberada`, o teste reprova.
+   */
+  it('visibilidade no portal declarada: importador, responsáveis e WhatsApp ficam fora da sessão do portal', async () => {
+    const PORTAL_FORA = [
+      // Importador (0024/0026): lote, arquivo bruto, divergências e livro do lote.
+      'import_batches',
+      'import_raw_files',
+      'import_batch_keys',
+      // 0049: intenção da chave de lote (sem órfã no KMS).
+      'import_batch_key_intents',
+      // R9 (0046): chave do índice cego do CPF.
+      'patient_cpf_index_keys',
+      'import_issues',
+      'import_batch_records',
+      // Responsáveis (0028): só as funções do dono leem o vínculo.
+      'guardians',
+      'patient_guardians',
+      'patient_guardian_history',
+      // WhatsApp (0032): adicionadas no merge do #69 (abaixo, em PORTAL_FORA_WHATSAPP).
+      ...PORTAL_FORA_WHATSAPP,
+    ];
+    const linhas = await sql<{ tabela: string; policy: string }[]>`
+      SELECT tablename AS tabela, policyname AS policy FROM pg_policies
+       WHERE schemaname = 'public' AND permissive = 'RESTRICTIVE' AND policyname ~ '^portal_'
+         AND tablename = ANY(${PORTAL_FORA})`;
+    for (const tabela of PORTAL_FORA) {
+      const policies = linhas.filter((l) => l.tabela === tabela).map((l) => l.policy).sort();
+      expect(policies, tabela).toEqual(['portal_fora']);
+    }
+  });
+});
+
+/**
+ * Importador (0024): o expurgo do arquivo bruto e o desfazer são SECURITY DEFINER com search_path fixo e
+ * dono sem superpoder; o runtime não apaga nada das tabelas do importador nem de pacientes/agendamentos.
+ */
+describe('guarda de schema: funções do importador (0024)', () => {
+  for (const assinatura of ['public.app_purge_import_raw_files()', 'public.app_undo_import_batch(uuid)', 'public.app_finish_import_batch_key_destroy(uuid)', 'public.app_record_import_batch_key_intent(uuid,text)', 'public.app_close_import_batch_key_intent(uuid,text)']) {
+    it(`${assinatura}: SECURITY DEFINER, search_path fixo, dono sem superpoder`, async () => {
+      const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+        SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+        FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+        WHERE p.oid = ${assinatura}::regprocedure`;
+      expect(f?.secdef).toBe(true);
+      expect(f?.config ?? []).toContain('search_path=pg_catalog, public, pg_temp');
+      expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+      expect(f?.dono).not.toBe(RUNTIME_ROLE);
+    });
+  }
+
+  it('o runtime não tem DELETE nem TRUNCATE no importador, em pacientes e em agendamentos', async () => {
+    for (const tabela of ['import_batches', 'import_raw_files', 'import_batch_keys', 'import_batch_key_intents', 'import_issues', 'import_batch_records', 'patients', 'appointments']) {
+      const tem = await privilegiosDoRuntime(tabela);
+      expect(tem.filter((p) => p === 'DELETE' || p === 'TRUNCATE'), tabela).toEqual([]);
+    }
+  });
+});
+
+/**
+ * O-R17e do #63 (0047): a exceção do fundador depende de current_user. Uma função SECURITY DEFINER de dono
+ * app_migrator roda COMO app_migrator; se o runtime pudesse executá-la (ou se um trigger a disparasse) e ela
+ * gravasse em `tenants` ou `clinic_members`, o runtime herdaria o papel de operação. Regra: nenhuma função
+ * SECURITY DEFINER executável pelo runtime, ou usada por trigger, escreve nessas tabelas.
+ */
+const DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS: Readonly<Record<string, string>> = {
+  // Lista FECHADA. Hoje vazia: o registro e a correção do fundador são SECURITY INVOKER e sem GRANT ao runtime.
+  // Incluir uma função aqui exige justificativa (valor) revisada pelo guardiao-lgpd.
+};
+const ESCRITA_EM_TENANTS_OU_MEMBROS =
+  /\b(insert\s+into|update|delete\s+from|truncate(\s+table)?|merge\s+into|copy)\s+(only\s+)?("?public"?\.)?"?(tenants|clinic_members)"?(?![\w])/i;
+
+describe('guarda de schema: SECURITY DEFINER não grava tenants nem clinic_members (O-R17e)', () => {
+  it('nenhuma função SECURITY DEFINER executável pelo runtime (ou de trigger) escreve em tenants/clinic_members', async () => {
+    const funcs = await sql<{ assinatura: string; fonte: string }[]>`
+      SELECT p.oid::regprocedure::text AS assinatura, p.prosrc AS fonte
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.prosecdef
+         AND (has_function_privilege(${RUNTIME_ROLE}, p.oid, 'EXECUTE')
+              OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgfoid = p.oid))`;
+    expect(funcs.length, 'o banco tem funções SECURITY DEFINER do runtime (sanidade da consulta)').toBeGreaterThan(0);
+    const violacoes = funcs
+      .filter((f) => ESCRITA_EM_TENANTS_OU_MEMBROS.test(f.fonte) && !(f.assinatura in DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS))
+      .map((f) => f.assinatura);
+    expect(violacoes, 'função SECURITY DEFINER do runtime grava tenants/clinic_members: torne-a SECURITY INVOKER ou tire o GRANT').toEqual([]);
+    // A lista fechada não acumula lixo: toda função permitida existe e continua no alcance do runtime.
+    for (const assinatura of Object.keys(DEFINER_QUE_GRAVA_TENANTS_OU_MEMBROS_PERMITIDAS)) {
+      expect(funcs.map((f) => f.assinatura), assinatura).toContain(assinatura);
+    }
+  });
+
+  it('a regra de detecção pega as formas usuais de escrita (autoteste da expressão)', () => {
+    for (const s of ['UPDATE tenants SET x = 1', 'insert into public.clinic_members (a) values (1)', 'DELETE FROM "clinic_members"', 'update ONLY tenants set a=1']) {
+      expect(ESCRITA_EM_TENANTS_OU_MEMBROS.test(s), s).toBe(true);
+    }
+    for (const s of ['SELECT 1 FROM clinic_members', 'FROM tenants t WHERE', 'UPDATE tenant_data_keys SET a = 1', 'UPDATE tenants_x SET a = 1']) {
+      expect(ESCRITA_EM_TENANTS_OU_MEMBROS.test(s), s).toBe(false);
     }
   });
 });

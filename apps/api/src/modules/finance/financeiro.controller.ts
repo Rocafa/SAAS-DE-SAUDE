@@ -10,6 +10,7 @@ import {
   validarCancelamentoCobranca,
   validarCancelamentoRecibo,
   validarConfiguracao,
+  validarCorpoVazio,
   validarEmissaoRecibo,
   validarEstorno,
   validarFechamentoCaixa,
@@ -21,6 +22,7 @@ import {
   validarPerfilFiscal,
   validarQueryVazia,
   validarRecebimento,
+  validarSaneamentoPagador,
 } from './financeiro.validation';
 import { RecibosService, type LoteReceitaSaudeDto, type ReciboDto, type ReciboResumoDto } from './recibos.service';
 
@@ -160,6 +162,19 @@ export class FinanceiroController {
     return this.recibos.emitir(paraRequestContext(auth), alvo, validarEmissaoRecibo(corpo));
   }
 
+  /**
+   * Saneamento de `pagador_responsavel` (R2 do 2º parecer do #67): grava, uma vez, o responsável pagador
+   * de um recebimento sem congelado (corpo `{vinculoId}`). `pagador_anulado` não se resolve aqui
+   * (estorno e novo recebimento).
+   */
+  @Post('recebimentos/:id/pagador-responsavel')
+  @HttpCode(200)
+  @Permissao('financeiro:sanear_pagador')
+  sanearPagador(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
+    const alvo = exigirUuid(id);
+    return this.recibos.resolverPagadorResponsavel(paraRequestContext(auth), alvo, validarSaneamentoPagador(corpo).vinculoId);
+  }
+
   @Get('recibos')
   @Permissao('financeiro:ler')
   async listarRecibos(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<{ itens: ReciboResumoDto[]; truncado: boolean }> {
@@ -178,6 +193,21 @@ export class FinanceiroController {
     // Recibo traz nome e CPF: conta como ficha distinta aberta (alerta de anomalia, R5).
     await this.vigilancia.ficha(ctx, `recibo:${alvo}`);
     return this.recibos.obter(ctx, alvo);
+  }
+
+  /**
+   * Via OFICIAL do recibo (N2 da conferência do #67): CPFs completos, para o IR do pagador. Só admin e
+   * financeiro; a recepção entrega a via de conferência ("não vale para IR"). Conta como ficha aberta (R5).
+   */
+  @Post('recibos/:id/via-oficial')
+  @HttpCode(200)
+  @Permissao('recibos:emitir_via_oficial')
+  async viaOficialRecibo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ReciboDto> {
+    const alvo = exigirUuid(id);
+    validarCorpoVazio(corpo);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.ficha(ctx, `recibo:${alvo}`);
+    return this.recibos.emitirViaOficial(ctx, alvo);
   }
 
   @Post('recibos/:id/cancelar')

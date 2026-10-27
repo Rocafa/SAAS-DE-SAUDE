@@ -5,6 +5,7 @@ import {
   normalizarTextoParaChecagem,
   dinheiroEsperado,
   menorDeIdadeEm,
+  pendenciasDoItem,
   pendenciasDoRecibo,
   situacaoDaCobranca,
   totaisZerados,
@@ -125,6 +126,9 @@ describe('caixa e recibo', () => {
       descricao: 'Atendimento',
     };
     expect(pendenciasDoRecibo(base)).toEqual(['cpf_do_profissional', 'cpf_do_pagador']);
+    // R1 do 2º parecer do #67: pagador congelado anulado depois (cadastro errado).
+    expect(pendenciasDoRecibo(base, false, true)).toEqual(['pagador_anulado', 'cpf_do_profissional', 'cpf_do_pagador']);
+    expect(pendenciasDoItem({ pagador: { nome: 'A', cpf: '00000000191' }, beneficiario: base.beneficiario }, false, true)).toEqual(['pagador_anulado']);
   });
 });
 

@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, desc, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   appointments,
@@ -15,6 +15,7 @@ import {
   type PackageProfessionalChangeReason,
   type PackageReversalReason,
 } from '../../db/schema';
+import { dbErrorCode } from '../../db/db-errors';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -345,10 +346,16 @@ export class PacotesService {
       if (!travado) throw new NaoEncontradoError();
       if (travado.reversedAt) throw new ConflitoError('consumo_ja_estornado');
       const agora = new Date();
-      await tx
-        .update(packageSessions)
-        .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: motivo })
-        .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.id, consumoId)));
+      try {
+        await tx
+          .update(packageSessions)
+          .set({ reversedAt: agora, reversedBy: ctx.userId, reversalReason: motivo })
+          .where(and(eq(packageSessions.tenantId, ctx.tenantId), eq(packageSessions.id, consumoId)));
+      } catch (e) {
+        // R19 do #65 (0041): o banco exige perfil ativo em clinic_members para estornar.
+        if (dbErrorCode(e) === '42501') throw new ProibidoError('perfil_nao_registrado');
+        throw e;
+      }
       const [p] = await tx
         .update(sessionPackages)
         .set({ usedSessions: sql`${sessionPackages.usedSessions} - 1`, updatedAt: agora })

@@ -19,13 +19,13 @@
  * (job diário) chama `executarCicloDasNotas` para cada clínica; a rota do admin faz o mesmo sob demanda.
  */
 import { Inject, Injectable } from '@nestjs/common';
-import { AuditAction, type RequestContext } from '@plataforma/shared';
+import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica } from '../../common/transacao-clinica';
 import { patients, privateNotes, professionals } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -162,6 +162,19 @@ export class CicloNotasPrivadasService {
   /** Job (e rota do admin): prazos da custódia e depois o expurgo, numa transação da clínica. */
   executarCicloDasNotas(ctx: RequestContext, agora: Date = new Date()): Promise<ResultadoDoCiclo> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      const prazos = await aplicarPrazosDeCustodia(this.cipher, tx, ctx, agora);
+      const expurgadas = await expurgarNotasDescartadas(tx, ctx);
+      return { ...prazos, expurgadas };
+    });
+  }
+
+  /**
+   * Job do sistema (agendador, api-dominio §14): o mesmo ciclo, sem usuário (slot travado com o sentinela da
+   * 0019; ator `sistema` na trilha). Sem a política de assinatura: prazo e expurgo valem para clínica cancelada.
+   */
+  executarCicloComoSistema(tenantId: TenantId, agora: Date = new Date()): Promise<ResultadoDoCiclo> {
+    const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
+    return this.db.run(tenantId, async (tx) => {
       const prazos = await aplicarPrazosDeCustodia(this.cipher, tx, ctx, agora);
       const expurgadas = await expurgarNotasDescartadas(tx, ctx);
       return { ...prazos, expurgadas };

@@ -9,11 +9,23 @@ import { createAuthProvider } from './modules/auth/auth-provider.factory';
 import { AuthModule } from './modules/auth/auth.module';
 import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module';
 import type { KeyProvider } from './modules/crypto/key-provider';
+import type { KmsCliente } from './modules/crypto/kms-client';
 import { ExportsModule } from './modules/exports/exports.module';
 import { FinanceModule } from './modules/finance/finance.module';
+import { ImportsModule } from './modules/imports/imports.module';
+import { criarInfraDosJobs, type InfraDosJobs, JobsModule } from './modules/jobs/jobs.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
+import { criarMensageiro } from './modules/messaging/mensageiro.factory';
+import type { MensageiroWhatsApp } from './modules/messaging/mensageiro-whatsapp';
+import { MessagingModule } from './modules/messaging/messaging.module';
+import type { FonteDeResponsaveis } from './modules/messaging/responsaveis.port';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
+import { createPortalAuthProvider, type PortalAuthProvider } from './modules/portal/portal-auth';
+import { PortalModule } from './modules/portal/portal.module';
+import { createPortalOtpSender, type PortalOtpSender } from './modules/portal/portal-otp';
+import { loadPortalLimites, type PortalLimites } from './modules/portal/portal-vigilancia';
+import { loadPaginationCursorKey } from './modules/patients/cursor-de-paginacao';
 import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
@@ -24,6 +36,11 @@ export interface AppAdapters {
   readonly authProvider?: AuthProvider;
   readonly keyProvider?: KeyProvider;
   /**
+   * Cliente KMS da chave mestra e do pseudônimo (testes passam um falso). Sem ele, cada fábrica cria
+   * o seu com o SDK a partir do ambiente (AWS_REGION em sa-east-1; credencial = role da tarefa).
+   */
+  readonly kms?: KmsCliente;
+  /**
    * Store dos contadores por usuário (R5). O main.ts passa o MESMO store do rate limit por IP
    * (Redis com fallback); sem ele, cria um pelo ambiente e o fecha no shutdown.
    */
@@ -32,24 +49,42 @@ export interface AppAdapters {
   readonly vigilancia?: VigilanciaConfig;
   /** Pseudônimo do suporte (N1); padrão: createPseudonymSigner (KMS fora de development/test). */
   readonly pseudonymSigner?: PseudonymSigner;
+  /** Sessão do PORTAL DO PACIENTE, separada da da clínica (D4); padrão: createPortalAuthProvider. */
+  readonly portalAuthProvider?: PortalAuthProvider;
+  /** Envio do código de resgate do convite (A2 do #68); padrão: createPortalOtpSender (dev/test; real com a D4). */
+  readonly portalOtpSender?: PortalOtpSender;
+  /** Limite por conta do portal; padrão: ambiente (loadPortalLimites). */
+  readonly portalLimites?: PortalLimites;
+  /** Canal WhatsApp; padrão: criarMensageiro (WHATSAPP_PROVEDOR; desligado se vazio). `null` = desligado. */
+  readonly mensageiro?: MensageiroWhatsApp | null;
+  /** Telefone do responsável do paciente; padrão: pelo catálogo (tolera a ausência da 0028). */
+  readonly responsaveis?: FonteDeResponsaveis;
+  /** Agendador de jobs (api-dominio §14); padrão: criarInfraDosJobs (BullMQ com REDIS_URL; memória em dev/test). */
+  readonly jobs?: InfraDosJobs;
 }
 
 @Module({})
 export class AppModule {
   /**
-   * Sem adaptador explícito, escolhe pelo ambiente: em NODE_ENV=production sem provedor real de
-   * login (D4), sem KMS das chaves de dados ou sem KMS do pseudônimo do suporte (N1), lança aqui
-   * e a API não sobe.
+   * Sem adaptador explícito, escolhe pelo ambiente. Em NODE_ENV=production lança aqui (a API não
+   * sobe) sem provedor real de login e do portal (D4), sem a configuração do KMS (AWS_REGION,
+   * SUPPORT_PSEUDONYM_KMS_KEY_ID) ou sem os segredos obrigatórios. Tabela em api-dominio.md §0.
    */
   static forRoot(config: AppConfig, adapters: AppAdapters = {}): DynamicModule {
+    const kmsDeps = adapters.kms ? { kms: adapters.kms } : {};
     const authProvider = adapters.authProvider ?? createAuthProvider(process.env);
-    const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
-    const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
+    const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env, kmsDeps);
+    const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env, kmsDeps);
+    const portalAuthProvider = adapters.portalAuthProvider ?? createPortalAuthProvider(process.env);
+    const portalOtpSender = adapters.portalOtpSender ?? createPortalOtpSender(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
+    const mensageiro = adapters.mensageiro !== undefined ? adapters.mensageiro : criarMensageiro(process.env);
     const pacientes = PatientsModule.forRoot({
       store,
       fecharStore: adapters.rateLimitStore === undefined,
       hashKey: loadRateLimitHashKey(process.env),
+      // Segredo do cursor da lista (R5 do parecer #76); obrigatório em produção.
+      cursorKey: loadPaginationCursorKey(process.env),
       config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),
     });
     return {
@@ -70,6 +105,19 @@ export class AppModule {
         RecordsModule.forRoot(pacientes),
         // Financeiro: listas e recibos contam na mesma vigilância (R5).
         FinanceModule.forRoot(pacientes),
+        // Portal do paciente: sessão própria; limite por conta no mesmo store (rodada 18.1).
+        PortalModule.forRoot({
+          pacientes,
+          provider: portalAuthProvider,
+          otp: portalOtpSender,
+          limites: adapters.portalLimites ?? loadPortalLimites(process.env),
+        }),
+        // Importador: grava pacientes com a mesma cifra/regras do cadastro (mesma instância).
+        ImportsModule.forRoot(pacientes),
+        // WhatsApp (rodada 18.3): lembretes D-1 e confirmação; desligado por padrão.
+        MessagingModule.forRoot({ mensageiro, ...(adapters.responsaveis ? { responsaveis: adapters.responsaveis } : {}) }),
+        // Agendador (rodada 20): jobs por clínica; sem Redis em produção, desligado e logado (JOBS_DESLIGADOS).
+        JobsModule.forRoot(adapters.jobs ?? criarInfraDosJobs(process.env)),
       ],
     };
   }

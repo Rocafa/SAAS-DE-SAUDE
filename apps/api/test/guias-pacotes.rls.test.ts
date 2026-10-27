@@ -11,6 +11,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  appointments,
   auditLog,
   guideSessions,
   guideSessionSignatures,
@@ -21,10 +22,13 @@ import {
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { hashDaConfirmacao, hojeNaClinica, somarDias } from '../src/modules/insurance/guias-regras';
+import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
 
+/** UUID aleatório: tirado do texto antes de procurar marcador numérico (só dígitos casariam com ele). */
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 let api: ApiDeTeste;
 let clinicaA: TenantId;
 let clinicaB: TenantId;
@@ -105,8 +109,10 @@ beforeAll(async () => {
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
   adminA = api.sessao(clinicaA, 'admin');
-  recepA = api.sessao(clinicaA, 'recepcao');
-  finA = api.sessao(clinicaA, 'financeiro');
+  // R19 do #65 (0041): estornar sessão de pacote exige o perfil registrado no banco.
+  recepA = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+  // R20 do #65 (0042): estornar consumo de guia também exige o perfil registrado no banco.
+  finA = await api.membro(clinicaA, api.sessao(clinicaA, 'financeiro'), 'financeiro');
   profA = api.sessao(clinicaA, 'profissional');
   adminB = api.sessao(clinicaB, 'admin');
   recepB = api.sessao(clinicaB, 'recepcao');
@@ -293,7 +299,7 @@ describe('consumo, estorno e guia vencida (CNV-04.3)', () => {
       tx
         .select()
         .from(auditLog)
-        .where(and(eq(auditLog.scope, 'guide_sessions'), sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`, sql`${auditLog.metadata}->>'op' = 'reverse'`)),
+        .where(and(eq(auditLog.scope, 'guide_sessions'), sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`, sql`${auditLog.metadata}->>'op' = 'reverse'`)).orderBy(sql`seq`),
     );
     expect(aud?.metadata).toMatchObject({ reason: 'lancamento_errado', guide_id: g.id });
   });
@@ -324,7 +330,7 @@ describe('consumo, estorno e guia vencida (CNV-04.3)', () => {
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
     expect(linha?.overrideReason).toBe('prorrogacao_da_operadora');
     const [aud] = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`),
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'guide_session_id' = ${consumoId}`).orderBy(sql`seq`),
     );
     expect(aud?.metadata).toMatchObject({ op: 'consume', override: true, reason: 'prorrogacao_da_operadora' });
   });
@@ -577,6 +583,145 @@ describe('isolamento entre clínicas', () => {
       tx.insert(guideSessions).values({ tenantId: clinicaB, guideId: guiaA, appointmentId: agendamentoB, consumedBy: randomUUID() }),
     );
     expect(await sqlstate(cruzado)).toContain('23503');
+  });
+});
+
+describe('R20 do #65: consumo de guia só aceita o estorno (0042)', () => {
+  /** UPDATE em SQL arbitrário (como um SQL injetado faria), no contexto da clínica A e do usuário dado. */
+  const sqlUpd = (consumoId: string, sets: ReturnType<typeof sql>, quem?: string) =>
+    withTenant(api.db.db, clinicaA, (tx) => tx.execute(sql`update guide_sessions set ${sets} where id = ${consumoId}::uuid`), quem);
+  const linha = async (consumoId: string) =>
+    (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId))))[0]!;
+  const consumir = async (guiaId: string, extra: Record<string, unknown> = {}) => {
+    const r = await post(recepA, `/guias/${guiaId}/consumos`, { agendamentoId: await sessaoRealizada(), ...extra });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return (r.body as { consumoId: string }).consumoId;
+  };
+
+  it('SQL arbitrário não desfaz estorno nem troca guia, agendamento, autoria ou override; estorno só em nome próprio', async () => {
+    const g = await novaGuia(recepA, { validade: somarDias(hojeNaClinica(), -1) });
+    const outraGuia = await novaGuia(recepA);
+    const estornado = await consumir(g.id, { overrideMotivo: 'prorrogacao_da_operadora' });
+    expect((await post(finA, `/guias/${g.id}/consumos/${estornado}/estornar`, { motivo: 'lancamento_errado' })).status).toBe(200);
+    const vivo = await consumir(g.id, { overrideMotivo: 'renovacao_em_andamento' });
+    const outroAg = await sessaoRealizada();
+    const adminReg = await api.membro(clinicaA, api.sessao(clinicaA, 'admin'), 'admin');
+    const antesY = await linha(estornado);
+    const antesX = await linha(vivo);
+
+    for (const s of [recepA, finA, adminReg, profA]) {
+      const u = s.userId;
+      // Desfazer o estorno ou reescrever motivo/autor de um estorno já feito.
+      expect(await sqlstate(sqlUpd(estornado, sql`reversed_at = null, reversed_by = null, reversal_reason = null`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(estornado, sql`reversal_reason = 'guia_errada'`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(estornado, sql`reversed_by = ${u}::uuid`, u))).toContain('42501');
+      // Trocar guia, agendamento, autoria, instante ou override de um consumo vivo.
+      expect(await sqlstate(sqlUpd(vivo, sql`guide_id = ${outraGuia.id}::uuid`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(vivo, sql`appointment_id = ${outroAg}::uuid`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(vivo, sql`consumed_by = ${u}::uuid`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(vivo, sql`consumed_at = 'epoch'`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(vivo, sql`override_reason = 'decisao_da_clinica'`, u))).toContain('42501');
+      expect(await sqlstate(sqlUpd(vivo, sql`override_reason = null`, u))).toContain('42501');
+      // Estorno em nome de outra pessoa, ou "estorno" que troca a guia junto.
+      const outro = s === finA ? recepA : finA;
+      expect(await sqlstate(sqlUpd(vivo, sql`reversed_at = now(), reversed_by = ${outro.userId}::uuid, reversal_reason = 'guia_errada'`, u))).toContain('42501');
+      expect(
+        await sqlstate(sqlUpd(vivo, sql`reversed_at = now(), reversed_by = ${u}::uuid, reversal_reason = 'guia_errada', guide_id = ${outraGuia.id}::uuid`, u)),
+      ).toContain('42501');
+    }
+    // Sem usuário na transação, nem o estorno passa.
+    expect(await sqlstate(sqlUpd(vivo, sql`reversed_at = now(), reversed_by = ${finA.userId}::uuid, reversal_reason = 'guia_errada'`))).toContain('42501');
+
+    expect(await linha(estornado)).toEqual(antesY);
+    expect(await linha(vivo)).toEqual(antesX);
+    expect(antesX).toMatchObject({ reversedAt: null, overrideReason: 'renovacao_em_andamento', guideId: g.id });
+
+    // O estorno legítimo pela API continua funcionando, uma vez só.
+    expect((await post(finA, `/guias/${g.id}/consumos/${vivo}/estornar`, { motivo: 'status_corrigido' })).status).toBe(200);
+    expect(await sqlstate(sqlUpd(vivo, sql`reversal_reason = 'guia_errada'`, finA.userId))).toContain('42501');
+    expect(await linha(vivo)).toMatchObject({ reversedBy: finA.userId, reversalReason: 'status_corrigido', overrideReason: 'renovacao_em_andamento' });
+  });
+
+  it('o estorno grava a hora do banco, não a enviada pelo cliente', async () => {
+    const g = await novaGuia(recepA);
+    const c = await consumir(g.id);
+    const antes = Date.now();
+    await sqlUpd(c, sql`reversed_at = 'epoch', reversed_by = ${finA.userId}::uuid, reversal_reason = 'lancamento_errado'`, finA.userId);
+    const gravada = await linha(c);
+    expect(gravada).toMatchObject({ reversedBy: finA.userId, reversalReason: 'lancamento_errado' });
+    expect(gravada.reversedAt!.getTime()).toBeGreaterThan(antes - 60_000);
+    expect(gravada.reversedAt!.getTime()).toBeLessThan(Date.now() + 60_000);
+  });
+
+  it('estornar exige perfil autorizado ativo em clinic_members (SQL e API)', async () => {
+    const g = await novaGuia(recepA);
+    const c = await consumir(g.id);
+    const estornoDireto = (quem: string) =>
+      sqlUpd(c, sql`reversed_at = now(), reversed_by = ${quem}::uuid, reversal_reason = 'lancamento_errado'`, quem);
+    // Perfil só no token, perfil fora da lista (psicólogo), perfil revogado e usuário de outra clínica: 42501.
+    const soToken = api.sessao(clinicaA, 'financeiro');
+    const psicologo = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'psicologo');
+    const deOutraClinica = await api.membro(clinicaB, api.sessao(clinicaB, 'recepcao'), 'recepcao');
+    const revogado = await api.membro(clinicaA, api.sessao(clinicaA, 'recepcao'), 'recepcao');
+    const adminReg = await api.membro(clinicaA, api.sessao(clinicaA, 'admin'), 'admin');
+    expect((await api.http().delete(`/clinica/membros/${revogado.userId}/recepcao`).set(cab(adminReg))).status).toBe(204);
+    for (const s of [soToken, psicologo, deOutraClinica, revogado]) expect(await sqlstate(estornoDireto(s.userId))).toContain('42501');
+    // Pela API, o perfil do token sem registro no banco vira 403 explicável, sem estornar nem mexer no saldo.
+    const api403 = await post(soToken, `/guias/${g.id}/consumos/${c}/estornar`, { motivo: 'lancamento_errado' });
+    expect(api403.status).toBe(403);
+    expect(api403.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
+    expect(await linha(c)).toMatchObject({ reversedAt: null, reversedBy: null });
+    expect((await api.http().get(`/guias/${g.id}`).set(cab(recepA))).body).toMatchObject({ sessoesUsadas: 1, saldo: 9 });
+    // Perfil autorizado registrado (recepção) estorna em nome próprio.
+    await estornoDireto(recepA.userId);
+    expect(await linha(c)).toMatchObject({ reversedBy: recepA.userId, reversalReason: 'lancamento_errado' });
+  });
+});
+
+describe('R21 do #65: correção atendido -> faltou sem perfil registrado', () => {
+  const status = (s: Sessao, ag: string, novo: string) => post(s, `/agendamentos/${ag}/status`, { status: novo });
+
+  it('o passo que estorna devolve 403 perfil_nao_registrado (não 500) e nada é gravado; com o perfil, a correção chega a faltou', async () => {
+    // Sessão de agora (dentro da janela de atendimento), atendida pelo profissional e consumida na guia.
+    const { data, hora } = noFusoDaClinica(new Date());
+    const r = await post(recepA, '/agendamentos', { pacienteId: pacienteA, profissionalId: profissionalA, tipoId: tipoA, data, hora, encaixe: true });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const ag = id(r);
+    expect((await post(recepA, `/agendamentos/${ag}/check-in`)).status).toBe(200);
+    expect((await status(profA, ag, 'atendido')).status).toBe(200);
+    const g = await novaGuia(recepA);
+    const c = await post(recepA, `/guias/${g.id}/consumos`, { agendamentoId: ag });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const consumoId = (c.body as { consumoId: string }).consumoId;
+
+    // Correção atendido -> faltou: atendido -> em atendimento -> chegou -> agendado (estorna) -> faltou.
+    expect((await status(profA, ag, 'em_atendimento')).status).toBe(200);
+    expect((await status(profA, ag, 'chegou')).status).toBe(200);
+    const auditoriaAntes = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'appointment_id' = ${ag}`));
+    // Recepção só no token (sem linha em clinic_members): o passo que estorna é recusado com 403 explicável.
+    const recepSoToken = api.sessao(clinicaA, 'recepcao');
+    const recusa = await status(recepSoToken, ag, 'agendado');
+    expect(recusa.status, JSON.stringify(recusa.body)).toBe(403);
+    expect(recusa.body).toMatchObject({ codigo: 'perfil_nao_registrado' });
+    // Sem UUIDs antes de procurar o SQLSTATE: "42501" casaria com um id aleatório.
+    expect(JSON.stringify(recusa.body).replace(UUID_RE, '<uuid>')).not.toMatch(/42501|guide_sessions|SQL/i);
+    // Nada gravado: status, consumo, saldo e trilha iguais.
+    const [agLinha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(appointments).where(eq(appointments.id, ag)));
+    expect(agLinha?.status).toBe('checked_in');
+    const [consumo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
+    expect(consumo).toMatchObject({ reversedAt: null, reversedBy: null });
+    expect((await api.http().get(`/guias/${g.id}`).set(cab(recepA))).body).toMatchObject({ sessoesUsadas: 1, saldo: 9 });
+    const auditoriaDepois = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'appointment_id' = ${ag}`));
+    expect(auditoriaDepois.length).toBe(auditoriaAntes.length);
+
+    // Com o perfil registrado (recepA), a mesma correção estorna e chega a faltou.
+    expect((await status(recepA, ag, 'agendado')).status).toBe(200);
+    expect((await status(recepA, ag, 'faltou')).status).toBe(200);
+    expect((await api.http().get(`/guias/${g.id}`).set(cab(recepA))).body).toMatchObject({ sessoesUsadas: 0, saldo: 10 });
+    const [estornado] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guideSessions).where(eq(guideSessions.id, consumoId)));
+    expect(estornado).toMatchObject({ reversedBy: recepA.userId, reversalReason: 'status_corrigido' });
   });
 });
 

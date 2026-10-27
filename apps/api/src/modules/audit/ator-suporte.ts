@@ -24,6 +24,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import type { TenantTx } from '../../db/tenant-transaction';
+import { createAwsKmsCliente, loadKmsConfig, regiaoDoArnKms } from '../crypto/kms-client';
 import { insertAudit, type AuditEntry } from './audit-log';
 
 export const SUPPORT_PSEUDONYM_KEY_MIN_BYTES = 32;
@@ -107,20 +108,22 @@ export class LocalPseudonymSigner implements PseudonymSigner {
 
 /**
  * Subconjunto da API do AWS KMS para MAC, com os nomes e formatos do SDK v3
- * (`new KMS({ region: 'sa-east-1' })` de `@aws-sdk/client-kms` deve satisfazer esta interface).
- * Interface para a API não depender do SDK até a infraestrutura existir (Portão A) e para teste.
+ * O adaptador real é `createAwsKmsCliente` (crypto/kms-client.ts, `@aws-sdk/client-kms`).
+ * Interface para o signer não depender do SDK (testes usam KMS falso).
  */
 export interface KmsMacApi {
-  generateMac(input: { KeyId: string; Message: Uint8Array; MacAlgorithm: 'HMAC_SHA_256' }): Promise<{ Mac?: Uint8Array | undefined }>;
-  verifyMac(input: {
+  /**
+   * Única operação de MAC da API. K-c4a (parecer #76): sem `VerifyMac` — a role da tarefa não tem
+   * `kms:VerifyMac` e não vai ter (decisão do Guardião); não reintroduzir.
+   */
+  generateMac(input: {
     KeyId: string;
     Message: Uint8Array;
-    Mac: Uint8Array;
     MacAlgorithm: 'HMAC_SHA_256';
-  }): Promise<{ MacValid?: boolean | undefined }>;
+  }): Promise<{ Mac?: Uint8Array | undefined; KeyId?: string | undefined }>;
 }
 
-/** Sonda fixa, sem dado de ninguém, para conferir a chave no boot/readiness. */
+/** Sonda fixa, sem dado de ninguém, para conferir a chave (futura sonda de readiness, nunca no boot). */
 const SONDA = Buffer.from('plataforma-saude:pseudonimo-suporte:sonda:v1', 'utf8');
 
 /** HMAC-SHA256 dentro do KMS (chave HMAC_256, uso GENERATE_VERIFY_MAC). O segredo nunca sai de lá. */
@@ -142,16 +145,16 @@ export class KmsPseudonymSigner implements PseudonymSigner {
   }
 
   /**
-   * Confere que a chave existe, é de MAC e responde (GenerateMac + VerifyMac sobre a sonda fixa).
-   * Para o boot/readiness e para a ferramenta de reidentificação do operador.
+   * Confere que a chave existe, é de MAC e responde, só com `GenerateMac` sobre a sonda fixa
+   * (K-c4a, parecer #76): exige MAC não vazio e, quando a chave configurada é um ARN (fora de
+   * development/test é sempre), que o KMS responda com o MESMO ARN. Nunca chama `VerifyMac`.
+   * Feita para uma futura sonda de readiness (`/health/ready`); NÃO ligar no boot.
    */
   async verificarChave(): Promise<void> {
-    const gerado = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message: SONDA, MacAlgorithm: 'HMAC_SHA_256' }));
-    if (!gerado.Mac) throw new PseudonimoIndisponivelError();
-    const conferido = await guard(() =>
-      this.kms.verifyMac({ KeyId: this.keyId, Message: SONDA, Mac: gerado.Mac as Uint8Array, MacAlgorithm: 'HMAC_SHA_256' }),
-    );
-    if (conferido.MacValid !== true) throw new PseudonimoIndisponivelError();
+    const out = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message: SONDA, MacAlgorithm: 'HMAC_SHA_256' }));
+    if (!out.Mac || out.Mac.length === 0) throw new PseudonimoIndisponivelError();
+    const esperado = this.keyId.startsWith('arn:') ? this.keyId : undefined;
+    if (!out.KeyId || (esperado !== undefined && out.KeyId !== esperado)) throw new PseudonimoIndisponivelError();
   }
 }
 
@@ -167,7 +170,9 @@ let segredoDoProcesso: Buffer | undefined;
 
 /**
  * Escolhe o signer no boot:
- * - SUPPORT_PSEUDONYM_KMS_KEY_ID definida: KMS (exige o cliente KMS; sem ele, não sobe);
+ * - SUPPORT_PSEUDONYM_KMS_KEY_ID definida: KMS. O cliente vem de `deps.kms` (AppModule/testes) ou é
+ *   criado pelo SDK com `loadKmsConfig` (AWS_REGION em sa-east-1, só a role da tarefa); fora de
+ *   development/test, a variável tem de ser o ARN da chave, na mesma região. Sem isso, não sobe;
  * - development/test: segredo local (SUPPORT_PSEUDONYM_KEY em base64, ≥ 32 bytes, ou aleatório por
  *   processo, com pseudônimo só estável dentro do processo, o que basta para testes);
  * - qualquer outro NODE_ENV (production, staging, vazio...) sem KMS: lança e a API não sobe. O
@@ -180,8 +185,13 @@ export function createPseudonymSigner(env: NodeJS.ProcessEnv = process.env, deps
     throw new Error('SUPPORT_PSEUDONYM_KEY é proibida fora de development/test: o segredo do pseudônimo fica no KMS (SUPPORT_PSEUDONYM_KMS_KEY_ID)');
   }
   if (kmsKeyId) {
-    if (!deps.kms) throw new Error('SUPPORT_PSEUDONYM_KMS_KEY_ID definida, mas o cliente KMS não foi ligado');
-    return new KmsPseudonymSigner(deps.kms, kmsKeyId);
+    const config = loadKmsConfig(env, 'pseudônimo do suporte');
+    // Fora de dev/test, só o ARN completo que o Terraform entrega (aws_kms_key.pseudonimo_suporte.arn),
+    // na MESMA região do cliente: alias ou id solto poderiam apontar para outra chave/conta sem aviso.
+    if (!local && regiaoDoArnKms(kmsKeyId) !== config.region) {
+      throw new Error('SUPPORT_PSEUDONYM_KMS_KEY_ID precisa ser o ARN da chave HMAC (arn:aws:kms:<região>:<conta>:key/<id>) na região de AWS_REGION');
+    }
+    return new KmsPseudonymSigner(deps.kms ?? createAwsKmsCliente(config), kmsKeyId);
   }
   if (!local) {
     throw new Error(

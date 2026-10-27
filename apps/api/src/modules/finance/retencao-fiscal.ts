@@ -37,6 +37,8 @@ export interface PoliticaDeRetencaoFiscal {
 export interface ResultadoDaRetencaoFiscal {
   readonly recibosEliminados: number;
   readonly cobrancasEliminadas: number;
+  /** 0031 (V1 do #67): retratos do responsável pagador congelados nos recebimentos. */
+  readonly pagadoresEliminados: number;
   readonly politica: PoliticaDeRetencaoFiscal;
 }
 
@@ -73,9 +75,10 @@ export class RetencaoFiscalService {
 
   private async naTransacao(tx: TenantTx, ctx: RequestContext): Promise<ResultadoDaRetencaoFiscal> {
     const politica = await lerPolitica(tx);
-    const [r] = await tx.execute<{ receipts_purged: number; charges_purged: number }>(sql`select * from app_fiscal_retention_run()`);
+    const [r] = await tx.execute<{ receipts_purged: number; charges_purged: number; payers_purged: number }>(sql`select * from app_fiscal_retention_run()`);
     const recibosEliminados = Number(r?.receipts_purged ?? 0);
     const cobrancasEliminadas = Number(r?.charges_purged ?? 0);
+    const pagadoresEliminados = Number(r?.payers_purged ?? 0);
     await recordAudit(tx, ctx, {
       action: AuditAction.Update,
       scope: SCOPE_RETENCAO_FISCAL,
@@ -83,11 +86,12 @@ export class RetencaoFiscalService {
         op: 'fiscal_retention_run',
         receipts_purged: recibosEliminados,
         charges_purged: cobrancasEliminadas,
+        payers_purged: pagadoresEliminados,
         years: politica.anos,
         accountant_confirmed: politica.confirmadaPeloContador,
       },
     });
-    return { recibosEliminados, cobrancasEliminadas, politica };
+    return { recibosEliminados, cobrancasEliminadas, pagadoresEliminados, politica };
   }
 }
 

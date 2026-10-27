@@ -18,9 +18,22 @@ export class FieldDecryptionError extends FieldCryptoError {
 /** Chave mestra ou de dados indisponível: destruída, inexistente ou provedor fora do ar. */
 export class KeyUnavailableError extends FieldCryptoError {
   override readonly name = 'KeyUnavailableError';
-  constructor() {
+  /** Tipo da falha (lista fechada, sem mensagem nem ARN do provedor); `outro` quando não se sabe. */
+  constructor(readonly kind: KeyFailureKind = 'outro') {
     super('chave de criptografia indisponível');
   }
+}
+
+/**
+ * Tipo da falha do provedor de chaves, para o on-call separar IAM de indisponibilidade (observação 3 da
+ * conferência R3-a/R3-b do importador). Lista FECHADA, derivada só do NOME do erro do SDK e do código
+ * HTTP: nunca da mensagem, do ARN ou do id da requisição.
+ */
+export type KeyFailureKind = 'acesso_negado' | 'indisponivel' | 'estado_invalido' | 'outro';
+
+/** Tipo de qualquer erro vindo da porta `KeyProvider` (o que não for `KeyUnavailableError` é `outro`). */
+export function keyFailureKind(e: unknown): KeyFailureKind {
+  return e instanceof KeyUnavailableError ? e.kind : 'outro';
 }
 
 /** A clínica ainda não tem chave provisionada: falha fechada, nunca grava o campo em claro. */

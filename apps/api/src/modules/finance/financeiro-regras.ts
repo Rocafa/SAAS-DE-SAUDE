@@ -160,10 +160,18 @@ export function menorDeIdadeEm(nascimento: string | null, data: string): boolean
  * Pendências do recibo. `pagadorResponsavel`: o paciente é menor e nenhum pagador foi informado — o
  * recibo sai com o paciente como pagador PRESUMIDO e a pendência `pagador_responsavel` (R3 do #65): o
  * IR do responsável exige o nome e o CPF de quem pagou (Lei 9.250/1995, art. 8º, §2º, III).
+ * `pagadorAnulado` (R1 do 2º parecer do #67): o vínculo do pagador congelado no recebimento foi anulado
+ * depois como cadastro errado — o recibo sai com o congelado e a pendência `pagador_anulado`; a correção
+ * fiscal é estorno e novo recebimento (api-dominio §10a).
  */
-export function pendenciasDoRecibo(c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>, pagadorResponsavel = false): string[] {
+export function pendenciasDoRecibo(
+  c: Omit<ConteudoDoRecibo, 'pendencias' | 'versao'>,
+  pagadorResponsavel = false,
+  pagadorAnulado = false,
+): string[] {
   const p: string[] = [];
   if (pagadorResponsavel) p.push('pagador_responsavel');
+  if (pagadorAnulado) p.push('pagador_anulado');
   if (!c.emitente.documento) p.push(c.emitente.tipo === 'pf' ? 'cpf_do_profissional' : 'cnpj_da_clinica');
   if (!c.pagador.cpf) p.push('cpf_do_pagador');
   if (!c.beneficiario.cpf) p.push('cpf_do_beneficiario');
@@ -196,9 +204,14 @@ export interface ItemReceitaSaude {
   readonly pendencias: readonly string[];
 }
 
-export function pendenciasDoItem(i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>, pagadorResponsavel = false): string[] {
+export function pendenciasDoItem(
+  i: Pick<ItemReceitaSaude, 'pagador' | 'beneficiario'>,
+  pagadorResponsavel = false,
+  pagadorAnulado = false,
+): string[] {
   const p: string[] = [];
   if (pagadorResponsavel) p.push('pagador_responsavel');
+  if (pagadorAnulado) p.push('pagador_anulado');
   if (!i.pagador.cpf) p.push('cpf_do_pagador');
   if (!i.beneficiario.cpf) p.push('cpf_do_beneficiario');
   return p;

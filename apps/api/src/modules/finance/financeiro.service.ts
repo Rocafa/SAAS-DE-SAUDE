@@ -30,7 +30,8 @@ import { travarAgendamento } from '../insurance/consumos';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, cifrarCampoFinanceiro } from './finance-fields';
+import { pagadorVivoDoCadastro } from '../patients/responsaveis.service';
+import { CAMPO_CPF_PAGADOR, CAMPO_CPF_PROFISSIONAL, CAMPO_PAGADOR_DO_RECEBIMENTO, cifrarCampoFinanceiro } from './finance-fields';
 import {
   caixaAbertoPara,
   carregarConfig,
@@ -428,9 +429,28 @@ export class FinanceiroService {
       if (valor > saldo) throw new ConflitoError('valor_acima_do_saldo');
       const caixaId = await caixaAbertoPara(tx, ctx, dados.caixaId);
       const agora = new Date();
+      const pagamentoId = randomUUID();
+      // V1 do #67: sem pagador na cobrança, o responsável pagador VIVO agora é congelado no recebimento
+      // (vínculo + retrato cifrado). O banco confere que é mesmo o pagador vivo do paciente da cobrança.
+      const doCadastro = c.payerName ? null : await pagadorVivoDoCadastro(tx, this.cipher, ctx.tenantId, c.patientId);
+      const congelado = doCadastro
+        ? {
+            guardianPayerLinkId: doCadastro.vinculoId,
+            guardianPayerEnc: await cifrarCampoFinanceiro(
+              this.cipher,
+              tx,
+              ctx,
+              pagamentoId,
+              CAMPO_PAGADOR_DO_RECEBIMENTO,
+              JSON.stringify({ nome: doCadastro.nome, cpf: doCadastro.cpf }),
+            ),
+          }
+        : {};
       const [p] = await tx
         .insert(payments)
         .values({
+          id: pagamentoId,
+          ...congelado,
           tenantId: ctx.tenantId,
           chargeId: c.id,
           cashSessionId: caixaId,
@@ -449,7 +469,15 @@ export class FinanceiroService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: SCOPE_RECEBIMENTOS,
-        metadata: { payment_id: p.id, charge_id: c.id, patient_id: c.patientId, cash_session_id: caixaId, method: dados.forma, partial: valor < saldo },
+        metadata: {
+          payment_id: p.id,
+          charge_id: c.id,
+          patient_id: c.patientId,
+          cash_session_id: caixaId,
+          method: dados.forma,
+          partial: valor < saldo,
+          ...(doCadastro ? { payer_link_id: doCadastro.vinculoId } : {}),
+        },
       });
       return this.recebimentoDto(p, atualizada, false);
     });

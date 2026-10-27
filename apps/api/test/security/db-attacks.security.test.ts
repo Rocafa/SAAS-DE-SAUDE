@@ -76,8 +76,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await raw?.end({ timeout: 5 });
-  await h?.close();
+  try {
+    await raw?.end({ timeout: 5 });
+  } finally {
+    await h?.close();
+  }
 });
 
 describe('troca de contexto de tenant', () => {
@@ -126,8 +129,13 @@ describe('troca de contexto de tenant', () => {
 
   it('SET SESSION app.tenant_id = B fora de withTenant não expõe B', async () => {
     await raw.unsafe(`set session app.tenant_id = '${b.ctx.tenantId}'`);
-    const vistos = await raw.unsafe<{ display_name: string }[]>('select display_name from patients');
-    await raw.unsafe('reset app.tenant_id');
+    let vistos: { display_name: string }[];
+    try {
+      vistos = await raw.unsafe<{ display_name: string }[]>('select display_name from patients');
+    } finally {
+      // A conexão `raw` (max 1) é a mesma dos testes seguintes: o contexto de sessão não pode sobrar.
+      await raw.unsafe('reset app.tenant_id');
+    }
     expect(vistos).toHaveLength(0);
   });
 

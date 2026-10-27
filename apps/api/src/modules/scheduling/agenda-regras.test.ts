@@ -16,8 +16,33 @@ import {
   STATUS_FRONT,
   statusParaDb,
   statusParaFront,
+  transicaoPeloPaciente,
   transicaoPermitida,
 } from './agenda-regras';
+
+describe('resposta do paciente pelo canal (regra da agenda, não a transição genérica)', () => {
+  const inicio = new Date('2030-01-10T13:00:00Z');
+  const antes = new Date('2030-01-09T13:00:00Z');
+  it('confirma só agendado; confirmado já estava', () => {
+    expect(transicaoPeloPaciente('scheduled', 'confirmar', inicio, antes)).toEqual({ tipo: 'mudar', para: 'confirmed' });
+    expect(transicaoPeloPaciente('confirmed', 'confirmar', inicio, antes)).toEqual({ tipo: 'ja_estava' });
+    for (const s of ['checked_in', 'in_progress', 'completed', 'no_show', 'cancelled'] as const) {
+      expect(transicaoPeloPaciente(s, 'confirmar', inicio, antes)).toEqual({ tipo: 'status_nao_permite' });
+    }
+  });
+  it('cancela agendado ou confirmado; nunca chegou/atendido/falta', () => {
+    expect(transicaoPeloPaciente('scheduled', 'cancelar', inicio, antes)).toEqual({ tipo: 'mudar', para: 'cancelled' });
+    expect(transicaoPeloPaciente('confirmed', 'cancelar', inicio, antes)).toEqual({ tipo: 'mudar', para: 'cancelled' });
+    expect(transicaoPeloPaciente('cancelled', 'cancelar', inicio, antes)).toEqual({ tipo: 'ja_estava' });
+    for (const s of ['checked_in', 'in_progress', 'completed', 'no_show'] as const) {
+      expect(transicaoPeloPaciente(s, 'cancelar', inicio, antes)).toEqual({ tipo: 'status_nao_permite' });
+    }
+  });
+  it('depois do início, nada', () => {
+    expect(transicaoPeloPaciente('scheduled', 'confirmar', inicio, inicio)).toEqual({ tipo: 'status_nao_permite' });
+    expect(transicaoPeloPaciente('scheduled', 'cancelar', inicio, new Date('2030-01-10T14:00:00Z'))).toEqual({ tipo: 'status_nao_permite' });
+  });
+});
 import { validarFiltroAgenda, validarNovoAgendamento } from './scheduling.validation';
 
 describe('fuso da clínica (UTC-03:00)', () => {

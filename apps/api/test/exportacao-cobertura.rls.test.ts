@@ -5,7 +5,7 @@
  * aplicação real (mesma cifra da API) e confere conteúdo, contagens, CSV e auditoria.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -41,7 +41,27 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  portalConsents,
+  portalInvites,
+  portalLinks,
+  portalRightsRequests,
+  guardians,
+  patientGuardians,
+  patientGuardianHistory,
+  importBatches,
+  importBatchRecords,
+  tenants,
+  whatsappInbound,
+  whatsappOptIns,
+  whatsappOutbox,
+  whatsappSettings,
 } from '../src/db/schema';
+import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
+import type { FieldCipher } from '../src/modules/crypto/field-cipher';
+import type { TenantTx } from '../src/db/tenant-transaction';
+import { cifrarCampoPortal } from '../src/modules/portal/portal-fields';
+import { hashDoCodigo } from '../src/modules/portal/portal-otp';
+import { TERMO_MIGRACAO_VERSAO } from '../src/modules/imports/importacao-regras';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
@@ -94,6 +114,19 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  portal_invites: 'portal.invites',
+  portal_links: 'portal.links',
+  portal_consents: 'portal.consents',
+  portal_rights_requests: 'portal.rightsRequests',
+  guardians: 'guardians.guardians',
+  patient_guardians: 'guardians.patientGuardians',
+  patient_guardian_history: 'guardians.patientGuardianHistory',
+  import_batches: 'imports.batches',
+  import_batch_records: 'imports.batchRecords',
+  whatsapp_settings: 'whatsapp.whatsappSettings',
+  whatsapp_opt_ins: 'whatsapp.whatsappOptIns',
+  whatsapp_outbox: 'whatsapp.whatsappOutbox',
+  whatsapp_inbound: 'whatsapp.whatsappInbound',
   audit_log: 'auditEvents',
 };
 
@@ -102,6 +135,11 @@ const COLUNAS_FORA_DO_ITEM: Readonly<Record<string, string>> = {
   'tenants.subscription_status': 'vai no manifesto (subscription.status)',
   'tenants.cancelled_at': 'vai no manifesto (subscription.cancelledAt)',
   'patients.search_name': 'derivada do nome para a busca (não é dado próprio)',
+  'patients.cpf_bidx': 'índice cego do CPF (HMAC com chave interna da clínica, 0046/R9); o CPF sai decifrado em cpf',
+  'patients.cpf_bidx_version': 'versão da chave interna do índice cego do CPF (0046/R9); não é dado da clínica',
+  'portal_invites.token_hash': 'hash do token de uso único do convite: credencial, não sai (0027)',
+  'whatsapp_opt_ins.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone',
+  'whatsapp_outbox.recipient_phone_hash': 'HMAC de comparação com chave interna da clínica (V1 do #69); o número sai decifrado em recipientPhone enquanto não passa a retenção',
 };
 
 const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -126,6 +164,10 @@ const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
 const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
 const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
+const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
+const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
+/** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
+const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -304,13 +346,141 @@ beforeAll(async () => {
     .send({ dinheiroContadoCentavos: 1000 })
     .expect(200);
 
+  // Portal do paciente (0027), direto pelo banco: convite da clínica, resgate pela conta, consentimento e
+  // pedido do titular (detalhe cifrado) na sessão do portal.
+  const contaPortal = randomUUID();
+  const tokenPortal = randomBytes(32).toString('base64url');
+  const tokenHash = createHash('sha256').update(tokenPortal).digest('hex');
+  // 0033 (A2 do #68): o resgate exige o código enviado ao telefone do cadastro (aqui, um código fictício).
+  const codigoHash = hashDoCodigo(tokenPortal, '123456');
+  await withTenant(
+    api.db.db,
+    clinicaA,
+    (tx) =>
+      tx.insert(portalInvites).values({
+        tenantId: clinicaA,
+        patientId: pacienteId,
+        tokenHash,
+        actingAs: 'titular',
+        expiresAt: sql`now() + interval '1 day'`,
+        createdBy: admin.userId,
+      }),
+    admin.userId,
+  );
+  const vinculo = await api.db.db.transaction(async (tx) => {
+    const d = await tx.execute(sql`select invite_id from app_portal_invite_challenge(${contaPortal}::uuid, ${tokenHash}, ${codigoHash})`);
+    expect(d).toHaveLength(1);
+    return null;
+  }).then(() => api.db.db.transaction(async (tx) => {
+    const r = await tx.execute<{ v: string | null }>(sql`select app_portal_redeem_invite(${contaPortal}::uuid, ${tokenHash}, ${codigoHash}) as v`);
+    return r[0]?.v ?? null;
+  }));
+  expect(vinculo).toMatch(/^[0-9a-f-]{36}$/);
+  const cifra = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+  await api.db.db.transaction(async (tx) => {
+    await tx.execute(sql`select app_set_portal_session(${contaPortal}::uuid, ${vinculo}::uuid)`);
+    await tx.insert(portalConsents).values({
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      purpose: 'escriba_ia',
+      response: 'nao',
+      actingAs: 'titular',
+      textVersion: 'teste-1',
+      textHash: 'a'.repeat(64),
+    });
+    const id = randomUUID();
+    await tx.insert(portalRightsRequests).values({
+      id,
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      linkId: vinculo as string,
+      accountId: contaPortal,
+      kind: 'acesso',
+      actingAs: 'titular',
+      protocol: '20301231-ABCDEF01',
+      detailEnc: await cifrarCampoPortal(cifra, tx, clinicaA, null, id, 'detail', PEDIDO_DETALHE),
+    });
+  });
+  // Responsáveis (0028): pessoa + vínculo pagador, troca do telefone (valor anterior no histórico) e encerramento.
+  const resp = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/responsaveis`)
+    .set(cab(admin))
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
+  expect(resp.status, JSON.stringify(resp.body)).toBe(201);
+  const vinculoId = (resp.body as { id: string }).id;
+  await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
+  await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
+
+  // Importador (0024): um lote de pacientes aplicado (1 paciente criado), com o aceite do termo.
+  const lote = await api
+    .http()
+    .post(`/importacoes?tipo=pacientes&termo=${TERMO_MIGRACAO_VERSAO}`)
+    .set(cab(admin))
+    .set('Content-Type', 'text/csv; charset=utf-8')
+    .send('nome;telefone\nPaciente Ficticio Importado;11900000077\n');
+  expect(lote.status, JSON.stringify(lote.body)).toBe(201);
+  const loteId = (lote.body as { id: string }).id;
+  await api.http().put(`/importacoes/${loteId}/mapeamento`).set(cab(admin)).send({ mapeamento: { nome: 0, telefone: 1 } }).expect(200);
+  await api.http().post(`/importacoes/${loteId}/validar`).set(cab(admin)).send({}).expect(200);
+  const sim = await api.http().post(`/importacoes/${loteId}/simular`).set(cab(admin)).send({}).expect(200);
+  await api
+    .http()
+    .post(`/importacoes/${loteId}/aplicar`)
+    .set(cab(admin))
+    .send({
+      resumoHash: (sim.body as { resumoHash: string }).resumoHash,
+      // R6: confirmação da clínica de origem (nome da clínica).
+      clinicaConfirmada: (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ nome: tenants.displayName }).from(tenants)))[0]?.nome,
+    })
+    .expect(200);
+  // WhatsApp (0032): canal, opt-in com prova, um envio (modelo da plataforma) e uma resposta (do webhook = sistema).
+  const ag4 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-08',
+    hora: '10:00',
+  });
+  expect(ag4.status).toBe(201);
+  const ag4Body = ag4.body as { id: string; inicio: string };
+  // Opt-in pela rota (grava o número que consentiu, cifrado e com HMAC; V1 do parecer #69).
+  const opt = await api
+    .http()
+    .post(`/pacientes/${pacienteId}/whatsapp/opt-in`)
+    .set(cab(admin))
+    .send({ destinatario: 'paciente', meio: 'formulario_assinado', comprovante: 'Termo ficticio export 1' });
+  expect(opt.status, JSON.stringify(opt.body)).toBe(201);
+  const envioId = await withTenant(
+    api.db.db,
+    clinicaA,
+    async (tx) => {
+      await tx.insert(whatsappSettings).values({ tenantId: clinicaA, senderName: 'Agendamentos', businessNumberId: NUMERO_DE_NEGOCIO, updatedBy: admin.userId });
+      const [o] = await tx.select().from(whatsappOptIns).where(eq(whatsappOptIns.id, (opt.body as { id: string }).id));
+      const [e] = await tx
+        .insert(whatsappOutbox)
+        .values({ tenantId: clinicaA, appointmentId: ag4Body.id, appointmentStartsAt: new Date(ag4Body.inicio), patientId: pacienteId, optInId: o?.id ?? '', templateName: 'lembrete_neutro_v1', recipientKind: 'paciente', recipientPhoneHash: o?.recipientPhoneHash ?? '', createdBy: admin.userId })
+        .returning();
+      return e?.id ?? '';
+    },
+    admin.userId,
+  );
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(whatsappInbound).values({ tenantId: clinicaA, providerMessageId: 'wamid.EXPORT1', outboxId: envioId, interpretation: 'outro', outcome: 'sem_acao' }),
+  );
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
 
 afterAll(async () => {
-  await sqlCat?.end({ timeout: 5 });
-  await api?.fechar();
+  try {
+    await sqlCat?.end({ timeout: 5 });
+  } finally {
+    await api?.fechar();
+  }
 });
 
 describe('G2 — cobertura da exportação contra o catálogo', () => {
@@ -387,7 +557,18 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receiptCounters
           | typeof receipts
           | typeof receiptCancellations
-          | typeof clinicMembers,
+          | typeof clinicMembers
+          | typeof portalInvites
+          | typeof portalLinks
+          | typeof portalConsents
+          | typeof portalRightsRequests
+          | typeof guardians
+          | typeof patientGuardians
+          | typeof patientGuardianHistory
+          | typeof whatsappSettings
+          | typeof whatsappOptIns
+          | typeof whatsappOutbox
+          | typeof whatsappInbound,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -425,7 +606,28 @@ describe('G2 — conteúdo do pacote', () => {
           receipts: await n(receipts),
           receiptCancellations: await n(receiptCancellations),
         },
+        guardians: {
+          guardians: await n(guardians),
+          patientGuardians: await n(patientGuardians),
+          patientGuardianHistory: await n(patientGuardianHistory),
+        },
+        whatsapp: {
+          whatsappSettings: await n(whatsappSettings),
+          whatsappOptIns: await n(whatsappOptIns),
+          whatsappOutbox: await n(whatsappOutbox),
+          whatsappInbound: await n(whatsappInbound),
+        },
         clinicMembers: await n(clinicMembers),
+        portal: {
+          invites: await n(portalInvites),
+          links: await n(portalLinks),
+          consents: await n(portalConsents),
+          rightsRequests: await n(portalRightsRequests),
+        },
+        imports: {
+          batches: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatches))[0]?.n ?? -1,
+          batchRecords: (await tx.select({ n: sql<number>`count(*)::int` }).from(importBatchRecords))[0]?.n ?? -1,
+        },
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -433,10 +635,11 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.json.manifest.counts).toEqual(noBanco);
     expect(noBanco).toMatchObject({
       tenants: 1,
-      patients: 2,
+      patients: 3,
+      imports: { batches: 1, batchRecords: 1 },
       professionals: 3,
       appointmentTypes: 1,
-      appointments: 3,
+      appointments: 4,
       appointmentReschedules: 1,
       insurers: 1,
       insuranceGuides: 1,
@@ -453,6 +656,7 @@ describe('G2 — conteúdo do pacote', () => {
       privateNotesWithheld: 1,
       legalHolds: 1,
       noteCustodies: 1,
+      portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
       finance: {
         financeSettings: 1,
         professionalFiscalProfiles: 1,
@@ -464,6 +668,13 @@ describe('G2 — conteúdo do pacote', () => {
         receipts: 2,
         receiptCancellations: 1,
       },
+      // 0028: 1 pessoa, 1 vínculo; histórico = criação da pessoa, do vínculo, troca do telefone e encerramento.
+      guardians: {
+        guardians: 1,
+        patientGuardians: 1,
+        patientGuardianHistory: 4,
+      },
+      whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });
     // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
     expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
@@ -529,6 +740,26 @@ describe('G2 — conteúdo do pacote', () => {
     for (const proibido of [cpfFicticio(8), cpfFicticio(9), 'Responsavel Ficticio']) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
+  it('portal: convite sem o hash do token, vínculo, consentimento e pedido do titular decifrado; nada disso na trilha', () => {
+    const p = pkg.json.data.portal;
+    expect(p.invites[0]).toMatchObject({ actingAs: 'titular', redeemedAccountId: p.links[0]?.accountId, linkId: p.links[0]?.id });
+    expect(JSON.stringify(p.invites)).not.toMatch(/tokenHash|[0-9a-f]{64}/);
+    expect(p.consents[0]).toMatchObject({ purpose: 'escriba_ia', response: 'nao', channel: 'portal' });
+    expect(p.rightsRequests[0]).toMatchObject({ kind: 'acesso', status: 'aberta', detail: PEDIDO_DETALHE, answer: null });
+    expect(pkg.auditJsonl).not.toContain(PEDIDO_DETALHE);
+  });
+
+  it('responsáveis (0028): pessoa decifrada, vínculo com vigência e histórico com o valor anterior; nada disso na trilha', () => {
+    const g = pkg.json.data.guardians;
+    expect(g.guardians[0]).toMatchObject({ name: RESP_NOME, cpf: cpfFicticio(10), phone: '11900000011' });
+    expect(g.patientGuardians[0]).toMatchObject({ kind: 'pai_mae', isPayer: true, receivesClinicalInfo: false, endReason: 'maioridade', clinicalInfoBasis: null, annulReason: null });
+    expect(g.patientGuardians[0]?.payerPatientAwareAt).toBeTruthy();
+    expect(g.patientGuardians[0]?.validUntil).toBe(g.patientGuardians[0]?.validFrom);
+    expect(g.patientGuardianHistory.map((h) => h.event)).toEqual(['responsavel_criado', 'vinculo_criado', 'responsavel_alterado', 'vinculo_encerrado']);
+    expect(g.patientGuardianHistory[2]).toMatchObject({ changedFields: 'phone', prevPhone: '11900000010', prevCpf: null });
+    for (const proibido of [cpfFicticio(10), 'QZX7737', '11900000010', '11900000011']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
   it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {
     const notas = pkg.json.data.privateNotes;
     expect(notas).toHaveLength(1);
@@ -545,10 +776,11 @@ describe('G2 — conteúdo do pacote', () => {
 
   it('auditoria da exportação: 1 linha com contagens, sem conteúdo', async () => {
     const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
-      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))).orderBy(sql`seq`),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
+    // 3 pacientes (2 do cadastro + 1 do lote importado) e 4 agendamentos (3 + o do WhatsApp).
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
@@ -591,7 +823,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
       expect(auditJsonl).not.toContain(proibido);
     }
-    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma']));
+    expect(new Set(auditEvents.map((e) => e.actorKind))).toEqual(new Set(['usuario_clinica', 'suporte_plataforma', 'paciente_portal']));
   });
 
   it('o atendente do suporte sai pseudonimizado por clínica, com chamado e motivo', async () => {
@@ -605,7 +837,7 @@ describe('G2 — trilha de auditoria no pacote (Decisão 1 do Guardião, PR #57)
     expect(JSON.stringify(pkg)).not.toContain(ATENDENTE);
     // Na clínica B, o mesmo atendente tem outro pseudônimo: o id não liga as duas clínicas.
     const linhasB = await withTenant(api.db.db, clinicaB, (tx) =>
-      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')),
+      tx.select().from(auditLog).where(eq(auditLog.actorKind, 'suporte_plataforma')).orderBy(sql`seq`),
     );
     expect(linhasB.map((l) => l.actorId)).toEqual([supportActorPseudonym(CHAVE_SUPORTE, clinicaB, ATENDENTE)]);
     expect(linhasB[0]?.actorId).not.toBe(pseudoA);
