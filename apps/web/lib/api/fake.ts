@@ -5,13 +5,17 @@
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
+import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
+import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
 import type {
+  AlteracaoPaciente,
   Agendamento,
   Anexo,
   EventoLinhaTempo,
   ItemEspera,
   NovoPaciente,
   Pacote,
+  Papel,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -133,8 +137,13 @@ const SEMENTES: Semente[] = [
 
 export interface OpcoesFake {
   agora?: Date;
-  /** Para demonstrar os estados de tela: "erro", "vazio" ou "lento". */
-  simular?: 'erro' | 'vazio' | 'lento';
+  /**
+   * Para demonstrar os estados de tela: "erro", "vazio", "lento" ou "lista_mudou" (o cursor da lista
+   * foi recusado também no recomeço: mesmo erro que o adaptador HTTP entrega, `erroListaMudou`).
+   */
+  simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
+  /** Papel do usuário da demonstração (padrão: admin). */
+  papel?: Papel;
 }
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
@@ -186,15 +195,20 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       ];
 
   async function resposta<T>(valor: T): Promise<T> {
-    if (opcoes.simular === 'erro') throw new Error('Não conseguimos falar com o servidor.');
+    if (opcoes.simular === 'erro') throw new ErroApi('Não conseguimos falar com o servidor.', 0, 'rede');
     if (opcoes.simular === 'lento') await new Promise((r) => setTimeout(r, 1500));
     return structuredClone(valor);
   }
 
   return {
     usuarioAtual: () =>
-      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' }),
-    listarPacientes: () => resposta(pacientes),
+      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: opcoes.papel ?? 'admin', clinica: 'Clínica Demonstração' }),
+    // O fake não pagina (devolve tudo de uma vez), mas entrega o mesmo erro final do HTTP quando o
+    // recomeço por cursor recusado falha: nada parcial chega à tela.
+    listarPacientes: async () => {
+      if (opcoes.simular === 'lista_mudou') throw erroListaMudou();
+      return resposta(pacientes);
+    },
     obterPaciente: (id) => resposta(pacientes.find((p) => p.id === id) ?? null),
     listarProfissionais: () => resposta(PROFISSIONAIS),
     listarTiposAtendimento: () => resposta(TIPOS),
@@ -211,9 +225,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
           .sort((x, y) => (x.data + x.hora).localeCompare(y.data + y.hora)),
       ),
     async criarAgendamento(dados: NovoAgendamento) {
-      if (!pacientes.some((p) => p.id === dados.pacienteId)) throw new Error('Falta o paciente. Escolha um nome da lista.');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dados.data)) throw new Error('Falta o dia. Escolha no calendário.');
-      if (!/^\d{2}:\d{2}$/.test(dados.hora)) throw new Error('Falta o horário. Digite como 14:00.');
+      if (!pacientes.some((p) => p.id === dados.pacienteId)) throw new ErroApi('Falta o paciente. Escolha um nome da lista.', 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dados.data)) throw new ErroApi('Falta o dia. Escolha no calendário.', 400);
+      if (!/^\d{2}:\d{2}$/.test(dados.hora)) throw new ErroApi('Falta o horário. Digite como 14:00.', 400);
       const tipo = TIPOS.find((t) => t.id === (dados.tipoId ?? 't1')) ?? TIPOS[0]!;
       const novo: Agendamento = {
         id: `a${++seq}`,
@@ -236,9 +250,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async remarcarAgendamento(id, data, hora) {
       const a = agendamentos.find((x) => x.id === id);
-      if (!a) throw new Error('Esse horário não existe mais. Atualize a tela.');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) throw new Error('Falta o dia. Escolha no calendário.');
-      if (!/^\d{2}:\d{2}$/.test(hora)) throw new Error('Falta o horário. Digite como 14:00.');
+      if (!a) throw new ErroApi('Esse horário não existe mais. Atualize a tela.', 404);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) throw new ErroApi('Falta o dia. Escolha no calendário.', 400);
+      if (!/^\d{2}:\d{2}$/.test(hora)) throw new ErroApi('Falta o horário. Digite como 14:00.', 400);
       const anterior = { data: a.data, hora: a.hora };
       a.data = data;
       a.hora = hora;
@@ -247,7 +261,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async alterarStatus(id, status) {
       const a = agendamentos.find((x) => x.id === id);
-      if (!a) throw new Error('Esse horário não existe mais. Atualize a tela.');
+      if (!a) throw new ErroApi('Esse horário não existe mais. Atualize a tela.', 404);
       const anterior = a.status;
       a.status = status;
       await resposta(null);
@@ -273,8 +287,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
 
     async criarSerie(dados: NovoAgendamento, rep: Repeticao) {
-      if (!pacientes.some((p) => p.id === dados.pacienteId)) throw new Error('Falta o paciente. Escolha um nome da lista.');
-      const datas = datasDaSerie(dados.data, rep.intervaloDias, rep.vezes);
+      if (!pacientes.some((p) => p.id === dados.pacienteId)) throw new ErroApi('Falta o paciente. Escolha um nome da lista.', 400);
+      let datas: string[];
+      try {
+        datas = datasDaSerie(dados.data, rep.intervaloDias, rep.vezes);
+      } catch (e) {
+        // Mensagem fixa em pt-BR da regra de repetição (lib/agenda.ts); vira erro do adaptador.
+        throw new ErroApi(e instanceof Error ? e.message : MENSAGENS.regra, 400);
+      }
       const serieId = novoId('s');
       let pacoteId: string | undefined;
       if (rep.pacote) {
@@ -312,7 +332,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
 
     listarEspera: () => resposta(espera),
     async adicionarEspera(pacienteId, preferencia) {
-      if (!pacientes.some((p) => p.id === pacienteId)) throw new Error('Falta o paciente. Escolha um nome da lista.');
+      if (!pacientes.some((p) => p.id === pacienteId)) throw new ErroApi('Falta o paciente. Escolha um nome da lista.', 400);
       const item: ItemEspera = { id: novoId('e'), pacienteId, preferencia: preferencia.trim() || 'Qualquer horário', criadoEm: hojeIso };
       espera.push(item);
       return resposta(item);
@@ -342,6 +362,30 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       pacientes.push(p);
       return resposta(p);
     },
+    // Mesmas regras da API (rodada 19+): inativo não muda; nascimento que reduz a idade de quem tem 12+
+    // exige documento conferido, e só admin ou profissional confere.
+    async alterarPaciente(id, dados: AlteracaoPaciente) {
+      const p = pacientes.find((x) => x.id === id);
+      if (!p) throw new ErroApi(MENSAGENS.naoEncontrado, 404);
+      if (!p.ativo) throw new ErroApi(MENSAGENS.inativo, 409, 'paciente_inativo');
+      // Como a API (0053): a conferência só vale junto com a data; data futura é recusada (400).
+      if (dados.documentoConferido !== undefined && dados.nascimento === undefined) throw mensagemDeErro(400, { campos: ['documentoConferido'] });
+      if (dados.telefone === undefined && dados.nascimento === undefined) throw new ErroApi(MENSAGENS.nadaMudou, 400);
+      const novoNascimento = dados.nascimento === undefined ? undefined : dados.nascimento?.trim() || '';
+      if (novoNascimento && (!/^\d{4}-\d{2}-\d{2}$/.test(novoNascimento) || novoNascimento > hojeIso)) {
+        throw mensagemDeErro(400, { campos: ['nascimento'] });
+      }
+      const mudou = novoNascimento !== undefined && novoNascimento !== p.nascimento;
+      if (mudou && mudancaDeNascimentoExigeDocumento(p.nascimento, novoNascimento, hojeIso) && dados.documentoConferido !== true) {
+        throw new ErroApi(MENSAGENS.documentoNaoConferido, 422, 'documento_nao_conferido');
+      }
+      if (mudou && dados.documentoConferido === true && !podeConferirDocumento(opcoes.papel ?? 'admin')) {
+        throw new ErroApi(MENSAGENS.conferenciaPerfil, 403, 'conferencia_exige_perfil');
+      }
+      if (dados.telefone !== undefined) p.telefone = dados.telefone.trim();
+      if (mudou) p.nascimento = novoNascimento;
+      return resposta(p);
+    },
     async removerPaciente(id) {
       const i = pacientes.findIndex((p) => p.id === id);
       if (i >= 0) pacientes.splice(i, 1);
@@ -349,7 +393,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async inativarPaciente(id, motivo) {
       const p = pacientes.find((x) => x.id === id);
-      if (!p) throw new Error('Paciente não encontrado.');
+      if (!p) throw new ErroApi('Paciente não encontrado.', 404);
       p.ativo = false;
       p.inativacao = { data: hojeIso, motivo: motivo.trim() || 'Sem motivo informado' };
       // Consultas futuras saem da agenda; o histórico e o prontuário ficam.
@@ -358,7 +402,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async reativarPaciente(id) {
       const p = pacientes.find((x) => x.id === id);
-      if (!p) throw new Error('Paciente não encontrado.');
+      if (!p) throw new ErroApi('Paciente não encontrado.', 404);
       p.ativo = true;
       delete p.inativacao;
       await resposta(null);

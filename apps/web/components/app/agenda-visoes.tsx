@@ -15,7 +15,7 @@ import { deIsoLocal, formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido, type Agendamento, type Paciente, type Profissional, type StatusAgendamento } from '@/lib/api/tipos';
 import { cn } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
-import { useAviso } from './desfazer';
+import { useAcao, useAviso } from './desfazer';
 
 interface Base {
   ags: Agendamento[];
@@ -40,17 +40,19 @@ function useBase(de: string, ate: string) {
 function useAcoesStatus() {
   const { api, atualizar } = useDados();
   const avisar = useAviso();
-  return async (a: Agendamento, status: StatusAgendamento, texto: string) => {
-    const anterior = await api.alterarStatus(a.id, status);
-    atualizar();
-    avisar({
-      texto,
-      desfazer: async () => {
-        await api.alterarStatus(a.id, anterior);
-        atualizar();
-      },
+  const acao = useAcao();
+  return (a: Agendamento, status: StatusAgendamento, texto: string) =>
+    acao(async () => {
+      const anterior = await api.alterarStatus(a.id, status);
+      atualizar();
+      avisar({
+        texto,
+        desfazer: async () => {
+          await api.alterarStatus(a.id, anterior);
+          atualizar();
+        },
+      });
     });
-  };
 }
 
 function nomeDe(base: Base, a: Agendamento) {
@@ -189,6 +191,7 @@ export function VisaoSemana({ dia }: { dia: string }) {
   const consulta = useBase(dias[0]!, dias[6]!);
   const { api, atualizar } = useDados();
   const avisar = useAviso();
+  const acao = useAcao();
   const [sobre, setSobre] = useState<string | null>(null);
   const hoje = paraIsoLocal(new Date());
 
@@ -199,20 +202,22 @@ export function VisaoSemana({ dia }: { dia: string }) {
       avisar({ texto: 'Esse dia já passou. Arraste para hoje ou um dia depois.' });
       return;
     }
-    const todos = await api.listarAgendamentos({ de: novoDia, ate: novoDia });
-    const ocupado = conflito(todos, { profissionalId: a.profissionalId, data: novoDia, hora: a.hora, ignorarId: a.id }, base.profissionais.find((p) => p.id === a.profissionalId));
-    if (ocupado) {
-      avisar({ texto: `Horário das ${a.hora} já ocupado nesse dia. Use “Remarcar” para escolher outro horário.` });
-      return;
-    }
-    const anterior = await api.remarcarAgendamento(a.id, novoDia, a.hora);
-    atualizar();
-    avisar({
-      texto: `${nomeDe(base, a)} passou para ${formatarDia(novoDia, new Date())} às ${a.hora}.`,
-      desfazer: async () => {
-        await api.remarcarAgendamento(a.id, anterior.data, anterior.hora);
-        atualizar();
-      },
+    await acao(async () => {
+      const todos = await api.listarAgendamentos({ de: novoDia, ate: novoDia });
+      const ocupado = conflito(todos, { profissionalId: a.profissionalId, data: novoDia, hora: a.hora, ignorarId: a.id }, base.profissionais.find((p) => p.id === a.profissionalId));
+      if (ocupado) {
+        avisar({ texto: `Horário das ${a.hora} já ocupado nesse dia. Use “Remarcar” para escolher outro horário.` });
+        return;
+      }
+      const anterior = await api.remarcarAgendamento(a.id, novoDia, a.hora);
+      atualizar();
+      avisar({
+        texto: `${nomeDe(base, a)} passou para ${formatarDia(novoDia, new Date())} às ${a.hora}.`,
+        desfazer: async () => {
+          await api.remarcarAgendamento(a.id, anterior.data, anterior.hora);
+          atualizar();
+        },
+      });
     });
   }
 

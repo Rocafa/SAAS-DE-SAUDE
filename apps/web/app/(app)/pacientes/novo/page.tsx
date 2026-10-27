@@ -8,7 +8,7 @@ import { UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { textoDoErro, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
@@ -35,6 +35,7 @@ export default function PaginaNovoPaciente() {
   });
   const [erros, setErros] = useState<Partial<Record<Campo, string>>>({});
   const [enviando, setEnviando] = useState(false);
+  const [erroGeral, setErroGeral] = useState('');
   const menor = v.nascimento ? idade(v.nascimento, new Date()) < 18 : false;
   const mudar = (c: keyof typeof v) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [c]: e.target.value }));
 
@@ -60,14 +61,23 @@ export default function PaginaNovoPaciente() {
       return;
     }
     setEnviando(true);
-    const p = await api.criarPaciente({
-      nome: v.nome,
-      nomeSocial: v.nomeSocial,
-      telefone: formatarTelefone(v.telefone),
-      cpf: formatarCpf(v.cpf),
-      nascimento: v.nascimento,
-      ...(menor ? { responsavel: { nome: v.respNome.trim(), parentesco: v.respParentesco, telefone: formatarTelefone(v.respTelefone) } } : {}),
-    });
+    setErroGeral('');
+    let p: Awaited<ReturnType<typeof api.criarPaciente>>;
+    try {
+      p = await api.criarPaciente({
+        nome: v.nome,
+        nomeSocial: v.nomeSocial,
+        telefone: formatarTelefone(v.telefone),
+        cpf: formatarCpf(v.cpf),
+        nascimento: v.nascimento,
+        ...(menor ? { responsavel: { nome: v.respNome.trim(), parentesco: v.respParentesco, telefone: formatarTelefone(v.respTelefone) } } : {}),
+      });
+    } catch (err) {
+      // A API recusou (perfil, assinatura, limite…): mensagem pronta do adaptador, sem dado pessoal.
+      setErroGeral(textoDoErro(err));
+      setEnviando(false);
+      return;
+    }
     atualizar();
     avisar({
       texto: `${p.nomeSocial ?? p.nome} cadastrado.`,
@@ -107,6 +117,11 @@ export default function PaginaNovoPaciente() {
     <>
       <Titulo descricao="Só o nome e o telefone são obrigatórios. O resto dá para completar depois.">Cadastrar paciente</Titulo>
       <form onSubmit={enviar} noValidate className="flex max-w-xl flex-col gap-6">
+        {erroGeral && (
+          <p role="alert" className="rounded-md border-[3px] border-borda-forte p-3 font-bold">
+            {erroGeral}
+          </p>
+        )}
         {campo('nome', 'Nome completo (de registro)', { autoComplete: 'off' })}
         <div className="flex flex-col gap-2">
           <label htmlFor="campo-nomeSocial" className="text-lg font-bold">

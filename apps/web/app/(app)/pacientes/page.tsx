@@ -3,31 +3,24 @@
 /** Lista de pacientes: busca, cadastro e inativos (escondidos por padrão). */
 import { Search, UserPlus, UserRound } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
 import { Titulo } from '@/components/app/estrutura';
+import { useAtrasado } from '@/components/app/use-atrasado';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { acharPacientes } from '@/lib/ajudante/busca';
 import { nomeExibido } from '@/lib/api/tipos';
-
-/** Espera a pessoa parar de digitar antes de buscar no servidor (modo http). */
-function useAtrasado(valor: string, ms: number): string {
-  const [v, setV] = useState(valor);
-  useEffect(() => {
-    const t = setTimeout(() => setV(valor), ms);
-    return () => clearTimeout(t);
-  }, [valor, ms]);
-  return v;
-}
+import { ATRASO_BUSCA_MS, TERMO_MINIMO } from '@/lib/selecao-paciente';
 
 export default function PaginaPacientes() {
   const { api } = useDados();
   const [busca, setBusca] = useState('');
   const [verInativos, setVerInativos] = useState(false);
   // Modo http: a busca vai ao servidor, que a registra na auditoria (sem o termo). Fake: local.
-  const termo = useAtrasado(busca.trim(), 350);
-  const noServidor = Boolean(api.buscarPacientes) && termo.length >= 2;
+  const termo = useAtrasado(busca.trim(), ATRASO_BUSCA_MS);
+  const noServidor = Boolean(api.buscarPacientes) && termo.length >= TERMO_MINIMO;
   const consulta = useConsulta(
     (a) => (noServidor && a.buscarPacientes ? a.buscarPacientes(termo) : a.listarPacientes()),
     [noServidor ? termo : ''],
@@ -69,6 +62,7 @@ export default function PaginaPacientes() {
       </label>
       {consulta.estado === 'carregando' && <Carregando />}
       {consulta.estado === 'erro' && <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />}
+      {consulta.estado === 'pronto' && <AvisoTruncado truncado={consulta.dados.truncado} />}
       {consulta.estado === 'pronto' &&
         (lista.length === 0 ? (
           <Vazio

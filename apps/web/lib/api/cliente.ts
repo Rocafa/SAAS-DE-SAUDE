@@ -1,8 +1,10 @@
 import type {
+  AlteracaoPaciente,
   Agendamento,
   Anexo,
   EventoLinhaTempo,
   ItemEspera,
+  ListaPacientes,
   NovoPaciente,
   Pacote,
   Repeticao,
@@ -29,13 +31,19 @@ export interface FiltroAgenda {
  */
 export interface ApiClinica {
   usuarioAtual(): Promise<Usuario>;
-  listarPacientes(): Promise<Paciente[]>;
+  /** `truncado: true` quando passou do teto de 1.000 nomes (a tela avisa para refinar a busca). */
+  listarPacientes(): Promise<ListaPacientes>;
   /**
    * Busca no servidor (modo http): a API audita a busca como leitura de cadastro, sem o termo.
-   * Opcional: o fake procura na lista em memória.
+   * Opcional: o fake procura na lista em memória. Mesmo teto e mesmo `truncado` da lista.
    */
-  buscarPacientes?(termo: string): Promise<Paciente[]>;
+  buscarPacientes?(termo: string): Promise<ListaPacientes>;
   obterPaciente(id: string): Promise<Paciente | null>;
+  /**
+   * Descarta o que o adaptador guarda em memória (retrato de pacientes). O provedor chama no `limpar()`
+   * (sair, trocar de clínica, sessão mudou). Opcional: o fake não guarda nada além dos dados fictícios.
+   */
+  esquecerCache?(): void;
   listarProfissionais(): Promise<Profissional[]>;
   listarTiposAtendimento(): Promise<TipoAtendimento[]>;
   listarAgendamentos(filtro?: FiltroAgenda): Promise<Agendamento[]>;
@@ -60,6 +68,11 @@ export interface ApiClinica {
   devolverEspera(item: ItemEspera): Promise<void>;
 
   criarPaciente(dados: NovoPaciente): Promise<Paciente>;
+  /**
+   * Corrige telefone e/ou nascimento. Mudar o nascimento pode exigir `documentoConferido` (só admin ou
+   * profissional): sem ela, erro com a mensagem de conferência (422 `documento_nao_conferido` na API).
+   */
+  alterarPaciente(id: string, dados: AlteracaoPaciente): Promise<Paciente>;
   removerPaciente(id: string): Promise<void>;
   inativarPaciente(id: string, motivo: string): Promise<void>;
   reativarPaciente(id: string): Promise<void>;

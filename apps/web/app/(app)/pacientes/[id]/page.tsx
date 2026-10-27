@@ -9,7 +9,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { CorrigirDados } from '@/components/app/corrigir-dados';
+import { useAcao, useAviso } from '@/components/app/desfazer';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { cpfMascarado } from '@/lib/ajudante/busca';
@@ -21,6 +22,7 @@ export default function PaginaFicha() {
   const { id } = useParams<{ id: string }>();
   const { api, atualizar } = useDados();
   const avisar = useAviso();
+  const acao = useAcao();
   const [cancelando, setCancelando] = useState<string | null>(null);
   const [inativando, setInativando] = useState(false);
   const [motivo, setMotivo] = useState('Terminou o tratamento');
@@ -61,37 +63,40 @@ export default function PaginaFicha() {
   const proximas = ags.filter((a) => a.data >= hoje && (a.status === 'agendado' || a.status === 'confirmado'));
   const nome = nomeExibido(paciente);
 
-  async function cancelar(a: Agendamento) {
-    const anterior = await api.alterarStatus(a.id, 'cancelado');
-    setCancelando(null);
-    atualizar();
-    avisar({
-      texto: `Consulta de ${formatarDia(a.data, new Date())} às ${a.hora} cancelada.`,
-      desfazer: async () => {
-        await api.alterarStatus(a.id, anterior);
-        atualizar();
-      },
+  const cancelar = (a: Agendamento) =>
+    acao(async () => {
+      const anterior = await api.alterarStatus(a.id, 'cancelado');
+      setCancelando(null);
+      atualizar();
+      avisar({
+        texto: `Consulta de ${formatarDia(a.data, new Date())} às ${a.hora} cancelada.`,
+        desfazer: async () => {
+          await api.alterarStatus(a.id, anterior);
+          atualizar();
+        },
+      });
     });
-  }
 
-  async function inativar() {
-    await api.inativarPaciente(id, motivo);
-    setInativando(false);
-    atualizar();
-    avisar({
-      texto: `${nome} inativado. O prontuário continua guardado.`,
-      desfazer: async () => {
-        await api.reativarPaciente(id);
-        atualizar();
-      },
+  const inativar = () =>
+    acao(async () => {
+      await api.inativarPaciente(id, motivo);
+      setInativando(false);
+      atualizar();
+      avisar({
+        texto: `${nome} inativado. O prontuário continua guardado.`,
+        desfazer: async () => {
+          await api.reativarPaciente(id);
+          atualizar();
+        },
+      });
     });
-  }
 
-  async function reativar() {
-    await api.reativarPaciente(id);
-    atualizar();
-    avisar({ texto: `${nome} está ativo de novo.` });
-  }
+  const reativar = () =>
+    acao(async () => {
+      await api.reativarPaciente(id);
+      atualizar();
+      avisar({ texto: `${nome} está ativo de novo.` });
+    });
 
   return (
     <article className="flex flex-col gap-8">
@@ -128,6 +133,9 @@ export default function PaginaFicha() {
               Marcar consulta
             </Link>
           </Botao>
+        </div>
+        <div className="mt-2">
+          <CorrigirDados key={`${paciente.id}-${paciente.telefone}-${paciente.nascimento}`} paciente={paciente} />
         </div>
       </header>
 

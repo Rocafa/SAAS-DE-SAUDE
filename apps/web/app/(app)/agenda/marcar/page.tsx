@@ -7,16 +7,18 @@
 import { CalendarCheck, ChevronDown, Search, UserRound, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useId, useMemo, useState, type FormEvent } from 'react';
+import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { textoDoErro, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { usePreenchimento } from '@/components/app/executor';
+import { useAtrasado } from '@/components/app/use-atrasado';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import { conflito } from '@/lib/agenda';
-import { acharPacientes } from '@/lib/ajudante/busca';
 import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
-import { nomeExibido, type Paciente } from '@/lib/api/tipos';
+import { comTruncado, nomeExibido, type Paciente } from '@/lib/api/tipos';
+import { ATRASO_BUSCA_MS, buscarParaEscolha, sugestoesParaEscolha, TERMO_MINIMO } from '@/lib/selecao-paciente';
 
 export default function PaginaMarcar() {
   return (
@@ -43,8 +45,10 @@ function FormularioMarcar() {
 
   const consulta = useConsulta(
     async (a) => {
+      // F-1: no modo http a escolha do paciente busca no servidor; a lista completa (teto de 1.000)
+      // só é carregada no fake, que não tem `buscarPacientes`.
       const [pacientes, profissionais, tipos, agendamentos] = await Promise.all([
-        a.listarPacientes(),
+        a.buscarPacientes ? Promise.resolve(comTruncado([], false)) : a.listarPacientes(),
         a.listarProfissionais(),
         a.listarTiposAtendimento(),
         remarcarId ? a.listarAgendamentos() : Promise.resolve([]),
@@ -100,12 +104,34 @@ function FormularioMarcar() {
   usePreenchimento('marcar-dia', (v) => setDia(v), () => setDia(''));
   usePreenchimento('marcar-hora', (v) => setHora(v), () => setHora(''));
 
-  const pacientes = consulta.estado === 'pronto' ? consulta.dados.pacientes : [];
-  const escolhido: Paciente | undefined = pacientes.find((p) => p.id === pacienteId);
+  const pacientes = useMemo(() => (consulta.estado === 'pronto' ? consulta.dados.pacientes : comTruncado([], false)), [consulta]);
+  const noServidor = Boolean(api.buscarPacientes);
+  const termo = useAtrasado(busca.trim(), ATRASO_BUSCA_MS);
+  const buscaServidor = useConsulta(async (a) => ({ termo, lista: await buscarParaEscolha(a, termo) }), [termo]);
+  const respostaServidor = buscaServidor.estado === 'pronto' ? buscaServidor.dados : null;
+  const termoCurto = noServidor && busca.trim().length > 0 && busca.trim().length < TERMO_MINIMO;
+  const procurando = noServidor && !termoCurto && busca.trim().length > 0 && buscaServidor.estado !== 'erro' && respostaServidor?.termo !== busca.trim();
   const sugestoes = useMemo(
-    () => (busca.trim() ? acharPacientes(busca, pacientes.filter((p) => p.ativo)).slice(0, 6).map((x) => x.paciente) : []),
-    [busca, pacientes],
+    () => sugestoesParaEscolha({ termo: busca, doServidor: noServidor ? (respostaServidor?.lista ?? comTruncado([], false)) : null, local: pacientes }),
+    [busca, noServidor, respostaServidor, pacientes],
   );
+
+  // Paciente escolhido: guardado ao clicar; quando vem de fora (URL, remarcar, ajudante) e não está
+  // na lista local, busca o cadastro pelo id (leitura que a API audita por paciente).
+  const [escolhidoGuardado, setEscolhidoGuardado] = useState<Paciente | null>(null);
+  const daLista = pacientes.find((p) => p.id === pacienteId);
+  const escolhido: Paciente | undefined = escolhidoGuardado?.id === pacienteId ? escolhidoGuardado : daLista;
+  useEffect(() => {
+    if (!pacienteId || daLista || escolhidoGuardado?.id === pacienteId) return;
+    let vivo = true;
+    api
+      .obterPaciente(pacienteId)
+      .then((p) => vivo && p && setEscolhidoGuardado(p))
+      .catch(() => undefined);
+    return () => {
+      vivo = false;
+    };
+  }, [api, pacienteId, daLista, escolhidoGuardado]);
 
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
@@ -173,7 +199,7 @@ function FormularioMarcar() {
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {
-      setErros({ geral: err instanceof Error ? err.message : 'Não deu para marcar. Tente de novo.' });
+      setErros({ geral: textoDoErro(err, 'Não deu para marcar. Tente de novo.') });
       setEnviando(false);
     }
   }
@@ -222,13 +248,29 @@ function FormularioMarcar() {
                   className={`${CAMPO} pl-12`}
                 />
               </div>
-              {sugestoes.length > 0 && (
+              <div aria-live="polite" className="flex flex-col gap-2">
+                {termoCurto && <p className="text-texto-suave">Digite pelo menos {TERMO_MINIMO} letras ou números para procurar.</p>}
+                {procurando && <p className="text-texto-suave">Procurando…</p>}
+                {buscaServidor.estado === 'erro' && <Erro mensagem={buscaServidor.mensagem} tentarDeNovo={buscaServidor.tentarDeNovo} />}
+                {!procurando && <AvisoTruncado truncado={sugestoes.truncado} />}
+                {!procurando && sugestoes.itens.length > 0 && (
+                  <p className="sr-only">{sugestoes.itens.length === 1 ? '1 paciente encontrado.' : `${sugestoes.itens.length} pacientes encontrados.`}</p>
+                )}
+                {!procurando && sugestoes.haMais && (
+                  <p className="text-texto-suave">Há mais pacientes com esse nome. Continue digitando (sobrenome ou telefone) para achar.</p>
+                )}
+                {busca.trim() && !termoCurto && !procurando && buscaServidor.estado !== 'erro' && sugestoes.itens.length === 0 && (
+                  <p className="text-texto-suave">Ninguém com esse nome. Confira a escrita ou cadastre o paciente em Pacientes.</p>
+                )}
+              </div>
+              {!procurando && sugestoes.itens.length > 0 && (
                 <ul aria-label="Pacientes encontrados" className="flex flex-col gap-1">
-                  {sugestoes.map((p) => (
+                  {sugestoes.itens.map((p) => (
                     <li key={p.id}>
                       <button
                         type="button"
                         onClick={() => {
+                          setEscolhidoGuardado(p);
                           setPacienteId(p.id);
                           setBusca('');
                           setErros((e) => ({ ...e, paciente: undefined }));
@@ -242,9 +284,6 @@ function FormularioMarcar() {
                     </li>
                   ))}
                 </ul>
-              )}
-              {busca.trim() && sugestoes.length === 0 && (
-                <p className="text-texto-suave">Ninguém com esse nome. Confira a escrita ou cadastre o paciente em Pacientes.</p>
               )}
             </>
           )}
