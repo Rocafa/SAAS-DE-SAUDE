@@ -7,7 +7,7 @@
 | PR | Escopo | Estado |
 |---|---|---|
 | 1 | Design system em cinza + estrutura (menu lateral e barra inferior) + camada de dados fake + **Ajudante completo** + Início | 🟢 aberto, pede revisão do Guardião |
-| 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | ⬜ |
+| 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | 🟢 aberto, empilhado sobre o PR 1 |
 | 3 | Atendimento/Prontuário + Documentos | ⬜ |
 | 4 | Financeiro + Guias + Mensagens + Relatórios | ⬜ |
 | 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | ⬜ |
@@ -37,3 +37,11 @@
 
 - O E2E (Playwright) ainda não roda no CI: pede um job novo em `.github/workflows/ci.yml`, que é caminho da DevOps. Sugestão: `pnpm --filter @plataforma/web build && pnpm --filter @plataforma/web exec playwright install --with-deps chromium && pnpm --filter @plataforma/web test:e2e`.
 - O build agora baixa a fonte do Google **na hora do build** (não no navegador). Se o CI não tiver saída para a internet, trocar por arquivo de fonte versionado com `next/font/local`.
+
+## O que o PR 2 entrega
+
+- **Agenda** em 4 jeitos de ver: Dia (agrupado por horário, com Chegou, Atender, Faltou, Remarcar e Cancelar com confirmação), Semana (remarcar **arrastando** no computador ou pelo botão "Remarcar" em qualquer tela), Por profissional e Lista de espera (colocar, tirar com desfazer, "Marcar horário" já com o paciente).
+- **Marcar**: horário ocupado é recusado com instrução ("Escolha outro horário ou faça um encaixe"); encaixe passa por cima; sessões recorrentes (toda semana ou a cada 2 semanas, 2 a 52 vezes) e pacote com saldo; desfazer apaga a série inteira.
+- **Atendimento simultâneo** (fisio no ginásio): o profissional tem limite de pacientes ao mesmo tempo; a agenda mostra "2 pacientes ao mesmo tempo".
+- **Pacientes**: cadastro com só nome e telefone obrigatórios, nome social, CPF opcional com dígito verificador, responsável obrigatório para menor; ficha com pacotes (saldo), anexos, linha do tempo e **inativar sem apagar** (texto explica a guarda legal; consultas futuras canceladas; desfazer reativa). Inativos ficam escondidos na lista, com opção de mostrar.
+- Números do PR 2: Vitest 153 no web; Playwright 75 verdes + 1 pulado de propósito (arrastar no celular; lá o caminho é o botão, testado).
