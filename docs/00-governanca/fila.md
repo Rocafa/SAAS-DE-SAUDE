@@ -79,9 +79,10 @@
 | Rodada 27.3: ✅ boot em produção com KMS real e pseudônimo — só a D4 impede a subida | Maestro @Rocafa | 26/10/2026 | `eng/integracao-r19` |
 | Rodada 27.4: ✅ #58 — XFF append, R7 (logs do ALB), AWS_REGION, veto à cadeia de credenciais (K-a/b), contexto tenant_id no gestor e break-glass (K-c) (5dc085b, aaf2f32); **key policy das chaves por clínica aguarda decisão** | Maestro @Rocafa | 27/10/2026 | PR #58 |
 | Rodada 27.5: ✅ Guardião: #58 **APROVADO** (apply após plano verde no CI), V2-a/b aprovados, R7 no ROPA (2f2c71c); **K-a1 bloqueia o merge do #73**; K-c2/K-c3 bloqueiam o piloto | Maestro @Rocafa | 27/10/2026 | PR #58 / `eng/integracao-r19` |
-| Rodada 27.6: #76 — busca com checagem de sessão e aviso de truncamento acima de 1.000 | Maestro @Rocafa (agente engenharia) | 27/10/2026 | PR #76 |
-| Rodada 27.7: API — K-a1 (lista de variáveis AWS igual à do Terraform), K-c2 (key policy com tenant_id literal no CreateKey), K-c3 unitário, K-c4 | Maestro @Rocafa (agente engenharia) | 27/10/2026 | `eng/integracao-r19` |
-| Rodada 27.8: #58 — R7-a, K-a2, K-c1 e registro da decisão K-c2 | Maestro @Rocafa (agente devops-ci) | 27/10/2026 | PR #58 |
+| Rodada 27.6: ✅ #76 — busca com checagem de sessão e aviso de truncamento acima de 1.000 (b43ab1e; web 232/232) | Maestro @Rocafa | 27/10/2026 | PR #76 |
+| Rodada 27.7: ✅ API — K-a1 (lista de variáveis AWS igual à do Terraform), K-c2 (key policy com tenant_id literal no CreateKey), K-c3 unitário, K-c4 (cdf7152) — **K-a1 aprovado: bloqueio de merge do #73 levantado** | Maestro @Rocafa | 27/10/2026 | `eng/integracao-r19` |
+| Rodada 27.8: ✅ #58 — R7-a, K-a2, K-c1 e registro da decisão K-c2 (6ba44ea, 96df2c9) — **APROVADO** (e320f95) | Maestro @Rocafa | 27/10/2026 | PR #58 |
+| Rodada 27.9: antes do piloto — K-c4a (verificarChave só com GenerateMac) + trava das listas AWS (#73); F-1 marcar consulta com busca (#76); K-c5 alarmes de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant (#58) | Maestro @Rocafa (3 agentes) | 27/10/2026 | PRs #73/#76/#58 |
 
 ## Livre (pegue colocando seu nome)
 
