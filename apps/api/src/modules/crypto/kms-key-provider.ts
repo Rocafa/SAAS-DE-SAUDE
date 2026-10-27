@@ -57,8 +57,12 @@ export class KmsKeyProvider implements KeyProvider {
   constructor(
     private readonly kms: KmsApi,
     private readonly contaAws: string,
+    /** R4: padrões de ARN de humanos além dos fixos (`KMS_PAPEIS_HUMANOS_EXTRA` = `var.papeis_humanos_extra`). */
+    private readonly papeisHumanosExtra: readonly string[] = [],
   ) {
     validarConta(contaAws);
+    // Falha no boot, não na primeira clínica: monta uma política de prova só para validar os extras.
+    politicaDaChaveDaClinica(contaAws, 'validacao' as TenantId, papeisHumanosExtra);
   }
 
   /**
@@ -81,7 +85,7 @@ export class KmsKeyProvider implements KeyProvider {
           ...(lote ? [{ TagKey: 'batch_id', TagValue: lote.batchId }] : []),
         ],
         // K-c2: a chave do lote também guarda DEK com contexto da clínica, então leva a mesma política.
-        Policy: politicaDaChaveDaClinica(this.contaAws, tenantId),
+        Policy: politicaDaChaveDaClinica(this.contaAws, tenantId, this.papeisHumanosExtra),
       }),
     );
     const arn = out.KeyMetadata?.Arn;
@@ -173,11 +177,32 @@ function validarConta(conta: string): void {
  * (ii) `Deny` para `"*"` nas operações de dados quando `kms:EncryptionContext:tenant_id` estiver AUSENTE
  *     (`Null` — `StringNotEquals` sozinho não nega quando a chave de contexto falta) ou DIFERENTE do
  *     tenant da chave. O tenant vai LITERAL (sem `${aws:ResourceTag/...}`): não depende da propagação da
- *     tag nem de substituição de variável. A role da API não tem `PutKeyPolicy`: a política é imutável para ela.
+ *     tag nem de substituição de variável. A role da API não tem `PutKeyPolicy`: a política é imutável para ela;
+ * (iii) R4 (parecer #58): `HumanoNaoDecifra`, o mesmo statement de `kms_deny_humanos` do Terraform — `Deny`
+ *     de `kms:Decrypt`/`kms:ReEncrypt*` quando `aws:PrincipalArn` casa (ArnLike) com SSO, usuário IAM, root
+ *     ou um dos `papeisHumanosExtra`. Role da API, gestor de chaves e break-glass ficam fora dos padrões.
+ *
+ * Tudo que a função usa fica nela, em OPERACOES_DE_DADOS, CONDICAO_TENANT ou validarConta: o
+ * `infra/scripts/staging/politica-kc3.mjs` (#58) extrai só essas declarações pela AST.
  */
-export function politicaDaChaveDaClinica(contaAws: string, tenantId: TenantId): string {
+export function politicaDaChaveDaClinica(contaAws: string, tenantId: TenantId, papeisHumanosExtra: readonly string[] = []): string {
   validarConta(contaAws);
   if (!/^[A-Za-z0-9-]+$/.test(tenantId)) throw new Error('politicaDaChaveDaClinica: tenant_id inválido');
+  // Extra: role/ ou user/ da MESMA conta, com prefixo fixo (1º caractere não curinga) e só caracteres de nome IAM.
+  // Recusa outra conta, sts, group, vazio e curinga total (`role/*` negaria a própria role da API).
+  const formatoExtra = /^arn:aws:iam::(\d{12}):(?:role|user)\/[A-Za-z0-9+=,.@_-][A-Za-z0-9+=,.@_\-/*?]*$/;
+  for (const extra of papeisHumanosExtra) {
+    const m = formatoExtra.exec(extra);
+    if (!m || m[1] !== contaAws) {
+      throw new Error('politicaDaChaveDaClinica: papel humano extra inválido (arn:aws:iam::<mesma conta>:role|user/<prefixo fixo>...)');
+    }
+  }
+  const humanos = [
+    `arn:aws:iam::${contaAws}:role/aws-reserved/sso.amazonaws.com/*`,
+    `arn:aws:iam::${contaAws}:user/*`,
+    `arn:aws:iam::${contaAws}:root`,
+    ...papeisHumanosExtra,
+  ];
   const negar = (Sid: string, Condition: Record<string, Record<string, string>>) => ({
     Sid,
     Effect: 'Deny',
@@ -199,8 +224,28 @@ export function politicaDaChaveDaClinica(contaAws: string, tenantId: TenantId): 
       },
       negar('NegarSemContextoDaClinica', { Null: { [CONDICAO_TENANT]: 'true' } }),
       negar('NegarContextoDeOutraClinica', { StringNotEquals: { [CONDICAO_TENANT]: tenantId } }),
+      {
+        Sid: 'HumanoNaoDecifra',
+        Effect: 'Deny',
+        Principal: { AWS: '*' },
+        Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
+        Resource: '*',
+        Condition: { ArnLike: { 'aws:PrincipalArn': humanos } },
+      },
     ],
   });
+}
+
+/**
+ * R4: `KMS_PAPEIS_HUMANOS_EXTRA` (opcional) = `join(",", var.papeis_humanos_extra)` do Terraform.
+ * Ausente ou só espaços: nenhum extra. Item vazio (`a,,b`, vírgula sobrando) é recusado; o formato de
+ * cada item é conferido em `politicaDaChaveDaClinica` (o construtor do provedor valida no boot).
+ */
+export function papeisHumanosExtraDoAmbiente(valor: string | undefined): string[] {
+  if (!valor?.trim()) return [];
+  const itens = valor.split(',').map((s) => s.trim());
+  if (itens.some((s) => s === '')) throw new Error('KMS_PAPEIS_HUMANOS_EXTRA: item vazio na lista separada por vírgula');
+  return itens;
 }
 
 function context(tenantId: TenantId): Record<string, string> {

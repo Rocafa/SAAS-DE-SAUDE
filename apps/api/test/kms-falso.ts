@@ -10,11 +10,33 @@ import type { KmsApi } from '../src/modules/crypto/kms-key-provider';
 /** Conta fictícia dos testes (12 zeros, igual à dos ARNs falsos). */
 export const CONTA_DE_TESTE = '000000000000';
 
+/** Principal padrão das chamadas ao KMS falso: a role da tarefa da API (fictícia, fora dos padrões de humano). */
+export const ROLE_API_DE_TESTE = `arn:aws:iam::${CONTA_DE_TESTE}:role/plataforma-saude-staging-api-tarefa`;
+
 interface StatementFalso {
   Effect?: string;
   Principal?: unknown;
   Action?: string | string[];
-  Condition?: Record<string, Record<string, string>>;
+  Condition?: Record<string, Record<string, string | string[]>>;
+}
+
+/** Deny por `aws:PrincipalArn` (R4, `HumanoNaoDecifra`): ações e padrões ArnLike. */
+interface NegacaoPorPrincipal {
+  acoes: string[];
+  padroes: string[];
+}
+
+/** Curinga da IAM (`*` e `?`) → regex. ArnLike compara cada um dos 6 campos do ARN separadamente. */
+const curinga = (padrao: string): RegExp =>
+  new RegExp(`^${padrao.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+const camposArn = (arn: string): string[] => {
+  const p = arn.split(':');
+  return [...p.slice(0, 5), p.slice(5).join(':')];
+};
+export function arnLike(arn: string, padrao: string): boolean {
+  const a = camposArn(arn);
+  const p = camposArn(padrao);
+  return a.length === 6 && p.length === 6 && p.every((campo, i) => curinga(campo).test(a[i] ?? ''));
 }
 
 /**
@@ -22,7 +44,13 @@ interface StatementFalso {
  * `BypassPolicyLockoutSafetyCheck` e com o statement de root da conta (senão o KMS recusa por lockout).
  * Devolve o erro do KMS (sem lançar) ou o tenant literal da negação `StringNotEquals` (ou `null` se não houver), para aplicar a política.
  */
-function conferirPolitica(input: { Policy?: unknown }): { tenant: string | null; exigeContexto: boolean } | Error {
+interface PoliticaFalsa {
+  tenant: string | null;
+  exigeContexto: boolean;
+  porPrincipal: NegacaoPorPrincipal[];
+}
+
+function conferirPolitica(input: { Policy?: unknown }): PoliticaFalsa | Error {
   const malformada = () => kmsErro('MalformedPolicyDocumentException');
   if ('BypassPolicyLockoutSafetyCheck' in input) return malformada();
   if (typeof input.Policy !== 'string') return malformada();
@@ -40,10 +68,20 @@ function conferirPolitica(input: { Policy?: unknown }): { tenant: string | null;
   const negacoes = st.filter((s) => s.Effect === 'Deny' && s.Principal === '*');
   const tenant = negacoes.map((s) => s.Condition?.StringNotEquals?.['kms:EncryptionContext:tenant_id']).find((t) => t !== undefined) ?? null;
   const exigeContexto = negacoes.some((s) => s.Condition?.Null?.['kms:EncryptionContext:tenant_id'] === 'true');
-  return { tenant, exigeContexto };
+  const lista = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? [v] : []);
+  const porPrincipal = st
+    .filter((s) => s.Effect === 'Deny' && JSON.stringify(s.Principal) === JSON.stringify({ AWS: '*' }) && s.Condition?.ArnLike?.['aws:PrincipalArn'])
+    .map((s) => ({ acoes: lista(s.Action), padroes: lista(s.Condition?.ArnLike?.['aws:PrincipalArn']) }));
+  return { tenant: typeof tenant === 'string' ? tenant : null, exigeContexto, porPrincipal };
 }
 
-export type FakeKms = KmsApi & { calls: { op: string; input: unknown }[]; fail: boolean; excluir(keyId: string): void };
+export type FakeKms = KmsApi & {
+  calls: { op: string; input: unknown }[];
+  fail: boolean;
+  excluir(keyId: string): void;
+  /** `aws:PrincipalArn` de quem chama (padrão: role da API). Trocar simula humano/break-glass (R4). */
+  principalArn: string;
+};
 
 /** Erro como o SDK v3 lança: o tipo vem em `name`; a mensagem pode trazer ARN e conta. */
 export function kmsErro(name: string, message = name, httpStatusCode?: number): Error {
@@ -60,18 +98,23 @@ export function fakeKms(): FakeKms {
   // Exclusão já feita pelo KMS (passou a janela de 7 dias): toda operação na chave dá NotFoundException.
   const excluidas = new Set<string>();
   // Política de cada chave criada (K-c2): DEK sem contexto ou com outro tenant dá AccessDenied, como no KMS.
-  const politicas = new Map<string, { tenant: string | null; exigeContexto: boolean }>();
-  const negadoPelaPolitica = (keyId: string, ctx: Record<string, string>): boolean => {
+  const politicas = new Map<string, PoliticaFalsa>();
+  const negadoPelaPolitica = (keyId: string, ctx: Record<string, string>, acao: string): boolean => {
     const pol = politicas.get(keyId);
     if (!pol) return false;
     const t = ctx.tenant_id;
-    return (pol.exigeContexto && t === undefined) || (pol.tenant !== null && t !== undefined && t !== pol.tenant);
+    if ((pol.exigeContexto && t === undefined) || (pol.tenant !== null && t !== undefined && t !== pol.tenant)) return true;
+    // R4: Deny explícito por principal vale mesmo com o contexto certo.
+    return pol.porPrincipal.some(
+      (n) => n.acoes.some((a) => curinga(a).test(acao)) && n.padroes.some((p) => arnLike(fake.principalArn, p)),
+    );
   };
   const negado = () => Promise.reject(kmsErro('AccessDeniedException', 'explicit deny in a resource-based policy', 400));
   const naoExiste = (keyId: string) => Promise.reject(kmsErro('NotFoundException', `Key '${keyId}' does not exist`, 400));
   const fake: FakeKms = {
     calls: [],
     fail: false,
+    principalArn: ROLE_API_DE_TESTE,
     excluir(keyId) {
       pendentes.delete(keyId);
       excluidas.add(keyId);
@@ -91,7 +134,7 @@ export function fakeKms(): FakeKms {
     },
     generateDataKey(input) {
       fake.calls.push({ op: 'generateDataKey', input });
-      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext)) return negado();
+      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext, 'kms:GenerateDataKey')) return negado();
       const plaintext = randomBytes(32);
       const blob = randomBytes(64);
       blobs.set(blob.toString('hex'), { plaintext: Buffer.from(plaintext), ctx: JSON.stringify(input.EncryptionContext) });
@@ -99,7 +142,7 @@ export function fakeKms(): FakeKms {
     },
     decrypt(input) {
       fake.calls.push({ op: 'decrypt', input });
-      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext)) return negado();
+      if (negadoPelaPolitica(input.KeyId, input.EncryptionContext, 'kms:Decrypt')) return negado();
       // Como no KMS: chave com exclusão agendada não decifra (KMSInvalidStateException).
       if (pendentes.has(input.KeyId)) return Promise.reject(kmsErro('KMSInvalidStateException'));
       const b = blobs.get(Buffer.from(input.CiphertextBlob).toString('hex'));
@@ -110,7 +153,11 @@ export function fakeKms(): FakeKms {
     },
     reEncrypt(input) {
       fake.calls.push({ op: 'reEncrypt', input });
-      if (negadoPelaPolitica(input.SourceKeyId, input.SourceEncryptionContext) || negadoPelaPolitica(input.DestinationKeyId, input.DestinationEncryptionContext)) {
+      // ReEncrypt pede kms:ReEncryptFrom na origem e kms:ReEncryptTo no destino.
+      if (
+        negadoPelaPolitica(input.SourceKeyId, input.SourceEncryptionContext, 'kms:ReEncryptFrom') ||
+        negadoPelaPolitica(input.DestinationKeyId, input.DestinationEncryptionContext, 'kms:ReEncryptTo')
+      ) {
         return negado();
       }
       return Promise.resolve({ CiphertextBlob: Buffer.from(input.CiphertextBlob) });

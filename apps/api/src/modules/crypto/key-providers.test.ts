@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { KeyUnavailableError } from './crypto-errors';
 import type { DataKey } from './data-key';
-import { KMS_DELETION_WINDOW_DAYS, KmsKeyProvider, politicaDaChaveDaClinica } from './kms-key-provider';
+import { KMS_DELETION_WINDOW_DAYS, KmsKeyProvider, papeisHumanosExtraDoAmbiente, politicaDaChaveDaClinica } from './kms-key-provider';
 import { createKeyProvider } from './crypto.module';
 import { DisposableKeys } from './disposable-keys';
 import { LocalKeyProvider } from './local-key-provider';
@@ -99,7 +99,7 @@ describe('K-c2/K-c3: key policy da chave da clínica (parecer #76, 27/10)', () =
   });
 
   it('nega a todos (Principal "*") as operações de dados com tenant_id ausente (Null) OU diferente (StringNotEquals)', () => {
-    const negacoes = ler(tenantA).Statement.filter((s) => s.Effect === 'Deny');
+    const negacoes = ler(tenantA).Statement.filter((s) => s.Effect === 'Deny' && s.Principal === '*');
     expect(negacoes).toHaveLength(2);
     for (const s of negacoes) {
       expect(s.Principal).toBe('*');
@@ -160,6 +160,124 @@ describe('K-c2/K-c3: key policy da chave da clínica (parecer #76, 27/10)', () =
     await expect(
       kms.createKey({ ...base, Tags: [], Policy: politicaDaChaveDaClinica(CONTA, tenantA), BypassPolicyLockoutSafetyCheck: true } as never),
     ).rejects.toMatchObject({ name: 'MalformedPolicyDocumentException' });
+  });
+});
+
+describe('R4 (parecer #58): HumanoNaoDecifra na key policy da chave da clínica e do lote', () => {
+  type Statement = { Sid: string; Effect: string; Principal: unknown; Action: string | string[]; Resource: string; Condition?: Record<string, Record<string, string[]>> };
+  const ler = (extra?: readonly string[]) => JSON.parse(politicaDaChaveDaClinica(CONTA, tenantA, extra)) as { Statement: Statement[] };
+  const PADROES = [`arn:aws:iam::${CONTA}:role/aws-reserved/sso.amazonaws.com/*`, `arn:aws:iam::${CONTA}:user/*`, `arn:aws:iam::${CONTA}:root`];
+  const ROLE_API = `arn:aws:iam::${CONTA}:role/plataforma-saude-staging-api-tarefa`;
+  const ROLE_GESTOR = `arn:aws:iam::${CONTA}:role/plataforma-saude-staging-gestor-chaves`;
+  const ROLE_BREAK_GLASS = `arn:aws:iam::${CONTA}:role/plataforma-saude-staging-break-glass`;
+  const HUMANOS = [
+    `arn:aws:iam::${CONTA}:role/aws-reserved/sso.amazonaws.com/sa-east-1/AWSReservedSSO_Admin_0123456789abcdef`,
+    `arn:aws:iam::${CONTA}:user/usuario-ficticio`,
+    `arn:aws:iam::${CONTA}:root`,
+  ];
+  const EXTRA = `arn:aws:iam::${CONTA}:role/idp-externo-*`;
+
+  it('tem o statement igual ao do Terraform (kms_deny_humanos): Deny Decrypt/ReEncrypt* por ArnLike aws:PrincipalArn', () => {
+    expect(ler().Statement.find((x) => x.Sid === 'HumanoNaoDecifra')).toEqual({
+      Sid: 'HumanoNaoDecifra',
+      Effect: 'Deny',
+      Principal: { AWS: '*' },
+      Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
+      Resource: '*',
+      Condition: { ArnLike: { 'aws:PrincipalArn': PADROES } },
+    });
+  });
+
+  it('createMasterKey: chave da clínica E chave de lote levam o HumanoNaoDecifra (com os extras do provedor)', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms, CONTA, [EXTRA]);
+    await p.createMasterKey(tenantA);
+    await p.createMasterKey(tenantA, { purpose: 'import_batch', batchId: randomUUID() });
+    const politicas = kms.calls
+      .filter((c) => c.op === 'createKey')
+      .map((c) => JSON.parse((c.input as { Policy: string }).Policy) as { Statement: Statement[] });
+    expect(politicas).toHaveLength(2);
+    for (const pol of politicas) {
+      expect(pol.Statement.find((x) => x.Sid === 'HumanoNaoDecifra')?.Condition?.ArnLike?.['aws:PrincipalArn']).toEqual([...PADROES, EXTRA]);
+    }
+  });
+
+  it('extras (var.papeis_humanos_extra) somam aos padrões fixos', () => {
+    const extra = [EXTRA, `arn:aws:iam::${CONTA}:role/federado/medico-?`];
+    expect(ler(extra).Statement.find((x) => x.Sid === 'HumanoNaoDecifra')?.Condition?.ArnLike?.['aws:PrincipalArn']).toEqual([...PADROES, ...extra]);
+  });
+
+  it('recusa extra de outra conta, fora do formato, vazio ou curinga total', () => {
+    const ruins = [
+      'arn:aws:iam::111111111111:role/idp-externo',
+      'arn:aws:iam::*:role/idp',
+      'role/idp',
+      '',
+      ' ',
+      '*',
+      `arn:aws:iam::${CONTA}:*`,
+      `arn:aws:iam::${CONTA}:role/*`,
+      `arn:aws:iam::${CONTA}:role/**`,
+      `arn:aws:iam::${CONTA}:role/?*`,
+      `arn:aws:iam::${CONTA}:user/`,
+      `arn:aws:iam::${CONTA}:role/*api`,
+      `arn:aws:iam::${CONTA}:role/a"b`,
+      `arn:aws:sts::${CONTA}:assumed-role/x`,
+      `arn:aws:iam::${CONTA}:group/admins`,
+    ];
+    for (const r of ruins) {
+      expect(() => politicaDaChaveDaClinica(CONTA, tenantA, [r]), r).toThrow(/papel humano/);
+      expect(() => new KmsKeyProvider(fakeKms(), CONTA, [r]), r).toThrow(/papel humano/);
+    }
+  });
+
+  it('papeisHumanosExtraDoAmbiente: lista separada por vírgula; ausente/vazia = nenhum; item vazio recusado', () => {
+    expect(papeisHumanosExtraDoAmbiente(undefined)).toEqual([]);
+    expect(papeisHumanosExtraDoAmbiente('  ')).toEqual([]);
+    expect(papeisHumanosExtraDoAmbiente(` arn:aws:iam::${CONTA}:role/a-* , arn:aws:iam::${CONTA}:role/b `)).toEqual([
+      `arn:aws:iam::${CONTA}:role/a-*`,
+      `arn:aws:iam::${CONTA}:role/b`,
+    ]);
+    expect(() => papeisHumanosExtraDoAmbiente(`arn:aws:iam::${CONTA}:role/a,,arn:aws:iam::${CONTA}:role/b`)).toThrow(/KMS_PAPEIS_HUMANOS_EXTRA/);
+    expect(() => papeisHumanosExtraDoAmbiente(`arn:aws:iam::${CONTA}:role/a,`)).toThrow(/KMS_PAPEIS_HUMANOS_EXTRA/);
+  });
+
+  it('createKeyProvider lê KMS_PAPEIS_HUMANOS_EXTRA e recusa no boot o que for inválido (outra conta)', async () => {
+    const env = {
+      NODE_ENV: 'production',
+      AWS_REGION: 'sa-east-1',
+      SUPPORT_PSEUDONYM_KMS_KEY_ID: `arn:aws:kms:sa-east-1:${CONTA}:key/00000000-0000-0000-0000-000000000000`,
+    };
+    const kms = fakeKms();
+    await createKeyProvider({ ...env, KMS_PAPEIS_HUMANOS_EXTRA: EXTRA }, { kms }).createMasterKey(tenantA);
+    expect((kms.calls[0]?.input as { Policy: string }).Policy).toContain('idp-externo-*');
+    expect(() => createKeyProvider({ ...env, KMS_PAPEIS_HUMANOS_EXTRA: 'arn:aws:iam::111111111111:role/x' }, { kms: fakeKms() })).toThrow(/papel humano/);
+  });
+
+  it('nenhum Deny atinge a role da API, o gestor de chaves nem o break-glass (fora dos padrões)', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms, CONTA, [EXTRA]);
+    const arn = await p.createMasterKey(tenantA);
+    const g = await p.generateDataKey(arn, tenantA);
+    for (const principal of [ROLE_API, ROLE_GESTOR, ROLE_BREAK_GLASS]) {
+      kms.principalArn = principal;
+      await expect(p.unwrapDataKey(g, tenantA), principal).resolves.toBeDefined();
+      await expect(p.rewrapDataKey(g, arn, tenantA), principal).resolves.toBeDefined();
+    }
+  });
+
+  it('KMS falso aplica o Deny: humano (SSO, usuário IAM, root, extra) não decifra nem recifra, nem com o contexto certo', async () => {
+    const kms = fakeKms();
+    const p = new KmsKeyProvider(kms, CONTA, [EXTRA]);
+    const arn = await p.createMasterKey(tenantA);
+    const g = await p.generateDataKey(arn, tenantA);
+    for (const principal of [...HUMANOS, `arn:aws:iam::${CONTA}:role/idp-externo-medico`]) {
+      kms.principalArn = principal;
+      await expect(p.unwrapDataKey(g, tenantA), principal).rejects.toMatchObject({ kind: 'acesso_negado' });
+      await expect(p.rewrapDataKey(g, arn, tenantA), principal).rejects.toMatchObject({ kind: 'acesso_negado' });
+      // GenerateDataKey fica fora do Deny (igual ao Terraform).
+      await expect(p.generateDataKey(arn, tenantA), principal).resolves.toBeDefined();
+    }
   });
 });
 

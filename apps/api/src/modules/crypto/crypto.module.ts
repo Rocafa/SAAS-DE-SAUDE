@@ -6,7 +6,7 @@ import { FieldCipher } from './field-cipher';
 import { auditKeyEvents } from './key-audit';
 import type { KeyProvider } from './key-provider';
 import { contaDoArnKms, createAwsKmsCliente, loadKmsConfig } from './kms-client';
-import { KmsKeyProvider, type KmsApi } from './kms-key-provider';
+import { KmsKeyProvider, papeisHumanosExtraDoAmbiente, type KmsApi } from './kms-key-provider';
 import { LocalKeyProvider } from './local-key-provider';
 
 export const FIELD_CIPHER = Symbol('FIELD_CIPHER');
@@ -37,7 +37,9 @@ export function createKeyProvider(env: NodeJS.ProcessEnv = process.env, deps: { 
     if (!conta) {
       throw new Error('KMS (chave mestra das clínicas): SUPPORT_PSEUDONYM_KMS_KEY_ID precisa ser o ARN de uma chave (arn:aws:kms:<região>:<conta>:key/<id>); a conta da key policy vem dele');
     }
-    return new KmsKeyProvider(deps.kms ?? createAwsKmsCliente(config), conta);
+    // R4: humanos além de SSO/usuário IAM/root (`var.papeis_humanos_extra`), validados no construtor.
+    const extras = papeisHumanosExtraDoAmbiente(env.KMS_PAPEIS_HUMANOS_EXTRA);
+    return new KmsKeyProvider(deps.kms ?? createAwsKmsCliente(config), conta, extras);
   }
   const raiz = env.FIELD_KEYS_DEV_ROOT_SECRET;
   return new LocalKeyProvider({
