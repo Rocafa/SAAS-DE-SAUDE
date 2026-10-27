@@ -113,7 +113,16 @@ describe('G2 — exportação total do tenant', () => {
       guideSessionSignatures: 0,
       sessionPackages: 0,
       packageSessions: 0,
+      clinicalSettings: 0,
+      encounters: 0,
+      clinicalRecordVersions: 0,
+      clinicalAddenda: 0,
+      privateNotes: 0,
+      privateNotesWithheld: 0,
       appointmentReschedules: 0,
+      legalHolds: 0,
+      noteCustodies: 0,
+      clinicMembers: 0,
       auditEvents: pkg.auditEvents.length,
     });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();
@@ -222,6 +231,10 @@ describe('G3 — auditoria append-only da exportação', () => {
       appointments: 0,
       guides: 0,
       packages: 0,
+      encounters: 0,
+      recordVersions: 0,
+      privateNotes: 0,
+      privateNotesWithheld: 0,
       appointmentReschedules: 0,
       auditEvents: 0,
     });

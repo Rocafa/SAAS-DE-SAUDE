@@ -17,6 +17,8 @@ export const tenants = pgTable('tenants', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   /** Migração 0013: janela de continuidade do vínculo de cuidado, em dias (1..180, padrão 90). */
   careLinkDays: smallint('care_link_days').notNull().default(90),
+  /** Migração 0022 (R15 do #63): quem fundou a clínica (registrado na criação; imutável para o runtime). */
+  founderUserId: uuid('founder_user_id'),
 });
 
 export const patients = pgTable('patients', {
@@ -36,6 +38,8 @@ export const patients = pgTable('patients', {
   active: boolean('active').notNull().default(true),
   inactivatedAt: timestamp('inactivated_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Migração 0015 (D1.4 do #63): retenção legal; enquanto marcada, nada do paciente é expurgado. */
+  legalHoldSince: timestamp('legal_hold_since', { withTimezone: true }),
 });
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
@@ -240,6 +244,188 @@ export const packageSessions = pgTable('package_sessions', {
   reversalReason: text('reversal_reason', { enum: PACKAGE_REVERSAL_REASONS }),
 });
 
+/** Modelos de prontuário (CHECK da 0012). O compartimento deriva do modelo. */
+export const RECORD_TEMPLATES = ['fisio', 'to', 'psicologia'] as const;
+export type RecordTemplate = (typeof RECORD_TEMPLATES)[number];
+export const RECORD_COMPARTMENTS = ['geral', 'psicologia'] as const;
+export type RecordCompartment = (typeof RECORD_COMPARTMENTS)[number];
+/** Consentimento de IA em 3 estados (RIPD do escriba, R12): `nao_informado` nega. */
+export const AI_CONSENT_STATES = ['nao_informado', 'informado_nao_recusou', 'recusou'] as const;
+export type AiConsentState = (typeof AI_CONSENT_STATES)[number];
+export const ENCOUNTER_STATUSES = ['open', 'signed'] as const;
+export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
+/** Sigilo do registro de psicologia (pergunta 1.11 do advogado em aberto: configurável). */
+export const PSYCH_COMPARTMENT_MODES = ['restrito_ao_autor', 'prontuario_unico'] as const;
+export type PsychCompartmentMode = (typeof PSYCH_COMPARTMENT_MODES)[number];
+
+/** Configuração de sigilo do prontuário por clínica (0012). Sem linha = padrão `restrito_ao_autor`. */
+export const clinicalSettings = pgTable('clinical_settings', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  psychCompartment: text('psych_compartment', { enum: PSYCH_COMPARTMENT_MODES }).notNull().default('restrito_ao_autor'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by').notNull(),
+});
+
+/** Atendimento aberto a partir do agendamento (0012). Finalizado é terminal (trigger). */
+export const encounters = pgTable('encounters', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  professionalId: uuid('professional_id').notNull(),
+  appointmentId: uuid('appointment_id').notNull(),
+  authorUserId: uuid('author_user_id').notNull(),
+  template: text('template', { enum: RECORD_TEMPLATES }).notNull(),
+  compartment: text('compartment', { enum: RECORD_COMPARTMENTS }).notNull(),
+  aiConsent: text('ai_consent', { enum: AI_CONSENT_STATES }).notNull().default('nao_informado'),
+  status: text('status', { enum: ENCOUNTER_STATUSES }).notNull().default('open'),
+  currentVersion: integer('current_version').notNull().default(0),
+  openedAt: timestamp('opened_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  signedAt: timestamp('signed_at', { withTimezone: true }),
+  signedBy: uuid('signed_by'),
+  signedVersion: integer('signed_version'),
+  signedHash: text('signed_hash'),
+  /**
+   * Migração 0015 (B1 do #63): modo de sigilo da psicologia vigente na ABERTURA. A leitura decide por
+   * ele, nunca pela configuração atual. Só pode ficar mais restrito (trigger).
+   */
+  confidentiality: text('confidentiality', { enum: PSYCH_COMPARTMENT_MODES }).notNull().default('restrito_ao_autor'),
+});
+
+/** Versões da evolução (0012): append-only; conteúdo JSON SÓ cifrado (v1). */
+export const clinicalRecordVersions = pgTable('clinical_record_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  encounterId: uuid('encounter_id').notNull(),
+  version: integer('version').notNull(),
+  template: text('template', { enum: RECORD_TEMPLATES }).notNull(),
+  templateVersion: integer('template_version').notNull(),
+  contentEnc: text('content_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+});
+
+/** Adendos depois da finalização (0012): append-only, texto SÓ cifrado. */
+export const clinicalAddenda = pgTable('clinical_addenda', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  encounterId: uuid('encounter_id').notNull(),
+  textEnc: text('text_enc').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').notNull(),
+});
+
+/**
+ * Custódia da nota privada (0015, D2 do parecer #63): 'ativa'; 'aguardando_decisao' (autor desligado,
+ * 30 dias); 'lacrada' (psicologia sem decisão: para o psicólogo substituto, 90 dias); 'guarda_clinica'
+ * (o autor marcou para exportar: acompanha o prontuário, ilegível no aplicativo, só no G2).
+ */
+export const PRIVATE_NOTE_CUSTODY_STATES = ['ativa', 'aguardando_decisao', 'lacrada', 'guarda_clinica'] as const;
+export type PrivateNoteCustodyState = (typeof PRIVATE_NOTE_CUSTODY_STATES)[number];
+
+/** Anotações privadas do profissional (0012, HU-PRO-009): fora do prontuário; só o autor lê. */
+export const privateNotes = pgTable('private_notes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  authorUserId: uuid('author_user_id').notNull(),
+  encounterId: uuid('encounter_id'),
+  contentEnc: text('content_enc').notNull(),
+  exportConsent: boolean('export_consent').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  discardedAt: timestamp('discarded_at', { withTimezone: true }),
+  /** Migração 0015 (D2 do #63): ciclo de vida quando o autor sai da clínica. */
+  custodyState: text('custody_state', { enum: PRIVATE_NOTE_CUSTODY_STATES }).notNull().default('ativa'),
+  custodyDeadline: timestamp('custody_deadline', { withTimezone: true }),
+});
+
+/**
+ * Retenção legal do paciente (0017, R12 do #63): referência do processo/ofício cifrada; retirar exige
+ * pedido com motivo cifrado e aprovação de OUTRA pessoa (trigger). Espelhada em patients.legal_hold_since.
+ */
+export const legalHolds = pgTable('legal_holds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  referenceEnc: text('reference_enc').notNull(),
+  placedBy: uuid('placed_by').notNull(),
+  placedAt: timestamp('placed_at', { withTimezone: true }).notNull().defaultNow(),
+  releaseReasonEnc: text('release_reason_enc'),
+  releaseRequestedBy: uuid('release_requested_by'),
+  releaseRequestedAt: timestamp('release_requested_at', { withTimezone: true }),
+  releasedBy: uuid('released_by'),
+  releasedAt: timestamp('released_at', { withTimezone: true }),
+});
+
+/**
+ * Perfis da clínica no banco (0020, R13 do #63): usuário × clínica × perfil. Só admin ativo concede e
+ * revoga (fundação: o primeiro admin de uma clínica vazia); nunca se apaga. Os triggers de retenção legal
+ * e custódia conferem o perfil aqui. `psicologo` é a qualificação clínica exigida pela custódia.
+ */
+export const CLINIC_MEMBER_ROLES = ['admin', 'profissional', 'recepcao', 'financeiro', 'psicologo'] as const;
+export type ClinicMemberRole = (typeof CLINIC_MEMBER_ROLES)[number];
+export const clinicMembers = pgTable('clinic_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  userId: uuid('user_id').notNull(),
+  role: text('role', { enum: CLINIC_MEMBER_ROLES }).notNull(),
+  grantedBy: uuid('granted_by').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  revokedBy: uuid('revoked_by'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
+/** Custódia das notas lacradas de um psicólogo desligado (0017, R2 do #63): designa o admin, aceita o substituto. */
+export const noteCustodies = pgTable('note_custodies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  authorUserId: uuid('author_user_id').notNull(),
+  substituteUserId: uuid('substitute_user_id').notNull(),
+  designatedBy: uuid('designated_by').notNull(),
+  designatedAt: timestamp('designated_at', { withTimezone: true }).notNull().defaultNow(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+});
+
+/** Caixa de avisos interna (0017, R9 do #63): sem dado de paciente; só o destinatário lê e marca lido. */
+/** 0022 (R13/R15 do #63): avisos aos demais admins (perfil alterado, retirada de retenção pedida/aprovada). */
+export const CLINICAL_NOTICE_KINDS = ['sigilo_psicologia_alterado', 'perfil_alterado', 'retencao_retirada_pedida', 'retencao_retirada_aprovada'] as const;
+export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
+export const clinicalNotices = pgTable('clinical_notices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  recipientUserId: uuid('recipient_user_id').notNull(),
+  kind: text('kind', { enum: CLINICAL_NOTICE_KINDS }).notNull(),
+  fromMode: text('from_mode', { enum: PSYCH_COMPARTMENT_MODES }),
+  toMode: text('to_mode', { enum: PSYCH_COMPARTMENT_MODES }),
+  subjectUserId: uuid('subject_user_id'),
+  subjectRole: text('subject_role', { enum: CLINIC_MEMBER_ROLES }),
+  change: text('change', { enum: ['concedido', 'revogado'] as const }),
+  legalHoldId: uuid('legal_hold_id'),
+  restrictedExisting: integer('restricted_existing').notNull().default(0),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+});
+
 /** Metadados de auditoria: só escalares (contagens, versões, formatos). Nunca conteúdo clínico. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
@@ -325,5 +511,13 @@ export const schema = {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  clinicalSettings,
+  encounters,
+  clinicalRecordVersions,
+  clinicalAddenda,
+  privateNotes,
   appointmentReschedules,
+  legalHolds,
+  noteCustodies,
+  clinicalNotices,
 };

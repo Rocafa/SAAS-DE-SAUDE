@@ -116,6 +116,24 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/pacotes/${id}/cancelar`],
       [RequestMethod.POST, `/pacotes/${id}/consumos`],
       [RequestMethod.POST, `/pacotes/${id}/consumos/${id}/estornar`],
+      // Prontuário (rodada 14.1).
+      [RequestMethod.POST, '/atendimentos'],
+      [RequestMethod.GET, `/atendimentos/${id}`],
+      [RequestMethod.PUT, `/atendimentos/${id}/registro`],
+      [RequestMethod.GET, `/atendimentos/${id}/versoes`],
+      [RequestMethod.POST, `/atendimentos/${id}/finalizar`],
+      [RequestMethod.POST, `/atendimentos/${id}/adendos`],
+      [RequestMethod.GET, `/pacientes/${id}/prontuario`],
+      [RequestMethod.GET, `/pacientes/${id}/notas-privadas`],
+      [RequestMethod.POST, `/pacientes/${id}/notas-privadas`],
+      [RequestMethod.GET, `/notas-privadas/${id}`],
+      [RequestMethod.PATCH, `/notas-privadas/${id}`],
+      [RequestMethod.POST, `/notas-privadas/${id}/descartar`],
+      [RequestMethod.GET, '/prontuario/configuracao'],
+      [RequestMethod.PUT, '/prontuario/configuracao'],
+      [RequestMethod.POST, '/prontuario/notas-privadas/ciclo'],
+      [RequestMethod.POST, `/prontuario/profissionais/${id}/desligamento`],
+      [RequestMethod.PUT, `/prontuario/pacientes/${id}/retencao-legal`],
     ];
     const efemera = api.sessao(clinicaA, 'admin');
     api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
@@ -123,7 +141,13 @@ describe('toda rota de domínio exige sessão', () => {
       for (const auth of [undefined, 'Bearer invalido', `Bearer ${'a'.repeat(43)}`, efemera.Authorization]) {
         const http = api.http();
         const req =
-          metodo === RequestMethod.GET ? http.get(rota) : metodo === RequestMethod.PATCH ? http.patch(rota) : http.post(rota);
+          metodo === RequestMethod.GET
+            ? http.get(rota)
+            : metodo === RequestMethod.PATCH
+              ? http.patch(rota)
+              : metodo === RequestMethod.PUT
+                ? http.put(rota)
+                : http.post(rota);
         if (auth) void req.set('Authorization', auth);
         const res = await req.set('x-tenant-id', clinicaA).send({});
         expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);

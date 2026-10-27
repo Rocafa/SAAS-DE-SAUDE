@@ -13,8 +13,12 @@ export class NaoEncontradoError extends NotFoundException {
 }
 
 export class ConflitoError extends ConflictException {
-  constructor(readonly codigo: string) {
-    super({ statusCode: 409, message: 'Conflito', codigo });
+  /** `campos`: só NOMES de campo (ex.: obrigatórios faltando), nunca valor. */
+  constructor(
+    readonly codigo: string,
+    campos?: readonly string[],
+  ) {
+    super({ statusCode: 409, message: 'Conflito', codigo, ...(campos ? { campos: [...campos] } : {}) });
   }
 }
 

@@ -5,7 +5,7 @@
  * aplicação real (mesma cifra da API) e confere conteúdo, contagens, CSV e auditoria.
  * Pré-requisitos: migrações aplicadas e DATABASE_URL = papel app_user. Dados 100% fictícios.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,6 +23,14 @@ import {
   guideSessionSignatures,
   sessionPackages,
   packageSessions,
+  clinicalSettings,
+  encounters,
+  clinicalRecordVersions,
+  clinicalAddenda,
+  privateNotes,
+  legalHolds,
+  noteCustodies,
+  clinicMembers,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
@@ -57,7 +65,15 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guide_session_signatures: 'guideSessionSignatures',
   session_packages: 'sessionPackages',
   package_sessions: 'packageSessions',
+  clinical_settings: 'clinicalSettings',
+  encounters: 'encounters',
+  clinical_record_versions: 'clinicalRecordVersions',
+  clinical_addenda: 'clinicalAddenda',
+  private_notes: 'privateNotes',
   appointment_reschedules: 'appointmentReschedules',
+  legal_holds: 'legalHolds',
+  note_custodies: 'noteCustodies',
+  clinic_members: 'clinicMembers',
   audit_log: 'auditEvents',
 };
 
@@ -83,6 +99,13 @@ const ATENDENTE = 'atendente-ficticio-01';
 const GUIA_NUMERO = 'FIC-EXP-0001';
 const GUIA_SENHA = 'SENHAEXP9';
 const GUIA_CARTEIRINHA = 'CART-EXP-42';
+/** Textos clínicos fictícios: no pacote decifrados; nunca na trilha. */
+const TEXTO_CLINICO = 'Evolucao ficticia exportavel QZX7731';
+const TEXTO_ADENDO = 'Adendo ficticio exportavel QZX7732';
+const NOTA_EXPORTAVEL = 'Nota privada ficticia com decisao do autor QZX7733';
+const NOTA_RETIDA = 'Nota privada ficticia sem decisao QZX7734';
+const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
+const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -90,7 +113,7 @@ beforeAll(async () => {
   clinicaA = await api.novaClinica();
   clinicaB = await api.novaClinica();
   const admin = api.sessao(clinicaA, 'admin', 'profissional');
-  const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'TO' });
+  const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'Terapia ocupacional', usuarioId: admin.userId });
   const tipo = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Avaliacao', minutos: 40 });
   const pac = await api
     .http()
@@ -166,6 +189,62 @@ beforeAll(async () => {
     );
   }
 
+  // Prontuário (0012): atendimento com 2 versões, finalizado, com adendo; sigilo configurado; duas
+  // notas privadas, só UMA com a decisão do autor de exportar.
+  const ag3 = randomUUID();
+  const recepcao = randomUUID();
+  await withTenant(api.db.db, clinicaA, (tx) =>
+    tx.insert(appointments).values({
+      createdBy: recepcao,
+      id: ag3,
+      tenantId: clinicaA,
+      patientId: pacienteId,
+      professionalId: (prof.body as { id: string }).id,
+      appointmentTypeId: (tipo.body as { id: string }).id,
+      startsAt: new Date(Date.now() - 10 * 60_000),
+      endsAt: new Date(Date.now() + 30 * 60_000),
+      status: 'checked_in',
+    }),
+  recepcao);
+  const at = await api.http().post('/atendimentos').set(cab(admin)).send({ agendamentoId: ag3 });
+  expect(at.status).toBe(200);
+  const atId = (at.body as { id: string }).id;
+  await api.http().put(`/atendimentos/${atId}/registro`).set(cab(admin)).send({ versaoBase: 0, conteudo: { queixa: 'Queixa v1' } }).expect(200);
+  await api
+    .http()
+    .put(`/atendimentos/${atId}/registro`)
+    .set(cab(admin))
+    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', medidas: [{ tipo: 'eva', valor: 4 }] } })
+    .expect(200);
+  await api.http().post(`/atendimentos/${atId}/finalizar`).set(cab(admin)).send({}).expect(200);
+  await api.http().post(`/atendimentos/${atId}/adendos`).set(cab(admin)).send({ texto: TEXTO_ADENDO }).expect(201);
+  await api.http().put('/prontuario/configuracao').set(cab(admin)).send({ psicologia: 'restrito_ao_autor' }).expect(200);
+  await api
+    .http()
+    .post(`/pacientes/${pacienteId}/notas-privadas`)
+    .set(cab(admin))
+    .send({ texto: NOTA_EXPORTAVEL, incluirNaExportacao: true })
+    .expect(201);
+  await api.http().post(`/pacientes/${pacienteId}/notas-privadas`).set(cab(admin)).send({ texto: NOTA_RETIDA }).expect(201);
+
+  // Retenção legal (0017): marcada, pedida a retirada por um admin e aprovada por OUTRO.
+  const admin2 = api.sessao(clinicaA, 'admin');
+  await api.membro(clinicaA, admin, 'admin');
+  await api.membro(clinicaA, admin2, 'admin');
+  await api.http().put('/prontuario/pacientes/' + pacienteId + '/retencao-legal').set(cab(admin)).send({ referencia: REFERENCIA_RETENCAO }).expect(200);
+  await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada').set(cab(admin)).send({ motivo: MOTIVO_RETIRADA }).expect(200);
+  await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada/aprovacao').set(cab(admin2)).send({}).expect(200);
+  // Custódia (0017): psicólogo autor e substituto; designada e aceita.
+  const psiAutor = api.sessao(clinicaA, 'profissional');
+  const psiSubst = api.sessao(clinicaA, 'profissional');
+  await api.membro(clinicaA, psiAutor, 'psicologo');
+  await api.membro(clinicaA, psiSubst, 'psicologo');
+  const autorId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Autor Ficticio', especialidade: 'Psicologia', usuarioId: psiAutor.userId })).body as { id: string };
+  const substId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Subst Ficticio', especialidade: 'Psicologia', usuarioId: psiSubst.userId })).body as { id: string };
+  const cust = await api.http().post('/prontuario/custodias').set(cab(admin)).send({ autorProfissionalId: autorId.id, substitutoProfissionalId: substId.id });
+  expect(cust.status).toBe(201);
+  await api.http().post('/custodias/' + (cust.body as { id: string }).id + '/aceite').set(cab(psiSubst)).send({}).expect(200);
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
@@ -229,7 +308,14 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof guideSessions
           | typeof guideSessionSignatures
           | typeof sessionPackages
-          | typeof packageSessions,
+          | typeof packageSessions
+          | typeof clinicalSettings
+          | typeof encounters
+          | typeof clinicalRecordVersions
+          | typeof clinicalAddenda
+          | typeof legalHolds
+          | typeof noteCustodies
+          | typeof clinicMembers,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -244,7 +330,18 @@ describe('G2 — conteúdo do pacote', () => {
         guideSessionSignatures: await n(guideSessionSignatures),
         sessionPackages: await n(sessionPackages),
         packageSessions: await n(packageSessions),
+        clinicalSettings: await n(clinicalSettings),
+        encounters: await n(encounters),
+        clinicalRecordVersions: await n(clinicalRecordVersions),
+        clinicalAddenda: await n(clinicalAddenda),
+        // Só as notas com decisão do autor saem; as outras aparecem SÓ como contagem.
+        privateNotes: (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, true)))[0]?.n ?? -1,
+        privateNotesWithheld:
+          (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, false)))[0]?.n ?? -1,
         appointmentReschedules: await n(appointmentReschedules),
+        legalHolds: await n(legalHolds),
+        noteCustodies: await n(noteCustodies),
+        clinicMembers: await n(clinicMembers),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
@@ -253,9 +350,9 @@ describe('G2 — conteúdo do pacote', () => {
     expect(noBanco).toMatchObject({
       tenants: 1,
       patients: 2,
-      professionals: 1,
+      professionals: 3,
       appointmentTypes: 1,
-      appointments: 2,
+      appointments: 3,
       appointmentReschedules: 1,
       insurers: 1,
       insuranceGuides: 1,
@@ -263,7 +360,26 @@ describe('G2 — conteúdo do pacote', () => {
       guideSessionSignatures: 1,
       sessionPackages: 1,
       packageSessions: 1,
+      clinicalSettings: 1,
+      encounters: 1,
+      clinicalRecordVersions: 2,
+      clinicalAddenda: 1,
+      privateNotes: 1,
+      privateNotesWithheld: 1,
+      legalHolds: 1,
+      noteCustodies: 1,
     });
+    // R16: perfis da clínica no pacote (fundador + 2 admins + 2 psicólogos), com o fundador no tenant.
+    expect(noBanco.clinicMembers).toBeGreaterThanOrEqual(5);
+    const fundador = api.fundador(clinicaA);
+    expect(pkg.json.data.tenant.founderUserId).toBe(fundador);
+    expect(pkg.json.data.clinicMembers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: fundador, role: 'admin', grantedBy: fundador, revokedAt: null })]),
+    );
+    // Referência e motivo da retenção saem decifrados no pacote, nunca na trilha.
+    expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
+    expect(pkg.auditJsonl).not.toContain('QZX7735');
+    expect(pkg.auditJsonl).not.toContain('QZX7736');
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
@@ -294,6 +410,27 @@ describe('G2 — conteúdo do pacote', () => {
     for (const proibido of [GUIA_NUMERO, GUIA_SENHA, GUIA_CARTEIRINHA]) expect(pkg.auditJsonl).not.toContain(proibido);
   });
 
+  it('prontuário: todas as versões e o adendo saem decifrados; finalização com hash; nada clínico na trilha', () => {
+    const { encounters: ats, clinicalRecordVersions: versoes, clinicalAddenda: adendos, clinicalSettings: cfg } = pkg.json.data;
+    expect(ats[0]).toMatchObject({ status: 'signed', currentVersion: 2, signedVersion: 2, template: 'to', compartment: 'geral', aiConsent: 'nao_informado' });
+    expect(ats[0]?.signedHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(versoes.map((v) => v.version)).toEqual([1, 2]);
+    expect(versoes[0]?.content).toEqual({ queixa: 'Queixa v1' });
+    expect(versoes[1]?.content).toMatchObject({ queixa: TEXTO_CLINICO, medidas: [{ tipo: 'eva', valor: 4 }] });
+    expect(adendos[0]).toMatchObject({ text: TEXTO_ADENDO, encounterId: ats[0]?.id });
+    expect(cfg).toEqual([expect.objectContaining({ psychCompartment: 'restrito_ao_autor' })]);
+    for (const proibido of [TEXTO_CLINICO, TEXTO_ADENDO, NOTA_EXPORTAVEL, NOTA_RETIDA, 'Queixa v1']) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
+  it('notas privadas: só a que o AUTOR marcou sai; a outra fica fora e é contada (cobertura não silenciosa)', () => {
+    const notas = pkg.json.data.privateNotes;
+    expect(notas).toHaveLength(1);
+    expect(notas[0]).toMatchObject({ content: NOTA_EXPORTAVEL, exportConsent: true, discardedAt: null });
+    expect(JSON.stringify(pkg.json)).not.toContain('QZX7734');
+    expect(pkg.json.manifest.counts).toMatchObject({ privateNotes: 1, privateNotesWithheld: 1 });
+    expect(pkg.patientsCsv).not.toContain('QZX7734');
+  });
+
   it('CSV neutraliza fórmula nas colunas novas; o JSON mantém o valor original', () => {
     expect(pkg.patientsCsv).toContain(`"'${FORMULA.replaceAll('"', '""')}"`);
     expect(pkg.patientsCsv).not.toContain(`,"${FORMULA.replaceAll('"', '""')}"`);
@@ -304,7 +441,7 @@ describe('G2 — conteúdo do pacote', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 1, appointmentTypes: 1, appointments: 2, guides: 1, packages: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 3, appointmentTypes: 1, appointments: 3, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
