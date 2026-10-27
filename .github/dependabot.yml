@@ -28,3 +28,8 @@ updates:
     directory: /apps/api
     schedule:
       interval: weekly
+    # Trocar de Node maior é decisão conjunta: build (node:22-*) e runtime (distroless nodejs22-*)
+    # têm de mudar juntos, e @types/node também. O Dependabot só traz digests e versões menores.
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
