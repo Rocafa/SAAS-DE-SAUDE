@@ -82,12 +82,14 @@
 | Rodada 27.6: ✅ #76 — busca com checagem de sessão e aviso de truncamento acima de 1.000 (b43ab1e; web 232/232) | Maestro @Rocafa | 27/10/2026 | PR #76 |
 | Rodada 27.7: ✅ API — K-a1 (lista de variáveis AWS igual à do Terraform), K-c2 (key policy com tenant_id literal no CreateKey), K-c3 unitário, K-c4 (cdf7152) — **K-a1 aprovado: bloqueio de merge do #73 levantado** | Maestro @Rocafa | 27/10/2026 | `eng/integracao-r19` |
 | Rodada 27.8: ✅ #58 — R7-a, K-a2, K-c1 e registro da decisão K-c2 (6ba44ea, 96df2c9) — **APROVADO** (e320f95) | Maestro @Rocafa | 27/10/2026 | PR #58 |
-| Rodada 27.9: antes do piloto — K-c4a (verificarChave só com GenerateMac) + trava das listas AWS (#73); F-1 marcar consulta com busca (#76); K-c5 alarmes de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant (#58) | Maestro @Rocafa (3 agentes) | 27/10/2026 | PRs #73/#76/#58 |
+| Rodada 27.9: ✅ antes do piloto — K-c4a (verificarChave só com GenerateMac) + trava das listas AWS (#73); F-1 marcar consulta com busca (#76); K-c5 alarmes de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant (#58) — **APROVADOS** (c7c25e4) · [relatório](../relatorios/2026-10-27-rodada-27.md) | Maestro @Rocafa | 27/10/2026 | PRs #73/#76/#58 |
 
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
+| **Antes do piloto (devops-ci, em staging):** K-c3 de integração (chave por clínica não abre sem contexto/outro tenant) e prova de disparo do alarme K-c5 | parecer #76, conferência K-c4a/F-1/K-c5 (27/10/2026) |
+| Após merge do #58: `listas-terraform.test.ts` com falha explícita em vez de `skipIf` | idem |
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
