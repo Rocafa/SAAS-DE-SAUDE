@@ -33,10 +33,13 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 COPY packages/shared ./packages/shared
 COPY apps/api ./apps/api
 
+# O `deploy` do pnpm 9 resolve a API de novo, sem o lockfile, e precisa dos metadados do registro, que o
+# `fetch` não guarda: com --offline falha (ERR_PNPM_NO_OFFLINE_META). --prefer-offline usa o store e só busca
+# o que faltar. O `install --frozen-lockfile --offline` continua preso ao lockfile.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --offline --filter "@plataforma/api..." && \
     pnpm --filter "@plataforma/api..." build && \
-    pnpm --filter @plataforma/api deploy --prod --offline /out && \
+    pnpm --filter @plataforma/api deploy --prod --prefer-offline /out && \
     mkdir -p /app && \
     cp -R /out/node_modules /out/package.json /out/dist /out/db /out/scripts /app/
 
