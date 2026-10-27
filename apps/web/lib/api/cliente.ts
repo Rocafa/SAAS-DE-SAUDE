@@ -30,6 +30,11 @@ export interface FiltroAgenda {
 export interface ApiClinica {
   usuarioAtual(): Promise<Usuario>;
   listarPacientes(): Promise<Paciente[]>;
+  /**
+   * Busca no servidor (modo http): a API audita a busca como leitura de cadastro, sem o termo.
+   * Opcional: o fake procura na lista em memória.
+   */
+  buscarPacientes?(termo: string): Promise<Paciente[]>;
   obterPaciente(id: string): Promise<Paciente | null>;
   listarProfissionais(): Promise<Profissional[]>;
   listarTiposAtendimento(): Promise<TipoAtendimento[]>;

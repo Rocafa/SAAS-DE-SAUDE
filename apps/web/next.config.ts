@@ -9,11 +9,34 @@ import type { NextConfig } from 'next';
  * `'unsafe-eval'` só em desenvolvimento (React Refresh).
  */
 export function contentSecurityPolicy(env: NodeJS.ProcessEnv = process.env): string {
-  const dev = env.NODE_ENV === 'development';
+  return montarCsp(env);
+}
+
+/**
+ * Origem da API para o `connect-src`; o adaptador HTTP (`lib/api/selecionar.ts`) valida igual.
+ * Só esquema://host[:porta], sem caminho nem curinga. Com `NEXT_PUBLIC_API_MODO=http` a origem é
+ * obrigatória; em produção, só https. É a ÚNICA origem externa que o navegador pode chamar.
+ */
+export function origemDaApi(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const modo = env.NEXT_PUBLIC_API_MODO?.trim() || 'fake';
+  if (modo !== 'fake' && modo !== 'http') throw new Error('NEXT_PUBLIC_API_MODO inválido: use fake ou http');
   const apiOrigin = env.NEXT_PUBLIC_API_ORIGIN?.trim();
-  if (apiOrigin && !/^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i.test(apiOrigin)) {
+  if (!apiOrigin) {
+    if (modo === 'http') throw new Error('NEXT_PUBLIC_API_ORIGIN é obrigatória com NEXT_PUBLIC_API_MODO=http');
+    return undefined;
+  }
+  if (!/^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i.test(apiOrigin)) {
     throw new Error('NEXT_PUBLIC_API_ORIGIN inválida: use esquema://host[:porta], sem curinga');
   }
+  if (env.NODE_ENV === 'production' && !apiOrigin.toLowerCase().startsWith('https://')) {
+    throw new Error('NEXT_PUBLIC_API_ORIGIN inválida: em produção só https');
+  }
+  return apiOrigin.toLowerCase();
+}
+
+function montarCsp(env: NodeJS.ProcessEnv = process.env): string {
+  const dev = env.NODE_ENV === 'development';
+  const apiOrigin = origemDaApi(env);
   const directives: Record<string, string[]> = {
     'default-src': ["'self'"],
     'script-src': ["'self'", "'unsafe-inline'", ...(dev ? ["'unsafe-eval'"] : [])],

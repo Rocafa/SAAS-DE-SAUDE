@@ -3,23 +3,41 @@
 /** Lista de pacientes: busca, cadastro e inativos (escondidos por padrão). */
 import { Search, UserPlus, UserRound } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
-import { useConsulta } from '@/components/app/dados';
+import { useEffect, useMemo, useState } from 'react';
+import { useConsulta, useDados } from '@/components/app/dados';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { acharPacientes } from '@/lib/ajudante/busca';
 import { nomeExibido } from '@/lib/api/tipos';
 
+/** Espera a pessoa parar de digitar antes de buscar no servidor (modo http). */
+function useAtrasado(valor: string, ms: number): string {
+  const [v, setV] = useState(valor);
+  useEffect(() => {
+    const t = setTimeout(() => setV(valor), ms);
+    return () => clearTimeout(t);
+  }, [valor, ms]);
+  return v;
+}
+
 export default function PaginaPacientes() {
-  const consulta = useConsulta((a) => a.listarPacientes());
+  const { api } = useDados();
   const [busca, setBusca] = useState('');
   const [verInativos, setVerInativos] = useState(false);
+  // Modo http: a busca vai ao servidor, que a registra na auditoria (sem o termo). Fake: local.
+  const termo = useAtrasado(busca.trim(), 350);
+  const noServidor = Boolean(api.buscarPacientes) && termo.length >= 2;
+  const consulta = useConsulta(
+    (a) => (noServidor && a.buscarPacientes ? a.buscarPacientes(termo) : a.listarPacientes()),
+    [noServidor ? termo : ''],
+  );
   const lista = useMemo(() => {
     if (consulta.estado !== 'pronto') return [];
     const todos = consulta.dados.filter((p) => verInativos || p.ativo);
+    if (noServidor) return todos;
     return busca.trim() ? acharPacientes(busca, todos).map((x) => x.paciente) : [...todos].sort((a, b) => nomeExibido(a).localeCompare(nomeExibido(b)));
-  }, [consulta, busca, verInativos]);
+  }, [consulta, busca, verInativos, noServidor]);
 
   return (
     <>

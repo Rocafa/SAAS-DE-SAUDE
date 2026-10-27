@@ -74,6 +74,15 @@ function FormularioMarcar() {
     if (pacienteDaUrl) setPacienteId(pacienteDaUrl);
     if (diaDaUrl && /^\d{4}-\d{2}-\d{2}$/.test(diaDaUrl)) setDia(diaDaUrl);
   }, [pacienteDaUrl, diaDaUrl]);
+  // Na API real os ids são UUID: o padrão 'pr1'/'t1' do fake vira o primeiro da lista.
+  const listas = consulta.estado === 'pronto' ? consulta.dados : null;
+  useEffect(() => {
+    if (!listas) return;
+    const primeiroProf = listas.profissionais[0]?.id;
+    const primeiroTipo = listas.tipos[0]?.id;
+    if (primeiroProf) setProfissionalId((atual) => (listas.profissionais.some((p) => p.id === atual) ? atual : primeiroProf));
+    if (primeiroTipo) setTipoId((atual) => (listas.tipos.some((t) => t.id === atual) ? atual : primeiroTipo));
+  }, [listas]);
   useEffect(() => {
     if (!original) return;
     setPacienteId(original.pacienteId);

@@ -10,6 +10,8 @@ export interface Usuario {
   nome: string;
   papel: Papel;
   clinica: string;
+  /** Id opaco da clínica da sessão (só no modo http): trocar de clínica limpa o retrato em memória. */
+  clinicaId?: string;
 }
 
 export interface Responsavel {
