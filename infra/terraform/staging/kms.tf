@@ -20,8 +20,11 @@ locals {
 # administrador com kms:* por IAM. Só serviços e papéis de máquina (tarefa da API, RDS, Secrets
 # Manager a pedido da tarefa) e o papel break-glass (acesso-humano.tf), cujo uso gera alerta.
 # Só Decrypt e ReEncrypt: GenerateDataKey continua liberado para o apply gravar segredos
-# write-only. As KEKs das clínicas nascem fora do Terraform: o KmsKeyProvider inclui este mesmo
-# Deny na key policy de cada KEK (output kms_deny_humanos; requisito da ENG).
+# write-only. As KEKs das clínicas nascem fora do Terraform: a API monta o MESMO statement
+# (Sid HumanoNaoDecifra, mesmas ações) na key policy de cada chave de clínica e de lote, na função
+# politicaDaChaveDaClinica (apps/api/src/modules/crypto/kms-key-provider.ts, #73 15e3303), a partir
+# dos 3 padrões fixos de local.principais_humanos + KMS_PAPEIS_HUMANOS_EXTRA (= papeis_humanos_extra,
+# injetada em app.tf). O CI ("Travas do projeto") compara os padrões fixos dos dois lados.
 data "aws_iam_policy_document" "kms_deny_humanos" {
   statement {
     sid       = "HumanoNaoDecifra"

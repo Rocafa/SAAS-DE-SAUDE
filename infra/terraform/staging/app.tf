@@ -230,6 +230,9 @@ locals {
       { name = "AWS_REGION", value = local.regiao },
     ],
     length(var.cors_origens) > 0 ? [{ name = "CORS_ALLOWED_ORIGINS", value = join(",", var.cors_origens) }] : [],
+    # R4: a API monta o HumanoNaoDecifra da key policy de cada chave de clínica com os 3 padrões
+    # fixos + estes extras (politicaDaChaveDaClinica, #73 15e3303). Mesma lista do Deny do Terraform.
+    length(var.papeis_humanos_extra) > 0 ? [{ name = "KMS_PAPEIS_HUMANOS_EXTRA", value = join(",", var.papeis_humanos_extra) }] : [],
     var.whatsapp_provedor == "cloud_api" ? [{ name = "WHATSAPP_WABA_ID", value = var.whatsapp_waba_id }] : [],
     var.whatsapp_provedor == "cloud_api" && var.whatsapp_clausulas_padrao_assinadas ? [{ name = "WHATSAPP_R17_CLAUSULAS_PADRAO", value = "assinadas" }] : [],
   )
@@ -343,6 +346,14 @@ resource "aws_ecs_task_definition" "api" {
     precondition {
       condition     = length(setsubtract(local.api_ambiente_obrigatorio, local.api_nomes_ambiente)) == 0
       error_message = "Falta variável obrigatória em `environment` da API (NODE_ENV, API_PORT, HTTP_TRUST_PROXY_HOPS, IMPORTADOR_HABILITADO, WHATSAPP_PROVEDOR, SUPPORT_PSEUDONYM_KMS_KEY_ID, AWS_REGION). Ver infra-staging.md §4.5."
+    }
+    # R4: a API recusa no boot extra fora deste formato (role/ ou user/ da mesma conta, prefixo fixo).
+    precondition {
+      condition = alltrue([
+        for a in var.papeis_humanos_extra :
+        can(regex("^arn:aws:iam::${local.conta}:(role|user)/[A-Za-z0-9+=,.@_-][A-Za-z0-9+=,.@_/*?-]*$", a))
+      ])
+      error_message = "papeis_humanos_extra: cada item precisa ser arn:aws:iam::<esta conta>:role/... ou user/... com prefixo fixo (sem curinga no 1º caractere). Fora disso a API não sobe (KMS_PAPEIS_HUMANOS_EXTRA, #73)."
     }
     precondition {
       condition     = one([for v in local.api_ambiente : v.value if v.name == "AWS_REGION"]) == "sa-east-1"

@@ -54,7 +54,7 @@ output "bucket_documentos" {
 }
 
 output "kms_deny_humanos" {
-  description = "Política (JSON) cujo statement o KmsKeyProvider inclui na key policy de cada KEK de clínica: humano não decifra (R4 do PR #58)."
+  description = "Referência (JSON) do statement HumanoNaoDecifra (R4 do PR #58). A API monta o mesmo statement na key policy de cada chave de clínica (politicaDaChaveDaClinica, #73 15e3303) com os padrões fixos + KMS_PAPEIS_HUMANOS_EXTRA."
   value       = data.aws_iam_policy_document.kms_deny_humanos.json
 }
 
