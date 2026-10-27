@@ -67,6 +67,7 @@ REPROVADA_POR=""
 INICIO=$(agora_utc)
 
 recusar_desvio_de_endpoint
+# shellcheck disable=SC2119 # sem ferramentas extras: só aws e node
 exigir_ferramentas
 CONTA=$(conferir_conta)
 
@@ -285,6 +286,7 @@ info "    key policy efetiva = gerada (sha256 canônico $SHA_POLITICA_GERADA)"
 
 info "3/7 criando os papéis temporários com kms:* no IAM"
 # Quem pode assumir: só o papel SSO do operador (conferido no passo 0, com o caminho completo).
+# shellcheck disable=SC2016 # o código entre aspas simples é JavaScript do node -e; o $ é dele
 CONFIANCA=$(OP="$OPERADOR_ARN" CONTA="$CONTA" node -e '
   process.stdout.write(JSON.stringify({ Version: "2012-10-17", Statement: [{
     Effect: "Allow", Principal: { AWS: `arn:aws:iam::${process.env.CONTA}:root` }, Action: "sts:AssumeRole",

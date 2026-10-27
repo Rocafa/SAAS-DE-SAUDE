@@ -47,6 +47,7 @@ readonly PROVA=kc5
 if [ "${1:-}" = --anotar-email ]; then
   [ $# -eq 4 ] || falhar "uso: $0 --anotar-email <evidência.json> <horário DisableKey> <horário PutKeyPolicy>"
   [ -f "$2" ] || falhar "evidência $2 não existe"
+  # shellcheck disable=SC2016 # o código entre aspas simples é JavaScript do node -e; o $ é dele
   node -e '
     const fs = require("node:fs");
     const [arq, tDisable, tPut] = process.argv.slice(1);
@@ -96,6 +97,7 @@ EVIDENCIA_ARQUIVO=""
 INICIO=$(agora_utc)
 
 recusar_desvio_de_endpoint
+# shellcheck disable=SC2119 # sem ferramentas extras: só aws e node
 exigir_ferramentas
 CONTA=$(conferir_conta)
 SUFIXO=$(novo_uuid)

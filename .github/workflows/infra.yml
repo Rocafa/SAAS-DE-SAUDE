@@ -195,7 +195,11 @@ jobs:
           tflint_config_path: infra/terraform/.tflint.hcl
 
       - name: terraform fmt
-        run: terraform fmt -check -recursive -diff
+        # A pasta do TF_PLUGIN_CACHE_DIR tem de existir antes do primeiro comando do terraform (até o fmt
+        # falha sem ela quando o cache ainda não foi restaurado).
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          terraform fmt -check -recursive -diff
 
       - name: terraform init (sem backend) e validate
         run: |

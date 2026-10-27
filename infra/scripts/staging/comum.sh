@@ -116,6 +116,7 @@ sha256_json_canonico() {
 # AccessKeyId nem IP. Se contiver, troca o valor por "[REMOVIDO:<tipo>]", marca aprovada=false com o
 # motivo em evidencia_reprovada_por e devolve 1. A reprovação continua sendo evidência anexável.
 sanear_evidencia() {
+  # shellcheck disable=SC2016 # o código entre aspas simples é JavaScript do node -e; o $ é dele
   node -e '
     const fs = require("node:fs");
     const arq = process.argv[1];
