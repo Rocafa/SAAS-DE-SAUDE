@@ -130,6 +130,12 @@ data "aws_iam_policy_document" "break_glass" {
       variable = "kms:EncryptionContext:tenant_id"
       values   = ["&{aws:ResourceTag/tenant_id}"]
     }
+    # K-c1: igual à DekDaClinica, o contexto só pode ter a chave tenant_id.
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "kms:EncryptionContextKeys"
+      values   = ["tenant_id"]
+    }
   }
   statement {
     sid       = "LerDocumentos"

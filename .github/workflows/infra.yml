@@ -281,6 +281,10 @@ jobs:
           done
           ! echo "$aws_proib" | grep -q '"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"' \
             || { echo "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI é a credencial da role (o ECS injeta): não vetar"; exit 1; }
+          # K-a2: e também nunca declarada à mão (environment, secrets ou mapa); apontaria para outro caminho.
+          if grep -rEn --include='*.tf' '(name *= *"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"|^\s*"?AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"?\s*=)' .; then
+            echo "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI declarada na tarefa: quem a injeta é o ECS (K-a2, §4.5)"; exit 1
+          fi
           grep -q 'api_prefixos_aws_proibidos *= *\["AWS_ENDPOINT_URL"\]' staging/app.tf
           grep -q 'setintersection(local.api_variaveis_aws_proibidas,' staging/app.tf
           grep -q 'startswith(n, p)' staging/app.tf
@@ -405,6 +409,11 @@ jobs:
                  | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
           bg DecifrarKekDeClinica | grep -q 'actions *= *\["kms:Decrypt"\]'
           bg DecifrarKekDeClinica | grep -A2 '"kms:EncryptionContext:tenant_id"' | grep -q 'values *= *\["&{aws:ResourceTag/tenant_id}"\]'
+          # K-c1: break-glass igual à API, contexto só com a chave tenant_id.
+          bg DecifrarKekDeClinica | grep -B1 -A1 '"kms:EncryptionContextKeys"' | grep -q 'test *= *"ForAllValues:StringEquals"' \
+            || { echo "DecifrarKekDeClinica sem ForAllValues:StringEquals em kms:EncryptionContextKeys (K-c1)"; exit 1; }
+          bg DecifrarKekDeClinica | grep -A1 '"kms:EncryptionContextKeys"' | grep -q 'values *= *\["tenant_id"\]' \
+            || { echo "DecifrarKekDeClinica: kms:EncryptionContextKeys diferente de [\"tenant_id\"] (K-c1)"; exit 1; }
           # Nenhum outro Allow de GenerateDataKey/Decrypt/ReEncrypt em chave com tag tenant_id.
           for f in "$k" staging/acesso-humano.tf; do
             n=$(grep -Ec '"kms:(GenerateDataKey|ReEncryptFrom|ReEncryptTo)"|actions *= *\["kms:Decrypt"\]' "$f")
