@@ -29,6 +29,8 @@ export interface Paciente {
   nascimento: string;
   responsaveis: Responsavel[];
   ativo: boolean;
+  /** Inativar não apaga: o prontuário fica guardado pelo prazo legal do conselho. */
+  inativacao?: { data: string; motivo: string };
   /** Todo paciente da demonstração é inventado. */
   ficticio: true;
 }
@@ -46,6 +48,8 @@ export interface Profissional {
   id: string;
   nome: string;
   especialidade: string;
+  /** Quantos pacientes atende ao mesmo tempo (fisio em ginásio: mais de um). Padrão 1. */
+  limiteSimultaneo?: number;
 }
 
 export interface TipoAtendimento {
@@ -67,6 +71,55 @@ export interface Agendamento {
   minutos: number;
   status: StatusAgendamento;
   encaixe: boolean;
+  /** Sessões recorrentes da mesma série. */
+  serieId?: string;
+  pacoteId?: string;
+}
+
+export interface ItemEspera {
+  id: string;
+  pacienteId: string;
+  preferencia: string;
+  criadoEm: string;
+}
+
+export interface Pacote {
+  id: string;
+  pacienteId: string;
+  nome: string;
+  total: number;
+  usadas: number;
+}
+
+export interface Anexo {
+  id: string;
+  pacienteId: string;
+  nome: string;
+  tipo: 'exame' | 'laudo' | 'documento' | 'imagem';
+  data: string;
+}
+
+export interface EventoLinhaTempo {
+  data: string;
+  hora?: string;
+  tipo: 'consulta' | 'falta' | 'cancelamento' | 'recibo' | 'anexo' | 'cadastro';
+  texto: string;
+}
+
+export interface NovoPaciente {
+  nome: string;
+  nomeSocial?: string;
+  telefone: string;
+  cpf?: string;
+  nascimento?: string;
+  responsavel?: { nome: string; parentesco: string; telefone: string };
+}
+
+export interface Repeticao {
+  intervaloDias: 7 | 14;
+  vezes: number;
+  /** Cria um pacote com esse número de sessões. */
+  pacote?: boolean;
 }
 
 export interface Recibo {

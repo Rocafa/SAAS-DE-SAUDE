@@ -13,6 +13,7 @@ import { Titulo } from '@/components/app/estrutura';
 import { usePreenchimento } from '@/components/app/executor';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
+import { conflito } from '@/lib/agenda';
 import { acharPacientes } from '@/lib/ajudante/busca';
 import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido, type Paciente } from '@/lib/api/tipos';
@@ -37,7 +38,8 @@ function FormularioMarcar() {
   const encaixe = params.get('encaixe') === '1';
   const { api, atualizar } = useDados();
   const avisar = useAviso();
-  const ids = { paciente: useId(), dia: useId(), hora: useId(), prof: useId(), tipo: useId() };
+  const esperaId = params.get('espera');
+  const ids = { paciente: useId(), dia: useId(), hora: useId(), prof: useId(), tipo: useId(), repetir: useId(), vezes: useId() };
 
   const consulta = useConsulta(
     async (a) => {
@@ -59,14 +61,19 @@ function FormularioMarcar() {
   const [profissionalId, setProfissionalId] = useState('pr1');
   const [tipoId, setTipoId] = useState('t1');
   const [maisOpcoes, setMaisOpcoes] = useState(false);
+  const [repetir, setRepetir] = useState<'nao' | '7' | '14'>('nao');
+  const [vezes, setVezes] = useState('10');
+  const [pacote, setPacote] = useState(false);
   const [erros, setErros] = useState<Erros>({});
   const [enviando, setEnviando] = useState(false);
 
   const original = consulta.estado === 'pronto' ? consulta.dados.original : null;
   const pacienteDaUrl = params.get('paciente');
+  const diaDaUrl = params.get('dia');
   useEffect(() => {
     if (pacienteDaUrl) setPacienteId(pacienteDaUrl);
-  }, [pacienteDaUrl]);
+    if (diaDaUrl && /^\d{4}-\d{2}-\d{2}$/.test(diaDaUrl)) setDia(diaDaUrl);
+  }, [pacienteDaUrl, diaDaUrl]);
   useEffect(() => {
     if (!original) return;
     setPacienteId(original.pacienteId);
@@ -105,6 +112,14 @@ function FormularioMarcar() {
     if (!dia) novos.dia = 'Falta o dia. Escolha no calendário.';
     else if (dia < paraIsoLocal(new Date())) novos.dia = 'Esse dia já passou. Escolha hoje ou um dia depois.';
     if (!hora) novos.hora = 'Falta o horário. Digite como 14:00.';
+    const nVezes = Number(vezes);
+    if (repetir !== 'nao' && !(nVezes >= 2 && nVezes <= 52)) novos.geral = 'Quantas sessões? Digite um número de 2 a 52.';
+    if (!novos.dia && !novos.hora && !encaixe) {
+      const profId = original?.profissionalId ?? profissionalId;
+      const doDia = await api.listarAgendamentos({ de: dia, ate: dia });
+      const ocupado = conflito(doDia, { profissionalId: profId, data: dia, hora, ...(remarcarId ? { ignorarId: remarcarId } : {}) }, profissionais.find((p) => p.id === profId));
+      if (ocupado) novos.hora = `Esse horário já está ocupado. Escolha outro horário ou faça um encaixe.`;
+    }
     setErros(novos);
     if (Object.keys(novos).length) {
       document.getElementById(novos.paciente ? ids.paciente : novos.dia ? ids.dia : ids.hora)?.focus();
@@ -123,6 +138,18 @@ function FormularioMarcar() {
             atualizar();
           },
         });
+      } else if (repetir !== 'nao') {
+        const serie = await api.criarSerie(
+          { pacienteId, data: dia, hora, profissionalId, tipoId },
+          { intervaloDias: repetir === '7' ? 7 : 14, vezes: Number(vezes), pacote },
+        );
+        avisar({
+          texto: `${serie.length} sessões marcadas para ${nome}, começando ${quando}.`,
+          desfazer: async () => {
+            await api.removerSerie(serie[0]!.serieId!);
+            atualizar();
+          },
+        });
       } else {
         const novo = await api.criarAgendamento({ pacienteId, data: dia, hora, profissionalId, tipoId, encaixe });
         avisar({
@@ -133,6 +160,7 @@ function FormularioMarcar() {
           },
         });
       }
+      if (esperaId) await api.removerEspera(esperaId);
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {
@@ -283,6 +311,28 @@ function FormularioMarcar() {
                     ))}
                   </select>
                 </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor={ids.repetir} className="font-bold">
+                    Repetir
+                  </label>
+                  <select id={ids.repetir} value={repetir} onChange={(e) => setRepetir(e.target.value as 'nao' | '7' | '14')} className={CAMPO} disabled={encaixe}>
+                    <option value="nao">Não repetir</option>
+                    <option value="7">Toda semana</option>
+                    <option value="14">A cada 2 semanas</option>
+                  </select>
+                </div>
+                {repetir !== 'nao' && (
+                  <div className="flex flex-col gap-2">
+                    <label htmlFor={ids.vezes} className="font-bold">
+                      Quantas sessões
+                    </label>
+                    <input id={ids.vezes} type="number" inputMode="numeric" min={2} max={52} value={vezes} onChange={(e) => setVezes(e.target.value)} className={CAMPO} />
+                    <label className="flex min-h-12 items-center gap-3 font-bold">
+                      <input type="checkbox" checked={pacote} onChange={(e) => setPacote(e.target.checked)} className="size-6 accent-[var(--texto)]" />
+                      Faz parte de um pacote (controla o saldo de sessões)
+                    </label>
+                  </div>
+                )}
                 <div className="flex flex-col gap-2">
                   <label htmlFor={ids.tipo} className="font-bold">
                     Tipo de atendimento

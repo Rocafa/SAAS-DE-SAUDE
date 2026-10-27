@@ -1,5 +1,11 @@
 import type {
   Agendamento,
+  Anexo,
+  EventoLinhaTempo,
+  ItemEspera,
+  NovoPaciente,
+  Pacote,
+  Repeticao,
   NovoAgendamento,
   Paciente,
   Pendencia,
@@ -37,4 +43,21 @@ export interface ApiClinica {
   alterarStatus(id: string, status: StatusAgendamento): Promise<StatusAgendamento>;
   listarRecibos(pacienteId?: string): Promise<Recibo[]>;
   pendenciasDoDia(data: string): Promise<Pendencia[]>;
+
+  /** Sessões recorrentes; com `pacote`, cria também o pacote de sessões. */
+  criarSerie(dados: NovoAgendamento, repeticao: Repeticao): Promise<Agendamento[]>;
+  removerSerie(serieId: string): Promise<void>;
+  listarPacotes(pacienteId?: string): Promise<Pacote[]>;
+
+  listarEspera(): Promise<ItemEspera[]>;
+  adicionarEspera(pacienteId: string, preferencia: string): Promise<ItemEspera>;
+  removerEspera(id: string): Promise<ItemEspera | null>;
+  devolverEspera(item: ItemEspera): Promise<void>;
+
+  criarPaciente(dados: NovoPaciente): Promise<Paciente>;
+  removerPaciente(id: string): Promise<void>;
+  inativarPaciente(id: string, motivo: string): Promise<void>;
+  reativarPaciente(id: string): Promise<void>;
+  listarAnexos(pacienteId: string): Promise<Anexo[]>;
+  linhaDoTempo(pacienteId: string): Promise<EventoLinhaTempo[]>;
 }

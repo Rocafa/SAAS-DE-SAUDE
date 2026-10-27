@@ -1,8 +1,9 @@
 # Relatório geral do projeto Plataforma Saúde
 
 > **Para quem:** os dois sócios (N0). Dá para entender o projeto inteiro só com este documento, sem abrir o resto.
-> **Autor:** Maestro (N1) · **Data de referência:** 12/10/2026 (atualizado na rodada 9; versão anterior: 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
-> **Escopo:** `main` até o merge do PR **#38** (`9230c7a`), rodadas 1 a 9. PRs ainda abertos: **#43** a **#47** (telas do front), **#36** (PoC da D4, rascunho) e **#49** a **#53** (Dependabot novos). A §6 (rodada 5) fica como registro histórico.
+> **Autor:** Maestro (N1) · **Data de referência:** 27/10/2026 (atualizado até a rodada 27; versões anteriores: 25/10, 15/10, 12/10 e 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
+> **Escopo:** rodadas 1 a 27. A `main` continua no código de 12/10 (migrações 0001 a 0006), porque o GitHub Actions está parado por cobrança desde então e a regra é não mergear código sem CI verde. Todo o resto está **pronto em PR**, testado só localmente: #43 a #47, #75 e #76 (telas), #54 (economia de minutos), #56 (IA), #57, #60, #61, #62, #63, #65 e **#73** (API, que substitui #66 a #69), #58 (Terraform), #59 (Docker), #36 (PoC da D4, rascunho), #74 (multer) e os Dependabot #49, #51, #52, #70, #71 e #72. A §6 (rodada 5) fica como registro histórico.
+> **Números de teste:** são os últimos verificados localmente pelo Maestro. Nenhum passou pelo CI.
 >
 > **Legenda de estado:** ✅ pronto · 🛠️ em andamento ou aguardando merge · 📋 planejado (só no papel)
 
@@ -14,24 +15,34 @@
 
 **Por que pode dar certo.** É um mercado de **troca de sistema**: 92% dos estabelecimentos já usam sistema eletrônico [FATO, TIC Saúde, citado em [relatório executivo de mercado](../01-mercado/relatorio-executivo-mercado.md) §1]. As queixas mais comuns contra os concorrentes são prontuário bloqueado por inadimplência, cancelamento difícil, cobrança escondida e suporte lento. Nossa proposta é atacar exatamente essas dores, com garantias que o código faz cumprir.
 
-**Onde estamos (15/10/2026).** **O núcleo do produto está escrito e testado, mas nada novo entrou na `main` desde 12/10**, porque o GitHub Actions está parado por falta de pagamento e a regra é não mergear código sem CI verde. Estão **prontos em PR, testados localmente contra Postgres real e aprovados pelo Guardião (com ressalvas)**: rotas de **pacientes e agenda** (#57), **vínculo de cuidado** à prova de atalho (#61), **guias de convênio e pacotes** (#62), **prontuário** por nicho, cifrado e versionado (#63), **financeiro** com recibos sem buraco (#65), **telas ligadas à API** (#60), **imagem Docker** (#59) e **Terraform do staging** (#58). Nas rodadas 14 e 15 o Guardião encontrou **3 formas de um profissional ver prontuário alheio** e uma falha que abria todos os registros antigos de psicologia; todas foram corrigidas antes de existir dado real. Fontes: [rodada 14](2026-10-14-rodada-14.md), [rodada 15](2026-10-15-rodada-15.md).
+**Onde estamos (27/10/2026).** **O núcleo do MVP (primeira versão vendável) está escrito, testado localmente e aprovado pelo Guardião, mas nada de código entrou na `main` desde 12/10**, porque o GitHub Actions continua parado por falta de pagamento. Desde a última versão deste relatório (rodada 15):
+- o **financeiro** (#65) e o **prontuário** (#63) passaram de "aprovado com ressalvas" para **APROVADO** (rodada 20);
+- nasceram e foram aprovados o **importador** de dados dos concorrentes, os **responsáveis** do paciente (pais, representante legal, quem paga), o **backend do portal do paciente** e os **lembretes por WhatsApp**. Os quatro foram juntados num único PR, o **#73**, que o Guardião **APROVOU** em 23/10 (rodadas 17 a 19);
+- entrou o **agendador real das tarefas automáticas** (descarte de dados vencidos, revogação na maioridade, lembretes), que só pode ser mergeado depois de passar com um Redis real (rodada 20);
+- o **Terraform do staging** (#58) ganhou alarmes, IAM das chaves e uma trava de TLS no CI (rodadas 20 a 22);
+- os vetos das telas do front (#44, #46, #47) foram **levantados** e o **portal do paciente no navegador foi ligado ao backend real** (#75) (rodadas 24 e 25);
+- foi feito um **ensaio local do merge completo** (todos os PRs juntos, na ordem) e as telas de pacientes e agenda foram alinhadas ao backend novo (**#76**) (rodada 26);
+- a **segurança das chaves** ficou mais forte: cada clínica tem uma chave que **só abre com a identificação da própria clínica**, um alarme avisa qualquer mudança nas regras das chaves, e a API sobe em produção com o cofre de chaves real da AWS — só falta o login (D4). O Terraform do staging (#58) foi **APROVADO** pelo Guardião (rodada 27).
+
+Ao todo, o Guardião vetou 4 entregas novas nessas rodadas (#66, #67, #68, #69). Todas foram corrigidas e reaprovadas antes de existir dado real. Fontes: [rodada 16](2026-10-15-rodada-16.md), [rodadas 17–19](2026-10-22-rodadas-17-a-19.md), [rodada 20](2026-10-23-rodada-20.md), [rodadas 21–22](2026-10-23-rodadas-21-22.md), [rodadas 24–25](2026-10-25-rodadas-24-25.md), [rodada 26](2026-10-25-rodada-26.md), [rodada 27](2026-10-27-rodada-27.md).
 
 | Pronto | Falta |
 |---|---|
 | Pesquisa de mercado (11 segmentos) e recomendação de nicho | Confirmar o nicho com 5 a 10 entrevistas reais (D1) |
-| PRD, WBS (332 micropartes), roadmap, backlog do MVP (176 histórias, 898 pontos), garantias G1–G9 | Merge dos PRs prontos quando o CI voltar (pacientes, agenda, guias, pacotes, **prontuário** e **financeiro** já escritos); importador de dados dos concorrentes, portal do paciente (backend) e WhatsApp ainda não começaram |
-| LGPD: RIPD da plataforma, da IA e do WhatsApp, minuta do DPA, proposta de retenção, plano de incidente, matriz de retenção por conselho, 7 pareceres do Guardião | Advogado validar os itens ⚖️ (D8); nomear o encarregado (DPO); DPA assinado |
-| Código-base: isolamento por clínica, **criptografia por clínica**, **auditoria encadeada**, **guarda de schema**, garantia de saída, rate limit em Redis | Login, permissões por perfil (RBAC) e MFA: tudo depende da **D4** |
-| Telas do front: design system, Ajudante, Hoje, Agenda, Pacientes (PR #42 na `main`; #43 a #47 abertos) | Telas de pacientes e agenda já ligadas à API (#60, aguardando CI); login real (D4) para usar no navegador; corrigir os 3 vetos do Guardião (#44, #46, #47) |
-| 9 checks automáticos no CI, todos verdes na última execução | **O GitHub Actions parou por falta de pagamento**: hoje nenhum CI roda ([fila.md](../00-governanca/fila.md)) |
+| PRD, WBS (332 micropartes), roadmap, backlog do MVP (176 histórias, 898 pontos), garantias G1–G9 | Merge de tudo quando o CI voltar (§9.1) |
+| LGPD: RIPD da plataforma, da IA e do WhatsApp, minuta do DPA, proposta de retenção, plano de incidente, matriz de retenção por conselho e **mais de 25 pareceres do Guardião** | Advogado validar os itens ⚖️ (D8); nomear o encarregado (DPO); DPA assinado |
+| API pronta em PR: pacientes, agenda, vínculo de cuidado, guias, pacotes, prontuário, financeiro, importador, responsáveis, portal do paciente, WhatsApp e agendador de tarefas (**53 migrações**, `test:rls` **613/613** local) | Login, permissões por perfil (RBAC) e MFA: tudo depende da **D4** |
+| Telas do front: design system, Ajudante, Hoje, Agenda, Pacientes (#42 na `main`); demais telas e portal ligado ao backend em PR (#43 a #47, #60, #75, #76) | Login real (D4) para usar no navegador; @Lopesloro aceitar ou descartar o #75 |
+| Infra em PR: Terraform do staging com alarmes, IAM das chaves e alarme de administração do KMS (#58, **aprovado**), imagem Docker (#59) | Orçamento (D13) e o primeiro *apply* (criação real) na AWS |
+| 9 checks automáticos no CI, mais os que chegam com os PRs (§5) | **O GitHub Actions parou por falta de pagamento**: hoje nenhum CI roda ([fila.md](../00-governanca/fila.md)) |
 
 **As 3 decisões mais urgentes**
 
-1. **D4: autenticação.** É o **gargalo** do projeto: sem login não existe RBAC nem MFA, e sem eles as telas não se ligam à API, a rota de exportação da garantia de saída não existe e nenhuma clínica entra. A PoC do PR #36 já mediu Zitadel × Better Auth. Fonte: [memo D04](../00-governanca/memos/D04-autenticacao.md).
+1. **D4: autenticação.** É o **gargalo** do projeto: sem login não existe RBAC nem MFA, as telas só funcionam com sessão de teste, a entrada no portal do paciente continua simulada e nenhuma clínica entra. A PoC do PR #36 já mediu Zitadel × Better Auth, e o memo da rodada 10 recomenda Better Auth. Fonte: [memo D04](../00-governanca/memos/D04-autenticacao.md).
 2. **D8: contratar o advogado de saúde + LGPD**, junto com a nomeação do **DPO**. Bloqueia o piloto com dados reais, o DPA, os termos e a publicação da Carta de Compromissos. Fonte: [memo D08](../00-governanca/memos/D08-validacao-juridica.md).
 3. **D13: orçamento de infraestrutura e pentest.** Destrava o staging na AWS (Terraform parado) e o pentest obrigatório antes do piloto. Fonte: [memo D13](../00-governanca/memos/D13-orcamento-infra-pentest.md).
 
-Além das decisões, há uma **ação simples e urgente**: **regularizar o pagamento do GitHub** da conta Rocafa. Sem isso o CI não roda e, pela regra do projeto, nenhum PR de código entra (o #43 está pronto e parado só por isso).
+Além das decisões, há uma **ação simples e urgente**: **regularizar o pagamento do GitHub** da conta Rocafa. Sem isso o CI não roda e, pela regra do projeto, nenhum PR de código entra. Há ainda um motivo de segurança: a versão do Next.js (o motor do site) hoje na `main` tem **2 vulnerabilidades críticas**, e a correção (Dependabot #72) é o primeiro merge da fila assim que o CI voltar ([rodada 20](2026-10-23-rodada-20.md)).
 
 ---
 
@@ -58,8 +69,14 @@ As datas estão no horário de Brasília. Os merges aparecem no GitHub como 09/1
 | 14/10/2026 | 13 — Ressalvas e guias | **Vínculo de cuidado** no servidor, alerta de anomalia, pseudônimo via KMS; **API de guias e pacotes** (saldo nunca negativo sob concorrência); ressalvas de infraestrutura (break-glass, backup, logs) | PRs **#61**, guias e pacotes, #58 atualizado ([rodada 13](2026-10-14-rodada-13.md)) |
 | 14/10/2026 | 14 — Prontuário | **Prontuário** por nicho (cifrado, versionado, bloqueado após finalizar, notas privadas da psicologia); Guardião **vetou 2 vezes o vínculo de cuidado** (encaixe consigo mesmo; remarcar consulta antiga) e **1 vez o prontuário** (troca de sigilo abria registros antigos): tudo corrigido e reaprovado | PRs **#63**, #61 e #62 atualizados ([rodada 14](2026-10-14-rodada-14.md)) |
 | 15/10/2026 | 15 — Ressalvas e financeiro | Retenção legal que bloqueia eliminação, custódia do psicólogo substituto, **usuário da sessão travado no banco**; **financeiro** (cobranças, caixa, recibos sem buraco, insumo do Receita Saúde, texto neutro) | PRs **#65**, #61 e #63 atualizados ([rodada 15](2026-10-15-rodada-15.md)) |
+| 15/10/2026 | 16 — Limpeza das ressalvas | Toda transação com usuário travado (0019); o banco passa a saber quem é admin ou psicólogo (0020); ressalvas do financeiro (0021); registro de mudanças de estrutura do banco (pgaudit) e alarmes no Terraform | #61, #63, #65, #58 atualizados ([rodada 16](2026-10-15-rodada-16.md)) |
+| 15–22/10/2026 | 17 a 19 — Importador, responsáveis, portal e WhatsApp | **Importador** dos concorrentes (#66), **responsáveis** do paciente com pagador congelado (#67), **backend do portal do paciente** com sessão própria (#68) e **lembretes por WhatsApp** (#69). Guardião vetou os quatro pelo menos uma vez; todos corrigidos e reaprovados. Integração dos quatro no **#73** (0036–0040), **APROVADO** em 23/10 | PRs **#66–#69** → **#73** ([rodadas 17–19](2026-10-22-rodadas-17-a-19.md)) |
+| 23/10/2026 | 20 — Agendador e aprovações | **#65 e #63 APROVADOS**; **agendador real das tarefas automáticas** (BullMQ, 7 tarefas, 0043); alarmes de tarefas no Terraform; achado de 2 vulnerabilidades críticas no Next.js (#72 vira o 1º merge) | #73, #58 ([rodada 20](2026-10-23-rodada-20.md)) |
+| 23/10/2026 | 21 a 23 — Fechamento do importador | Chave própria por lote de importação e índice cego do CPF (0046): **importador aprovado pelo código**; operador nominal na correção do fundador (0047); responsáveis importados com as regras de idade (0048); varredura de testes instáveis; chave de lote sem órfã (0049); titular que passa a menor perde o acesso ao portal (0050); trava de TLS e IAM das chaves no Terraform | #73, #58 ([rodadas 21–22 e 23](2026-10-23-rodadas-21-22.md)) |
+| 24/10/2026 | — Dependabot local | Todos os PRs do Dependabot testados localmente; ordem de merge definida; PR #74 (multer/body-parser) | [relatório](2026-10-24-dependabot-local.md) |
+| 24–25/10/2026 | 24 e 25 — Front e portal real | **Vetos do front levantados** (#44, #46, #47); contrato único `ApiPortal`; redução de idade do adolescente só com documento conferido (0051–0053); **PR #75**: portal do navegador ligado ao backend real | #73, **#74**, **#75** ([rodadas 24–25](2026-10-25-rodadas-24-25.md)) |
 
-Fontes: `git log --oneline --first-parent origin/main`, `gh pr list --state all`, [rodada 2](2026-10-08-rodada-2.md), [rodada 3](2026-10-08-rodada-3.md), [rodada 4](2026-10-09-rodada-4-garantias.md), [rodada 6](2026-10-09-rodada-6-dependabot.md), [rodada 7](2026-10-10-rodada-7-necessidades-producao.md), [rodada 8](2026-10-12-estado-rodada-8.md) e [o que falta](2026-10-12-o-que-falta.md).
+Fontes: `git log --oneline --first-parent origin/main`, `gh pr list --state all`, [rodada 2](2026-10-08-rodada-2.md), [rodada 3](2026-10-08-rodada-3.md), [rodada 4](2026-10-09-rodada-4-garantias.md), [rodada 6](2026-10-09-rodada-6-dependabot.md), [rodada 7](2026-10-10-rodada-7-necessidades-producao.md), [rodada 8](2026-10-12-estado-rodada-8.md), [o que falta](2026-10-12-o-que-falta.md) e os relatórios das rodadas 10 a 25 em `docs/relatorios/`.
 
 ---
 
@@ -105,7 +122,9 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | Garantias G1–G9 + Carta de Compromissos (rascunho, ressalvas M1–M6 aplicadas no PR #28) | [garantias-ao-cliente.md](../02-produto/garantias-ao-cliente.md) | 🛠️ na `main`; aguarda D9 e advogado | — |
 | Necessidades de produção: checklist P0/P1/P2, portões A (staging), B (piloto) e C (lançamento) | [rodada 7](2026-10-10-rodada-7-necessidades-producao.md) | ✅ (documento) | — |
 | Telas do front com **dados fictícios** (sem API): design system em cinza, Ajudante (busca e ações por texto, 100% local), Hoje, Agenda, Pacientes | `apps/web/` (PR #42) e [estado do front](2026-10-12-front-estado.md) | ✅ #42 na `main` · 🛠️ #43 pronto, parado sem CI | Capturas em `docs/02-produto/telas/` (no #42) |
-| Telas de atendimento/prontuário/documentos, financeiro/guias/mensagens, configurações/acesso, portal do paciente/PWA | PRs #44, #45, #46, #47 | 🛠️ **#44, #46 e #47 vetados** pelo Guardião; #45 aprovado com ressalvas, mas empilhado sobre o #44 | [parecer do front](../03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md) |
+| Telas de atendimento/prontuário/documentos (#44), financeiro/guias/mensagens (#45), configurações/acesso (#46), portal do paciente/PWA (#47) | PRs #44 a #47 (@Lopesloro) | 🛠️ **Vetos levantados em 24/10**: #46 aprovado; #44, #45 e #47 aprovados com ressalvas. Merge só com CI verde | [re-revisão do front](../03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md) |
+| Telas de pacientes e agenda ligadas à API real | PR #60 | 🛠️ pronto, aguarda CI | — |
+| **Portal do paciente ligado ao backend real**: escolha de "de quem" é o acesso (o próprio paciente ou o filho, por exemplo), resgate do convite com código enviado ao telefone do cadastro, botões de confirmar e cancelar decididos pelo servidor, recibos, nada clínico para o responsável. Fora do ambiente de desenvolvimento ele fica travado no modo de teste até existir login real (D4) | PR #75 (empilhado sobre o #47, sem mexer na branch do @Lopesloro) | 🛠️ aprovado com ressalvas (R1–R4 corrigidas); **aguarda @Lopesloro aceitar ou descartar** | [parecer do #75](../03-seguranca-lgpd/revisoes/2026-10-25-pr75.md); front: 262 testes e E2E do portal 24/24 (números do executor) |
 
 ### 3.4 LGPD e segurança
 
@@ -119,7 +138,9 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | Revisão das garantias (vetado → corrigido; ressalvas M1–M6 aplicadas no PR #28) | [revisoes/2026-10-09-garantias.md](../03-seguranca-lgpd/revisoes/2026-10-09-garantias.md) | ✅ | — |
 | RIPD da plataforma, minuta do DPA, retenção e descarte (proposta da D7), plano de resposta a incidente (3 dias úteis), checklist CFM 2.454 | [RIPD-plataforma.md](../03-seguranca-lgpd/RIPD-plataforma.md), [dpa-minuta.md](../03-seguranca-lgpd/dpa-minuta.md), [retencao-e-descarte.md](../03-seguranca-lgpd/retencao-e-descarte.md), [plano-resposta-incidentes.md](../03-seguranca-lgpd/plano-resposta-incidentes.md), [checklist-cfm-2454.md](../03-seguranca-lgpd/checklist-cfm-2454.md) | ✅ rascunho (PR #28) | Itens ⚖️ vão ao advogado |
 | RIPD da IA (escriba) e do WhatsApp; matriz de retenção por conselho; pareceres dos PRs #29, #30, #35, #37 | [RIPD-ia-escriba.md](../03-seguranca-lgpd/RIPD-ia-escriba.md), [RIPD-whatsapp.md](../03-seguranca-lgpd/RIPD-whatsapp.md), [matriz-retencao.md](../03-seguranca-lgpd/matriz-retencao.md), [revisoes/](../03-seguranca-lgpd/revisoes/) | ✅ (PR #38) | — |
-| Parecer das telas do front (#42–#47): 3 bloqueantes. **B1** recepção e admin não clínico leem evoluções; **B2** atestado com CID emitido por qualquer perfil e em nome de qualquer profissional; **B3** o portal do paciente usa o contrato e os dados da clínica | [revisoes/2026-10-12-front-r8.md](../03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md) | 🛠️ correções com o front (@Lopesloro) | Nenhum exige redesenho |
+| Parecer das telas do front (#42–#47): 3 bloqueantes. **B1** recepção e admin não clínico leem evoluções; **B2** atestado com CID emitido por qualquer perfil e em nome de qualquer profissional; **B3** o portal do paciente usa o contrato e os dados da clínica | [revisoes/2026-10-12-front-r8.md](../03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md) | ✅ **vetos levantados** na re-revisão de 24/10 | [revisoes/2026-10-24-front-vetos.md](../03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md) |
+| Pareceres da API e da infra (rodadas 11 a 25): #56, #57, #58, #61, #62, #63, #65, importador (#66), responsáveis (#67), portal do paciente (#68), WhatsApp (#69), integração (#73), agendador de tarefas, portal no front (#75) | [revisoes/](../03-seguranca-lgpd/revisoes/) (arquivos de 13/10 a 25/10) | ✅ todos aprovados ou aprovados com ressalvas; **nenhum veto em aberto** | Cada parecer lista as ressalvas e o prazo de cada uma |
+| Financeiro no ROPA (registro das operações de tratamento) | [pasta 03](../03-seguranca-lgpd/) | ✅ (rodada 16) | — |
 | RIPD do piloto, DPA assinado, DPO nomeado, termos de uso e política de privacidade | — | 📋 | Dependem da D8 e da nomeação do DPO |
 
 ### 3.5 Engenharia e código
@@ -129,19 +150,90 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | Arquitetura (stack, C4, modelo de dados, integrações, DevOps) | [04-arquitetura/](../04-arquitetura/) | ✅ (documento) | — |
 | Monorepo pnpm + Turborepo | [package.json](../../package.json), [turbo.json](../../turbo.json) | ✅ | `pnpm install --frozen-lockfile` |
 | API NestJS: `GET /health` + contexto de clínica (`withTenant`) | [apps/api/](../../apps/api/) | ✅ | `pnpm turbo run lint typecheck test` |
-| Banco: tabelas `tenants` e `patients` com RLS forçado; 6 migrações (0001 a 0006) | [db/migrations/](../../apps/api/db/migrations/) | ✅ | `pnpm db:up`, depois `pnpm --filter @plataforma/api db:migrate` e `test:rls` |
+| Banco na `main`: tabelas `tenants` e `patients` com RLS forçado; 6 migrações (0001 a 0006). Outras 47 (0007 a 0053) prontas em PR, na tabela abaixo | [db/migrations/](../../apps/api/db/migrations/) | ✅ `main` · 🛠️ PRs | `pnpm db:up`, depois `pnpm --filter @plataforma/api db:migrate` e `test:rls` |
 | Site Next.js: telas com dados fictícios (Hoje, Agenda, Pacientes, Mais) e Ajudante; ainda **não fala com a API** | [apps/web/](../../apps/web/) (PR #42) | ✅ fundação do front · 🛠️ #43–#47 abertos | `pnpm turbo run test`; E2E (Playwright) só roda local, ainda não no CI |
 | Tipos compartilhados (com build próprio desde o PR #30) | [packages/shared/](../../packages/shared/) | ✅ | — |
-| Módulos auth, patients, scheduling, records, prescriptions, billing | `apps/api/src/modules/*` | 📋 **a API não tem rota de negócio**, só `/health` e `/health/ready`; `patients` tem apenas o repositório usado pela exportação, os demais são arquivos de 3 linhas | — |
+| Módulos de negócio da API (rotas reais) | `apps/api/src/modules/*` nos PRs | 🛠️ **prontos em PR** (tabela abaixo); na `main` a API ainda só tem `/health` e `/health/ready` | `test:rls` **600/600**, `test:security` 81 ok e 7 pulados (os que exigem Redis real), turbo 12/12: verificação do Maestro no #73, banco recriado do zero ([rodadas 24–25](2026-10-25-rodadas-24-25.md)) |
 | Garantia de saída: status de assinatura, política de acesso, exportação, `audit_log` append-only | [explicação](../04-arquitetura/garantia-de-saida.md) | ✅ (PR #9) | Testes `exit-guarantee.rls.test.ts` |
 | **Criptografia por clínica:** AES-256-GCM com chave própria de cada clínica (envelope). Destruir a chave deixa os dados daquela clínica ilegíveis, até nos backups; destruição em duas fases | [criptografia-de-campo.md](../04-arquitetura/criptografia-de-campo.md), migração 0004 | ✅ (PR #35) · ainda não protege nenhum campo de negócio, porque eles não existem | `crypto.rls.test.ts` |
 | **Auditoria encadeada:** cada registro guarda o hash (impressão digital) do anterior, por clínica; um verificador detecta alteração, exclusão e reordenação. Ações de chave, IA e break-glass no enum (0006) | [auditoria-encadeada.md](../04-arquitetura/auditoria-encadeada.md), migrações 0005 e 0006 | ✅ (PRs #37, #40, #41) · falta âncora externa imutável (depende do Terraform) | `audit-chain.rls.test.ts` |
 | **Guarda de schema:** teste que lê o catálogo do banco e reprova qualquer tabela sem RLS forçado, sem policy, com privilégio a mais (inclusive por coluna) ou fora do teste de isolamento | `apps/api/test/guarda-schema.rls.test.ts` | ✅ (PR #34) | Pegou as 8 mutações de teste |
 | **Rate limit em Redis** compartilhado entre instâncias, com fallback em memória; build definitivo; erro 25006 → 503 | `apps/api/src/security/` | ✅ (PR #30) · falta R5 (teste do `trustProxyHops`, depende do ALB) | — |
 | Interface de LLM com adaptador falso (sem provedor real) | `apps/api/src/modules/ai/` | ✅ (PR #29) · veto prévio do Guardião a adaptador real antes das condições | — |
-| Rota HTTP de exportação, login, RBAC, MFA | — | 📋 | Depende da D4; PoC no PR #36 (rascunho) |
-| Ambientes de staging/produção na AWS (Terraform) | branch `devops/terraform-staging-b` | 🟡 **parado**: código existe, PR não aberto | — |
-| Imagem Docker da API | — | 🟡 **parado**: só o levantamento | — |
+| Login, RBAC, MFA | — | 📋 | Depende da D4; PoC no PR #36 (rascunho). As rotas já usam um "login plugável" (#57), pronto para receber o adaptador escolhido |
+| Ambiente de staging na AWS (Terraform): rede, banco, Redis com TLS, chaves por clínica no KMS, WAF, CloudTrail, backup, alarmes de mudança de estrutura do banco e das tarefas automáticas, IAM das chaves de lote | PR #58 | 🛠️ aprovado no código pelo Guardião; validar no CI. **Nada foi criado na AWS** (depende da D13) | `fmt`, `validate`, `tflint` locais; checkov só no CI |
+| Imagem Docker da API (distroless, sem root, com varredura de vulnerabilidades) + E2E no CI | PR #59 | 🛠️ pronto, aguarda CI | — |
+
+**Módulos prontos em PR** (todos testados localmente contra Postgres real; nenhum na `main`):
+
+| Módulo | PR | O que faz, em uma linha | Guardião |
+|---|---|---|---|
+| Pacientes e agenda | #57 | Cadastro com CPF, telefone e nascimento só cifrados; busca sem nome na URL; atendimento simultâneo | Aprovado c/ ressalvas |
+| Vínculo de cuidado | #61 | Só o profissional que atende o paciente vê conteúdo clínico, sem atalhos (encaixe consigo mesmo, remarcar consulta antiga) | Aprovado c/ ressalvas |
+| Guias de convênio e pacotes | #62 | Guias sem TISS com dados cifrados; saldo de sessões nunca fica negativo, mesmo com uso simultâneo | Aprovado c/ ressalvas |
+| Prontuário | #63 | Por nicho (fisio/TO e psicologia), cifrado, versionado, travado após finalizar, notas privadas, retenção legal e custódia do psicólogo substituto | **Aprovado** (20) |
+| Financeiro | #65 | Cobranças, caixa, estorno, recibos sem buraco na numeração, insumo do Receita Saúde, texto neutro (sem CID) | **Aprovado** (20) |
+| Importador de concorrentes | #73 (era #66) | Traz pacientes de outros sistemas; cada lote tem chave própria; desfazer não apaga paciente antigo. **Só liga em produção** com as condições do §9.2 | **Aprovado pelo código** (22) |
+| Responsáveis do paciente | #73 (era #67) | Pais, representante legal e pagador; o pagador fica congelado no recibo já emitido | Aprovado |
+| Backend do portal do paciente | #73 (era #68) | Sessão própria do paciente; responsável só para menor ou curatela, sem nada clínico; sigilo do adolescente até no banco | Aprovado |
+| Lembretes por WhatsApp | #73 (era #69) | Opt-in amarrado ao número, modelos em lista fechada, "SAIR" revoga tudo; canal desligado por padrão e sem provedor real | Aprovado |
+| Agendador de tarefas automáticas | #73 | 7 tarefas por clínica (descarte do WhatsApp, revogação na maioridade, ciclo das notas privadas, retenção fiscal etc.), com trilha e alarme de atraso | Aprovado c/ ressalvas: **merge exige os testes com Redis real verdes** |
+| Contrato `ApiPortal` | #73 (`packages/shared`) | Lista única das rotas do portal, usada igual pelo backend e pelo front, com teste de contrato | Adaptador do portal liberado (24) |
+
+**Migrações do banco** (cada migração é um script que cria ou altera tabelas; elas rodam em ordem). Na `main`: **0001 a 0006**. Prontas em PR: **0007 a 0053** (todas acumuladas no #73, que está empilhado sobre os anteriores). Descrição em uma linha, a partir do nome do arquivo e dos relatórios das rodadas:
+
+| Nº | O que protege |
+|---|---|
+| 0001 | Tabelas de clínicas e pacientes com RLS forçado: cada clínica só vê as próprias linhas |
+| 0002 | Garantia de saída: clínica inadimplente ou cancelada continua lendo e exportando; auditoria que só aceita inclusões |
+| 0003 | Clínica travada por transação: ninguém troca de clínica no meio de uma operação |
+| 0004 | Chave de dados por clínica: apagar a chave deixa os dados dela ilegíveis, até nos backups |
+| 0005 | Auditoria encadeada: alterar ou apagar um registro deixa rastro |
+| 0006 | Novas ações na auditoria (chaves, IA, break-glass) |
+| 0007 | Pacientes e agenda, com CPF, telefone e nascimento só cifrados (#57) |
+| 0008 | Tipo de ator na auditoria: o suporte aparece pseudonimizado na exportação (#57) |
+| 0009 | Pacientes sem DELETE: a API não consegue apagar paciente (#57) |
+| 0010 | Limite por usuário e alerta de acesso fora do normal (#61) |
+| 0011 | Guias e pacotes: saldo nunca negativo; número, senha e carteirinha só cifrados (#62) |
+| 0012 | Prontuário cifrado, versionado e travado após finalizar (#63) |
+| 0013 | Profissional não ganha vínculo de cuidado marcando consulta consigo mesmo (#61) |
+| 0014 | Remarcar consulta antiga não reabre o prontuário (#61) |
+| 0015 | Sigilo da psicologia gravado em cada atendimento + notas privadas: mudar a configuração não abre sessões antigas (#63) |
+| 0016 | Usuário da sessão gravado no banco: o banco recusa autor diferente (#61) |
+| 0017 | Retenção legal bloqueia eliminação; custódia do psicólogo substituto; caixa de avisos (#63) |
+| 0018 | Financeiro: cobranças, caixa, recibos sem buraco (#65) |
+| 0019 | Toda transação tem usuário travado; sem usuário vale um "sentinela de sistema" que não serve de autor (#61) |
+| 0020 | O banco sabe quem é admin ou psicólogo; ninguém se promove sozinho; o último admin não sai (#63) |
+| 0021 | Cobrança de pessoa física só do profissional certo; retenção fiscal de 5 anos com piso no banco (#65) |
+| 0022 | A clínica já nasce com o fundador registrado como admin; avisos de mudança de perfil (#63) |
+| 0023 | Profissional fixado já na venda do pacote (#65) |
+| 0024 | Importador de dados dos concorrentes (#66) |
+| 0025 | Cobrança de pessoa física de um pacote só cobre sessões do próprio profissional; profissional e paciente do agendamento não podem ser trocados (#65) |
+| 0026 | Correções do primeiro veto do importador (#66) |
+| 0027 | Portal do paciente: o servidor descobre o paciente pela sessão (#68) |
+| 0028 | Responsáveis do paciente: menores, representante legal, pagador (#67) |
+| 0029 | Sessão de pacote não muda depois de registrada, salvo um único estorno (#65) |
+| 0030 | O importador não dá nenhum sinal sobre pacientes de outras clínicas (fim do alerta de CPF em outra clínica) (#66) |
+| 0031 | **Pagador congelado** no recebimento: recibo passado não muda se o cadastro do responsável mudar (#67) |
+| 0032 | Lembretes por WhatsApp com opt-in (#69) |
+| 0033 | Portal: responsável com regra de idade; trilha de auditoria invisível ao portal (#68) |
+| 0034 | Responsáveis: anular pagador com recebimentos exige perfil financeiro; responsáveis na retenção de 20 anos; CPF mascarado no recibo (#67) |
+| 0035 | Nenhuma migração pode criar exclusão em cascata em pacientes ou agendamentos; desfazer importação não apaga paciente antigo (#66) |
+| 0036 | WhatsApp para menor só pelo responsável vigente (#73) |
+| 0037–0040 | Ajustes pedidos pelo Guardião na integração (#73): recibos e cobranças sensíveis do adolescente ocultos ao responsável que não paga; sigilo só recalculado quando a data de nascimento muda de fato; avisos a admin e profissional e alerta ao DPO quando o sigilo desliga; avisos visíveis só ao destinatário |
+| 0041 | Estorno de sessão de pacote só com perfil ativo, conferido no banco; hora do estorno vem do servidor (#65) |
+| 0042 | Guia imutável, salvo estorno; correção do fundador em dois passos, só pelo migrador, com 24 h e trilha (#65, #63) |
+| 0043 | Agendador de tarefas: lista de clínicas que devolve só ids e recusa rodar dentro de uma clínica (#73) |
+| 0044 | Pedido de correção do fundador em tabela que só o migrador acessa (#63) |
+| 0045 | Responsáveis: guarda de 20 anos completa; via oficial do recibo (IR) só para admin e financeiro; trava contra corrida entre recebimento e anulação (#67) |
+| 0046 | Importador: **crypto-shredding por lote** e **índice cego** do CPF por clínica (#66) |
+| 0047 | **Operador nominal** na correção do fundador: precisa ser outra pessoa, identificada pelo login do banco (#63) |
+| 0048 | Responsáveis importados seguem as regras de idade, curatela e sigilo; desfazer só apaga o que o lote criou (#66) |
+| 0049 | Chave de lote registrada antes de ser criada; chave órfã detectada com alarme (#66) |
+| 0050 | Titular que passa a constar como menor perde o acesso ao portal (#68) |
+| 0051 | Portal: nascimento completo e pedido de correção da data (#73) |
+| 0052 | Reduzir a idade de um adolescente exige documento conferido (#73) |
+| 0053 | Só admin ou profissional conferem esse documento; mensagens de erro unificadas (#73) |
 
 ### 3.6 IA
 
@@ -150,7 +242,7 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | Estratégia em fases (API + RAG → ajuste fino com dados anonimizados → modelo próprio no Brasil) | [05-ia-llm/README.md](../05-ia-llm/README.md) | ✅ (documento) | — |
 | Casos de uso, dados e treino, avaliação, arquitetura do gateway | [05-ia-llm/](../05-ia-llm/) | ✅ (documento) | — |
 | Custo estimado do escriba: R$ 0,30 a 0,70 por consulta [ESTIMATIVA] | [05-ia-llm/README.md](../05-ia-llm/README.md) §1 | — | O [CONTEXTO.md](../../CONTEXTO.md) cita R$ 0,30–0,58; vale o número do README da IA |
-| Golden sets sintéticos (8 casos de fisio/TO e 8 de psicologia) e protocolo do gate do M3 | [golden-sets/](../05-ia-llm/golden-sets/), [protocolo-avaliacao-escriba.md](../05-ia-llm/protocolo-avaliacao-escriba.md) | ✅ (PR #29) · o gate exige ≥ 50 por nicho com revisão clínica | — |
+| Golden sets sintéticos (8 casos de fisio/TO e 8 de psicologia) e protocolo do gate do M3 | [golden-sets/](../05-ia-llm/golden-sets/), [protocolo-avaliacao-escriba.md](../05-ia-llm/protocolo-avaliacao-escriba.md) | ✅ (PR #29) · 🛠️ **50 casos sintéticos por nicho** prontos no PR #56 (aprovado c/ ressalvas), aguardando CI e a revisão de 1 profissional de fisio/TO e 1 de psicologia | — |
 | Código de IA: interface de LLM, política de roteamento e adaptador falso (sem rede) | `apps/api/src/modules/ai/` | ✅ fundação · 📋 escriba e adaptador real | Escriba entra no M3; depende da D3 e das condições do Guardião (consentimento em 3 estados, classificação de risco CFM) |
 
 ### 3.7 CI e automação
@@ -161,8 +253,8 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | CI com 4 jobs (gitleaks, qualidade, RLS + guarda de schema, auditoria de dependências) | [ci.yml](../../.github/workflows/ci.yml) | ✅ (quando o Actions volta) |
 | Segurança (testes ofensivos + ZAP) e Testes de produção (resiliência/backup + carga k6) | [seguranca.yml](../../.github/workflows/seguranca.yml), [producao.yml](../../.github/workflows/producao.yml) | ✅ (PRs #10 e #11) |
 | CodeQL por PR e semanal (segunda, 03h17) | [codeql.yml](../../.github/workflows/codeql.yml) | ✅ (v4 desde o PR #31) |
-| Dependabot semanal (npm e Actions) | [dependabot.yml](../../.github/dependabot.yml) | ✅ #1–#26 resolvidos (rodadas 6 e 9); 5 novos abertos (#49–#53, incluindo ioredis 6, versão principal nova) |
-| E2E do front (Playwright) no CI | — | 📋 roda só local; falta o job |
+| Dependabot semanal (npm e Actions) | [dependabot.yml](../../.github/dependabot.yml) | ✅ #1–#26 resolvidos (rodadas 6 e 9) · 🛠️ abertos e **testados localmente em 24/10**: #72 (next 16.4.2, corrige 2 críticas), #70+#71 (CodeQL), #52, #51 e #49 (ioredis 6); mais o #74, aberto pelo Maestro (multer e body-parser) ([relatório](2026-10-24-dependabot-local.md)) |
+| E2E do front (Playwright), imagem Docker com varredura, Terraform e os testes novos da API | PRs #59, #58 e #73 | 🛠️ chegam com os PRs (ver §5) |
 | Actions fixadas por SHA (proteção da cadeia de suprimentos) | workflows | ✅ |
 | Modelos de issue (feature, pesquisa, decisão, incidente LGPD) e de PR | [.github/ISSUE_TEMPLATE/](../../.github/ISSUE_TEMPLATE/), [pull_request_template.md](../../.github/pull_request_template.md) | ✅ |
 | Proteção da `main` (impedir merge com CI vermelho) | — | 📋 exige plano pago em repositório privado |
@@ -195,7 +287,14 @@ A API usa um usuário de banco limitado (`app_user`), que não consegue desligar
 
 > **Atualização de 12/10/2026 (rodadas 6 a 9).** O texto acima foi escrito em 09/10 e continua valendo; a garantia de saída já está na `main`. Desde então entraram: **criptografia por clínica** (cada clínica tem sua chave; apagar a chave torna os dados dela ilegíveis), **auditoria encadeada** (cada registro "assina" o anterior, então alterar ou apagar um deixa rastro), **guarda de schema** (o CI reprova tabela nova sem a trava por clínica) e **rate limit em Redis** (o limite de requisições vale para todas as instâncias juntas, não para cada uma). O site ganhou telas, mas com **dados fictícios** e sem falar com a API. Fontes: [criptografia-de-campo.md](../04-arquitetura/criptografia-de-campo.md), [auditoria-encadeada.md](../04-arquitetura/auditoria-encadeada.md), [estado da rodada 8](2026-10-12-estado-rodada-8.md).
 
-**O que ainda não existe:** login, permissões por perfil, MFA, rotas de negócio, a rota HTTP da exportação, criptografia ligada a campos reais de prontuário, auditoria de leitura de prontuário, a eliminação após 90 dias, filas (BullMQ) e hospedagem na AWS.
+> **Atualização de 25/10/2026 (rodadas 10 a 25).** Tudo acima continua valendo para a `main`. Quando os PRs entrarem, a API passa a ter rotas reais (pacientes, agenda, prontuário, guias, pacotes, financeiro, importador, responsáveis, portal e WhatsApp), com três travas novas que valem **dentro do banco**, e não só no código:
+> - **quem é o usuário:** toda transação carrega o usuário logado, travado; trocar no meio dá erro, e sem usuário vale um "sentinela de sistema" que não serve de autor de nada (0016/0019);
+> - **qual é o perfil:** o banco sabe quem é admin, psicólogo, recepção ou financeiro, e confere o perfil antes das ações sensíveis (0020 em diante);
+> - **quem cuida do paciente:** conteúdo clínico só aparece para quem tem vínculo de cuidado com aquele paciente (#61).
+>
+> A criptografia por clínica passa a proteger campos reais (CPF, telefone, nascimento, prontuário, dados da guia), e há um **agendador de tarefas** (BullMQ sobre Redis) que roda, uma clínica de cada vez, o descarte de dados vencidos, a revogação de acessos na maioridade e os lembretes. Fontes: relatórios das rodadas 11 a 25.
+
+**O que ainda não existe:** login, permissões por perfil ligadas a um login real, MFA, hospedagem na AWS (o Terraform está pronto, mas nada foi criado), conta da Meta para o WhatsApp real e a âncora externa da auditoria publicada por um job. Na `main` também faltam as rotas de negócio e o agendador, que estão em PR.
 
 ### Diagrama da arquitetura atual (só o que existe)
 
@@ -229,7 +328,7 @@ flowchart LR
 
 O **CI** é um robô do GitHub que, a cada PR e a cada mudança na `main`, roda verificações automáticas. Hoje são **9 checks**: os 5 da tabela abaixo mais os 4 da rodada 5 (testes ofensivos, ZAP, resiliência/backup e carga k6, ver §6). Desde o PR #34, o check de RLS também roda a **guarda de schema**.
 
-> ⚠️ **Bloqueio atual (12/10/2026): o GitHub Actions da conta parou por falta de pagamento** (mensagem do GitHub: "recent account payments have failed or your spending limit needs to be increased"). **Nenhum check roda** até o billing da conta Rocafa ser ajustado. A regra continua: **não fazer merge de código sem CI verde**. Por isso o PR #43, já pronto, está parado. Fonte: [fila.md](../00-governanca/fila.md).
+> ⚠️ **Bloqueio atual (desde 12/10/2026, ainda valendo em 25/10): o GitHub Actions da conta parou por falta de pagamento** (mensagem do GitHub: "recent account payments have failed or your spending limit needs to be increased"). **Nenhum check roda** até o billing da conta Rocafa ser ajustado: todos os jobs falham em 1 a 2 segundos. A regra continua: **não fazer merge de código sem CI verde**. Por isso todos os PRs de código estão parados. Fonte: [fila.md](../00-governanca/fila.md).
 
 | Check (nome no GitHub) | O que faz | O que protege | Se falhar |
 |---|---|---|---|
@@ -238,6 +337,24 @@ O **CI** é um robô do GitHub que, a cada PR e a cada mudança na `main`, roda 
 | **Isolamento entre tenants (RLS)** | Sobe um PostgreSQL real, cria os papéis, aplica as migrações e roda os testes de isolamento e da garantia de saída com o usuário limitado | Uma clínica ver dados de outra; quebra da garantia de saída; auditoria editável | **É o check mais crítico.** Falha = risco de vazamento entre clínicas. Não se faz merge |
 | **Auditoria de dependências** | `pnpm audit`: bibliotecas de terceiros com falha conhecida grave | Vulnerabilidade herdada de pacote externo | Bloqueia em nível alto/crítico; atualizar ou trocar o pacote |
 | **Análise estática de segurança (CodeQL)** | Lê o código procurando padrões perigosos (injeção, XSS etc.); também roda toda segunda-feira | Falhas de segurança no nosso próprio código | Falha se houver achado de nível "error"; o relatório fica como artefato (SARIF), porque o repositório privado não tem a aba Security |
+
+### 5.1 Checks e travas novos, que chegam com os PRs
+
+Estes ainda **não rodaram no CI** (só localmente, quando possível). Passam a valer quando cada PR entrar.
+
+| Check ou trava | Onde | O que protege | Se falhar |
+|---|---|---|---|
+| **Exportação completa (G2)** | `test:rls` (#57 em diante) | Um teste lê o catálogo do banco e reprova qualquer tabela de clínica que fique fora da exportação total. Garante que a promessa "você leva todos os seus dados" continua verdadeira a cada tabela nova | Merge bloqueado até a tabela entrar na exportação |
+| **Sem exclusão em cascata** | toda migração (#66/#73) | Nenhuma migração pode criar uma regra que apague pacientes ou agendamentos em cascata (um apagamento que se espalha sozinho) | A migração é recusada |
+| **`DATABASE_ADMIN_URL` no teste de isolamento** | `ci.yml` e `.env.example` (#73) | O `test:rls` agora exige uma conexão de superusuário do banco de teste (descartável). Ela é usada só para testar o que nem o migrador pode fazer: o operador nominal da correção do fundador e as guardas da chave de lote do importador | Sem a variável o teste para com erro; com ela, o teste reprova se alguma dessas guardas falhar |
+| **Testes com Redis real** (`JOBS_REDIS_TESTE=1`) | `test:security` (#73) | Exercitam o caminho de produção do agendador de tarefas: trava para duas instâncias não rodarem a mesma tarefa e registro do último sucesso. Localmente ficaram **pulados** (o `test:security` teve 7 pulados no total, todos por falta de Redis real) | **Condição de merge do #73:** precisam rodar verdes pelo menos uma vez, com a saída anexada ao PR. Teste pulado é "verde falso" |
+| **E2E do front (Playwright)** | `e2e.yml` (#59) | Testa as telas num navegador de verdade, de ponta a ponta | PR vermelho |
+| **Imagem Docker** | `imagem.yml` (#59) | Varredura de vulnerabilidades (Trivy), lista de componentes (SBOM) e teste de fumaça (`/health` responde) | Imagem não é publicada |
+| **Terraform** (`fmt`, `validate`, tflint, checkov) | `infra.yml` (#58) | Infraestrutura escrita de forma válida e sem configurações inseguras conhecidas. O checkov só roda no CI | PR vermelho |
+| **Guarda de TLS** | `infra.yml`, job `tls` (#58) | Reprova qualquer arquivo fora do staging e dos docs que desligue a conferência do certificado nas conexões criptografadas (TLS). Sem essa conferência, um intermediário poderia se passar pelo servidor. Limite: pega a forma escrita literalmente; desligar por uma variável indireta passa e fica para a revisão humana | PR vermelho |
+| **Alarmes das tarefas automáticas** | `infra.yml`, travas do projeto (#58) | Confere que existem os 10 alarmes de falha das tarefas (avisando a operação e, quando a falha é de retenção ou revogação, o DPO), o canary que lê o `/health/ready` a cada 5 minutos e as precondições que impedem subir a API sem Redis ou com as tarefas desligadas | PR vermelho; no `terraform plan`, o plano falha |
+| **IAM das chaves KMS** (trava "R3-b") | `infra.yml` (#58) | Confere cada regra de permissão das chaves de lote do importador: só servem para o lote e a clínica certos, ninguém cancela a destruição de uma chave sem disparar alerta, e a eliminação de chave de clínica fica com um papel próprio (gestor de chaves) | PR vermelho. A validação final só acontece num *apply* real no staging |
+| **Segredos fora do Terraform** | `infra.yml` (#58) | Reprova senha ou token escritos no código ou guardados no estado do Terraform, e cópia automática do backup para outro cofre (`copy_action`) | PR vermelho |
 
 **Limite importante:** sem a proteção da `main` (que exige plano pago), o GitHub **não impede** um merge com CI vermelho. Hoje a regra é de disciplina: ninguém faz merge com check vermelho. Fonte: [rodada 3](2026-10-08-rodada-3.md) §6.
 
@@ -314,24 +431,24 @@ Fonte: [decisoes.md](../00-governanca/decisoes.md) e um memo de 1 página por de
 | **D1** | Nicho de entrada | Fisio/TO (clínicas de 2 a 10 profissionais) + psicólogos autônomos; TEA/ABA na onda 2. Confirmar com 5 a 10 entrevistas usando o roteiro do relatório de mercado | **Alto.** O M1 já foi desenhado para esse nicho; mudar depois gera retrabalho e atrasa o piloto |
 | **D2** | Preço | Validar a hipótese H1, de R$ 99 a 129 por profissional por mês, com WhatsApp e IA incluídos e sem fidelidade, nas mesmas entrevistas | Médio. Não trava código agora, mas trava a página de preço e a garantia G5 |
 | **D3** | Provedor de LLM para dado sensível | Gemini (Vertex, São Paulo) ou Maritaca/Sabiá no Brasil; Claude/GPT só com dado pseudonimizado; psicologia nunca sai do país | Médio. Trava o escriba (M3) e a frase "IA no Brasil" no marketing |
-| **D4** | Autenticação | Descartar login escrito do zero. Escolher entre servidor de identidade no Brasil (Keycloak ou Zitadel) e a biblioteca Better Auth dentro da API. A PoC (PR #36, rascunho) mediu Zitadel × Better Auth em 14 critérios ([memo D04](../00-governanca/memos/D04-autenticacao.md)) | **Alto e imediato: é o gargalo.** Sem login não há RBAC, MFA, rota de exportação nem ligação das telas à API |
-| **D5** | Provedor Pix | Asaas, Efí, Pagar.me ou Stripe ([integracoes.md](../04-arquitetura/integracoes.md)) | Baixo agora; entra com o financeiro |
+| **D4** | Autenticação | Descartar login escrito do zero. A PoC (PR #36, rascunho) mediu Zitadel × Better Auth em 14 critérios, e o memo de recomendação da rodada 10 indica **Better Auth** ([memo D04](../00-governanca/memos/D04-autenticacao.md)) | **Alto e imediato: é o gargalo.** Sem login não há RBAC nem MFA; a entrada no portal do paciente continua simulada; o #63 pede "login nominal por operador" antes do lançamento |
+| **D5** | Provedor Pix | Asaas, Efí, Pagar.me ou Stripe ([integracoes.md](../04-arquitetura/integracoes.md)) | Baixo agora: o financeiro (#65) já registra Pix manual; o provedor entra para cobrança automática |
 | **D6** | Provedor de vídeo | LiveKit (recomendado) | Baixo; teleconsulta é da Fase 2 |
-| **D7** | Retenção da trilha de auditoria | Proposta do PR #28: 20 anos para a auditoria de prontuário, 5 anos para a administrativa, 12 meses para logs de acesso ([retencao-e-descarte.md](../03-seguranca-lgpd/retencao-e-descarte.md)) | Médio. A auditoria encadeada já existe; o prazo precisa estar definido antes do piloto |
-| **D8** | Validação jurídica | Advogado de saúde + LGPD revisar os itens ⚖️: CFM 2.454/2026, DPA, Carta de Compromissos, sigilo na exportação e enquadramento ANVISA da sugestão de CID | **Alto.** Sem o advogado não há DPA, não há piloto com dado real e não se publica a Carta |
+| **D7** | Retenção da trilha de auditoria | Proposta do PR #28: 20 anos para a auditoria de prontuário, 5 anos para a administrativa, 12 meses para logs de acesso ([retencao-e-descarte.md](../03-seguranca-lgpd/retencao-e-descarte.md)) | Médio. A auditoria encadeada já existe; o prazo precisa estar definido antes do piloto (também define a retenção dos logs no Terraform, a R9 do #58) |
+| **D8** | Validação jurídica | Advogado de saúde + LGPD revisar os itens ⚖️: CFM 2.454/2026, DPA, Carta de Compromissos, sigilo na exportação e enquadramento ANVISA da sugestão de CID. Itens novos das rodadas 14 a 19: prontuário único da psicologia (pergunta 1.11), prazo da prova de opt-in do WhatsApp (proposta: enquanto ativo + 5 anos), descarte de cadastro errado em 30 dias, titular de 12 a 17 anos no portal e as cláusulas-padrão para enviar dados à Meta (R17) | **Alto.** Sem o advogado não há DPA, não há piloto com dado real, não há WhatsApp real e não se publica a Carta |
 | **D9** | Garantias ao cliente | Aprovar a Carta (G1–G9) e antecipar o roadmap público e a status page para o MVP | Médio. A Carta é o argumento de venda contra os concorrentes; adiar enfraquece o discurso do piloto |
 | **D10** | Receita controlada (SNCR da Anvisa) | Integrar direto ao SNCR ou usar parceiro já integrado ([memo D10](../00-governanca/memos/D10-receita-controlada-sncr.md)) | Baixo no nicho de entrada; trava a venda para nichos com médico |
 | **D11** | Inscrição no CRM como plataforma de prescrição | Inscrever a empresa com responsável técnico ou delegar a prescrição a parceiro inscrito ⚖️ ([memo D11](../00-governanca/memos/D11-inscricao-crm-prescricao.md)) | Baixo no nicho de entrada |
 | **D12** | Certificação SBIS S-RES | Seguir o manual desde o M0 e certificar depois do lançamento ([memo D12](../00-governanca/memos/D12-certificacao-sbis.md)) | Médio. Influencia o desenho da auditoria e da assinatura já no M0 |
-| **D13** | Orçamento de infraestrutura e pentest | ~US$ 750–1.050/mês de AWS (staging + produção) e pentest de US$ 5–30 mil [ESTIMATIVA]; inclui uma chave por clínica no KMS ([memo D13](../00-governanca/memos/D13-orcamento-infra-pentest.md)) | **Alto.** Trava o staging (Terraform parado) e o pentest obrigatório antes do piloto |
-| **D14** | Receita Saúde no MVP | Gerar o arquivo de lote e conciliar, sem prometer emissão automática (não há API pública) ([memo D14](../00-governanca/memos/D14-receita-saude-mvp.md)) | Médio. Afeta a promessa de venda para psicólogo pessoa física |
-| **DPO (J4)** | Nomear o encarregado de dados, com canal público | — | **Alto.** Trava o plano de incidente, o RIPD e o piloto com dado real |
+| **D13** | Orçamento de infraestrutura e pentest | ~US$ 750–1.050/mês de AWS (staging + produção) e pentest de US$ 5–30 mil [ESTIMATIVA]; inclui uma chave por clínica no KMS ([memo D13](../00-governanca/memos/D13-orcamento-infra-pentest.md)) | **Alto.** Trava o primeiro *apply* do staging (o Terraform do #58 está pronto, mas o staging ficou **estimado em US$ 280–380/mês** [ESTIMATIVA], acima da faixa do memo por causa do Multi-AZ e da réplica do Redis), o IAM das chaves validado na AWS e o pentest obrigatório antes do piloto |
+| **D14** | Receita Saúde no MVP | Gerar o arquivo de lote e conciliar, sem prometer emissão automática (não há API pública) ([memo D14](../00-governanca/memos/D14-receita-saude-mvp.md)) | Médio. O financeiro (#65) já gera o insumo marcado como "não oficial"; falta a decisão e o manual oficial |
+| **DPO (J4)** | Nomear o encarregado de dados, com canal público | — | **Alto.** Trava o plano de incidente, o RIPD e o piloto com dado real. O código já manda alertas ao DPO (sigilo do adolescente desligado, falha nas tarefas de retenção e revogação), e o Terraform precisa do e-mail dele (`alerta_dpo_email`) |
 
-Também aguardam os sócios: **regularizar o pagamento do GitHub Actions** (sem CI nada de código entra), a ratificação da decisão "não treinar LLM do zero", e decidir se as correções dos vetos B1–B3 do front entram antes de qualquer nova tela.
+Os relatórios das rodadas 20 a 25 listam como mais urgentes para os sócios: **GitHub Actions, D4, D8 e D7** ([rodadas 24–25](2026-10-25-rodadas-24-25.md)). Também aguardam os sócios: **regularizar o pagamento do GitHub Actions** (sem CI nada de código entra); a ratificação da decisão "não treinar LLM do zero"; confirmar com um **contador** o prazo de 5 anos da retenção fiscal (#65); indicar o **e-mail dos alertas de segurança** (break-glass e alarmes das tarefas); e a **revisão clínica** dos golden sets (1 profissional de fisio/TO e 1 de psicologia).
 
 ---
 
-## 8. Riscos principais (top 12)
+## 8. Riscos principais (top 16)
 
 | # | Risco | Tipo | Mitigação | Dono |
 |---|---|---|---|---|
@@ -343,34 +460,61 @@ Também aguardam os sócios: **regularizar o pagamento do GitHub Actions** (sem 
 | 6 | Escopo do MVP grande (194 micropartes, 898 pontos) e atraso do lançamento | Negócio / técnico | Corte pré-acordado no roadmap §8 (lista de itens que podem ir para a F2) | Produto + Maestro |
 | 7 | Exportação total usada por quem invadiu a conta (exfiltração) | Segurança | Controles da EXP-01.5 e do parecer M1: MFA recente, link pessoal de 24 h, alerta "não fui eu", janela de segurança | Engenharia + Guardião |
 | 8 | Dado sensível processado fora do Brasil (IA, WhatsApp/Meta) | LGPD | D3 com provedor no Brasil; psicologia nunca sai do país; "IA no Brasil" só no marketing depois da D3 | IA + Guardião |
-| 9 | Merge na `main` com CI vermelho (sem proteção de branch) **ou sem CI nenhum** (Actions parado por billing desde 12/10) | Técnico | Disciplina + revisor de código; regularizar o billing já; avaliar o plano pago do GitHub quando houver código de produção | Sócios + DevOps |
+| 9 | Merge na `main` com CI vermelho (sem proteção de branch) **ou sem CI nenhum** (Actions parado por billing desde 12/10, ainda parado em 25/10) | Técnico | Disciplina + revisor de código; regularizar o billing já; avaliar o plano pago do GitHub quando houver código de produção | Sócios + DevOps |
 | 10 | IA errando em conteúdo clínico (CFM 2.454/2026) | Regulatório / técnico | Revisão humana obrigatória ("rascunho para revisar e assinar"); golden sets só sintéticos; avaliação antes do gate do M3 | IA + Guardião |
-| 11 | Telas ensinarem o modelo de acesso errado e a API real herdar (B1–B3: recepção lendo evolução, atestado por qualquer perfil, portal com dados da clínica, risco de IDOR, ou seja, um paciente acessar dado de outro trocando um número na requisição) | LGPD / segurança | Vetos do Guardião em #44, #46 e #47; correções no contrato `ApiClinica`, criação de um `ApiPortal` separado e testes E2E por perfil | Front + Guardião |
-| 12 | D4 parada segurando tudo: telas prontas sem backend, trabalho acumulando em pilha | Negócio / técnico | Decidir a D4 com o memo e a PoC #36; enquanto isso, só infra (Terraform, Docker) e correções do front | Sócios + Maestro |
+| 11 | Telas ensinarem o modelo de acesso errado e a API real herdar (B1–B3: recepção lendo evolução, atestado por qualquer perfil, portal com dados da clínica, risco de IDOR, ou seja, um paciente acessar dado de outro trocando um número na requisição) | LGPD / segurança | **Mitigado:** vetos levantados em 24/10; o portal usa um contrato próprio (`ApiPortal`) e o servidor descobre o paciente pela sessão; falta rodar os E2E por perfil no CI | Front + Guardião |
+| 12 | D4 parada segurando tudo: telas e backend prontos, trabalho acumulando em pilha | Negócio / técnico | Decidir a D4 com o memo (recomenda Better Auth) e a PoC #36 | Sócios + Maestro |
+| 13 | **Merge gigante quando o CI voltar:** 25 rodadas de código em PRs empilhados, testados só localmente (Windows e Postgres embutido); algo pode falhar só no CI (Linux, Node 22, Redis real) | Técnico | Ordem de merge definida (§9.1); um PR por vez, esperando o CI verde; testes instáveis já varridos na rodada 23 (`test:rls` passou 5 vezes seguidas) | Maestro + DevOps |
+| 14 | **Tarefas automáticas sem Redis real testado:** se o agendador falhar em produção, dados vencidos não são descartados e acessos não são revogados na maioridade | LGPD / técnico | Condição de merge do #73 (testes com Redis real verdes); alarmes para operação e DPO no Terraform; a API sem Redis sobe **sem tarefas** e avisa | Engenharia + DevOps + Guardião |
+| 15 | **Vulnerabilidades críticas conhecidas na `main`** (Next.js 16.4.0: 2 críticas e 1 alta; mais altas em body-parser e multer) | Segurança | #72 é o 1º merge; #74 corrige multer e body-parser; o sistema ainda não está no ar (nada foi criado na AWS) | Maestro + DevOps |
+| 16 | **Importador ligado cedo demais:** dados importados de outro sistema sem a destruição por lote funcionando na AWS | LGPD | Importador só liga em produção com IAM/KMS aplicado, alarme `CHAVE_LOTE_PRESA`, R10 e 1º ciclo do agendador sem alarme (§9.2) | DevOps + Guardião |
 
 Fontes: [roadmap.md](../02-produto/roadmap.md) §8, [PRD.md](../02-produto/PRD.md) §8, revisões do Guardião em [revisoes/](../03-seguranca-lgpd/revisoes/), [05-ia-llm/avaliacao-e-seguranca.md](../05-ia-llm/avaliacao-e-seguranca.md), [o que falta](2026-10-12-o-que-falta.md).
 
 ---
 
-## 9. Próximos passos recomendados (próximas 3 rodadas, até 3 agentes cada)
+## 9. Ordem de merge, o que falta para o piloto e próximos passos
 
-> As rodadas 6 a 8 sugeridas na versão de 09/10 foram feitas (ver §2). Abaixo, a sequência atual, de [o que falta](2026-10-12-o-que-falta.md) §7 e da [fila](../00-governanca/fila.md).
+> As sequências sugeridas nas versões anteriores (rodadas 9 a 11) foram feitas, exceto os merges, que esperam o CI. Fontes desta seção: [rodada 20](2026-10-23-rodada-20.md), [Dependabot local](2026-10-24-dependabot-local.md), [rodadas 21–22](2026-10-23-rodadas-21-22.md), [rodadas 24–25](2026-10-25-rodadas-24-25.md) e a [fila](../00-governanca/fila.md).
 
 **Antes de tudo (sócios):** regularizar o billing do GitHub Actions; decidir a D4.
 
-**Fechar a rodada 9**
-- Front (@Lopesloro): corrigir B1 e B2 no #44 (e a linha da tabela no #46) e B3 no #47; rebasear a pilha #43 → #47.
-- Maestro: merge do #43 assim que o CI voltar; depois #44 a #47, na ordem, após nova revisão do Guardião.
+### 9.1 Ordem de merge quando o CI voltar
 
-**Rodada 10: infraestrutura**
-- `devops-ci`: PR do Terraform do staging + workflow `infra.yml`.
-- `devops-ci`: Dockerfile + `imagem.yml` + job de E2E do front no CI.
-- `engenharia`: reportar o bug do postgres.js 3.4.9; teste R5 do rate limit.
+Um PR por vez, só com o CI verde. Regra da fila: quem abriu o PR faz o merge.
 
-**Rodada 11: produto real** (depois da D4)
-- `engenharia`: login, RBAC e MFA conforme a D4.
-- `engenharia`: rotas de clínica, paciente e agenda seguindo o contrato `ApiClinica` do front.
-- `qa-testes`: E2E real do login à agenda + auditoria de leitura de prontuário.
+1. **#72** (Dependabot: next 16.4.2 e mais 13 pacotes). É o mais urgente, porque fecha as 2 vulnerabilidades críticas do Next.js. Conferir no CI os testes de RLS e o E2E com o Playwright novo.
+2. **#74** (multer 2.5.0 e body-parser 2.4.0, aberto pelo Maestro). Vem logo depois do #72 porque, sem ele, o check de auditoria de dependências continua vermelho e travaria todos os merges seguintes (decisão do Maestro, 25/10/2026).
+3. **#54** (economia de minutos do Actions).
+4. **#43** (telas de agenda e pacientes).
+5. **#57** → **#61** → **#62** → **#63** → **#65** (API: pacientes e agenda, vínculo de cuidado, guias e pacotes, prontuário, financeiro).
+6. **#73** (integração, que **substitui #66, #67, #68 e #69**). Condição: os testes com Redis real verdes no CI, com a saída anexada.
+7. **#60** (telas na API real) → **#76** (pacientes e agenda no backend novo; entra junto com o #73) → **#56** (golden sets da IA) → **#59** (imagem Docker) → **#58** (Terraform).
+8. Demais Dependabot, nesta ordem: **#70 + #71** juntos (CodeQL 4.39.0) → **#52** e **#51** (setup-node e upload-artifact) → **#49** (ioredis 6) por último. Antes do #49: pedir `@dependabot rebase` depois do #72, validar o BullMQ com Redis real e confirmar que o Redis da AWS (ElastiCache) está na versão 6 ou maior.
+
+
+**Pilha do front do @Lopesloro** (#44 → #45 → #46 → #47, todas aprovadas pelo Guardião, e o **#75** por cima, se ele aceitar): fica empilhada sobre o #43, e quem decide a posição e faz o merge é o @Lopesloro. Condição do Guardião: CI verde, incluindo os E2E novos de B1, B2 e R11.
+
+### 9.2 O que falta para o piloto
+
+| Item | Por que trava | Quem |
+|---|---|---|
+| **CI de volta e os merges do §9.1** | Sem isso nada do que foi feito desde 12/10 chega à `main` | Sócios (billing) + Maestro |
+| **Agendador com Redis real** | Os testes do agendador com Redis real precisam passar (condição do #73), e o primeiro ciclo no staging precisa rodar sem alarme. Sem o agendador, dados vencidos não são descartados nem acessos revogados na maioridade | Engenharia + DevOps |
+| **IAM e chaves KMS aplicados e validados** | As permissões das chaves (inclusive as de lote do importador) só se provam num *apply* real no staging, com uma chamada de cada tipo e uma chamada negada. Depende da D13 | DevOps + Sócios (D13) |
+| **R10 do importador** | Apagar a chave antiga `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte, antes da 1ª importação real. Junto: alarme `CHAVE_LOTE_PRESA` e CloudTrail ativos | DevOps (item livre na fila) |
+| **Provas do Guardião no staging** | Duas provas só possíveis com a AWS de verdade: (1) a chave de uma clínica não abre sem a identificação dela ou com a de outra (K-c3); (2) o alarme de mudança nas chaves dispara de fato (K-c5). Chaves criadas antes da regra nova não vão para o piloto | DevOps + Guardião |
+| **D4 (login real)** | Sem login não há RBAC, MFA, entrada real no portal nem uso das telas no navegador; o #63 pede login nominal por operador antes do lançamento | Sócios, depois Engenharia |
+| **Conta da Meta (WhatsApp Business)** | Os lembretes estão prontos, mas só com adaptador falso. Antes do 1º envio real: conta na Meta ou num parceiro oficial (BSP), nome de exibição neutro e a prova jurídica das cláusulas-padrão (R17, D8) | Sócios + Advogado |
+| **D8 + DPO** | Sem advogado e sem encarregado não há DPA, RIPD do piloto nem dado real | Sócios |
+| **Pentest externo** | Obrigatório antes do piloto; testes automáticos não o substituem | Sócios (D13) |
+| **D7** | O prazo de retenção da auditoria e dos logs precisa estar definido | Sócios |
+
+### 9.3 Próximas rodadas (até 3 agentes cada)
+
+- **Assim que o CI voltar:** o Maestro conduz os merges do §9.1, um por vez; `devops-ci` acompanha os jobs novos (Redis real, E2E, imagem, Terraform).
+- **Enquanto o CI não volta:** kit do primeiro dia do staging (roteiro + scripts das provas K-c3/K-c5); novo ensaio do merge completo com os PRs da rodada 27; R10 do importador e o reporte do bug do postgres.js 3.4.9 (itens livres na fila).
+- **Depois da D4:** `engenharia` com login, RBAC e MFA conforme a D4; `qa-testes` com o E2E real do login à agenda, por perfil.
 
 ---
 
@@ -410,6 +554,26 @@ Fontes: [roadmap.md](../02-produto/roadmap.md) §8, [PRD.md](../02-produto/PRD.m
 | **TAM / SAM / SOM / ARR** | Mercado total / mercado atendível / fatia alcançável / receita recorrente anual |
 | **WBS** | Quebra do produto em micropartes (no nosso caso, 332) |
 | **Épico / história / pontos** | Bloco grande de funcionalidade / pedaço entregável / medida relativa de esforço |
+| **Agendador de tarefas (BullMQ / Redis)** | Peça que roda sozinha, em horários marcados, tarefas como apagar dado vencido ou revogar acesso; usa o Redis (um banco rápido em memória) para combinar entre as instâncias quem roda o quê |
+| **Break-glass** | Acesso de emergência a dados protegidos, com MFA e prazo curto, que dispara alerta toda vez que é usado |
+| **Canary** | Robô que visita uma página do sistema de tempos em tempos e dispara alarme se a resposta não for a esperada |
+| **Crypto-shredding** | Apagar dados destruindo a chave que os decifra: sem a chave, as cópias (inclusive backups) ficam ilegíveis |
+| **Crypto-shredding por lote** | No importador, cada importação ganha uma chave própria; desfazer ou descartar aquele lote destrói a chave, e nem um backup antigo consegue decifrar o que veio nele |
+| **Custódia do psicólogo substituto** | Quando um psicólogo sai, outro assume a guarda dos registros de sessão dele, em vez de os registros ficarem só em contagem regressiva |
+| **E2E (ponta a ponta)** | Teste que usa o sistema como uma pessoa usaria, num navegador de verdade |
+| **IAM / KMS** | IAM: as regras de quem pode fazer o quê na AWS. KMS: o cofre de chaves de criptografia da AWS |
+| **Índice cego** | Uma "impressão digital" do CPF, calculada com uma chave secreta de cada clínica, que permite achar duplicados sem guardar nem revelar o CPF aberto |
+| **Operador nominal** | Exigência de que uma ação delicada (como corrigir o fundador de uma clínica) seja feita por uma pessoa identificada pelo próprio login, e não por um usuário genérico; e que quem confirma seja outra pessoa |
+| **Opt-in** | Autorização expressa do paciente para receber mensagens; aqui, amarrada ao número de telefone |
+| **Pagador congelado** | Quando um pagamento é recebido, o nome de quem pagou fica gravado no recibo; se o cadastro do responsável mudar depois, os recibos e o Receita Saúde já emitidos não mudam |
+| **Responsável (do paciente)** | Pai, mãe, representante legal ou curador que age em nome de um paciente menor ou curatelado; perde o acesso quando o paciente faz 18 anos |
+| **Retenção legal** | Trava que impede apagar um prontuário enquanto houver motivo legal para guardá-lo |
+| **Sentinela de sistema** | Usuário fictício que o banco usa quando uma tarefa roda sem pessoa logada; ele não serve de autor de nenhuma ação clínica ou financeira |
+| **Sigilo do adolescente** | A partir dos 12 anos, as consultas sensíveis do paciente ficam ocultas para o responsável, e os recibos e cobranças sensíveis ficam ocultos para o responsável que não paga, inclusive no banco; reduzir a idade cadastrada exige documento conferido por admin ou profissional |
+| **Terraform / apply** | Terraform: a infraestrutura da AWS descrita em código. *Apply*: o comando que cria de verdade o que está descrito |
+| **Teste instável** | Teste que às vezes passa e às vezes falha sem mudança no código; a rodada 23 fez uma varredura para eliminá-los |
+| **TLS** | A criptografia das conexões (o "cadeado" do navegador); só protege se o certificado do outro lado for conferido |
+| **Vínculo de cuidado** | Regra que só deixa ver conteúdo clínico o profissional que de fato atende aquele paciente |
 
 ---
 
