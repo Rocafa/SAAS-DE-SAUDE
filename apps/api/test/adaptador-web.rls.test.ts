@@ -137,8 +137,11 @@ describe('adaptador HTTP do web contra a API real', () => {
   });
 
   it('outra clínica não enxerga o paciente nem a agenda (clínica vem só da sessão)', async () => {
-    const a = mod.criarApiHttp({ baseUrl: base, obterToken: () => tokenDe(api.sessao(clinicaA, 'recepcao')) });
-    const b = mod.criarApiHttp({ baseUrl: base, obterToken: () => tokenDe(api.sessao(clinicaB, 'admin')) });
+    // Uma sessão por clínica (o adaptador confere que a sessão não mudou no meio da paginação).
+    const sa = api.sessao(clinicaA, 'recepcao');
+    const sb = api.sessao(clinicaB, 'admin');
+    const a = mod.criarApiHttp({ baseUrl: base, obterToken: () => tokenDe(sa) });
+    const b = mod.criarApiHttp({ baseUrl: base, obterToken: () => tokenDe(sb) });
     const p = await a.criarPaciente({ nome: 'Paciente Ficticio Isolado', telefone: '(11) 90000-0102' });
     expect(await b.obterPaciente(p.id)).toBeNull();
     expect((await b.listarPacientes()).some((x) => x.id === p.id)).toBe(false);
