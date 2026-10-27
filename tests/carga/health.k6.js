@@ -53,9 +53,11 @@ export default function () {
   const ready = http.get(`${BASE_URL}/health/ready`, { tags: { endpoint: 'readiness' } });
   check(ready, {
     'readiness 200': (r) => r.status === 200,
-    // Só `status` e o rótulo do modo do rate limit (R4 do Guardião no #30) — nenhum detalhe de erro.
+    // Só `status` e os rótulos do rate limit (R4 do Guardião no #30) e do agendador de jobs — nenhum detalhe de erro.
     'readiness sem detalhes': (r) => READINESS_OK.test(r.body),
   });
 }
 
-const READINESS_OK = /^\{"status":"ok","rateLimit":"(compartilhado|fallback|memoria|instancia-unica|desligado)"\}$/;
+// Corpo fixo {status, rateLimit, jobs}: só rótulos, nenhum detalhe de erro, host ou versão (api-dominio §14).
+const READINESS_OK =
+  /^\{"status":"ok","rateLimit":"(compartilhado|fallback|memoria|instancia-unica|desligado)","jobs":"(bullmq|memoria|desligado|nao_iniciado)"\}$/;
