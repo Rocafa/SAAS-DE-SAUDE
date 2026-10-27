@@ -87,7 +87,7 @@
 | Rodada 28.1: ✅ kit do primeiro dia do staging — roteiro + scripts das provas K-c3/K-c5 (d81d995) | Maestro @Rocafa | 27/10/2026 | PR #58 |
 | Rodada 28.2: ✅ 2º ensaio do merge completo — 25 PRs, api 986, web 349, rls 618, E2E 223, audit limpo ([relatório](../relatorios/2026-10-27-ensaio-de-merge-2.md)); teste do adaptador web corrigido no #76 (f260a16) | Maestro @Rocafa | 27/10/2026 | main / PR #76 |
 | Rodada 28.3: ✅ R4 na key policy por clínica — `HumanoNaoDecifra` (humano não decifra fora do break-glass), achado pelo kit do staging — API (15e3303) e Terraform (f4a679d, c2e0c77) — **APROVADO** (1f30a20) | Maestro @Rocafa | 27/10/2026 | `eng/integracao-r19` |
-| Rodada 28.4: condições da evidência das provas (H3 pela sessão SSO, SHA da política e do commit, eventos da K-c5, evidência sem dado pessoal) + `kms:CreateGrant` no HumanoNaoDecifra (API e Terraform) | Maestro @Rocafa (2 agentes) | 27/10/2026 | PRs #58/#73 |
+| Rodada 28.4: ✅ condições da evidência das provas (H3 pela sessão SSO, SHA da política e do commit, eventos da K-c5, evidência sem dado pessoal) + `kms:CreateGrant` no HumanoNaoDecifra (API e Terraform) — **APROVADO** (7ea09ec; condição 1 em c4eaf69) · [relatório](../relatorios/2026-10-27-rodada-28.md) | Maestro @Rocafa | 27/10/2026 | PRs #58/#73 |
 
 ## Livre (pegue colocando seu nome)
 
