@@ -31,13 +31,18 @@ type Privilegio = (typeof PRIVILEGIOS)[number];
 const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: readonly Privilegio[] }>> = {
   // A aplicação não exclui clínicas (migração 0001 revoga DELETE).
   tenants: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
-  patients: { privilegios: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  // Retenção (migração 0009, R3 do parecer PR #57): inativar, nunca apagar.
+  patients: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Append-only (migração 0002): sem UPDATE, sem DELETE, sem TRUNCATE.
   audit_log: { privilegios: ['SELECT', 'INSERT'] },
   // Chaves por clínica (migração 0004): sem DELETE/TRUNCATE (a linha destruída fica como lápide);
   // UPDATE só nas colunas do ciclo de vida, por isso aparece via has_any_column_privilege.
   tenant_master_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   tenant_data_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Domínio de agenda (migração 0007): sem DELETE/TRUNCATE — inativar/cancelar, nunca apagar.
+  professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
 };
 
 /** Tabelas INTERNAS: o runtime não toca. Exigência: ZERO privilégio para app_user. */

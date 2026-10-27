@@ -1,3 +1,31 @@
-// Placeholder do módulo "auth". Implementação em microparte própria (eng/auth-*).
-// Será decorado com @Module() do NestJS após o bootstrap da API (eng/api-bootstrap).
-export class AuthModule {}
+import { Controller, type DynamicModule, Get, Module, UseGuards } from '@nestjs/common';
+import { AUTH_PROVIDER, type AuthContext, type AuthProvider } from './auth-context';
+import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
+
+/** `usuarioAtual()` do contrato do front: só ids e perfis, nada de dado pessoal. */
+@Controller('sessao')
+@UseGuards(SessaoGuard)
+export class SessaoController {
+  @Get()
+  @Permissao('sessao:ler')
+  atual(@Sessao() auth: AuthContext): { usuarioId: string; clinicaId: string; perfis: readonly string[] } {
+    return { usuarioId: auth.userId, clinicaId: auth.tenantId, perfis: auth.perfis };
+  }
+}
+
+/**
+ * Autenticação plugável: o provedor (porta AuthProvider) é escolhido no boot por
+ * `createAuthProvider` e injetado aqui. Global para que o SessaoGuard funcione em qualquer módulo.
+ */
+@Module({})
+export class AuthModule {
+  static forRoot(provider: AuthProvider): DynamicModule {
+    return {
+      module: AuthModule,
+      global: true,
+      controllers: [SessaoController],
+      providers: [{ provide: AUTH_PROVIDER, useValue: provider }, SessaoGuard],
+      exports: [AUTH_PROVIDER, SessaoGuard],
+    };
+  }
+}

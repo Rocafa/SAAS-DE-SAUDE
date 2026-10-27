@@ -1,0 +1,55 @@
+/**
+ * Perfis e permissões (RBAC por clínica). A clínica é sempre a da sessão; aqui só se decide O QUE
+ * cada perfil pode fazer dentro dela.
+ *
+ * - `admin`: dono/administrador da clínica. Gestão e cadastro, mas NÃO é perfil clínico
+ *   (front-r8 B1): não lê conteúdo clínico, salvo se também tiver o perfil `profissional`.
+ * - `profissional`: profissional de saúde. Único perfil clínico.
+ * - `recepcao`: cadastra pacientes e agenda; nunca vê conteúdo clínico.
+ * - `financeiro`: lê cadastro e agenda (para cobrar); não altera agenda nem vê conteúdo clínico.
+ */
+export const PERFIS = ['admin', 'profissional', 'recepcao', 'financeiro'] as const;
+export type Perfil = (typeof PERFIS)[number];
+
+export function ehPerfil(valor: unknown): valor is Perfil {
+  return typeof valor === 'string' && (PERFIS as readonly string[]).includes(valor);
+}
+
+export const PERMISSOES = {
+  'sessao:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'pacientes:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'pacientes:escrever': ['admin', 'profissional', 'recepcao'],
+  'pacientes:inativar': ['admin', 'recepcao'],
+  'agenda:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'agenda:escrever': ['admin', 'profissional', 'recepcao'],
+  /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */
+  'agenda:atender': ['profissional'],
+  'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
+  'cadastros:gerir': ['admin'],
+  /**
+   * Conteúdo clínico (prontuário, evoluções, anexos clínicos). Não há rota nesta rodada; a regra
+   * fica explícita para a API de prontuário: perfil clínico E vínculo de cuidado (ver
+   * `podeLerConteudoClinico`). Recepção, financeiro e admin não clínico: nunca.
+   */
+  'conteudo_clinico:ler': ['profissional'],
+} as const satisfies Record<string, readonly Perfil[]>;
+
+export type Permissao = keyof typeof PERMISSOES;
+
+export function temPermissao(perfis: readonly Perfil[], permissao: Permissao): boolean {
+  const autorizados: readonly Perfil[] = PERMISSOES[permissao];
+  return perfis.some((p) => autorizados.includes(p));
+}
+
+/** Vínculo de cuidado do usuário com o paciente (profissional do atendimento, equipe do caso...). */
+export interface VinculoDeCuidado {
+  readonly temVinculo: boolean;
+}
+
+/**
+ * Regra B1 do Guardião (front-r8), valendo também para a API: conteúdo clínico só para perfil
+ * clínico COM vínculo de cuidado. Ter o perfil não basta; ter o vínculo sem o perfil também não.
+ */
+export function podeLerConteudoClinico(perfis: readonly Perfil[], vinculo: VinculoDeCuidado): boolean {
+  return temPermissao(perfis, 'conteudo_clinico:ler') && vinculo.temVinculo;
+}

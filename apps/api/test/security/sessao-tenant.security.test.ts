@@ -1,0 +1,111 @@
+/**
+ * Regra 1 da D4 (requisito do Guardião): a clínica vem SEMPRE da sessão guardada no servidor, nunca
+ * de cabeçalho, parâmetro ou corpo enviado pelo cliente. Também: toda rota de domínio exige sessão.
+ * Contra Postgres REAL (DATABASE_URL = app_user, migrações aplicadas). Dados 100% fictícios.
+ */
+import type { TenantId } from '@plataforma/shared';
+import { RequestMethod } from '@nestjs/common';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { cab, subirApi, type ApiDeTeste } from '../apoio-api';
+
+let api: ApiDeTeste;
+let clinicaA: TenantId;
+let clinicaB: TenantId;
+let recepA: { Authorization: string; userId: string };
+let pacienteB: string;
+
+const CABECALHOS_DE_CLINICA = ['x-tenant-id', 'x-clinica-id', 'x-org-id', 'x-zitadel-orgid', 'tenant-id'];
+
+beforeAll(async () => {
+  api = await subirApi();
+  clinicaA = await api.novaClinica();
+  clinicaB = await api.novaClinica();
+  recepA = api.sessao(clinicaA, 'recepcao');
+  const adminB = api.sessao(clinicaB, 'admin');
+  const res = await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio B', telefone: '11900000002' });
+  expect(res.status).toBe(201);
+  pacienteB = (res.body as { id: string }).id;
+});
+
+afterAll(async () => {
+  await api?.fechar();
+});
+
+describe('tenant só da sessão (D4, regra 1)', () => {
+  it('cabeçalho de clínica forjado é ignorado: a sessão de A continua vendo só A', async () => {
+    let req = api.http().get('/pacientes').set(cab(recepA));
+    for (const h of CABECALHOS_DE_CLINICA) req = req.set(h, clinicaB);
+    const res = await req.expect(200);
+    expect((res.body as { itens: { id: string }[] }).itens.map((p) => p.id)).not.toContain(pacienteB);
+
+    let det = api.http().get(`/pacientes/${pacienteB}`).set(cab(recepA));
+    for (const h of CABECALHOS_DE_CLINICA) det = det.set(h, clinicaB);
+    await det.expect(404);
+
+    const sessao = await api.http().get('/sessao').set(cab(recepA)).set('x-tenant-id', clinicaB).expect(200);
+    expect(sessao.body).toMatchObject({ clinicaId: clinicaA, perfis: ['recepcao'] });
+  });
+
+  it('escrita com cabeçalho de outra clínica grava na clínica da sessão', async () => {
+    const res = await api
+      .http()
+      .post('/pacientes')
+      .set(cab(recepA))
+      .set('x-tenant-id', clinicaB)
+      .send({ nome: 'Paciente Ficticio Cabecalho', telefone: '11900000003' })
+      .expect(201);
+    const id = (res.body as { id: string }).id;
+    await api.http().get(`/pacientes/${id}`).set(cab(recepA)).expect(200);
+    const adminB = api.sessao(clinicaB, 'admin');
+    await api.http().get(`/pacientes/${id}`).set(cab(adminB)).expect(404);
+  });
+
+  it('tenant no corpo ou na query é recusado (400), não usado', async () => {
+    for (const campo of ['tenantId', 'tenant_id', 'clinicaId']) {
+      await api
+        .http()
+        .post('/pacientes')
+        .set(cab(recepA))
+        .send({ nome: 'X', telefone: '11900000004', [campo]: clinicaB })
+        .expect(400);
+      await api.http().get('/pacientes').query({ [campo]: clinicaB }).set(cab(recepA)).expect(400);
+    }
+  });
+});
+
+describe('toda rota de domínio exige sessão', () => {
+  it('sem sessão, token inválido ou sessão encerrada: 401 genérico em todas as rotas', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const rotas: [RequestMethod, string][] = [
+      [RequestMethod.GET, '/sessao'],
+      [RequestMethod.GET, '/pacientes'],
+      [RequestMethod.GET, `/pacientes/${id}`],
+      [RequestMethod.POST, '/pacientes'],
+      [RequestMethod.PATCH, `/pacientes/${id}`],
+      [RequestMethod.POST, `/pacientes/${id}/inativar`],
+      [RequestMethod.GET, '/agendamentos'],
+      [RequestMethod.POST, '/agendamentos'],
+      [RequestMethod.POST, `/agendamentos/${id}/remarcar`],
+      [RequestMethod.POST, `/agendamentos/${id}/status`],
+      [RequestMethod.POST, `/agendamentos/${id}/check-in`],
+      [RequestMethod.POST, `/agendamentos/${id}/cancelar`],
+      [RequestMethod.GET, '/profissionais'],
+      [RequestMethod.POST, '/profissionais'],
+      [RequestMethod.GET, '/tipos-atendimento'],
+      [RequestMethod.POST, '/tipos-atendimento'],
+    ];
+    const efemera = api.sessao(clinicaA, 'admin');
+    api.sessoes.encerrarSessao(efemera.Authorization.slice('Bearer '.length));
+    for (const [metodo, rota] of rotas) {
+      for (const auth of [undefined, 'Bearer invalido', `Bearer ${'a'.repeat(43)}`, efemera.Authorization]) {
+        const http = api.http();
+        const req =
+          metodo === RequestMethod.GET ? http.get(rota) : metodo === RequestMethod.PATCH ? http.patch(rota) : http.post(rota);
+        if (auth) void req.set('Authorization', auth);
+        const res = await req.set('x-tenant-id', clinicaA).send({});
+        expect(res.status, `${rota} com ${auth ?? 'nada'}`).toBe(401);
+        expect(res.body).toEqual({ statusCode: 401, message: 'Não autenticado' });
+      }
+    }
+  });
+});
