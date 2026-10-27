@@ -5,6 +5,7 @@ import type {
   ItemEspera,
   NovoPaciente,
   Pacote,
+  Registro,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -58,6 +59,29 @@ export interface ApiClinica {
   removerPaciente(id: string): Promise<void>;
   inativarPaciente(id: string, motivo: string): Promise<void>;
   reativarPaciente(id: string): Promise<void>;
+  /** Anexo clínico (exame, laudo, imagem) só tem nome para quem cuida do paciente. */
   listarAnexos(pacienteId: string): Promise<Anexo[]>;
   linhaDoTempo(pacienteId: string): Promise<EventoLinhaTempo[]>;
+
+  /**
+   * Registros do paciente. `campos` e `adendos` só vêm para PERFIL CLÍNICO com VÍNCULO DE CUIDADO
+   * com o paciente (profissional que tem ou teve agendamento com ele); psicologia, só para o autor.
+   * Para os demais (recepção, administrador não clínico, profissional sem vínculo) vêm só os
+   * metadados, com `conteudoOculto: true`.
+   */
+  listarRegistros(pacienteId: string): Promise<Registro[]>;
+  obterRegistroDoAgendamento(agendamentoId: string): Promise<Registro | null>;
+  salvarRascunho(agendamentoId: string, campos: Record<string, string>): Promise<Registro>;
+  assinarRegistro(id: string): Promise<Registro>;
+  adicionarAdendo(id: string, texto: string): Promise<Registro>;
+
+  /**
+   * Registra a emissão/impressão de um documento (auditoria, sem o texto). Atestado só por perfil
+   * clínico com vínculo de cuidado, assinado pelo próprio usuário; recepção emite declaração e recibo.
+   */
+  registrarEmissaoDocumento(d: { tipo: 'atestado' | 'declaracao' | 'recibo'; pacienteId: string; profissionalId?: string }): Promise<void>;
+
+  /** Só na demonstração: trocar quem está usando, para ver as permissões. */
+  usuariosDemo(): Promise<Usuario[]>;
+  entrarComo(id: string): Promise<Usuario>;
 }

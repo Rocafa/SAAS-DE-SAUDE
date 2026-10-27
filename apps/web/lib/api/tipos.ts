@@ -10,6 +10,36 @@ export interface Usuario {
   nome: string;
   papel: Papel;
   clinica: string;
+  /** Quando o usuário é um profissional de saúde. */
+  profissionalId?: string;
+}
+
+export interface Adendo {
+  texto: string;
+  em: string;
+  autor: string;
+}
+
+/** Registro clínico (evolução). Assinado não muda mais: correção vira adendo. */
+export interface Registro {
+  id: string;
+  pacienteId: string;
+  agendamentoId?: string;
+  profissionalId: string;
+  modelo: 'fisio' | 'to' | 'psicologia';
+  data: string;
+  campos: Record<string, string>;
+  status: 'rascunho' | 'assinado';
+  assinadoEm?: string;
+  adendos: Adendo[];
+  /** Psicologia: compartimento separado; só o profissional autor lê o conteúdo. */
+  restrito: boolean;
+  /**
+   * true quando quem pediu não pode ler o conteúdo: aí `campos` e `adendos` vêm vazios e só os
+   * metadados (data e profissional) aparecem. A tela decide a mensagem por este campo.
+   */
+  conteudoOculto?: boolean;
+  motivoOculto?: 'perfil_nao_clinico' | 'sem_vinculo' | 'sigilo_psicologia';
 }
 
 export interface Responsavel {
@@ -97,6 +127,9 @@ export interface Anexo {
   nome: string;
   tipo: 'exame' | 'laudo' | 'documento' | 'imagem';
   data: string;
+  /** Exame, laudo e imagem são conteúdo clínico: o nome só aparece para quem cuida do paciente. */
+  clinico: boolean;
+  conteudoOculto?: boolean;
 }
 
 export interface EventoLinhaTempo {
