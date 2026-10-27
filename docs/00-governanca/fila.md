@@ -88,14 +88,13 @@
 | Rodada 28.2: ✅ 2º ensaio do merge completo — 25 PRs, api 986, web 349, rls 618, E2E 223, audit limpo ([relatório](../relatorios/2026-10-27-ensaio-de-merge-2.md)); teste do adaptador web corrigido no #76 (f260a16) | Maestro @Rocafa | 27/10/2026 | main / PR #76 |
 | Rodada 28.3: ✅ R4 na key policy por clínica — `HumanoNaoDecifra` (humano não decifra fora do break-glass), achado pelo kit do staging — API (15e3303) e Terraform (f4a679d, c2e0c77) — **APROVADO** (1f30a20) | Maestro @Rocafa | 27/10/2026 | `eng/integracao-r19` |
 | Rodada 28.4: ✅ condições da evidência das provas (H3 pela sessão SSO, SHA da política e do commit, eventos da K-c5, evidência sem dado pessoal) + `kms:CreateGrant` no HumanoNaoDecifra (API e Terraform) — **APROVADO** (7ea09ec; condição 1 em c4eaf69) · [relatório](../relatorios/2026-10-27-rodada-28.md) | Maestro @Rocafa | 27/10/2026 | PRs #58/#73 |
-| Rodada 29 (merges): repositório **público** em 27/10 → Actions volta (minutos grátis). ✅ #77 na main (a6a46bf): next 16.4.3 + overrides multer/body-parser (2 críticos + 3 altos novos no audit). #74 fechado (substituído). #54 fora da fila (motivo de billing sumiu; reduziria cobertura). Em andamento: #72 → #43 → #57 → … conforme o ensaio 2 | Maestro @Rocafa | 27/10/2026 | main |
+| Rodada 29 (merges): ✅ repositório **público** → Actions de volta. Entraram com CI verde: #77, #52, #51, #43, #57, #61, #62, #63, #65, #78, #79, #56, #59, #73 (com #66–#69), #60, #58, #76, #83, #84, #81, #82. 4 defeitos que só o CI real mostrou, corrigidos (imagem, Trivy/OpenSSL, k6, infra) · [relatório](../relatorios/2026-10-27-rodada-29-merges.md). Falta: pilha do front do @Lopesloro (#44–#47) + #75, e #49 (ioredis 6) | Maestro @Rocafa | 27/10/2026 | main |
 
 ## Livre (pegue colocando seu nome)
 
 | Item | Referência |
 |---|---|
 | **Antes do piloto (devops-ci, em staging):** K-c3 de integração (chave por clínica não abre sem contexto/outro tenant) e prova de disparo do alarme K-c5 | parecer #76, conferência K-c4a/F-1/K-c5 (27/10/2026) |
-| Após merge do #58: `listas-terraform.test.ts` com falha explícita em vez de `skipIf` | idem |
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
