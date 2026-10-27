@@ -4,6 +4,7 @@
 import { Search, UserPlus, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
@@ -69,6 +70,7 @@ export default function PaginaPacientes() {
       </label>
       {consulta.estado === 'carregando' && <Carregando />}
       {consulta.estado === 'erro' && <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />}
+      {consulta.estado === 'pronto' && <AvisoTruncado truncado={consulta.dados.truncado} />}
       {consulta.estado === 'pronto' &&
         (lista.length === 0 ? (
           <Vazio

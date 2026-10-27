@@ -30,11 +30,15 @@
  *   `cursor_invalido` (sessão trocou, filtro diferente, venceu) é tratado como `sessao_mudou`: descarta
  *   as páginas já juntadas, não guarda, confere a sessão e recomeça da página 1 UMA vez; se falhar de
  *   novo, a tela mostra erro.
+ * - Ressalvas do Guardião no #76: a busca segue a regra da lista (sem sessão guardada, confere antes da
+ *   página 1; sessão trocada no recomeço ou no fim → `sessao_mudou`). Lista e busca param em 1.000
+ *   nomes e marcam `truncado: true` (a tela avisa "refine a busca", sem dado de paciente no aviso).
  */
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import type {
   AlteracaoPaciente,
   Agendamento,
+  ListaPacientes,
   NovoAgendamento,
   NovoPaciente,
   Paciente,
@@ -46,6 +50,7 @@ import type {
   TipoAtendimento,
   Usuario,
 } from './tipos';
+import { comTruncado } from './tipos';
 
 /** Parte da ApiClinica que já fala com a API real. */
 export type ApiHttpPacientesAgenda = Pick<
@@ -311,7 +316,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
    * Retrato compartilhado: a promessa em andamento ou já resolvida, o instante em que nasceu e a sessão
    * (usuário + clínica) a que pertence. Nunca é devolvido para outra sessão.
    */
-  let retrato: { promessa: Promise<Paciente[]>; desde: number; chave: string } | null = null;
+  let retrato: { promessa: Promise<ListaPacientes>; desde: number; chave: string } | null = null;
   /** Última sessão vista no servidor (`usuarioId|clinicaId`). */
   let chaveSessao: string | null = null;
   let sessaoEmVoo: Promise<SessaoApi> | null = null;
@@ -337,7 +342,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     }
     return sessaoEmVoo;
   }
-  async function retratoDePacientes(): Promise<Paciente[]> {
+  async function retratoDePacientes(): Promise<ListaPacientes> {
     // Confere a sessão ANTES de devolver qualquer coisa guardada.
     const chave = anotarSessao(await lerSessao());
     const t = agora().getTime();
@@ -356,7 +361,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
     }
     // Cópia: uma tela não altera o retrato da outra.
-    return lista.map((p) => ({ ...p }));
+    return copiaDaLista(lista);
   }
   /** `GET /sessao` novo (não o compartilhado): uma conferência em voo pode ter saído antes da troca. */
   async function sessaoFresca(): Promise<string> {
@@ -367,7 +372,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
    * assinado (#73) já impede o servidor de misturar sessões; a conferência no fim continua como segunda
    * trava. Se a sessão mudou, nada é guardado nem entregue (409 `sessao_mudou`).
    */
-  async function paginasConferidas(chave: string): Promise<Paciente[]> {
+  async function paginasConferidas(chave: string): Promise<ListaPacientes> {
     const conferir = async () => {
       if ((await sessaoFresca()) !== chave) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
     };
@@ -399,9 +404,13 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     const promessa = atual.promessa.then((lista) => {
       const i = lista.findIndex((p) => p.id === id);
       const novo = mudar(i >= 0 ? lista[i] : undefined);
-      if (!novo) return lista.filter((p) => p.id !== id);
-      if (i >= 0) return [...lista.slice(0, i), novo, ...lista.slice(i + 1)];
-      return [...lista, novo].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      const nova = !novo
+        ? lista.filter((p) => p.id !== id)
+        : i >= 0
+          ? [...lista.slice(0, i), novo, ...lista.slice(i + 1)]
+          : [...lista, novo].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      // O retrato continua cortado no teto: o aviso de truncado não some com uma escrita.
+      return comTruncado(nova, lista.truncado);
     });
     retrato = { ...atual, promessa };
     promessa.catch(() => {
@@ -470,10 +479,13 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
    * para URL, logs de ALB/WAF ou histórico; veto do Guardião). A query do GET leva só situação, limite e
    * o cursor opaco (sem dado pessoal, §3b).
    */
-  async function passadaDePacientes(busca?: string): Promise<Paciente[]> {
+  async function passadaDePacientes(busca?: string): Promise<ListaPacientes> {
     const todos: Paciente[] = [];
     let cursor: string | undefined;
-    for (let i = 0; i < PAGINAS_MAXIMAS_INDICE; i++) {
+    for (let i = 0; ; i++) {
+      // Teto (1.000 nomes): o servidor ainda tem mais. Não busca a 11ª página; marca `truncado` para
+      // a tela avisar "refine a busca" (ressalva do Guardião no #76: nada de lista cortada em silêncio).
+      if (i >= PAGINAS_MAXIMAS_INDICE) return comTruncado(todos, true);
       const r =
         busca === undefined
           ? await chamar<PaginaPacientesApi>('GET', `/pacientes${qs({ situacao: 'todos', limite: LIMITE_PAGINA, cursor })}`)
@@ -494,12 +506,20 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     return todos;
   }
 
+  /** Copia a lista (uma tela não altera a da outra) sem perder a marca de truncado. */
+  function copiaDaLista(lista: ListaPacientes): ListaPacientes {
+    return comTruncado(
+      lista.map((p) => ({ ...p })),
+      lista.truncado,
+    );
+  }
+
   /**
    * Passada com UM recomeço em 409 `cursor_invalido`: o que foi juntado é descartado (nunca guardado nem
    * entregue), `conferir` checa a sessão (lança `sessao_mudou` se trocou) e a lista recomeça da página 1.
    * Recusado de novo: erro para a tela (`erroListaMudou`).
    */
-  async function paginasComRecomeco(busca: string | undefined, conferir: () => Promise<void>): Promise<Paciente[]> {
+  async function paginasComRecomeco(busca: string | undefined, conferir: () => Promise<void>): Promise<ListaPacientes> {
     try {
       return await passadaDePacientes(busca);
     } catch (e) {
@@ -574,11 +594,15 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     async buscarPacientes(termo: string) {
       const t = termo.trim().replace(/\s+/g, ' ');
       if (t.length < 2) return [];
-      const antes = chaveSessao;
-      return paginasComRecomeco(t.slice(0, 80), async () => {
-        const chave = await sessaoFresca();
-        if (antes !== null && chave !== antes) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+      // Mesma regra da lista (ressalva do Guardião no #76): sem sessão guardada, confere a sessão ANTES
+      // da primeira página e amarra a busca a ela; no recomeço por cursor recusado e no fim, se a sessão
+      // trocou (ou o provedor limpou), nada é entregue.
+      const chave = chaveSessao ?? anotarSessao(await lerSessao());
+      const lista = await paginasComRecomeco(t.slice(0, 80), async () => {
+        if ((await sessaoFresca()) !== chave) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
       });
+      if (chaveSessao !== chave) throw new ErroApi(MENSAGENS.conflito, 409, 'sessao_mudou');
+      return lista;
     },
     async obterPaciente(id) {
       if (!UUID_RE.test(id)) return null;

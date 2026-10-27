@@ -173,3 +173,18 @@ export const NOME_STATUS: Record<StatusAgendamento, string> = {
 export function nomeExibido(p: Pick<Paciente, 'nome' | 'nomeSocial'>): string {
   return p.nomeSocial ?? p.nome;
 }
+
+/** Teto de nomes que o adaptador junta numa lista/busca (10 páginas de 100). */
+export const TETO_LISTA_PACIENTES = 1000;
+
+/**
+ * Lista/busca de pacientes. `truncado: true` quando o servidor ainda tinha mais nomes e o adaptador
+ * parou no teto (`TETO_LISTA_PACIENTES`): a tela avisa para refinar a busca. Continua sendo um array,
+ * então quem só lê a lista não muda (mesmo espírito do `truncado` da agenda).
+ */
+export type ListaPacientes = Paciente[] & { truncado?: true };
+
+/** Anota (ou não) o truncamento numa lista nova. */
+export function comTruncado(lista: Paciente[], truncado: boolean | undefined): ListaPacientes {
+  return truncado ? Object.assign(lista, { truncado: true as const }) : lista;
+}
