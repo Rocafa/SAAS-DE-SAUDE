@@ -86,9 +86,11 @@ describe('configuração do KMS (Portão A)', () => {
 
   it('o adaptador do SDK expõe as duas portas (chave mestra e MAC) sem chamar a rede ao ser criado', () => {
     const c = createAwsKmsCliente({ region: 'sa-east-1' });
-    for (const op of ['createKey', 'generateDataKey', 'decrypt', 'reEncrypt', 'scheduleKeyDeletion', 'describeKey', 'generateMac', 'verifyMac'] as const) {
+    for (const op of ['createKey', 'generateDataKey', 'decrypt', 'reEncrypt', 'scheduleKeyDeletion', 'describeKey', 'generateMac'] as const) {
       expect(typeof c[op]).toBe('function');
     }
+    // K-c4a: a role não tem kms:VerifyMac; o adaptador nem expõe a operação.
+    expect('verifyMac' in c).toBe(false);
   });
 
   it('contaDoArnKms extrai a conta só de ARN de chave', () => {

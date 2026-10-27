@@ -112,16 +112,18 @@ export class LocalPseudonymSigner implements PseudonymSigner {
  * Interface para o signer não depender do SDK (testes usam KMS falso).
  */
 export interface KmsMacApi {
-  generateMac(input: { KeyId: string; Message: Uint8Array; MacAlgorithm: 'HMAC_SHA_256' }): Promise<{ Mac?: Uint8Array | undefined }>;
-  verifyMac(input: {
+  /**
+   * Única operação de MAC da API. K-c4a (parecer #76): sem `VerifyMac` — a role da tarefa não tem
+   * `kms:VerifyMac` e não vai ter (decisão do Guardião); não reintroduzir.
+   */
+  generateMac(input: {
     KeyId: string;
     Message: Uint8Array;
-    Mac: Uint8Array;
     MacAlgorithm: 'HMAC_SHA_256';
-  }): Promise<{ MacValid?: boolean | undefined }>;
+  }): Promise<{ Mac?: Uint8Array | undefined; KeyId?: string | undefined }>;
 }
 
-/** Sonda fixa, sem dado de ninguém, para conferir a chave no boot/readiness. */
+/** Sonda fixa, sem dado de ninguém, para conferir a chave (futura sonda de readiness, nunca no boot). */
 const SONDA = Buffer.from('plataforma-saude:pseudonimo-suporte:sonda:v1', 'utf8');
 
 /** HMAC-SHA256 dentro do KMS (chave HMAC_256, uso GENERATE_VERIFY_MAC). O segredo nunca sai de lá. */
@@ -143,16 +145,16 @@ export class KmsPseudonymSigner implements PseudonymSigner {
   }
 
   /**
-   * Confere que a chave existe, é de MAC e responde (GenerateMac + VerifyMac sobre a sonda fixa).
-   * Para o boot/readiness e para a ferramenta de reidentificação do operador.
+   * Confere que a chave existe, é de MAC e responde, só com `GenerateMac` sobre a sonda fixa
+   * (K-c4a, parecer #76): exige MAC não vazio e, quando a chave configurada é um ARN (fora de
+   * development/test é sempre), que o KMS responda com o MESMO ARN. Nunca chama `VerifyMac`.
+   * Feita para uma futura sonda de readiness (`/health/ready`); NÃO ligar no boot.
    */
   async verificarChave(): Promise<void> {
-    const gerado = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message: SONDA, MacAlgorithm: 'HMAC_SHA_256' }));
-    if (!gerado.Mac) throw new PseudonimoIndisponivelError();
-    const conferido = await guard(() =>
-      this.kms.verifyMac({ KeyId: this.keyId, Message: SONDA, Mac: gerado.Mac as Uint8Array, MacAlgorithm: 'HMAC_SHA_256' }),
-    );
-    if (conferido.MacValid !== true) throw new PseudonimoIndisponivelError();
+    const out = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message: SONDA, MacAlgorithm: 'HMAC_SHA_256' }));
+    if (!out.Mac || out.Mac.length === 0) throw new PseudonimoIndisponivelError();
+    const esperado = this.keyId.startsWith('arn:') ? this.keyId : undefined;
+    if (!out.KeyId || (esperado !== undefined && out.KeyId !== esperado)) throw new PseudonimoIndisponivelError();
   }
 }
 

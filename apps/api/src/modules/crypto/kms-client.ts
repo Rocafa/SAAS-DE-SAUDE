@@ -25,7 +25,6 @@ import {
   KMSClient,
   ReEncryptCommand,
   ScheduleKeyDeletionCommand,
-  VerifyMacCommand,
 } from '@aws-sdk/client-kms';
 import type { KmsMacApi } from '../audit/ator-suporte';
 import type { KmsApi } from './kms-key-provider';
@@ -115,7 +114,6 @@ export function createAwsKmsCliente(config: KmsConfig): KmsCliente {
     describeKey: (input) => c.send(new DescribeKeyCommand(input)),
     enableKey: (input) => c.send(new EnableKeyCommand(input)),
     generateMac: (input) => c.send(new GenerateMacCommand(input)),
-    verifyMac: (input) => c.send(new VerifyMacCommand(input)),
   };
 }
 

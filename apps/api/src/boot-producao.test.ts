@@ -53,7 +53,6 @@ function kmsDuplo(): KmsCliente & { calls: { op: string }[] } {
   const mac = kmsFalso(randomBytes(32));
   return Object.assign(chaves, {
     generateMac: (input: Parameters<typeof mac.generateMac>[0]) => mac.generateMac(input),
-    verifyMac: (input: Parameters<typeof mac.verifyMac>[0]) => mac.verifyMac(input),
   });
 }
 

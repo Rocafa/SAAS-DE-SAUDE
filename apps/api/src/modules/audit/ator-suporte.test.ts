@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { TenantTx } from '../../db/tenant-transaction';
 import {
   AcessoDeSuporteInvalidoError,
@@ -87,12 +87,31 @@ describe('PseudonymSigner (N1: segredo fora do processo da API)', () => {
     expect(String((erro as Error).message)).not.toMatch(/arn|123/);
   });
 
-  it('KMS: verificarChave usa GenerateMac + VerifyMac sobre a sonda fixa', async () => {
-    const kms = kmsFalso(randomBytes(32));
-    await expect(new KmsPseudonymSigner(kms, 'k').verificarChave()).resolves.toBeUndefined();
-    expect(kms.chamadas).toEqual(['generate:k', 'verify:k']);
-    const mentiroso: KmsMacApi = { ...kmsFalso(randomBytes(32)), verifyMac: () => Promise.resolve({ MacValid: false }) };
-    await expect(new KmsPseudonymSigner(mentiroso, 'k').verificarChave()).rejects.toBeInstanceOf(PseudonimoIndisponivelError);
+  it('K-c4a: verificarChave usa só GenerateMac sobre a sonda fixa e nunca chama VerifyMac', async () => {
+    const arn = 'arn:aws:kms:sa-east-1:000000000000:key/00000000-0000-4000-8000-000000000000';
+    const verifyMac = vi.fn(() => Promise.reject(new Error('AccessDenied: kms:VerifyMac')));
+    const kms = Object.assign(kmsFalso(randomBytes(32)), { verifyMac });
+    await expect(new KmsPseudonymSigner(kms, arn).verificarChave()).resolves.toBeUndefined();
+    expect(kms.chamadas).toEqual([`generate:${arn}`]);
+    expect(verifyMac).not.toHaveBeenCalled();
+    // Em dev/test a chave pode ser alias: basta o KMS devolver algum KeyId.
+    const comAlias = new KmsPseudonymSigner(kmsFalso(randomBytes(32), { keyIdResposta: arn }), 'alias/x');
+    await expect(comAlias.verificarChave()).resolves.toBeUndefined();
+  });
+
+  it('K-c4a: verificarChave falha fechada (MAC vazio, KeyId ausente/diferente, erro do KMS)', async () => {
+    const arn = 'arn:aws:kms:sa-east-1:000000000000:key/00000000-0000-4000-8000-000000000000';
+    const outro = 'arn:aws:kms:sa-east-1:000000000000:key/11111111-1111-4111-8111-111111111111';
+    const casos: KmsMacApi[] = [
+      kmsFalso(randomBytes(32), { macVazio: true }),
+      kmsFalso(randomBytes(32), { keyIdResposta: outro }),
+      kmsFalso(randomBytes(32), { falhar: true }),
+      { generateMac: () => Promise.resolve({ Mac: randomBytes(32) }) },
+      { generateMac: () => Promise.resolve({ KeyId: arn }) },
+    ];
+    for (const [i, kms] of casos.entries()) {
+      await expect(new KmsPseudonymSigner(kms, arn).verificarChave(), String(i)).rejects.toBeInstanceOf(PseudonimoIndisponivelError);
+    }
   });
 
   it('boot: fora de development/test sem KMS, a API não sobe; segredo em variável é recusado ali', () => {

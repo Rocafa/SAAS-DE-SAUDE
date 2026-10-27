@@ -3,7 +3,7 @@
  * contrato do AWS KMS (EncryptionContext obrigatório e igual) e o de MAC calcula HMAC-SHA256 com uma
  * chave que só ele conhece. O de chave mestra também confere e aplica a key policy (K-c2/K-c3). Vieram de key-providers.test.ts e ator-suporte.test.ts (rodada 27).
  */
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { KmsMacApi } from '../src/modules/audit/ator-suporte';
 import type { KmsApi } from '../src/modules/crypto/kms-key-provider';
 
@@ -140,20 +140,22 @@ export function fakeKms(): FakeKms {
   return fake;
 }
 
-/** KMS de mentira: HMAC-SHA256 com uma chave que só ele conhece (como o KMS real). */
-export function kmsFalso(chave: Buffer, opcoes: { falhar?: boolean } = {}): KmsMacApi & { chamadas: string[] } {
+/**
+ * KMS de mentira: HMAC-SHA256 com uma chave que só ele conhece (como o KMS real). Responde o
+ * `KeyId` como o KMS (ARN da chave; aqui, o próprio id recebido, ou `opcoes.keyIdResposta`).
+ */
+export function kmsFalso(
+  chave: Buffer,
+  opcoes: { falhar?: boolean; keyIdResposta?: string; macVazio?: boolean } = {},
+): KmsMacApi & { chamadas: string[] } {
   const chamadas: string[] = [];
   return {
     chamadas,
     generateMac(input) {
       chamadas.push(`generate:${input.KeyId}`);
       if (opcoes.falhar) return Promise.reject(new Error(`AccessDenied arn:aws:kms:sa-east-1:123:key/${input.KeyId}`));
-      return Promise.resolve({ Mac: createHmac('sha256', chave).update(input.Message).digest() });
-    },
-    verifyMac(input) {
-      chamadas.push(`verify:${input.KeyId}`);
-      const esperado = createHmac('sha256', chave).update(input.Message).digest();
-      return Promise.resolve({ MacValid: esperado.length === input.Mac.length && timingSafeEqual(esperado, input.Mac) });
+      const Mac = opcoes.macVazio ? new Uint8Array() : createHmac('sha256', chave).update(input.Message).digest();
+      return Promise.resolve({ Mac, KeyId: opcoes.keyIdResposta ?? input.KeyId });
     },
   };
 }
