@@ -10,7 +10,20 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
-import { auditLog, patients, professionals, appointmentTypes, appointments, appointmentReschedules } from '../src/db/schema';
+import {
+  auditLog,
+  patients,
+  professionals,
+  appointmentTypes,
+  appointments,
+  appointmentReschedules,
+  insurers,
+  insuranceGuides,
+  guideSessions,
+  guideSessionSignatures,
+  sessionPackages,
+  packageSessions,
+} from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { verifyExportedAuditTrail, type ExportedAuditEvent } from '../src/modules/audit/audit-chain';
 import { insertAudit } from '../src/modules/audit/audit-log';
@@ -38,6 +51,12 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   professionals: 'professionals',
   appointment_types: 'appointmentTypes',
   appointments: 'appointments',
+  insurers: 'insurers',
+  insurance_guides: 'insuranceGuides',
+  guide_sessions: 'guideSessions',
+  guide_session_signatures: 'guideSessionSignatures',
+  session_packages: 'sessionPackages',
+  package_sessions: 'packageSessions',
   appointment_reschedules: 'appointmentReschedules',
   audit_log: 'auditEvents',
 };
@@ -60,6 +79,10 @@ const FORMULA = '=HYPERLINK("http://exemplo.test")';
 /** Segredo do pseudônimo do suporte: gerado a cada execução, nunca fixo no código. */
 const CHAVE_SUPORTE = randomBytes(32);
 const ATENDENTE = 'atendente-ficticio-01';
+/** Identificadores fictícios da guia (não são de operadora nenhuma). */
+const GUIA_NUMERO = 'FIC-EXP-0001';
+const GUIA_SENHA = 'SENHAEXP9';
+const GUIA_CARTEIRINHA = 'CART-EXP-42';
 
 beforeAll(async () => {
   sqlCat = postgres(url, { max: 1, onnotice: () => undefined });
@@ -91,6 +114,38 @@ beforeAll(async () => {
     .set(cab(admin))
     .send({ data: '2030-05-07', hora: '09:00' })
     .expect(200);
+  // Guias e pacotes (0011): convênio, guia com campos cifrados, consumo + confirmação, pacote + consumo.
+  const pacienteId = (pac.body as { id: string }).id;
+  const agId = (ag.body as { id: string }).id;
+  await api.http().post(`/agendamentos/${agId}/check-in`).set(cab(admin)).expect(200);
+  const conv = await api.http().post('/convenios').set(cab(admin)).send({ nome: 'Operadora Ficticia Export', exigeAssinatura: true });
+  const guia = await api.http().post('/guias').set(cab(admin)).send({
+    pacienteId,
+    convenioId: (conv.body as { id: string }).id,
+    numero: GUIA_NUMERO,
+    senha: GUIA_SENHA,
+    carteirinha: GUIA_CARTEIRINHA,
+    sessoesAutorizadas: 5,
+    validade: '2099-12-31',
+  });
+  expect(guia.status).toBe(201);
+  const guiaId = (guia.body as { id: string }).id;
+  const consumo = await api.http().post(`/guias/${guiaId}/consumos`).set(cab(admin)).send({ agendamentoId: agId });
+  expect(consumo.status).toBe(201);
+  const consumoId = (consumo.body as { consumoId: string }).consumoId;
+  await api.http().post(`/guias/${guiaId}/consumos/${consumoId}/assinatura`).set(cab(admin)).send({ meio: 'tela' }).expect(201);
+  const ag2 = await api.http().post('/agendamentos').set(cab(admin)).send({
+    pacienteId,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    data: '2030-05-07',
+    hora: '08:00',
+  });
+  const ag2Id = (ag2.body as { id: string }).id;
+  await api.http().post(`/agendamentos/${ag2Id}/check-in`).set(cab(admin)).expect(200);
+  const pacote = await api.http().post('/pacotes').set(cab(admin)).send({ pacienteId, nome: 'Pacote Ficticio Export', total: 4 });
+  const pacoteId = (pacote.body as { id: string }).id;
+  await api.http().post(`/pacotes/${pacoteId}/consumos`).set(cab(admin)).send({ agendamentoId: ag2Id }).expect(201);
   // Clínica B com dados próprios, que não podem aparecer no pacote de A.
   const adminB = api.sessao(clinicaB, 'admin');
   await api.http().post('/pacientes').set(cab(adminB)).send({ nome: 'Paciente Ficticio Outra Clinica', telefone: '11900000008' }).expect(201);
@@ -163,7 +218,18 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.json.manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     const noBanco = await withTenant(api.db.db, clinicaA, async (tx) => {
       const n = async (
-        t: typeof patients | typeof professionals | typeof appointmentTypes | typeof appointments | typeof appointmentReschedules,
+        t:
+          | typeof patients
+          | typeof professionals
+          | typeof appointmentTypes
+          | typeof appointments
+          | typeof appointmentReschedules
+          | typeof insurers
+          | typeof insuranceGuides
+          | typeof guideSessions
+          | typeof guideSessionSignatures
+          | typeof sessionPackages
+          | typeof packageSessions,
       ) =>
         (await tx.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? -1;
       return {
@@ -172,13 +238,32 @@ describe('G2 — conteúdo do pacote', () => {
         professionals: await n(professionals),
         appointmentTypes: await n(appointmentTypes),
         appointments: await n(appointments),
+        insurers: await n(insurers),
+        insuranceGuides: await n(insuranceGuides),
+        guideSessions: await n(guideSessions),
+        guideSessionSignatures: await n(guideSessionSignatures),
+        sessionPackages: await n(sessionPackages),
+        packageSessions: await n(packageSessions),
         appointmentReschedules: await n(appointmentReschedules),
         // A linha da própria exportação entra na trilha depois de montado o pacote.
         auditEvents: ((await tx.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0) - 1,
       };
     });
     expect(pkg.json.manifest.counts).toEqual(noBanco);
-    expect(noBanco).toMatchObject({ tenants: 1, patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1, appointmentReschedules: 1 });
+    expect(noBanco).toMatchObject({
+      tenants: 1,
+      patients: 2,
+      professionals: 1,
+      appointmentTypes: 1,
+      appointments: 2,
+      appointmentReschedules: 1,
+      insurers: 1,
+      insuranceGuides: 1,
+      guideSessions: 1,
+      guideSessionSignatures: 1,
+      sessionPackages: 1,
+      packageSessions: 1,
+    });
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
@@ -198,6 +283,17 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.patientsCsv).not.toContain('v1:');
   });
 
+  it('guia sai com número, senha e carteirinha decifrados; consumo, confirmação e pacote no pacote', () => {
+    const { insuranceGuides: guias, guideSessions: consumos, guideSessionSignatures: assinaturas, sessionPackages: pacotes } = pkg.json.data;
+    expect(guias[0]).toMatchObject({ number: GUIA_NUMERO, authorizationCode: GUIA_SENHA, cardNumber: GUIA_CARTEIRINHA, usedSessions: 1 });
+    expect(consumos[0]).toMatchObject({ guideId: guias[0]?.id, reversedAt: null });
+    expect(assinaturas[0]).toMatchObject({ guideSessionId: consumos[0]?.id, method: 'tela' });
+    expect(assinaturas[0]?.recordHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(pacotes[0]).toMatchObject({ name: 'Pacote Ficticio Export', totalSessions: 4, usedSessions: 1 });
+    // A trilha exportada não traz os identificadores da guia.
+    for (const proibido of [GUIA_NUMERO, GUIA_SENHA, GUIA_CARTEIRINHA]) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+
   it('CSV neutraliza fórmula nas colunas novas; o JSON mantém o valor original', () => {
     expect(pkg.patientsCsv).toContain(`"'${FORMULA.replaceAll('"', '""')}"`);
     expect(pkg.patientsCsv).not.toContain(`,"${FORMULA.replaceAll('"', '""')}"`);
@@ -208,9 +304,9 @@ describe('G2 — conteúdo do pacote', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.scope, EXPORT_AUDIT_SCOPE))),
     );
     expect(linhas).toHaveLength(1);
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 1, appointmentTypes: 1, appointments: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 2, professionals: 1, appointmentTypes: 1, appointments: 2, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
-    for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK']) {
+    for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
     }
   });

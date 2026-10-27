@@ -107,6 +107,12 @@ describe('G2 — exportação total do tenant', () => {
       professionals: 0,
       appointmentTypes: 0,
       appointments: 0,
+      insurers: 0,
+      insuranceGuides: 0,
+      guideSessions: 0,
+      guideSessionSignatures: 0,
+      sessionPackages: 0,
+      packageSessions: 0,
       appointmentReschedules: 0,
       auditEvents: pkg.auditEvents.length,
     });
@@ -214,6 +220,8 @@ describe('G3 — auditoria append-only da exportação', () => {
       professionals: 0,
       appointmentTypes: 0,
       appointments: 0,
+      guides: 0,
+      packages: 0,
       appointmentReschedules: 0,
       auditEvents: 0,
     });

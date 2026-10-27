@@ -8,6 +8,8 @@ import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { temPermissao, type Perfil } from '../auth/perfis';
 import { autoagendadoPor } from '../auth/vinculo-de-cuidado';
+import { estornarConsumosDoAgendamento } from '../insurance/consumos';
+import { statusConsome } from '../insurance/guias-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
   capacidadeDoHorario,
@@ -285,6 +287,9 @@ export class SchedulingService {
         scope: SCOPE,
         metadata: { appointment_id: id, op: 'status', from: atual.status, to: novo },
       });
+      // HU-CNV-003 "Estorno ao desfazer": a sessão deixou de ter acontecido (ex.: atendido -> faltou),
+      // então o consumo de guia/pacote volta ao saldo, na mesma transação e com o agendamento travado.
+      if (statusConsome(atual.status) && !statusConsome(novo)) await estornarConsumosDoAgendamento(tx, ctx, id);
       // Autoagendamento: criado OU remarcado (em qualquer momento) pelo próprio usuário (V1, V2-c e R8 do #61).
       if (STATUS_CLINICOS.includes(novo) && !STATUS_CLINICOS.includes(atual.status) && (await this.autoagendado(tx, ctx, id))) {
         await this.alertarAutoagendamento(tx, ctx, atual.professionalId, agora);

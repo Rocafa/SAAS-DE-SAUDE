@@ -10,6 +10,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { createKeyProvider, CryptoModule } from './modules/crypto/crypto.module';
 import type { KeyProvider } from './modules/crypto/key-provider';
 import { ExportsModule } from './modules/exports/exports.module';
+import { InsuranceModule } from './modules/insurance/insurance.module';
 import { PatientsModule } from './modules/patients/patients.module';
 import { loadVigilanciaConfig, type VigilanciaConfig } from './modules/patients/vigilancia-de-leitura';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
@@ -43,6 +44,12 @@ export class AppModule {
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env);
     const pseudonymSigner = adapters.pseudonymSigner ?? createPseudonymSigner(process.env);
     const store = adapters.rateLimitStore ?? createRateLimitStore(process.env);
+    const pacientes = PatientsModule.forRoot({
+      store,
+      fecharStore: adapters.rateLimitStore === undefined,
+      hashKey: loadRateLimitHashKey(process.env),
+      config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),
+    });
     return {
       module: AppModule,
       imports: [
@@ -53,13 +60,10 @@ export class AppModule {
         CryptoModule.forRoot(keyProvider),
         AuditModule.forRoot(pseudonymSigner),
         ExportsModule.forRoot({ exitWindowDays: config.exitWindowDays }),
-        PatientsModule.forRoot({
-          store,
-          fecharStore: adapters.rateLimitStore === undefined,
-          hashKey: loadRateLimitHashKey(process.env),
-          config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),
-        }),
+        pacientes,
         SchedulingModule,
+        // Mesma instância de PatientsModule: guias/pacotes contam no MESMO limite por usuário (R5).
+        InsuranceModule.forRoot(pacientes),
       ],
     };
   }

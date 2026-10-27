@@ -4,11 +4,26 @@
  */
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
-import { appointmentReschedules, appointments, appointmentTypes, patients, professionals, tenants, type SubscriptionStatus } from '../../db/schema';
+import {
+  appointmentReschedules,
+  appointments,
+  appointmentTypes,
+  guideSessions,
+  guideSessionSignatures,
+  insuranceGuides,
+  insurers,
+  packageSessions,
+  patients,
+  professionals,
+  sessionPackages,
+  tenants,
+  type SubscriptionStatus,
+} from '../../db/schema';
 import { withTenant, type Database, type TenantTx } from '../../db/tenant-transaction';
 import { auditChainHead, type ChainAnchor, type ExportedAuditEvent } from '../audit/audit-chain';
 import { recordAudit } from '../audit/audit-log';
 import type { FieldCipher } from '../crypto/field-cipher';
+import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import { canExport, ExitWindowClosedError, exitWindowEndsAt, EXIT_WINDOW_DAYS } from './access-policy';
 import { toCsv } from './csv';
@@ -22,11 +37,13 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        canônico, para a clínica verificar (Decisão 1 do Guardião, parecer PR #57); manifesto com a
  *        contagem e o último elo (`auditChain.head`).
  * 1.3.0: `tenant.careLinkDays` (janela de continuidade do vínculo de cuidado) e
- *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013.
- * 1.4.0: `appointments[].rescheduledBy`/`rescheduleLocked` e o histórico de remarcações
+ *        `appointments[].createdBy` (quem criou o agendamento), da migração 0013 (PR #61).
+ * 1.4.0: convênios, guias (número/senha/carteirinha decifrados), consumos de guia, confirmações do
+ *        paciente por sessão, pacotes de sessões e seus consumos (migração 0011).
+ * 1.5.0: `appointments[].rescheduledBy`/`rescheduleLocked` e o histórico de remarcações
  *        (`appointmentReschedules`, contagem própria), da migração 0014.
  */
-export const EXPORT_SCHEMA_VERSION = '1.4.0';
+export const EXPORT_SCHEMA_VERSION = '1.5.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -35,7 +52,21 @@ export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv',
  * toda tabela de `public` com `tenant_id` precisa estar em EXPORTED_TABLES ou em EXPORT_EXCLUDED_TABLES
  * (com o motivo). Tabela nova sem decisão reprova o test:rls.
  */
-export const EXPORTED_TABLES = ['tenants', 'patients', 'professionals', 'appointment_types', 'appointments', 'appointment_reschedules', 'audit_log'] as const;
+export const EXPORTED_TABLES = [
+  'tenants',
+  'patients',
+  'professionals',
+  'appointment_types',
+  'appointments',
+  'appointment_reschedules',
+  'insurers',
+  'insurance_guides',
+  'guide_sessions',
+  'guide_session_signatures',
+  'session_packages',
+  'package_sessions',
+  'audit_log',
+] as const;
 export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
@@ -59,6 +90,12 @@ export interface ExportManifest {
     readonly professionals: number;
     readonly appointmentTypes: number;
     readonly appointments: number;
+    readonly insurers: number;
+    readonly insuranceGuides: number;
+    readonly guideSessions: number;
+    readonly guideSessionSignatures: number;
+    readonly sessionPackages: number;
+    readonly packageSessions: number;
     readonly appointmentReschedules: number;
     /** Eventos em `auditoria.jsonl` (encadeados + anteriores à 0005). */
     readonly auditEvents: number;
@@ -140,6 +177,85 @@ export interface ExportedAppointmentReschedule {
   readonly createdAt: string;
 }
 
+export interface ExportedInsurer {
+  readonly id: string;
+  readonly name: string;
+  readonly ansCode: string | null;
+  readonly sessionValueCents: number | null;
+  readonly requiresPassword: boolean;
+  readonly requiresSignature: boolean;
+  readonly defaultValidityDays: number | null;
+  readonly active: boolean;
+  readonly inactivatedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ExportedInsuranceGuide {
+  readonly id: string;
+  readonly patientId: string;
+  readonly insurerId: string;
+  /** Cifrados no banco, saem DECIFRADOS para a própria clínica. */
+  readonly number: string;
+  readonly authorizationCode: string | null;
+  readonly cardNumber: string | null;
+  readonly authorizedSessions: number;
+  readonly usedSessions: number;
+  readonly issuedOn: string | null;
+  readonly validUntil: string;
+  readonly status: string;
+  readonly cancelledAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ExportedGuideSession {
+  readonly id: string;
+  readonly guideId: string;
+  readonly appointmentId: string;
+  readonly consumedAt: string;
+  readonly consumedBy: string;
+  readonly overrideReason: string | null;
+  readonly reversedAt: string | null;
+  readonly reversedBy: string | null;
+  readonly reversalReason: string | null;
+}
+
+export interface ExportedGuideSessionSignature {
+  readonly id: string;
+  readonly guideSessionId: string;
+  readonly method: string;
+  readonly deviceLabel: string | null;
+  readonly signedAt: string;
+  readonly recordedBy: string;
+  readonly recordHash: string;
+}
+
+export interface ExportedSessionPackage {
+  readonly id: string;
+  readonly patientId: string;
+  readonly appointmentTypeId: string | null;
+  readonly name: string;
+  readonly totalSessions: number;
+  readonly usedSessions: number;
+  readonly validUntil: string | null;
+  readonly status: string;
+  readonly cancelledAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ExportedPackageSession {
+  readonly id: string;
+  readonly packageId: string;
+  readonly appointmentId: string;
+  readonly consumedAt: string;
+  readonly consumedBy: string;
+  readonly reversedAt: string | null;
+  readonly reversedBy: string | null;
+  readonly reversalReason: string | null;
+}
+
 export interface TenantExportDocument {
   readonly manifest: ExportManifest;
   readonly data: {
@@ -148,6 +264,12 @@ export interface TenantExportDocument {
     readonly professionals: readonly ExportedProfessional[];
     readonly appointmentTypes: readonly ExportedAppointmentType[];
     readonly appointments: readonly ExportedAppointment[];
+    readonly insurers: readonly ExportedInsurer[];
+    readonly insuranceGuides: readonly ExportedInsuranceGuide[];
+    readonly guideSessions: readonly ExportedGuideSession[];
+    readonly guideSessionSignatures: readonly ExportedGuideSessionSignature[];
+    readonly sessionPackages: readonly ExportedSessionPackage[];
+    readonly packageSessions: readonly ExportedPackageSession[];
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
   };
 }
@@ -231,6 +353,45 @@ export async function exportInTransaction(
       .where(eq(appointments.tenantId, ctx.tenantId))
       .orderBy(asc(appointments.startsAt), asc(appointments.id)),
     ctx.tenantId,
+  );
+  const doTenant = <T extends { tenantId: string }>(rows: readonly T[]) => soDaClinica(rows, ctx.tenantId);
+  const insurerRows = doTenant(
+    await tx.select().from(insurers).where(eq(insurers.tenantId, ctx.tenantId)).orderBy(asc(insurers.createdAt), asc(insurers.id)),
+  );
+  const guideRows = doTenant(
+    await tx
+      .select()
+      .from(insuranceGuides)
+      .where(eq(insuranceGuides.tenantId, ctx.tenantId))
+      .orderBy(asc(insuranceGuides.createdAt), asc(insuranceGuides.id)),
+  );
+  const guideSessionRows = doTenant(
+    await tx
+      .select()
+      .from(guideSessions)
+      .where(eq(guideSessions.tenantId, ctx.tenantId))
+      .orderBy(asc(guideSessions.consumedAt), asc(guideSessions.id)),
+  );
+  const signatureRows = doTenant(
+    await tx
+      .select()
+      .from(guideSessionSignatures)
+      .where(eq(guideSessionSignatures.tenantId, ctx.tenantId))
+      .orderBy(asc(guideSessionSignatures.signedAt), asc(guideSessionSignatures.id)),
+  );
+  const packageRows = doTenant(
+    await tx
+      .select()
+      .from(sessionPackages)
+      .where(eq(sessionPackages.tenantId, ctx.tenantId))
+      .orderBy(asc(sessionPackages.createdAt), asc(sessionPackages.id)),
+  );
+  const packageSessionRows = doTenant(
+    await tx
+      .select()
+      .from(packageSessions)
+      .where(eq(packageSessions.tenantId, ctx.tenantId))
+      .orderBy(asc(packageSessions.consumedAt), asc(packageSessions.id)),
   );
 
   const rescheduleRows = soDaClinica(
@@ -349,6 +510,87 @@ export async function exportInTransaction(
     createdAt: r.createdAt.toISOString(),
   }));
 
+  const decryptGuide = async (rowId: string, column: GuideEncryptedColumn, value: string | null): Promise<string | null> => {
+    if (value === null) return null;
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher.decryptString(tx, guideFieldRef(ctx.tenantId, rowId, column), value);
+  };
+  const exportedInsurers: ExportedInsurer[] = insurerRows.map((c) => ({
+    id: c.id,
+    name: c.name,
+    ansCode: c.ansCode,
+    sessionValueCents: c.sessionValueCents,
+    requiresPassword: c.requiresPassword,
+    requiresSignature: c.requiresSignature,
+    defaultValidityDays: c.defaultValidityDays,
+    active: c.active,
+    inactivatedAt: iso(c.inactivatedAt),
+    createdAt: c.createdAt.toISOString(),
+    updatedAt: c.updatedAt.toISOString(),
+  }));
+  const exportedGuides: ExportedInsuranceGuide[] = [];
+  for (const g of guideRows) {
+    exportedGuides.push({
+      id: g.id,
+      patientId: g.patientId,
+      insurerId: g.insurerId,
+      number: (await decryptGuide(g.id, 'number', g.numberEnc)) ?? '',
+      authorizationCode: await decryptGuide(g.id, 'authorization_code', g.authorizationCodeEnc),
+      cardNumber: await decryptGuide(g.id, 'card_number', g.cardNumberEnc),
+      authorizedSessions: g.authorizedSessions,
+      usedSessions: g.usedSessions,
+      issuedOn: g.issuedOn,
+      validUntil: g.validUntil,
+      status: g.status,
+      cancelledAt: iso(g.cancelledAt),
+      createdAt: g.createdAt.toISOString(),
+      updatedAt: g.updatedAt.toISOString(),
+    });
+  }
+  const exportedGuideSessions: ExportedGuideSession[] = guideSessionRows.map((s) => ({
+    id: s.id,
+    guideId: s.guideId,
+    appointmentId: s.appointmentId,
+    consumedAt: s.consumedAt.toISOString(),
+    consumedBy: s.consumedBy,
+    overrideReason: s.overrideReason,
+    reversedAt: iso(s.reversedAt),
+    reversedBy: s.reversedBy,
+    reversalReason: s.reversalReason,
+  }));
+  const exportedSignatures: ExportedGuideSessionSignature[] = signatureRows.map((s) => ({
+    id: s.id,
+    guideSessionId: s.guideSessionId,
+    method: s.method,
+    deviceLabel: s.deviceLabel,
+    signedAt: s.signedAt.toISOString(),
+    recordedBy: s.recordedBy,
+    recordHash: s.recordHash,
+  }));
+  const exportedPackages: ExportedSessionPackage[] = packageRows.map((p) => ({
+    id: p.id,
+    patientId: p.patientId,
+    appointmentTypeId: p.appointmentTypeId,
+    name: p.name,
+    totalSessions: p.totalSessions,
+    usedSessions: p.usedSessions,
+    validUntil: p.validUntil,
+    status: p.status,
+    cancelledAt: iso(p.cancelledAt),
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt.toISOString(),
+  }));
+  const exportedPackageSessions: ExportedPackageSession[] = packageSessionRows.map((s) => ({
+    id: s.id,
+    packageId: s.packageId,
+    appointmentId: s.appointmentId,
+    consumedAt: s.consumedAt.toISOString(),
+    consumedBy: s.consumedBy,
+    reversedAt: iso(s.reversedAt),
+    reversedBy: s.reversedBy,
+    reversalReason: s.reversalReason,
+  }));
+
   const manifest: ExportManifest = {
     format: EXPORT_FORMAT,
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -368,6 +610,12 @@ export async function exportInTransaction(
       professionals: exportedProfessionals.length,
       appointmentTypes: exportedTypes.length,
       appointments: exportedAppointments.length,
+      insurers: exportedInsurers.length,
+      insuranceGuides: exportedGuides.length,
+      guideSessions: exportedGuideSessions.length,
+      guideSessionSignatures: exportedSignatures.length,
+      sessionPackages: exportedPackages.length,
+      packageSessions: exportedPackageSessions.length,
       appointmentReschedules: exportedReschedules.length,
       auditEvents: auditEvents.length,
     },
@@ -406,6 +654,9 @@ export async function exportInTransaction(
       professionals: manifest.counts.professionals,
       appointmentTypes: manifest.counts.appointmentTypes,
       appointments: manifest.counts.appointments,
+      // Resumo de guias e pacotes (o metadata tem teto de 16 chaves; o detalhe está no manifesto).
+      guides: manifest.counts.insuranceGuides,
+      packages: manifest.counts.sessionPackages,
       appointmentReschedules: manifest.counts.appointmentReschedules,
       auditEvents: manifest.counts.auditEvents,
     },
@@ -425,6 +676,12 @@ export async function exportInTransaction(
         professionals: exportedProfessionals,
         appointmentTypes: exportedTypes,
         appointments: exportedAppointments,
+        insurers: exportedInsurers,
+        insuranceGuides: exportedGuides,
+        guideSessions: exportedGuideSessions,
+        guideSessionSignatures: exportedSignatures,
+        sessionPackages: exportedPackages,
+        packageSessions: exportedPackageSessions,
         appointmentReschedules: exportedReschedules,
       },
     },
