@@ -12,7 +12,7 @@
 Princípios:
 - **Build uma vez, promove a mesma imagem** (tag por SHA do commit) de staging para prod.
 - Configuração por variável de ambiente; segredos injetados do Secrets Manager (nunca no repo).
-- Infra como código (Terraform) em `infra/` (a criar), com plano revisado em PR.
+- Infra como código (Terraform) em `infra/terraform/`, com plano revisado em PR. Staging: [infra-staging.md](infra-staging.md).
 - **Agendador de jobs (R3 do parecer dos jobs, 23/10/2026; condição do piloto):** o IaC de staging e produção tem de **exigir `REDIS_URL`** (`rediss://`, sem padrão; o plano falha sem ela) e **criar os alarmes `JOB_ATRASADO` e `JOBS_DESLIGADOS`** (filtros de métrica no CloudWatch Logs + SNS de on-call; retenção também para o DPO), além do alarme de `jobs` ≠ `bullmq` no `/health/ready` por mais de 15 min. Detalhe em [api-dominio.md §14](api-dominio.md), "Monitoramento e IaC". O `infra-staging.md` vive na branch do Terraform (`devops/terraform-staging-b`) e recebe este item quando ela for retomada.
 - **KMS das chaves de lote do importador (R3-b do parecer do importador, rodada 22; antes de `IMPORTADOR_HABILITADO=true`):** cada lote de importação tem chave KMS própria, com tags `tenant_id`, `purpose=import_batch` e `batch_id` e descrição própria; a chave da clínica tem `tenant_id` e `purpose=tenant_data`. A política IAM do papel da API tem de:
   - liberar `kms:CreateKey`/`kms:TagResource` só com `aws:RequestTag/purpose` ∈ {`tenant_data`, `import_batch`} e `tenant_id` presente;
