@@ -128,6 +128,7 @@ export interface ApiClinica {
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
   aprovarExportacao(id: string): Promise<PedidoExportacao>;
 
+
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
   usuariosDemo(): Promise<Usuario[]>;
   entrarComo(id: string): Promise<Usuario>;
