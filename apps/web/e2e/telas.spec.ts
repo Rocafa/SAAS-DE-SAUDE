@@ -43,6 +43,7 @@ const TELAS: [string, string][] = [
   ['portal-documentos', '/portal/documentos'],
   ['portal-dados', '/portal/dados'],
   ['portal-direitos', '/portal/direitos'],
+  ['portal-convite', '/portal/convite'],
   ['sem-conexao', '/offline'],
   ['pagina-404', '/nao-existe-esta-pagina'],
 ];

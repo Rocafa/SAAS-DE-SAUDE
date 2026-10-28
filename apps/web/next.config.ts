@@ -75,11 +75,31 @@ export function securityHeaders(env: NodeJS.ProcessEnv = process.env): { key: st
   ];
 }
 
+/**
+ * Portal do paciente em modo http só em desenvolvimento até a D4 (`lib/api/portal-selecionar.ts` recusa
+ * igual). Em build de produção, nem o modo http nem a sessão fictícia (`ptl_…`) podem ir para o bundle.
+ */
+export function conferirConfigPortal(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') return;
+  if ((env.NEXT_PUBLIC_PORTAL_MODO?.trim() || 'fake') !== 'fake') {
+    throw new Error('NEXT_PUBLIC_PORTAL_MODO=http só em desenvolvimento até a D4 (login real do portal)');
+  }
+  if (env.NEXT_PUBLIC_PORTAL_SESSAO_DEV?.trim()) {
+    throw new Error('NEXT_PUBLIC_PORTAL_SESSAO_DEV é só de desenvolvimento: não pode entrar em build de produção');
+  }
+}
+
+conferirConfigPortal();
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders() }];
+    return [
+      { source: '/:path*', headers: securityHeaders() },
+      // Convite do portal: o token vem no #fragmento; nenhum Referer sai desta página (P4).
+      { source: '/portal/convite', headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] },
+    ];
   },
 };
 

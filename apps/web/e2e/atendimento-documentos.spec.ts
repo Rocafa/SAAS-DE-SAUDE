@@ -1,7 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
 
-const PASTA = new URL('../../../docs/02-produto/telas/', import.meta.url).pathname;
+const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));
 
 /** Troca o usuário da demonstração e segue navegando sem recarregar (os dados vivem na memória da aba). */
 async function entrarComo(page: Page, nome: RegExp) {
