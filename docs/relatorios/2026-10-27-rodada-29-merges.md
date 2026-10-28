@@ -26,6 +26,8 @@ com tudo verde, por merge commit. Nenhum push em branch do @Lopesloro.
 | #83 | trava API × Terraform passa a falhar (em vez de pular) se o `app.tf` sumir | item Livre da fila |
 | #84 | Dependabot não sobe versão maior da imagem `node` | o #80 queria build em Node 26 com runtime distroless nodejs22 (fechado) |
 | #81, #82 | setup-node e upload-artifact nos workflows novos do #59 | Dependabot |
+| #49 | ioredis 6 | Redis real no CI (88/88) |
+| #85 | client-kms 3.1156.0, bullmq 6.4.2 (versões exatas mantidas) | Dependabot, 28/10 |
 
 **Fechados sem merge:** #74 (substituído pelo #77), #72 (o Dependabot fechou e abriu o #78), #70/#71 (pelo #79), #80 (§1),
 #66–#69 (já contidos no #73).
@@ -51,6 +53,7 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 
 - **Pilha do front do @Lopesloro (#44 → #45 → #46 → #47) e #75 em cima dela:** cada branch precisa receber a main. O #44
   pede decisão dele no `fake.ts`. Passo a passo comentado no #44.
+  **28/10:** proposta montada no **#86** (rascunho, branch minha). As resoluções do ensaio foram reaproveitadas depois de conferir que as entradas de cada conflito eram idênticas. Resultado: web 349/349, api 995/995 e CI todo verde, incluindo Playwright e RLS. Falta o aval dele no `fake.ts`.
 - **#49 (ioredis 6): entrou.** No CI de Segurança, com Redis real (`JOBS_REDIS_TESTE=1`), `agendador-redis` e `rate-limit-redis` rodaram e passaram (88/88, nenhum pulado).
 - **#54:** fora da fila. O motivo (billing) sumiu e ele reduziria a cobertura.
 - **#55 e #36 (@Lopesloro):** antigos, sem relação com a fila. Ficam com ele.
