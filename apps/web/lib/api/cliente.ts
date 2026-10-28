@@ -2,6 +2,9 @@ import type {
   AlteracaoPaciente,
   Agendamento,
   Anexo,
+  Conversa,
+  Guia,
+  NovaGuia,
   EventoLinhaTempo,
   ItemEspera,
   ListaPacientes,
@@ -93,6 +96,12 @@ export interface ApiClinica {
   assinarRegistro(id: string): Promise<Registro>;
   adicionarAdendo(id: string, texto: string): Promise<Registro>;
 
+  registrarPagamento(agendamentoId: string, forma: Recibo['forma']): Promise<Recibo>;
+  removerRecibo(id: string): Promise<void>;
+  listarGuias(): Promise<Guia[]>;
+  criarGuia(dados: NovaGuia): Promise<Guia>;
+  removerGuia(id: string): Promise<void>;
+  listarConversas(): Promise<Conversa[]>;
   /**
    * Registra a emissão/impressão de um documento (auditoria, sem o texto). Atestado só por perfil
    * clínico com vínculo de cuidado, assinado pelo próprio usuário; recepção emite declaração e recibo.

@@ -5,10 +5,6 @@ import { PAGINAS } from '@/lib/ajudante/catalogo';
 
 /** Telas dos próximos pacotes. Só rotas conhecidas; o resto é 404. */
 const PACOTE: Record<string, string> = {
-  financeiro: 'PR 4',
-  guias: 'PR 4',
-  mensagens: 'PR 4',
-  relatorios: 'PR 4',
   configuracoes: 'PR 5',
   ajuda: 'PR 5',
 };

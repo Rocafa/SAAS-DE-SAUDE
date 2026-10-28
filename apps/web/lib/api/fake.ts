@@ -12,6 +12,9 @@ import type {
   AlteracaoPaciente,
   Agendamento,
   Anexo,
+  Conversa,
+  Guia,
+  NovaGuia,
   EventoLinhaTempo,
   ItemEspera,
   NovoPaciente,
@@ -137,6 +140,17 @@ const SEMENTES: Semente[] = [
   { paciente: 13, prof: 2, tipo: 2, dia: -2, hora: '14:00', status: 'faltou' },
 ];
 
+// Histórico de 4 semanas para os relatórios (dias úteis, 2 atendimentos e às vezes uma falta).
+const HISTORICO: Semente[] = Array.from({ length: 28 }, (_, k) => -(k + 15)).flatMap((dia, k) => [
+  { paciente: (k % 28) + 1, prof: (k % 3) + 1, tipo: (k % 4) + 1, dia, hora: '10:00', status: 'atendido' as const },
+  { paciente: ((k + 7) % 28) + 1, prof: ((k + 1) % 3) + 1, tipo: 1, dia, hora: '15:00', status: (k % 5 === 0 ? 'faltou' : 'atendido') as StatusAgendamento },
+]);
+// E alguns atendimentos recentes ainda sem pagamento (contas a receber).
+const SEM_PAGAMENTO: Semente[] = [
+  { paciente: 11, prof: 1, tipo: 1, dia: -1, hora: '10:00', status: 'atendido' },
+  { paciente: 14, prof: 3, tipo: 4, dia: -4, hora: '11:00', status: 'atendido' },
+];
+
 export interface OpcoesFake {
   agora?: Date;
   /**
@@ -154,7 +168,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   const pacientes = vazio ? [] : criarPacientesFicticios();
   const agendamentos: Agendamento[] = vazio
     ? []
-    : SEMENTES.map((s, i) => {
+    : [...SEMENTES, ...HISTORICO, ...SEM_PAGAMENTO].map((s, i) => {
         const tipo = TIPOS[s.tipo - 1]!;
         return {
           id: `a${dois(i + 1)}`,
@@ -168,8 +182,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
           encaixe: false,
         };
       });
+  const semPagamentoIds = new Set(agendamentos.slice(SEMENTES.length + HISTORICO.length).map((a) => a.id));
   const recibos: Recibo[] = agendamentos
-    .filter((a) => a.status === 'atendido')
+    .filter((a) => a.status === 'atendido' && !semPagamentoIds.has(a.id))
     .map((a, i) => ({
       id: `r${dois(i + 1)}`,
       agendamentoId: a.id,
@@ -236,6 +251,20 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   };
   const anexoVisivel = (x: Anexo): Anexo =>
     x.clinico && !(ehPerfilClinico(usuario) && temVinculo(x.pacienteId)) ? { ...x, nome: 'Anexo clínico', conteudoOculto: true } : x;
+  const guias: Guia[] = vazio
+    ? []
+    : [
+        { id: 'gu1', pacienteId: 'p03', convenio: 'Convênio Exemplo (fictício)', numero: '000123', sessoesAutorizadas: 10, sessoesUsadas: 9, validade: paraIsoLocal(somarDias(agora, 20)) },
+        { id: 'gu2', pacienteId: 'p07', convenio: 'Plano Demonstração (fictício)', numero: '000456', sessoesAutorizadas: 12, sessoesUsadas: 4, validade: paraIsoLocal(somarDias(agora, 5)) },
+        { id: 'gu3', pacienteId: 'p08', convenio: 'Convênio Exemplo (fictício)', numero: '000789', sessoesAutorizadas: 8, sessoesUsadas: 2, validade: paraIsoLocal(somarDias(agora, 60)) },
+      ];
+  const conversas: Conversa[] = vazio
+    ? []
+    : [
+        { id: 'c1', pacienteId: 'p02', naoLidas: 1, mensagens: [{ de: 'clinica', texto: 'Olá! Lembrete da sua consulta hoje às 11:00. Confirma?', hora: '08:00' }, { de: 'paciente', texto: 'Confirmo, obrigado!', hora: '08:12' }] },
+        { id: 'c2', pacienteId: 'p12', naoLidas: 2, mensagens: [{ de: 'paciente', texto: 'Bom dia, posso trocar meu horário de hoje para amanhã?', hora: '07:40' }, { de: 'paciente', texto: 'Pode ser à tarde.', hora: '07:41' }] },
+        { id: 'c3', pacienteId: 'p05', naoLidas: 0, mensagens: [{ de: 'clinica', texto: 'Sua consulta de amanhã às 10:00 está confirmada.', hora: 'ontem' }] },
+      ];
   const anexos: Anexo[] = vazio
     ? []
     : [
@@ -527,6 +556,36 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       r.adendos.push({ texto: texto.trim(), em: hojeIso, autor: usuario.nome });
       return resposta(r);
     },
+
+    async registrarPagamento(agendamentoId, forma) {
+      const a = agendamentos.find((x) => x.id === agendamentoId);
+      if (!a) throw new Error('Atendimento não encontrado.');
+      if (recibos.some((r) => r.agendamentoId === agendamentoId)) throw new Error('Esse atendimento já está pago.');
+      const r: Recibo = { id: novoId('r'), agendamentoId, pacienteId: a.pacienteId, data: hojeIso, valor: TIPOS.find((t) => t.id === a.tipoId)!.valor, forma };
+      recibos.push(r);
+      return resposta(r);
+    },
+    async removerRecibo(id) {
+      const i = recibos.findIndex((r) => r.id === id);
+      if (i >= 0) recibos.splice(i, 1);
+      await resposta(null);
+    },
+    listarGuias: () => resposta(guias),
+    async criarGuia(d: NovaGuia) {
+      if (!pacientes.some((p) => p.id === d.pacienteId)) throw new Error('Falta o paciente. Escolha na lista.');
+      if (!d.convenio.trim()) throw new Error('Falta o nome do convênio.');
+      if (!d.numero.trim()) throw new Error('Falta o número da guia. Ele está no papel do convênio.');
+      if (!(d.sessoesAutorizadas >= 1)) throw new Error('Quantas sessões o convênio autorizou? Digite um número.');
+      const g: Guia = { id: novoId('gu'), ...d, convenio: d.convenio.trim(), numero: d.numero.trim(), sessoesUsadas: 0 };
+      guias.push(g);
+      return resposta(g);
+    },
+    async removerGuia(id) {
+      const i = guias.findIndex((g) => g.id === id);
+      if (i >= 0) guias.splice(i, 1);
+      await resposta(null);
+    },
+    listarConversas: () => resposta(conversas),
   };
 }
 
