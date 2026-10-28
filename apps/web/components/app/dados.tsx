@@ -35,6 +35,8 @@ interface ContextoDados {
   atualizar: () => void;
   /** Apaga o retrato em memória (sair, trocar de clínica). */
   limpar: () => void;
+  /** Só na demonstração: trocar de usuário para ver as permissões. */
+  entrarComo: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<ContextoDados | null>(null);
@@ -102,9 +104,16 @@ export function DadosProvider({ children }: { children: ReactNode }) {
   }, [api, config.modo, versao, limpar]);
 
   const atualizar = useCallback(() => setVersao((v) => v + 1), []);
+  const entrarComo = useCallback(
+    async (id: string) => {
+      await api.entrarComo(id);
+      atualizar();
+    },
+    [api, atualizar],
+  );
   const valor = useMemo(
-    () => ({ api, modo: config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar }),
-    [api, config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar],
+    () => ({ api, modo: config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar, entrarComo }),
+    [api, config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar, entrarComo],
   );
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
 }

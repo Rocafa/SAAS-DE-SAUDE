@@ -15,12 +15,14 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { cpfMascarado } from '@/lib/ajudante/busca';
 import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
+import { ehPerfilClinico } from '@/lib/prontuario';
 import { nomeExibido, type Agendamento } from '@/lib/api/tipos';
 import { reais } from '@/lib/utils';
 
 export default function PaginaFicha() {
   const { id } = useParams<{ id: string }>();
-  const { api, atualizar } = useDados();
+  const { api, atualizar, usuario } = useDados();
+  const clinico = ehPerfilClinico(usuario);
   const avisar = useAviso();
   const acao = useAcao();
   const [cancelando, setCancelando] = useState<string | null>(null);
@@ -247,10 +249,19 @@ export default function PaginaFicha() {
           <FileText aria-hidden className="size-6" />
           Prontuário
         </h2>
-        <Vazio
-          titulo="A tela de atendimento chega no próximo pacote"
-          oQueFazer="Evolução por modelo (fisio/TO e psicologia), histórico e assinatura entram no PR 3."
-        />
+        {clinico ? (
+          <>
+            <p className="mb-3 text-texto-suave">Evoluções assinadas, do mais novo para o mais antigo. Psicologia fica em compartimento sigiloso.</p>
+            <Botao asChild variante="contorno">
+              <Link href={`/pacientes/${paciente.id}/prontuario`}>
+                <FileText aria-hidden />
+                Abrir prontuário
+              </Link>
+            </Botao>
+          </>
+        ) : (
+          <p className="text-texto-suave">O conteúdo clínico é só para os profissionais que atendem este paciente.</p>
+        )}
       </section>
 
       <section aria-labelledby="t-recibos" data-assist-id="ficha-recibos">
@@ -268,14 +279,14 @@ export default function PaginaFicha() {
                   <strong>{formatarDia(r.data, new Date())}</strong> · {reais(r.valor)} ·{' '}
                   {r.forma === 'pix' ? 'Pix' : r.forma === 'cartao' ? 'Cartão' : 'Dinheiro'}
                 </span>
-                <Botao
-                  variante="contorno"
-                  tamanho="pequeno"
-                  onClick={() => window.print()}
-                  {...(i === 0 ? { 'data-assist-id': 'ficha-imprimir-recibo' } : {})}
-                >
-                  <Printer aria-hidden />
-                  Imprimir
+                <Botao asChild variante="contorno" tamanho="pequeno">
+                  <Link
+                    href={`/documentos?tipo=recibo&paciente=${paciente.id}&recibo=${r.id}`}
+                    {...(i === 0 ? { 'data-assist-id': 'ficha-imprimir-recibo' } : {})}
+                  >
+                    <Printer aria-hidden />
+                    Imprimir
+                  </Link>
                 </Botao>
               </li>
             ))}
@@ -294,7 +305,9 @@ export default function PaginaFicha() {
             {anexos.map((x) => (
               <li key={x.id} className="flex flex-wrap items-center gap-3 rounded-md border-2 border-borda p-3">
                 <Paperclip aria-hidden className="size-5" />
-                <span className="flex-1 font-bold">{x.nome}</span>
+                <span className={`flex-1 ${x.conteudoOculto ? 'italic' : 'font-bold'}`}>
+                  {x.conteudoOculto ? 'Anexo clínico (só o profissional que atende vê o nome)' : x.nome}
+                </span>
                 <span className="text-texto-suave">{formatarDia(x.data, new Date())}</span>
               </li>
             ))}

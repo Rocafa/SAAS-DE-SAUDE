@@ -15,6 +15,9 @@ const TELAS: [string, string][] = [
   ['agenda-profissional', '/agenda?ver=profissional'],
   ['lista-espera', '/agenda?ver=espera'],
   ['novo-paciente', '/pacientes/novo'],
+  ['atendimento-recepcao', '/atendimento'],
+  ['documentos-vazio', '/documentos'],
+  ['prontuario-sigiloso', '/pacientes/p04/prontuario'],
   ['em-construcao', '/financeiro'],
 ];
 
