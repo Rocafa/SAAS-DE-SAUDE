@@ -23,7 +23,20 @@ const TELAS: [string, string][] = [
   ['guias', '/guias'],
   ['mensagens', '/mensagens'],
   ['relatorios', '/relatorios'],
-  ['em-construcao', '/configuracoes/clinica'],
+  ['configuracoes', '/configuracoes'],
+  ['config-clinica', '/configuracoes/clinica'],
+  ['config-usuarios', '/configuracoes/usuarios'],
+  ['config-horarios', '/configuracoes/horarios'],
+  ['config-tipos', '/configuracoes/tipos'],
+  ['config-modelos', '/configuracoes/modelos'],
+  ['config-privacidade', '/configuracoes/privacidade'],
+  ['config-plano', '/configuracoes/plano'],
+  ['primeiros-passos', '/primeiros-passos'],
+  ['ajuda', '/ajuda'],
+  ['entrar', '/entrar'],
+  ['esqueci-senha', '/esqueci-senha'],
+  ['convite', '/convite'],
+  ['escolher-clinica', '/escolher-clinica'],
 ];
 
 const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));

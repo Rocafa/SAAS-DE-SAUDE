@@ -249,3 +249,45 @@ export interface Conversa {
   naoLidas: number;
   mensagens: { de: 'paciente' | 'clinica'; texto: string; hora: string }[];
 }
+
+export interface MembroEquipe {
+  id: string;
+  nome: string;
+  email: string;
+  papel: Papel;
+  situacao: 'ativo' | 'convite_enviado';
+}
+
+/** Registro de auditoria: quem fez o quê, sem conteúdo clínico. */
+export interface EventoAuditoria {
+  id: string;
+  quando: string;
+  quem: string;
+  acao: string;
+}
+
+export interface Assinatura {
+  plano: string;
+  valorMensal: number;
+  status: 'ativa' | 'cancelada';
+  proximaCobranca?: string;
+  canceladaEm?: string;
+  /** Até quando os dados ficam em leitura e exportação (G3: no mínimo 90 dias). */
+  disponivelAte?: string;
+}
+
+/** Exportação total (G2): MFA recente, aprovação do responsável técnico, link pessoal de 24 h. */
+export interface PedidoExportacao {
+  id: string;
+  status: 'aguardando_rt' | 'pronto';
+  pedidoEm: string;
+  expiraEm?: string;
+  downloadsRestantes?: number;
+}
+
+export interface DadosClinica {
+  nome: string;
+  cnpj: string;
+  telefone: string;
+  endereco: string;
+}
