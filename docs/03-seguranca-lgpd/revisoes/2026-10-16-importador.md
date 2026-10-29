@@ -386,3 +386,8 @@ Conferido:
 - **Encerramento da observação R3-a/R3-b.** Ela fica atendida quando o job tiver rodado em produção com Redis (`JOBS_HABILITADOS`) e a trilha de cada clínica existente mostrar `cpf_reindex` com `pending = 0`. Conferir isso no checklist do GA.
 - **Lote de 500 numa transação de 15 s** (`pool-config.ts:36`). Cada linha faz cerca de 3 consultas (`findById`, `UPDATE`, mais o KMS na primeira DEK). Deve caber, mas acompanhar a duração. Se chegar perto do teto, baixar o lote padrão.
 - **Responsáveis (0048)** continuam fora do índice e decifrando na dedup. O prazo segue o mesmo, antes do GA. Este job não cobre `guardians`.
+
+**Reconferência (28/10/2026, `ef7ddd6..28b16d4`): APROVADO.** C1 e C2 atendidas.
+- **C1.** `FieldCipher.tenantKeysDestroyed` delega a `hasDestroyedKeys`, que só olha `tenant_master_keys` em `destroying`/`destroyed`. Conferi `data-key-store.ts`: esse estado só nasce em `beginDestroy`, a eliminação da clínica inteira. A rotação normal de DEK não marca a clínica, então nenhuma clínica viva é pulada por engano. O estado `destroying` (eliminação a meio caminho) também é pulado, e isso está correto. A conferência roda na 1ª transação, antes de qualquer `chaveAtiva`/`criarChave`: não decifra, não provisiona, não grava trilha e não falha. O retorno traz só contagens e `chaveDestruida`. O teste da clínica E prova duas rodadas sem erro, `patient_cpf_index_keys` idêntica e trilha `cpf_reindex` vazia. O §12d registra o comportamento.
+- **C2.** O bloco "sem pendente" agora confere que a contagem de `patient_cpf_index_keys` não muda.
+- As observações anteriores continuam valendo (encerramento da R3-a/R3-b pela trilha `pending = 0` em produção; duração do lote; responsáveis antes do GA).
