@@ -318,12 +318,17 @@ export class ResponsaveisService {
           campos.push('name');
         }
         if (dados.cpf !== undefined) {
-          mud.cpfEnc = dados.cpf === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'cpf', dados.cpf);
           // 0054: o índice vai na MESMA escrita (sem CPF, sem índice).
           const indice = dados.cpf === null ? null : await this.indiceCpf.indexar(tx, ctx, dados.cpf, 'guardians');
-          mud.cpfBidx = indice?.cpfBidx ?? null;
-          mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
-          campos.push('cpf');
+          // Mesmo índice na mesma versão = mesmo CPF: não regrava. Recifrar daria cifra nova com índice igual, e
+          // o gatilho de índice ausente zeraria o índice (como nos pacientes, regravar o mesmo CPF não reescreve).
+          const mesmoCpf = indice !== null && g.cpfBidx === indice.cpfBidx && g.cpfBidxVersion === indice.cpfBidxVersion;
+          if (!mesmoCpf) {
+            mud.cpfEnc = dados.cpf === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'cpf', dados.cpf);
+            mud.cpfBidx = indice?.cpfBidx ?? null;
+            mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
+            campos.push('cpf');
+          }
         }
         if (dados.telefone !== undefined) {
           mud.phoneEnc = dados.telefone === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'phone', dados.telefone);

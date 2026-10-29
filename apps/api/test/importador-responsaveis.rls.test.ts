@@ -458,6 +458,13 @@ describe('0054: índice cego do CPF nos responsáveis (mesma chave da clínica, 
     const achados = await procurar(clinicaC, [novo, cpf]);
     expect(achados.get(novo)).toBe(emC.responsavelId);
     expect(achados.has(cpf)).toBe(false);
+    // Reenviar o MESMO CPF (tela que manda o formulário inteiro) não regrava nada: o índice continua lá.
+    const cifraAntes = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
+    const igual = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: novo, telefone: '11900000502' });
+    expect(igual.status, JSON.stringify(igual.body)).toBe(200);
+    expect(await indiceDe(clinicaC, emC.responsavelId)).toEqual(depois);
+    const cifraDepois = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
+    expect(cifraDepois).toBe(cifraAntes);
     const sem = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: null });
     expect(sem.status, JSON.stringify(sem.body)).toBe(200);
     expect(await indiceDe(clinicaC, emC.responsavelId)).toMatchObject({ b: null, v: null });
