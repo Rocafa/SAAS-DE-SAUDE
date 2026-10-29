@@ -317,18 +317,17 @@ export class ResponsaveisService {
           mud.nameEnc = await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'name', dados.nome);
           campos.push('name');
         }
-        if (dados.cpf !== undefined) {
-          // 0054: o índice vai na MESMA escrita (sem CPF, sem índice).
+        // 0054 (C1 do parecer do #89): "mesmo CPF" só se decide decifrando o atual, como nos pacientes. O índice
+        // pode ser trocado sem usuário (exceção da guarda), então nunca serve para concluir que o CPF é o mesmo:
+        // um índice forjado faria uma alteração legítima ser descartada em silêncio. Mesmo CPF (ou null sobre
+        // null) não regrava nada: recifrar daria cifra nova com índice igual e o gatilho zeraria o índice.
+        if (dados.cpf !== undefined && dados.cpf !== (await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, g.id, 'cpf', g.cpfEnc))) {
+          mud.cpfEnc = dados.cpf === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'cpf', dados.cpf);
+          // O índice vai na MESMA escrita (sem CPF, sem índice).
           const indice = dados.cpf === null ? null : await this.indiceCpf.indexar(tx, ctx, dados.cpf, 'guardians');
-          // Mesmo índice na mesma versão = mesmo CPF: não regrava. Recifrar daria cifra nova com índice igual, e
-          // o gatilho de índice ausente zeraria o índice (como nos pacientes, regravar o mesmo CPF não reescreve).
-          const mesmoCpf = indice !== null && g.cpfBidx === indice.cpfBidx && g.cpfBidxVersion === indice.cpfBidxVersion;
-          if (!mesmoCpf) {
-            mud.cpfEnc = dados.cpf === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'cpf', dados.cpf);
-            mud.cpfBidx = indice?.cpfBidx ?? null;
-            mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
-            campos.push('cpf');
-          }
+          mud.cpfBidx = indice?.cpfBidx ?? null;
+          mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
+          campos.push('cpf');
         }
         if (dados.telefone !== undefined) {
           mud.phoneEnc = dados.telefone === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'phone', dados.telefone);

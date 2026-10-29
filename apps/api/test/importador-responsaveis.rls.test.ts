@@ -465,6 +465,25 @@ describe('0054: índice cego do CPF nos responsáveis (mesma chave da clínica, 
     expect(await indiceDe(clinicaC, emC.responsavelId)).toMatchObject({ b: depois?.b, v: depois?.v });
     const cifraDepois = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
     expect(cifraDepois).toBe(cifraAntes);
+    // C1 do parecer do #89: índice forjado (copiado de outra responsável, sem usuário) não faz uma alteração
+    // legítima para o CPF dessa outra pessoa ser descartada em silêncio; "mesmo CPF" só se decide decifrando.
+    const outra = await responsavelDoCadastro(adminC, CPF(503), 'Resp Outra Ficticio');
+    const daOutra = await indiceDe(clinicaC, outra.responsavelId);
+    await gravarIndiceSemUsuario(clinicaC, emC.responsavelId, daOutra?.b ?? null, daOutra?.v ?? null);
+    const histAntesC1 = await historico(clinicaC, emC.responsavelId);
+    const paraOutra = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: CPF(503) });
+    expect(paraOutra.status, JSON.stringify(paraOutra.body)).toBe(200);
+    expect((paraOutra.body as { cpf: string | null }).cpf).toBe(CPF(503));
+    const cifraC1 = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
+    expect(cifraC1).not.toBe(cifraDepois);
+    expect(await indiceDe(clinicaC, emC.responsavelId)).toMatchObject({ b: daOutra?.b, v: daOutra?.v });
+    expect(await historico(clinicaC, emC.responsavelId)).toBeGreaterThan(histAntesC1);
+    const trilhaC1 = await withTenant(api.db.db, clinicaC, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.actorId, adminC.userId), sql`${auditLog.metadata}->>'guardian_id' = ${emC.responsavelId}`)).orderBy(sql`seq`),
+    );
+    expect((trilhaC1.at(-1)?.metadata as { changed?: string }).changed).toBe('cpf');
+    // A outra pessoa sai da conta dos testes seguintes (sem CPF).
+    await api.http().patch(`/pacientes/${outra.pacienteId}/responsaveis/${outra.vinculoId}`).set(cab(adminC)).send({ cpf: null }).expect(200);
     const sem = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: null });
     expect(sem.status, JSON.stringify(sem.body)).toBe(200);
     expect(await indiceDe(clinicaC, emC.responsavelId)).toMatchObject({ b: null, v: null });
