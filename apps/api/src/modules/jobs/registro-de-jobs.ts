@@ -10,6 +10,7 @@ import { SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import type { RetencaoFiscalService } from '../finance/retencao-fiscal';
 import type { ImportacaoService } from '../imports/importacao.service';
 import type { WhatsappService } from '../messaging/whatsapp.service';
+import type { PatientsService } from '../patients/patients.service';
 import type { ResponsaveisService } from '../patients/responsaveis.service';
 import type { PortalClinicaService } from '../portal/portal-clinica.service';
 import type { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
@@ -29,6 +30,7 @@ export interface ServicosDosJobs {
   readonly notas: Pick<CicloNotasPrivadasService, 'executarCicloComoSistema'>;
   readonly retencaoFiscal: Pick<RetencaoFiscalService, 'executarComoSistema'>;
   readonly responsaveis: Pick<ResponsaveisService, 'descartarAnuladosComoSistema'>;
+  readonly pacientes: Pick<PatientsService, 'reindexarIndiceCpfComoSistema'>;
 }
 
 export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob[] {
@@ -105,6 +107,13 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       nome: 'responsaveis-descarte',
       ...diario('0 5 * * *', 'diário, 05:00'),
       porClinica: async (t) => ({ ...(await s.responsaveis.descartarAnuladosComoSistema(t)) }),
+    },
+    {
+      // R9 do importador (§12d): passos 2 e 3 da troca de chave do índice cego do CPF, sozinhos. Sem pendente,
+      // não decifra nada; o que passar de 20 lotes de 500 fica para o dia seguinte.
+      nome: 'cpf-indice-reindexacao',
+      ...diario('30 5 * * *', 'diário, 05:30'),
+      porClinica: async (t) => ({ ...(await s.pacientes.reindexarIndiceCpfComoSistema(t)) }),
     },
   ];
   validarDefinicoes(jobs);

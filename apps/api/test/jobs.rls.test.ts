@@ -58,6 +58,7 @@ describe('agendador em teste', () => {
       'notas-privadas-ciclo',
       'retencao-fiscal',
       'responsaveis-descarte',
+      'cpf-indice-reindexacao',
     ]);
   });
 });

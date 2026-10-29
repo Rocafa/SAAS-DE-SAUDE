@@ -19,6 +19,7 @@ import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { RetencaoFiscalService } from '../finance/retencao-fiscal';
 import { ImportacaoService } from '../imports/importacao.service';
 import { WhatsappService } from '../messaging/whatsapp.service';
+import { PatientsService } from '../patients/patients.service';
 import { ResponsaveisService } from '../patients/responsaveis.service';
 import { PortalClinicaService } from '../portal/portal-clinica.service';
 import { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
@@ -111,6 +112,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
       notas: get(CicloNotasPrivadasService),
       retencaoFiscal: get(RetencaoFiscalService),
       responsaveis: get(ResponsaveisService),
+      pacientes: get(PatientsService),
     });
     this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;

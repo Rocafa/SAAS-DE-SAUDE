@@ -135,6 +135,38 @@ export class IndiceCegoCpf {
     return { reindexados: lote.length, pendentes };
   }
 
+  /**
+   * Quantos pacientes com CPF ainda estão fora da chave ativa (sem índice ou em versão antiga). Não decifra
+   * nada e não cria chave: é a conferência barata que o job faz antes de abrir a chave da clínica.
+   */
+  async pendentes(tx: TenantTx, tenantId: TenantId): Promise<number> {
+    const [k] = await tx
+      .select({ versao: patientCpfIndexKeys.version })
+      .from(patientCpfIndexKeys)
+      .where(and(eq(patientCpfIndexKeys.tenantId, tenantId), eq(patientCpfIndexKeys.status, 'active')));
+    const [r] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(patients)
+      .where(
+        and(
+          eq(patients.tenantId, tenantId),
+          isNotNull(patients.cpfEnc),
+          k ? or(isNull(patients.cpfBidxVersion), ne(patients.cpfBidxVersion, k.versao)) : sql`true`,
+        ),
+      );
+    return Number(r?.n ?? 0);
+  }
+
+  /** Há versão aposentada ainda não destruída? (sem decifrar; evita a trava da clínica quando não há) */
+  async temChaveAposentada(tx: TenantTx, tenantId: TenantId): Promise<boolean> {
+    const [k] = await tx
+      .select({ versao: patientCpfIndexKeys.version })
+      .from(patientCpfIndexKeys)
+      .where(and(eq(patientCpfIndexKeys.tenantId, tenantId), eq(patientCpfIndexKeys.status, 'retired')))
+      .limit(1);
+    return k !== undefined;
+  }
+
   /** Depois da reindexação: chaves aposentadas sem paciente indexado viram `destroyed` (key_enc apagada). */
   async descartarChavesAntigas(tx: TenantTx, ctx: RequestContext): Promise<number> {
     await this.travar(tx, ctx.tenantId);
