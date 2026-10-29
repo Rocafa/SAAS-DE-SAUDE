@@ -42,8 +42,10 @@ function SecaoClinica() {
   useEffect(() => {
     if (consulta.estado === 'pronto' && !d) setD(consulta.dados);
   }, [consulta, d]);
-  if (consulta.estado === 'carregando' || !d) return <Carregando />;
+  // O erro vem antes: com a primeira carga falhando, `d` fica nulo e a tela ficaria em "Carregando…"
+  // para sempre, sem o botão de tentar de novo.
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
+  if (consulta.estado === 'carregando' || !d) return <Carregando />;
   const mudar = (k: keyof DadosClinica) => (e: { target: { value: string } }) => setD({ ...d, [k]: e.target.value });
   async function salvar(e: FormEvent) {
     e.preventDefault();
@@ -94,7 +96,10 @@ const PERMISSOES: [string, string, string, string][] = [
 
 function SoAdmin({ children, oQue }: { children: ReactNode; oQue: string }) {
   const { usuario } = useDados();
-  if (usuario && usuario.papel !== 'admin') {
+  // Falha fechado: enquanto o papel não é conhecido (primeira carga, ou `usuarioAtual` que falhou)
+  // nada do conteúdo de administrador aparece.
+  if (!usuario) return <Carregando />;
+  if (usuario.papel !== 'admin') {
     return <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica {oQue}.</p>;
   }
   return <>{children}</>;
@@ -330,15 +335,67 @@ function SecaoModelos() {
   );
 }
 
+/**
+ * Trilha de acesso. Fica em componente próprio de propósito: assim `listarAuditoria` só é chamada
+ * quando quem está na tela é administrador. A trilha traz nome de paciente e e-mail da equipe, então
+ * não pode ser buscada para depois ser escondida na renderização.
+ */
+function TrilhaDeAcesso() {
+  const auditoria = useConsulta((a) => a.listarAuditoria());
+  const [filtro, setFiltro] = useState('');
+  return (
+      <section aria-labelledby="t-auditoria">
+        <h2 id="t-auditoria" className="mb-2 text-xl font-bold">
+          Quem acessou o quê
+        </h2>
+        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser alterado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
+        <label htmlFor="a-filtro" className="font-bold">
+          Filtrar por pessoa
+        </label>
+        <input id="a-filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Ex.: Beatriz" className={`${CAMPO} mb-3 mt-2 max-w-md`} />
+        {auditoria.estado === 'carregando' && <Carregando />}
+        {auditoria.estado === 'erro' && <Erro mensagem={auditoria.mensagem} tentarDeNovo={auditoria.tentarDeNovo} />}
+        {auditoria.estado === 'pronto' &&
+          (() => {
+            const lista = auditoria.dados.filter((e) => e.quem.toLowerCase().includes(filtro.trim().toLowerCase()));
+            return lista.length === 0 ? (
+              <Vazio titulo="Nada encontrado" oQueFazer="Confira o nome ou apague o filtro." />
+            ) : (
+              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Registro de acessos">
+                <table className="w-full border-collapse text-left">
+                  <thead>
+                    <tr className="border-b-2 border-borda-forte">
+                      <th className="p-2">Quando</th>
+                      <th className="p-2">Quem</th>
+                      <th className="p-2">O quê</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lista.map((e) => (
+                      <tr key={e.id} className="border-b border-borda">
+                        <td className="whitespace-nowrap p-2 tabular-nums">
+                          {formatarDia(e.quando.slice(0, 10), new Date())} {e.quando.slice(11)}
+                        </td>
+                        <td className="p-2">{e.quem}</td>
+                        <td className="p-2">{e.acao}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+      </section>
+  );
+}
+
 function SecaoPrivacidade() {
   const { api, usuario } = useDados();
-  const auditoria = useConsulta((a) => a.listarAuditoria());
   const [etapa, setEtapa] = useState<'inicio' | 'codigo' | 'pedido'>('inicio');
   const [codigo, setCodigo] = useState('');
   const [ciente, setCiente] = useState(false);
   const [erro, setErro] = useState('');
   const [pedido, setPedido] = useState<PedidoExportacao | null>(null);
-  const [filtro, setFiltro] = useState('');
   const admin = usuario?.papel === 'admin';
 
   async function pedir(e: FormEvent) {
@@ -416,48 +473,7 @@ function SecaoPrivacidade() {
       </section>
 
       {admin ? (
-      <section aria-labelledby="t-auditoria">
-        <h2 id="t-auditoria" className="mb-2 text-xl font-bold">
-          Quem acessou o quê
-        </h2>
-        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser alterado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
-        <label htmlFor="a-filtro" className="font-bold">
-          Filtrar por pessoa
-        </label>
-        <input id="a-filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Ex.: Beatriz" className={`${CAMPO} mb-3 mt-2 max-w-md`} />
-        {auditoria.estado === 'carregando' && <Carregando />}
-        {auditoria.estado === 'erro' && <Erro mensagem={auditoria.mensagem} tentarDeNovo={auditoria.tentarDeNovo} />}
-        {auditoria.estado === 'pronto' &&
-          (() => {
-            const lista = auditoria.dados.filter((e) => e.quem.toLowerCase().includes(filtro.trim().toLowerCase()));
-            return lista.length === 0 ? (
-              <Vazio titulo="Nada encontrado" oQueFazer="Confira o nome ou apague o filtro." />
-            ) : (
-              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Registro de acessos">
-                <table className="w-full border-collapse text-left">
-                  <thead>
-                    <tr className="border-b-2 border-borda-forte">
-                      <th className="p-2">Quando</th>
-                      <th className="p-2">Quem</th>
-                      <th className="p-2">O quê</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lista.map((e) => (
-                      <tr key={e.id} className="border-b border-borda">
-                        <td className="whitespace-nowrap p-2 tabular-nums">
-                          {formatarDia(e.quando.slice(0, 10), new Date())} {e.quando.slice(11)}
-                        </td>
-                        <td className="p-2">{e.quem}</td>
-                        <td className="p-2">{e.acao}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-      </section>
+        <TrilhaDeAcesso />
       ) : (
         <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica vê quem acessou o quê.</p>
       )}
