@@ -94,6 +94,15 @@ describe('maioridade (CC art. 5º) e informação clínica', () => {
     expect(pendenciasDoCadastro(true, [{ desde: '2020-01-01', ate: null, pagador: true }], HOJE)).toEqual([]);
     expect(pendenciasDoCadastro(true, [{ desde: '2020-01-01', ate: HOJE, pagador: true }], HOJE)).toHaveLength(2);
     expect(pendenciasDoCadastro(false, [], HOJE)).toEqual([]);
+    // 0057: maior com pai/mãe ou tutor vigente sem confirmação = revisar; confirmado, encerrado ou outro tipo, não.
+    const v = { desde: '2020-01-01', ate: null, pagador: false };
+    expect(pendenciasDoCadastro(false, [{ ...v, tipo: 'pai_mae' }], HOJE)).toEqual(['revisar_pai_mae_tutor_de_maior']);
+    expect(pendenciasDoCadastro(false, [{ ...v, tipo: 'tutor', confirmadoParaMaior: false }], HOJE)).toEqual(['revisar_pai_mae_tutor_de_maior']);
+    expect(pendenciasDoCadastro(false, [{ ...v, tipo: 'pai_mae', confirmadoParaMaior: true }], HOJE)).toEqual([]);
+    expect(pendenciasDoCadastro(false, [{ ...v, ate: HOJE, tipo: 'pai_mae' }], HOJE)).toEqual([]);
+    expect(pendenciasDoCadastro(false, [{ ...v, tipo: 'representante' }, { ...v, tipo: 'curador' }], HOJE)).toEqual([]);
+    expect(validarAlteracaoVinculo({ confirmaPacienteMaior: true })).toEqual({ confirmaPacienteMaior: true });
+    expect(() => validarAlteracaoVinculo({ confirmaPacienteMaior: false })).toThrow();
     expect(pendenciasDoCadastro(null, [], HOJE)).toEqual([]);
   });
 });

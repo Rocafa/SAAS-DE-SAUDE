@@ -117,8 +117,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.20.0: escopo da informação clínica e sigilo do adolescente (migração 0056, A1 b/c do #67):
  *        `patientGuardians[].clinicalInfoScope`/`clinicalInfoRiskOverride` e `guardians.adolescentConfidentialityRequests`
  *        (só ids e datas), com a contagem em `manifest.counts.guardians`.
+ * 1.21.0: `patientGuardians[].adultConfirmedBy`/`adultConfirmedAt` (migração 0057: pai/mãe ou tutor confirmado para
+ *        paciente maior).
  */
-export const EXPORT_SCHEMA_VERSION = '1.20.0';
+export const EXPORT_SCHEMA_VERSION = '1.21.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

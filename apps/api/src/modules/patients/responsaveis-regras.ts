@@ -185,15 +185,28 @@ export function pedidoDeSigiloDoVinculo(
 }
 
 /**
- * Pendências do cadastro (para a tela): menor sem responsável vigente, menor sem pagador vigente (vira
+ * Pendências do cadastro (para a tela): paciente maior com pai/mãe ou tutor vigente sem confirmação (0057), menor sem responsável vigente, menor sem pagador vigente (vira
  * `pagador_responsavel` no recibo quando o recebimento não congela pagador) e marca clínica de adolescente
  * à espera de nova decisão do profissional.
  */
 export function pendenciasDoCadastro(
   menor: boolean | null,
-  vinculos: readonly (Vigencia & { readonly pagador: boolean; readonly motivoInformacaoClinica?: MotivoInformacaoClinica })[],
+  vinculos: readonly (Vigencia & {
+    readonly pagador: boolean;
+    readonly motivoInformacaoClinica?: MotivoInformacaoClinica;
+    readonly tipo?: GuardianKind;
+    readonly confirmadoParaMaior?: boolean;
+  })[],
   hoje: string,
 ): string[] {
+  // 0057 (R4 do parecer do apoiador): paciente maior (ou emancipado) com pai/mãe ou tutor vigente e não confirmado —
+  // cadastrado sem data de nascimento, ou o paciente fez 18 anos. A recepção encerra o vínculo ou confirma.
+  if (menor === false) {
+    const aRevisar = vinculos.some(
+      (v) => vigenteEm(v, hoje) && (v.tipo === 'pai_mae' || v.tipo === 'tutor') && v.confirmadoParaMaior !== true,
+    );
+    return aRevisar ? ['revisar_pai_mae_tutor_de_maior'] : [];
+  }
   if (menor !== true) return [];
   const vigentes = vinculos.filter((v) => vigenteEm(v, hoje));
   const p: string[] = [];

@@ -60,6 +60,9 @@ export interface ExportedGuardians {
     /** 1.20.0 (0056): escopo da marca e exceção por risco ao pedido de sigilo do adolescente. */
     clinicalInfoScope: string | null;
     clinicalInfoRiskOverride: boolean;
+    /** 1.21.0 (0057): pai/mãe ou tutor confirmado para paciente maior. */
+    adultConfirmedBy: string | null;
+    adultConfirmedAt: string | null;
     annulReason: string | null;
     discardAfter: string | null;
     /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
@@ -208,6 +211,8 @@ export async function exportarResponsaveis(
       patientAuthorizedAt: iso(v.patientAuthorizedAt),
       clinicalInfoScope: v.clinicalInfoScope,
       clinicalInfoRiskOverride: v.clinicalInfoRiskOverride,
+      adultConfirmedBy: v.adultConfirmedBy,
+      adultConfirmedAt: iso(v.adultConfirmedAt),
       annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
       discardAfter: v.discardAfter,
       eliminatedAt: iso(v.eliminatedAt),

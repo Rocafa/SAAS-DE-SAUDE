@@ -1436,3 +1436,56 @@ describe('0056: ressalvas do parecer de 29/10 sobre o sigilo do adolescente', ()
     ).toContain('23514');
   });
 });
+
+describe('0057 (R4 do parecer do apoiador): pai/mãe ou tutor de paciente maior a revisar', () => {
+  type RespMaior = Resp & { confirmadoParaMaior: boolean };
+  const lista = async (pac: string) => (await get(recepA, `/pacientes/${pac}/responsaveis`)).body as { itens: RespMaior[]; pendencias: string[] };
+  it('confirmado no cadastro: sem pendência; cadastrado sem data e a data mostra adulto: pendência até confirmar', async () => {
+    const adulto = await paciente(recepA, { nome: 'Paciente Ficticio Revisao Maior', nascimento: nascidoHa(22) });
+    const mae = (await responsavel(recepA, adulto, { nome: 'Mae Ficticia Revisao', tipo: 'pai_mae', confirmaPacienteMaior: true })) as RespMaior;
+    expect(mae.confirmadoParaMaior).toBe(true);
+    expect((await lista(adulto)).pendencias).toEqual([]);
+
+    const semData = await paciente(recepA, { nome: 'Paciente Ficticio Revisao Sem Data' });
+    const pai = (await responsavel(recepA, semData, { nome: 'Pai Ficticio Revisao', tipo: 'pai_mae' })) as RespMaior;
+    expect(pai.confirmadoParaMaior).toBe(false);
+    // Confirmar antes de saber a idade: 409.
+    expect((await patch(recepA, `/pacientes/${semData}/responsaveis/${pai.id}`, { confirmaPacienteMaior: true })).body).toMatchObject({ codigo: 'paciente_nao_e_maior' });
+    // A data de nascimento cadastrada depois mostra um adulto (documento conferido pelo profissional).
+    const corr = await api.http().patch(`/pacientes/${semData}`).set(cab(profA)).send({ nascimento: nascidoHa(30), documentoConferido: true });
+    expect(corr.status, JSON.stringify(corr.body)).toBe(200);
+    expect((await lista(semData)).pendencias).toEqual(['revisar_pai_mae_tutor_de_maior']);
+    // Só pai/mãe e tutor se confirmam.
+    const rep = await responsavel(recepA, semData, { nome: 'Rep Ficticio Revisao', tipo: 'representante' });
+    expect((await patch(recepA, `/pacientes/${semData}/responsaveis/${rep.id}`, { confirmaPacienteMaior: true })).status).toBe(400);
+    const conf = await patch(recepA, `/pacientes/${semData}/responsaveis/${pai.id}`, { confirmaPacienteMaior: true });
+    expect(conf.status, JSON.stringify(conf.body)).toBe(200);
+    expect((conf.body as RespMaior).confirmadoParaMaior).toBe(true);
+    expect((await lista(semData)).pendencias).toEqual([]);
+    // Repetir não muda nada (nem a data da confirmação).
+    const linha = async () => (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, pai.id)), recepA.userId))[0];
+    const primeira = (await linha())?.adultConfirmedAt;
+    expect((await linha())?.adultConfirmedBy).toBe(recepA.userId);
+    await patch(recepA, `/pacientes/${semData}/responsaveis/${pai.id}`, { confirmaPacienteMaior: true }).expect(200);
+    expect((await linha())?.adultConfirmedAt).toEqual(primeira);
+    // Banco: a confirmação não se desfaz, não muda de autor e não vale para outro tipo.
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ adultConfirmedBy: null, adultConfirmedAt: null, updatedBy: recepA.userId }).where(eq(patientGuardians.id, pai.id)), recepA.userId)),
+    ).toContain('42501');
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ adultConfirmedBy: adminA.userId, updatedBy: recepA.userId }).where(eq(patientGuardians.id, pai.id)), recepA.userId)),
+    ).toContain('42501');
+    expect(
+      await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ adultConfirmedBy: recepA.userId, adultConfirmedAt: new Date(), updatedBy: recepA.userId }).where(eq(patientGuardians.id, rep.id)), recepA.userId)),
+    ).toContain('23514');
+  });
+
+  it('encerrar o vínculo (maioridade) também resolve a pendência', async () => {
+    const semData = await paciente(recepA, { nome: 'Paciente Ficticio Revisao Encerra' });
+    const tutor = await responsavel(recepA, semData, { nome: 'Tutor Ficticio Revisao', tipo: 'tutor' });
+    await api.http().patch(`/pacientes/${semData}`).set(cab(profA)).send({ nascimento: nascidoHa(19), documentoConferido: true }).expect(200);
+    expect((await lista(semData)).pendencias).toEqual(['revisar_pai_mae_tutor_de_maior']);
+    await post(recepA, `/pacientes/${semData}/responsaveis/${tutor.id}/encerrar`, { motivo: 'maioridade' }).expect(200);
+    expect((await lista(semData)).pendencias).toEqual([]);
+  });
+});

@@ -1078,6 +1078,9 @@ export const patientGuardians = pgTable('patient_guardians', {
   clinicalInfoScope: text('clinical_info_scope').$type<EscopoInformacaoClinica>(),
   /** 0056 (A1 c): a decisão supera o pedido de sigilo do adolescente por risco (justificativa na decisão). */
   clinicalInfoRiskOverride: boolean('clinical_info_risk_override').notNull().default(false),
+  /** 0057 (R4 do parecer do apoiador): pai/mãe ou tutor confirmado para paciente maior (quem e quando). */
+  adultConfirmedBy: uuid('adult_confirmed_by'),
+  adultConfirmedAt: timestamp('adult_confirmed_at', { withTimezone: true }),
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),

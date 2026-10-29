@@ -56,6 +56,8 @@ export interface AlteracaoVinculo {
   readonly escopoInformacao?: EscopoInformacaoClinica;
   /** 0056 (A1 c): a decisão supera o pedido de sigilo do adolescente por risco. */
   readonly superaSigiloPorRisco?: boolean;
+  /** 0057: confirma que o pai/mãe ou tutor continua vinculado ao paciente que é maior (resolve a pendência). */
+  readonly confirmaPacienteMaior?: boolean;
 }
 
 /** Pedido de sigilo do adolescente (0056): para todos os responsáveis ou para um vínculo. */
@@ -98,6 +100,7 @@ const CAMPOS_ALTERACAO = [
   'autorizacaoDoPaciente',
   'escopoInformacao',
   'superaSigiloPorRisco',
+  'confirmaPacienteMaior',
 ] as const;
 
 function cpfOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
@@ -217,6 +220,8 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
   const autorizacaoDoPaciente = autorizacaoDaDecisao(v, recebeInformacaoClinica);
   const extras = extrasDaDecisao(v, recebeInformacaoClinica);
+  const confirma = v.booleano('confirmaPacienteMaior');
+  if (confirma === false) v.falhar('confirmaPacienteMaior');
   v.concluir();
   if (!CAMPOS_ALTERACAO.some((c) => v.tem(c))) throw new EntradaInvalidaError(['corpo']);
   const out: { -readonly [K in keyof AlteracaoVinculo]: AlteracaoVinculo[K] } = {};
@@ -228,6 +233,7 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   if (autorizacaoDoPaciente) out.autorizacaoDoPaciente = true;
   if (extras.escopoInformacao) out.escopoInformacao = extras.escopoInformacao;
   if (extras.superaSigiloPorRisco) out.superaSigiloPorRisco = true;
+  if (confirma === true) out.confirmaPacienteMaior = true;
   return out;
 }
 

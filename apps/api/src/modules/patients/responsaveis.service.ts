@@ -64,6 +64,8 @@ export interface ResponsavelDto {
   readonly escopoInformacaoClinica: EscopoInformacaoClinica | null;
   /** 0056 (A1 c): a decisão vigente supera o pedido de sigilo do adolescente por risco. Só para o profissional (senão false). */
   readonly superaSigiloPorRisco: boolean;
+  /** 0057: pai/mãe ou tutor confirmado para paciente maior (resolve `revisar_pai_mae_tutor_de_maior`). */
+  readonly confirmadoParaMaior: boolean;
   /** Faixa do PACIENTE hoje (regra configurável em responsaveis-regras.ts); null sem data de nascimento. */
   readonly faixaEtaria: FaixaEtaria | null;
   readonly vigencia: { readonly desde: string; readonly ate: string | null; readonly vigente: boolean };
@@ -244,7 +246,17 @@ export class ResponsaveisService {
       return {
         itens,
         menorDeIdade: menor,
-        pendencias: pendenciasDoCadastro(menor, todos.map((r) => ({ ...r.vigencia, pagador: r.pagador, motivoInformacaoClinica: r.informacaoClinica.motivo })), hoje),
+        pendencias: pendenciasDoCadastro(
+          menor,
+          todos.map((r) => ({
+            ...r.vigencia,
+            pagador: r.pagador,
+            motivoInformacaoClinica: r.informacaoClinica.motivo,
+            tipo: r.tipo,
+            confirmadoParaMaior: r.confirmadoParaMaior,
+          })),
+          hoje,
+        ),
       };
     });
   }
@@ -318,6 +330,7 @@ export class ResponsaveisService {
             : {}),
           ...(dados.pagador && menor !== true ? { payerPatientAwareBy: ctx.userId, payerPatientAwareAt: new Date() } : {}),
           ...(dados.autorizacaoDoPaciente ? { patientAuthorizedBy: ctx.userId, patientAuthorizedAt: new Date() } : {}),
+          ...(paiOuTutorDeMaior ? { adultConfirmedBy: ctx.userId, adultConfirmedAt: new Date() } : {}),
           ...(dados.recebeInformacaoClinica ? { clinicalInfoScope: dados.escopoInformacao ?? 'essencial', clinicalInfoRiskOverride: dados.superaSigiloPorRisco === true } : {}),
           tenantId: ctx.tenantId,
           patientId: pacienteId,
@@ -396,6 +409,23 @@ export class ResponsaveisService {
         pessoa = ng as LinhaPessoa;
       }
       let vinculo = v;
+      // 0057: confirmar depois que o pai/mãe ou tutor continua vinculado ao paciente maior (resolve a pendência).
+      let confirmouMaior = false;
+      if (dados.confirmaPacienteMaior) {
+        if (v.kind !== 'pai_mae' && v.kind !== 'tutor') throw new EntradaInvalidaError(['confirmaPacienteMaior']);
+        const q = await this.quadro(tx, ctx.tenantId, pac);
+        if (menorEm(q.nascimento, hojeNaClinica(), q.emancipadoEm) !== false) throw new ConflitoError('paciente_nao_e_maior');
+        if (v.adultConfirmedAt === null) {
+          const [nv] = await tx
+            .update(patientGuardians)
+            .set({ adultConfirmedBy: ctx.userId, adultConfirmedAt: new Date(), updatedBy: ctx.userId })
+            .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, v.id)))
+            .returning();
+          vinculo = nv as LinhaVinculo;
+          campos.push('adult_confirmed');
+          confirmouMaior = true;
+        }
+      }
       // Ligar (ou renovar a decisão com nova justificativa, ex.: o paciente fez 12 anos) é decisão do
       // profissional; desligar é livre (fail-safe).
       // Apoiador (0055, B1): ligar (ou renovar a decisão) exige a autorização expressa do paciente; desligar
@@ -443,6 +473,7 @@ export class ResponsaveisService {
           ...(v.kind === 'apoiador' && dados.recebeInformacaoClinica === false && v.receivesClinicalInfo ? { patient_authorization_revoked: true } : {}),
           ...(dados.recebeInformacaoClinica === true ? { clinical_scope: dados.escopoInformacao ?? 'essencial' } : {}),
           ...(dados.superaSigiloPorRisco ? { confidentiality_risk_override: true } : {}),
+          ...(confirmouMaior ? { adult_patient_confirmed: true } : {}),
         },
       });
       return this.paraDto(tx, ctx, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
@@ -978,6 +1009,7 @@ export class ResponsaveisService {
       informacaoClinica: motivoVisivel(informacaoClinica(paraRegra(v, quadro), quadro.nascimento, hoje, quadro.emancipadoEm), v.receivesClinicalInfo, veClinico),
       escopoInformacaoClinica: v.clinicalInfoScope,
       superaSigiloPorRisco: v.clinicalInfoRiskOverride && veClinico,
+      confirmadoParaMaior: v.adultConfirmedAt !== null,
       faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
