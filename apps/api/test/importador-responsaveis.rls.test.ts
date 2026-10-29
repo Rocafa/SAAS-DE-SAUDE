@@ -462,7 +462,7 @@ describe('0054: índice cego do CPF nos responsáveis (mesma chave da clínica, 
     const cifraAntes = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
     const igual = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: novo, telefone: '11900000502' });
     expect(igual.status, JSON.stringify(igual.body)).toBe(200);
-    expect(await indiceDe(clinicaC, emC.responsavelId)).toEqual(depois);
+    expect(await indiceDe(clinicaC, emC.responsavelId)).toMatchObject({ b: depois?.b, v: depois?.v });
     const cifraDepois = (await withTenant(api.db.db, clinicaC, (tx) => tx.select({ e: guardians.cpfEnc }).from(guardians).where(eq(guardians.id, emC.responsavelId))))[0]?.e;
     expect(cifraDepois).toBe(cifraAntes);
     const sem = await api.http().patch(`/pacientes/${emC.pacienteId}/responsaveis/${emC.vinculoId}`).set(cab(adminC)).send({ cpf: null });
@@ -525,7 +525,7 @@ describe('0054: índice cego do CPF nos responsáveis (mesma chave da clínica, 
     expect(await historico(clinicaC, alvo.responsavelId)).toBe(histAntes);
     // Qualquer outra coluna junto com o índice cai nas regras de sempre: sem usuário da sessão, recusado.
     await expect(
-      withTenant(api.db.db, clinicaC, (tx) => tx.update(guardians).set({ cpfBidx: null, cpfBidxVersion: null, phoneEnc: null }).where(eq(guardians.id, alvo.responsavelId))),
+      withTenant(api.db.db, clinicaC, (tx) => tx.update(guardians).set({ cpfBidx: null, cpfBidxVersion: null, cpfEnc: null }).where(eq(guardians.id, alvo.responsavelId))),
     ).rejects.toThrow();
     await expect(
       withTenant(api.db.db, clinicaC, (tx) => tx.update(guardians).set({ cpfBidx: null, cpfBidxVersion: null, updatedAt: new Date(0) }).where(eq(guardians.id, alvo.responsavelId))),

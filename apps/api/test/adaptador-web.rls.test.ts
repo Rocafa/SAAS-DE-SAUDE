@@ -73,9 +73,10 @@ function tokenDe(s: { Authorization: string }): string {
   return s.Authorization.replace(/^Bearer /, '');
 }
 
-function hojeIso(): string {
-  // A API grava data/hora no fuso de Brasília (UTC−03:00 fixo).
-  return new Date(Date.now() - 3 * 3_600_000).toISOString().slice(0, 10);
+function amanhaIso(): string {
+  // A API grava data/hora no fuso de Brasília (UTC−03:00 fixo). Amanhã, e não hoje: "hoje às 23:00" já passou
+  // quando o CI roda depois das 23h de Brasília (horario_no_passado). O check-in não exige a janela.
+  return new Date(Date.now() - 3 * 3_600_000 + 86_400_000).toISOString().slice(0, 10);
 }
 
 beforeAll(async () => {
@@ -119,7 +120,7 @@ describe('adaptador HTTP do web contra a API real', () => {
     const [profissional] = await web.listarProfissionais();
     const [tipo] = await web.listarTiposAtendimento();
     expect(profissional?.limiteSimultaneo).toBe(1);
-    const dia = hojeIso();
+    const dia = amanhaIso();
     const ag = await web.criarAgendamento({ pacienteId: novo.id, data: dia, hora: '23:00', profissionalId: profissional!.id, tipoId: tipo!.id });
     expect(ag).toMatchObject({ pacienteId: novo.id, data: dia, hora: '23:00', status: 'agendado' });
 
