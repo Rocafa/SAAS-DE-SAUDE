@@ -9,6 +9,7 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido } from '@/lib/api/tipos';
+import { indexarPorId } from '@/lib/indexar';
 
 export default function PaginaAtendimento() {
   const { usuario } = useDados();
@@ -26,8 +27,8 @@ export default function PaginaAtendimento() {
         itens: ags
           .filter((g) => g.status !== 'cancelado' && g.status !== 'faltou')
           .map((g) => ({ g, registro: registros[ags.indexOf(g)] ?? null })),
-        pacientes: new Map(pacientes.map((p) => [p.id, p])),
-        profissionais: new Map(profissionais.map((p) => [p.id, p])),
+        pacientes: indexarPorId(pacientes),
+        profissionais: indexarPorId(profissionais),
       };
     },
     [hoje, profId],

@@ -11,6 +11,7 @@ import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
 import type { Agendamento, Paciente, Profissional, StatusAgendamento } from '@/lib/api/tipos';
 import { nomeExibido } from '@/lib/api/tipos';
+import { indexarPorId } from '@/lib/indexar';
 
 interface DadosHoje {
   hoje: Agendamento[];
@@ -34,8 +35,8 @@ export default function PaginaInicio() {
     ]);
     return {
       hoje,
-      pacientes: new Map(pacientes.map((p) => [p.id, p])),
-      profissionais: new Map(profissionais.map((p) => [p.id, p])),
+      pacientes: indexarPorId(pacientes),
+      profissionais: indexarPorId(profissionais),
       pendencias,
     };
   }, [dia]);

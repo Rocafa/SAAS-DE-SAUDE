@@ -13,8 +13,9 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
 import { paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido } from '@/lib/api/tipos';
-import { ehPerfilClinico, textoAtestado, textoDeclaracao, validarCid } from '@/lib/prontuario';
+import { ehPerfilClinico, faltasParaEmitir, textoAtestado, textoDeclaracao, validarCid } from '@/lib/prontuario';
 import { cn, reais } from '@/lib/utils';
+import { CAMPO } from '@/components/ui/formulario';
 
 type Tipo = 'atestado' | 'declaracao' | 'recibo';
 const TIPOS: { id: Tipo; rotulo: string }[] = [
@@ -22,8 +23,6 @@ const TIPOS: { id: Tipo; rotulo: string }[] = [
   { id: 'declaracao', rotulo: 'Declaração de comparecimento' },
   { id: 'recibo', rotulo: 'Recibo' },
 ];
-const REGISTRO: Record<string, string> = { pr1: 'CREFITO-3 000000-F (fictício)', pr2: 'CRP 06/000000 (fictício)', pr3: 'CREFITO-3 000000-TO (fictício)' };
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 export default function PaginaDocumentos() {
   return (
@@ -61,8 +60,13 @@ function Documentos() {
 
   const consulta = useConsulta(
     async (a) => {
-      const [pacientes, profissionais, recibos] = await Promise.all([a.listarPacientes(), a.listarProfissionais(), a.listarRecibos()]);
-      return { pacientes: pacientes.filter((p) => p.ativo).sort((x, y) => nomeExibido(x).localeCompare(nomeExibido(y))), profissionais, recibos };
+      const [pacientes, profissionais, recibos, clinica] = await Promise.all([
+        a.listarPacientes(),
+        a.listarProfissionais(),
+        a.listarRecibos(),
+        a.obterClinica(),
+      ]);
+      return { pacientes: pacientes.filter((p) => p.ativo).sort((x, y) => nomeExibido(x).localeCompare(nomeExibido(y))), profissionais, recibos, clinica };
     },
   );
 
@@ -73,7 +77,7 @@ function Documentos() {
 
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
-  const { pacientes, profissionais } = consulta.dados;
+  const { pacientes, profissionais, clinica } = consulta.dados;
   // Atestado é ato do profissional que atendeu: só perfil clínico, assinado por ele mesmo (B2).
   const permitidos = clinico ? TIPOS : TIPOS.filter((t) => t.id !== 'atestado');
   const tipoAtual: Tipo = permitidos.some((t) => t.id === tipo) ? tipo : permitidos[0]!.id;
@@ -93,13 +97,18 @@ function Documentos() {
   const erroHorario = tipoAtual === 'declaracao' && fim <= inicio ? 'O horário de saída tem que ser depois da chegada.' : null;
   const faltaPaciente = !paciente ? 'Falta o paciente. Escolha na lista.' : null;
   const erroRecibo = tipoAtual === 'recibo' && paciente && !recibo ? 'Este paciente ainda não tem pagamento registrado.' : null;
-  const erros = [faltaPaciente, semVinculo, erroDias, erroCid, erroCidSemAutorizacao, erroHorario, erroRecibo].filter(Boolean) as string[];
+  // Cabeçalho e assinatura saem da clínica e do profissional, nunca de texto fixo: no modo http os
+  // ids são UUID e a tabela fixa dava atestado sem registro do conselho, com o nome de outra clínica.
+  const erros = [
+    ...([faltaPaciente, semVinculo, erroDias, erroCid, erroCidSemAutorizacao, erroHorario, erroRecibo].filter(Boolean) as string[]),
+    ...(tipoAtual === 'recibo' ? [] : faltasParaEmitir(prof, clinica)),
+  ];
 
   let corpo = '';
   if (paciente && !erros.length) {
     const nome = nomeExibido(paciente);
     if (tipoAtual === 'atestado')
-      corpo = textoAtestado({ paciente: nome, profissional: prof?.nome ?? '', registro: REGISTRO[assinante] ?? '', data: dataLonga(hoje), dias: nDias, cid, autorizouCid });
+      corpo = textoAtestado({ paciente: nome, profissional: prof?.nome ?? '', registro: prof?.registro ?? '', data: dataLonga(hoje), dias: nDias, cid, autorizouCid });
     else if (tipoAtual === 'declaracao') corpo = textoDeclaracao({ paciente: nome, data: dataLonga(hoje), inicio, fim });
     else if (recibo)
       corpo = `Recebi de ${paciente.nome}${paciente.cpf ? `, CPF ${paciente.cpf}` : ''}, a quantia de ${reais(recibo.valor)}, referente a atendimento de ${prof?.especialidade.toLowerCase()} em ${dataLonga(recibo.data)}, pago em ${recibo.forma === 'pix' ? 'Pix' : recibo.forma === 'cartao' ? 'cartão' : 'dinheiro'}.`;
@@ -227,15 +236,18 @@ function Documentos() {
             Prévia
           </h2>
           <div data-imprimir className="flex min-h-96 flex-col gap-6 rounded-md border-2 border-borda-forte bg-white p-8 text-black">
-            <p className="text-center font-bold uppercase tracking-wide">Clínica Demonstração</p>
+            <p className="text-center font-bold uppercase tracking-wide">{clinica?.nome}</p>
             <h3 className="text-center text-xl font-bold">{TIPOS.find((t) => t.id === tipoAtual)?.rotulo}</h3>
             <p className="flex-1 whitespace-pre-wrap" data-testid="texto-documento">
               {corpo || 'Preencha ao lado para ver o documento.'}
             </p>
-            <p>São Paulo, {dataLonga(hoje)}.</p>
+            <p>
+              {clinica?.cidade ? `${clinica.cidade}, ` : ''}
+              {dataLonga(hoje)}.
+            </p>
             <div className="mt-8 border-t-2 border-black pt-2 text-center">
               <p className="font-bold">{prof?.nome}</p>
-              <p>{REGISTRO[assinante]}</p>
+              <p>{prof?.registro}</p>
             </div>
           </div>
           <p className="flex items-start gap-2 rounded-md border-2 border-dashed border-borda p-3">

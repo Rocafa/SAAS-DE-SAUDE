@@ -17,8 +17,8 @@ import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
 import { useAviso } from './desfazer';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 const NOME_PAPEL: Record<Papel, string> = { admin: 'Administrador', profissional: 'Profissional de saúde', recepcao: 'Recepção' };
 

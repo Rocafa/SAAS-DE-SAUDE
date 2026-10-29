@@ -16,6 +16,7 @@ import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido, type Agendamento } from '@/lib/api/tipos';
 import { NOME_FORMA, aReceber, totalPorForma, type Forma } from '@/lib/financeiro';
 import { reais } from '@/lib/utils';
+import { indexarPorId } from '@/lib/indexar';
 
 const ICONE_FORMA: Record<Forma, typeof Banknote> = { dinheiro: Banknote, cartao: CreditCard, pix: QrCode };
 
@@ -32,7 +33,7 @@ export default function PaginaFinanceiro() {
       a.listarPacotes(),
       a.listarTiposAtendimento(),
     ]);
-    return { ags, recibos, pacientes: new Map(pacientes.map((p) => [p.id, p])), pacotes, tipos: new Map(tipos.map((t) => [t.id, t])) };
+    return { ags, recibos, pacientes: indexarPorId(pacientes), pacotes, tipos: indexarPorId(tipos) };
   }, [hoje]);
 
   if (consulta.estado === 'carregando') return <Carregando />;

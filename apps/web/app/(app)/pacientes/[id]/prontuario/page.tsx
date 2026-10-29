@@ -13,6 +13,7 @@ import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import { nomeExibido, type Profissional, type Registro } from '@/lib/api/tipos';
 import { MODELOS, ehPerfilClinico } from '@/lib/prontuario';
+import { indexarPorId } from '@/lib/indexar';
 
 const MOTIVO: Record<NonNullable<Registro['motivoOculto']>, string> = {
   perfil_nao_clinico: 'Conteúdo clínico: só os profissionais que atendem o paciente leem.',
@@ -64,7 +65,7 @@ export default function PaginaProntuario() {
   const consulta = useConsulta(
     async (a) => {
       const [paciente, registros, profissionais] = await Promise.all([a.obterPaciente(id), a.listarRegistros(id), a.listarProfissionais()]);
-      return { paciente, registros, profissionais: new Map(profissionais.map((p) => [p.id, p])) };
+      return { paciente, registros, profissionais: indexarPorId(profissionais) };
     },
     [id],
   );

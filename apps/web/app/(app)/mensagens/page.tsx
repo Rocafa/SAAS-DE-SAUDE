@@ -12,12 +12,13 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { nomeExibido } from '@/lib/api/tipos';
 import { cn } from '@/lib/utils';
+import { indexarPorId } from '@/lib/indexar';
 
 export default function PaginaMensagens() {
   const { pacientes } = useDados();
   const consulta = useConsulta((a) => a.listarConversas());
   const [aberta, setAberta] = useState<string | null>(null);
-  const porId = new Map(pacientes.map((p) => [p.id, p]));
+  const porId = indexarPorId(pacientes);
   const nome = (id: string) => {
     const p = porId.get(id);
     return p ? nomeExibido(p) : 'Paciente';

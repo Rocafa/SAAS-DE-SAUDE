@@ -65,6 +65,24 @@ export function ehRestrito(modelo: Modelo): boolean {
 }
 
 /** Lista o que falta para assinar, já dizendo o que fazer. */
+/**
+ * O que falta para EMITIR um documento com valor: nome e registro do conselho de quem assina, e o
+ * nome da clínica no cabeçalho. Documento sem registro profissional não vale, então é melhor barrar a
+ * emissão do que imprimir um papel em branco no lugar do CREFITO/CRP.
+ */
+export function faltasParaEmitir(
+  profissional: { nome: string; registro?: string } | undefined,
+  clinica: { nome: string } | undefined,
+): string[] {
+  const faltas: string[] = [];
+  if (!profissional) faltas.push('Falta o profissional que assina o documento.');
+  else if (!profissional.registro?.trim()) {
+    faltas.push(`Falta o registro do conselho de ${profissional.nome}. Preencha em Configurações: sem ele o documento não tem valor.`);
+  }
+  if (!clinica?.nome.trim()) faltas.push('Falta o nome da clínica para o cabeçalho. Preencha em Configurações.');
+  return faltas;
+}
+
 export function faltasParaAssinar(modelo: Modelo, campos: Record<string, string>): string[] {
   return MODELOS[modelo].campos
     .filter((c) => c.obrigatorio && !(campos[c.id] ?? '').trim())

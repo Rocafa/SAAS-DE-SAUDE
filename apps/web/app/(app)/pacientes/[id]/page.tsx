@@ -18,6 +18,7 @@ import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
 import { ehPerfilClinico } from '@/lib/prontuario';
 import { nomeExibido, type Agendamento } from '@/lib/api/tipos';
 import { reais } from '@/lib/utils';
+import { indexarPorId } from '@/lib/indexar';
 
 export default function PaginaFicha() {
   const { id } = useParams<{ id: string }>();
@@ -39,7 +40,7 @@ export default function PaginaFicha() {
         a.listarAnexos(id),
         a.listarPacotes(id),
       ]);
-      return { paciente, ags, recibos, linha, anexos, pacotes, profissionais: new Map(profissionais.map((p) => [p.id, p])) };
+      return { paciente, ags, recibos, linha, anexos, pacotes, profissionais: indexarPorId(profissionais) };
     },
     [id],
   );

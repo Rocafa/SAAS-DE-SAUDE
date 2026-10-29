@@ -73,9 +73,9 @@ const NOMES: [string, string?][] = [
 ];
 
 const PROFISSIONAIS: Profissional[] = [
-  { id: 'pr1', nome: 'Dra. Beatriz Nogueira', especialidade: 'Fisioterapia', limiteSimultaneo: 3 },
-  { id: 'pr2', nome: 'Dr. Henrique Sales', especialidade: 'Psicologia' },
-  { id: 'pr3', nome: 'Dra. Lúcia Prates', especialidade: 'Terapia ocupacional' },
+  { id: 'pr1', nome: 'Dra. Beatriz Nogueira', especialidade: 'Fisioterapia', limiteSimultaneo: 3, registro: 'CREFITO-3 000000-F (fictício)' },
+  { id: 'pr2', nome: 'Dr. Henrique Sales', especialidade: 'Psicologia', registro: 'CRP 06/000000 (fictício)' },
+  { id: 'pr3', nome: 'Dra. Lúcia Prates', especialidade: 'Terapia ocupacional', registro: 'CREFITO-3 000000-TO (fictício)' },
 ];
 
 const TIPOS: TipoAtendimento[] = [
@@ -278,7 +278,13 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'c2', pacienteId: 'p12', naoLidas: 2, mensagens: [{ de: 'paciente', texto: 'Bom dia, posso trocar meu horário de hoje para amanhã?', hora: '07:40' }, { de: 'paciente', texto: 'Pode ser à tarde.', hora: '07:41' }] },
         { id: 'c3', pacienteId: 'p05', naoLidas: 0, mensagens: [{ de: 'clinica', texto: 'Sua consulta de amanhã às 10:00 está confirmada.', hora: 'ontem' }] },
       ];
-  let clinica: DadosClinica = { nome: 'Clínica Demonstração', cnpj: '', telefone: '(11) 3000-0000', endereco: 'Rua Fictícia, 100 — São Paulo/SP' };
+  let clinica: DadosClinica = {
+    nome: 'Clínica Demonstração',
+    cnpj: '',
+    telefone: '(11) 3000-0000',
+    endereco: 'Rua Fictícia, 100 — São Paulo/SP',
+    cidade: 'São Paulo',
+  };
   const equipe: MembroEquipe[] = [
     { id: 'm1', nome: 'Administradora (demonstração)', email: 'administracao@exemplo.test', papel: 'admin', situacao: 'ativo' },
     { id: 'm2', nome: 'Dra. Beatriz Nogueira', email: 'beatriz@exemplo.test', papel: 'profissional', situacao: 'ativo' },
