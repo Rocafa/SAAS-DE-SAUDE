@@ -762,20 +762,24 @@ Erros sem valor de campo (só códigos e nomes). Na URL só ids, o tipo e a vers
 - **Troca da chave (reindexação).** O passo 1 é decisão de operação (rotação ou suspeita de vazamento), numa transação da clínica com um admin. Os passos 2 e 3 rodam **sozinhos** no job diário `cpf-indice-reindexacao` (§14), como `sistema` (`PatientsService.reindexarIndiceCpfComoSistema`). O job faz até 20 lotes de 500 por clínica e por dia, cada lote numa transação curta. Antes de abrir a chave, confere os pendentes sem decifrar nada, então clínica sem pendente não decifra nem cria chave. Quando zera, destrói as versões aposentadas. Em clínica eliminada (chaves destruídas, G3), o CPF que sobrou é ilegível de propósito: o job não decifra, não cria chave, não grava trilha e **não falha**, porque um erro diário eterno esconderia as falhas reais. Ele devolve `chaveDestruida = 1` com a contagem (C1 do parecer do #88). Para acelerar, as mesmas funções podem ser chamadas à mão:
   1. `indiceCpf.girarChave(tx, ctx)`: a ativa vira `retired` (continua casando) e nasce a próxima versão. A trilha registra `key_rotate`, escopo `crypto.key.cpf_index`. Os cadastros novos já entram na versão nova.
   2. `indiceCpf.reindexar(tx, ctx, 500)`: chamar em lotes até `pendentes = 0`. Cada lote decifra o CPF, regrava só `cpf_bidx`/`cpf_bidx_version` (sem tocar o CPF cifrado nem `updated_at`, então não bloqueia o desfazer do importador) e grava na trilha `op = cpf_reindex` só com contagens.
-  3. `indiceCpf.descartarChavesAntigas(tx, ctx)`: a versão aposentada **sem nenhum paciente** vira `destroyed`, com `key_enc` apagada (`key_destroy`). O banco recusa destruir uma versão que ainda tenha paciente indexado.
+  3. `indiceCpf.descartarChavesAntigas(tx, ctx)`: a versão aposentada **sem nenhum paciente nem responsável** (0054) vira `destroyed`, com `key_enc` apagada (`key_destroy`). O banco recusa destruir uma versão que ainda tenha paciente ou responsável indexado.
 
   Os pacientes anteriores à 0046 (sem índice) e os que ficaram com índice ausente entram no mesmo passo 2, ou seja, no job. Até lá, são decifrados na busca. A observação "antes do GA" da conferência R3-a/R3-b fica coberta sem script manual.
-- **Responsáveis (dedup da 0048): ainda NÃO usam o índice. O caso não é simples.** Levar `cpf_bidx` para `guardians` exige:
-  - reescrever `guardians_guard` (0031), porque o descarte só admite apagar nome, CPF e telefone e recusaria zerar o índice;
-  - um caminho de reindexação que não mexa em `updated_at`/`updated_by` nem gere histórico. Hoje toda UPDATE de pessoa exige o usuário da sessão, atualiza `updated_at` e passaria a contar como `alterado_depois` no desfazer do lote.
-
-  Até lá, `cpfsDeResponsaveisDaClinica` continua decifrando os CPFs dos responsáveis da própria clínica, só na transação, como a 0048 entregou. **Proposta para a próxima rodada:**
-  - mesma chave e mesma tabela de chaves, com domínio `guardians.cpf:v1:`;
-  - colunas `cpf_bidx`/`cpf_bidx_version` em `guardians`, com o mesmo gatilho de índice ausente;
-  - exceção no `guardians_guard` só para as colunas do índice, sem `updated_at` nem histórico;
-  - passo 2 da reindexação cobrindo as duas tabelas.
+- **Responsáveis (dedup da 0048): usam o índice desde a 0054** (pendência "antes do GA" do parecer do importador).
+  - **Desenho.** `guardians.cpf_bidx`/`cpf_bidx_version`, com os mesmos CHECKs, o par, a FK para `patient_cpf_index_keys` e o índice parcial dos pacientes. **Mesma chave e mesma tabela de chaves** da clínica, com domínio `"guardians.cpf:v1:"` (`hmacDoCpf(chave, cpf, 'guardians')`): o mesmo CPF dá índice diferente no paciente e no responsável, e entre clínicas. O domínio dos pacientes não mudou; os índices já gravados continuam válidos.
+  - **Escrita.** O índice vai na mesma escrita do CPF em todos os caminhos: `ResponsaveisService.criar` e `alterar` (apagar o CPF apaga o índice) e o aplicar do importador (`criarPacientes`, pessoa nova do lote). O gatilho `guardians_cpf_bidx_stale` zera o índice quando o CPF muda sem índice novo, como o dos pacientes.
+  - **`guardians_guard` (0031, reescrita na 0054).** A UPDATE que muda **só** `cpf_bidx`/`cpf_bidx_version` passa sem usuário da sessão (o job roda como `sistema`), sem mexer em `updated_at`/`updated_by` e sem histórico (o gatilho de histórico só registra nome, CPF e telefone). Qualquer outra coluna junto cai nas regras de sempre. A pessoa descartada continua terminal, e o descarte, que apaga o CPF, também zera o índice. CHECKs e FK continuam valendo na exceção.
+  - **Busca** (`IndiceCegoCpf.procurarResponsaveis`, usada por `cpfsDeResponsaveisDaClinica`). Recebe só os CPFs do arquivo, casa pelo índice com todas as chaves vivas e confirma decifrando só as pessoas casadas e as pendentes sem índice válido. Pessoa descartada não entra; com CPF repetido, fica a mais antiga. Nenhum CPF vai para log ou trilha.
+  - **Reindexação.** `reindexar` faz primeiro os pacientes e completa o lote com responsáveis; `pendentes` soma as duas tabelas; `descartarChavesAntigas` (e o `patient_cpf_index_keys_guard`, no banco) só destrói versão sem paciente **nem responsável** indexado. A reindexação do responsável não toca `updated_at` nem histórico, então não conta como `alterado_depois` no desfazer do lote. Trilha: o evento dos pacientes como antes; o dos responsáveis, só quando há responsável a reindexar, com escopo `patient_guardians` e `{op: 'cpf_reindex', table: 'guardians', version, count, pending}`, só contagens. O job `cpf-indice-reindexacao` passa a cobrir as duas tabelas.
 - **Provas.**
-  - `cpf-indice-cego.test.ts`: chaves diferentes dão índices diferentes.
+  - `cpf-indice-cego.test.ts`: chaves diferentes dão índices diferentes; com a mesma chave, paciente e responsável dão índices diferentes, e o domínio dos pacientes é o da 0046.
+  - `importador-responsaveis.rls.test.ts` "0054":
+    - o mesmo CPF dá índice diferente em duas clínicas e entre paciente e responsável; alterar o CPF regrava o índice, e apagá-lo zera;
+    - a dedup do importador decifra só a pessoa casada (1 de 4), e o aplicar grava o índice da pessoa nova;
+    - o índice ausente cai para NULL e a busca ainda acha; o índice forjado não casa; a exceção da guarda é só do índice (outra coluna junto, sem usuário, é recusada);
+    - o job reindexa o responsável sem mudar `updated_at` nem histórico, `alterado_depois` fica 0 e o desfazer do lote funciona;
+    - a versão com responsável indexado não é destruída (nem pelo serviço, nem por SQL direto);
+    - nenhum CPF em claro na trilha nem no stdout/stderr.
   - `importador.rls.test.ts` "R9 do #66":
     - o mesmo CPF dá índice diferente em duas clínicas;
     - o dry-run decifra 1 CPF em vez de 5;
@@ -860,7 +864,7 @@ Antes do piloto, os jobs que só podiam ser chamados à mão (rotas do admin) pa
 | `notas-privadas-ciclo` | diário, 04:00 | sim, 26 h | prazos da custódia das notas privadas e expurgo das descartadas há 30 dias (salvo retenção legal) | §8e/§8f, D1–D3 do #63 |
 | `retencao-fiscal` | diário, 04:30 | sim, 26 h | elimina o retrato do recibo e o pagador vencidos (política de 5 anos, a confirmar com o contador) | §9a, R7 do #65 |
 | `responsaveis-descarte` | diário, 05:00 | sim, 26 h | descarta a pessoa de cadastro de responsável anulado há mais de 30 dias | §11a, A4 do #67 |
-| `cpf-indice-reindexacao` | diário, 05:30 | sim, 26 h | reindexa o CPF fora da chave ativa do índice cego (até 20 × 500 por clínica) e, zerado, destrói as versões aposentadas; sem pendente, não decifra nada | §12d, R9 do importador |
+| `cpf-indice-reindexacao` | diário, 05:30 | sim, 26 h | reindexa o CPF fora da chave ativa do índice cego, em pacientes e responsáveis (0054; até 20 × 500 por clínica), e, zerado, destrói as versões aposentadas; sem pendente, não decifra nada | §12d, R9 do importador |
 
 Fora do registro, por decisão: a **reconferência dos modelos** não é job próprio (o estado é por processo: quem despacha reconfere, dentro dos dois jobs do WhatsApp); a **eliminação dos responsáveis com o prontuário** (guarda de 20 anos) é passo da futura rotina de eliminação do prontuário; a **recifração após rotação de chave** é operação, não rotina.
 

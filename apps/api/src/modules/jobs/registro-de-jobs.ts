@@ -109,8 +109,8 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       porClinica: async (t) => ({ ...(await s.responsaveis.descartarAnuladosComoSistema(t)) }),
     },
     {
-      // R9 do importador (§12d): passos 2 e 3 da troca de chave do índice cego do CPF, sozinhos. Sem pendente,
-      // não decifra nada; o que passar de 20 lotes de 500 fica para o dia seguinte.
+      // R9 do importador (§12d): passos 2 e 3 da troca de chave do índice cego do CPF, sozinhos, em pacientes e
+      // responsáveis (0054). Sem pendente, não decifra nada; o que passar de 20 lotes de 500 fica para o dia seguinte.
       nome: 'cpf-indice-reindexacao',
       ...diario('30 5 * * *', 'diário, 05:30'),
       porClinica: async (t) => ({ ...(await s.pacientes.reindexarIndiceCpfComoSistema(t)) }),
