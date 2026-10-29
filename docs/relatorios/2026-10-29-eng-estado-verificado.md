@@ -46,7 +46,30 @@ viraram issue hoje:
 O que **não** é trabalho de engenharia e continua parado nos sócios: S1 (D4), S8 (pentest) e tudo da
 §2.1 (jurídico), que depende do advogado (J1).
 
-## 4. Como conferir
+## 4. Dívida de documentação da §7 (rodada 7)
+
+| Documento | Dono | Estado |
+|---|---|---|
+| [integracoes.md](../04-arquitetura/integracoes.md) | Engenharia | **Paga neste PR.** Entraram cobrança do WhatsApp por mensagem entregue e em BRL (com a consequência de guardar categoria e custo no `message_log`), Pix Automático e a D5 partida em duas, NFS-e no padrão nacional com o grupo IBSCBS e as três capitais com sistema próprio, seção nova do **Receita Saúde** (arquivo de lote do manual v2.1, sem API), **SNCR** dentro da prescrição com a decisão de não fazer controlados nativos, e TISS **04.03.00** com rotina mensal de versão |
+| [03-seguranca-lgpd/README.md](../03-seguranca-lgpd/README.md) | Guardião | Em aberto |
+| [05-ia-llm](../05-ia-llm/) | IA | Em aberto |
+| [backlog-mvp.md](../02-produto/backlog-mvp.md) | Produto | Em aberto, mas a pergunta já está respondida — ver abaixo |
+
+### A pergunta que a rodada 7 deixou para a rodada 8
+
+> "Não conferi se o importador está como P0 no backlog: verificar na rodada 8."
+
+Conferido: **está**, como `Must`. `HU-MIG-001` (importar pacientes por planilha, 5 pts), `HU-MIG-002`
+(importar agenda futura, 3) e `HU-MIG-003` (importador do concorrente A, 8) são `Must`;
+`HU-MIG-004` (concorrente B) é `Could` e `HU-MIG-005` (anexos em massa) é `Should`
+(`docs/02-produto/backlog-mvp.md:1795`–`1799`).
+
+O outro pedaço daquela linha **continua aberto**: o **arquivo de lote do Receita Saúde** não está no
+backlog. O que existe é `HU-FIN-003` — "Recibo para reembolso e IR (Receita Saúde)", 3 pts, `Must`
+(`:1747`) — que é o recibo, não o lote. São duas histórias diferentes: uma imprime o comprovante do
+paciente, a outra gera o arquivo que o profissional PF sobe no portal da Receita. Decisão de Produto.
+
+## 5. Como conferir
 
 ```bash
 # a prova de cada linha, do jeito mais curto
