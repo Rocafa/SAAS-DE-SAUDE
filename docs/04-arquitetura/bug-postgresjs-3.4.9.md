@@ -1,8 +1,8 @@
 # Rascunho de relato: bug do postgres.js 3.4.9 em transação cuja conexão cai
 
-> **Estado:** rascunho interno. **Não foi aberta issue externa.** Quem decide abrir o relato no
-> [porsager/postgres](https://github.com/porsager/postgres/issues) são os sócios ou o Maestro; o texto em
-> inglês da §4 está pronto para colar.
+> **Estado (29/10/2026):** **não foi preciso abrir issue.** Com o OK do sócio para reportar, conferimos antes
+> o projeto: o mesmo bug já tinha sido relatado por terceiros e as issues foram fechadas como resolvidas na
+> v4.0.0, publicada no mesmo dia. Abrir outra seria duplicata. Ver §7. O texto da §4 fica como registro.
 > **Versão afetada:** `postgres@3.4.9`, a última publicada (05/04/2026, conferido com
 > `gh release list -R porsager/postgres` em 10/10/2026).
 > **Nossa correção:** [`patches/postgres@3.4.9.patch`](../../patches/postgres@3.4.9.patch), aplicada pelo
@@ -132,3 +132,37 @@ mais novo). O projeto fixa `pnpm@9.12.0` (`packageManager`) e o lockfile registr
 hoje o patch é aplicado (`node_modules/.pnpm/postgres@3.4.9_patch_hash=...`). Antes de subir para o pnpm
 10, mover a configuração para `pnpm-workspace.yaml` (`patchedDependencies:`), senão a correção some sem
 aviso.
+
+## 7. Situação upstream (29/10/2026)
+
+Conferido com `gh issue list -R porsager/postgres`, `gh release view v4.0.0 -R porsager/postgres` e
+`npm view postgres versions` em 29/10/2026.
+
+- **Já relatado por terceiros**, com os nossos três sintomas, todas fechadas como resolvidas (COMPLETED) em
+  29/10/2026:
+  - [#1248](https://github.com/porsager/postgres/issues/1248): o callback de `sql.begin()` continua rodando
+    depois que a conexão cai (sintomas a e c);
+  - [#1250](https://github.com/porsager/postgres/issues/1250): `nextWriteTimer`/`chunk` antigos impedem o
+    `StartupMessage` da reconexão (sintoma b);
+  - [#1208](https://github.com/porsager/postgres/issues/1208): `nextWrite()` lança exceção não capturada
+    quando o backend de uma conexão reservada morre (sintoma a);
+  - relacionadas: [#1216](https://github.com/porsager/postgres/issues/1216) (transação desconectada lendo
+    linhas de outro usuário pelo RLS) e [#1204](https://github.com/porsager/postgres/issues/1204).
+- **Corrigido na v4.0.0** (29/10/2026). Nas notas da versão: uma transação cuja conexão se perde rejeita, e
+  nada que ela enfileirou chega ao próximo usuário da conexão. **Não há 3.4.10**: na linha 3 continuamos
+  com o patch.
+- **A v4 quebra compatibilidade** (pontos que nos afetam, a conferir na migração):
+  - o servidor decide o tipo de cada parâmetro (`infer: false`); fora de UTC, um `Date` gravado ou comparado
+    com coluna `timestamp`/`date` é tratado como UTC. O guia de migração do README traz uma query para achar
+    esses casos. `timestamptz` não muda;
+  - só ESM, sem build CommonJS; Node 20+;
+  - `sql.array()` removido;
+  - `sql.begin` rejeita com `TRANSACTION_ROLLED_BACK` quando o servidor responde ROLLBACK ao COMMIT;
+  - o driver `drizzle-orm/postgres-js` precisa estar compatível com a v4.
+- **Plano:** esperar ≥ 2 semanas de maturidade da v4 (a partir de ~12/11/2026), abrir um PR
+  `eng/postgres-v4` que remove o patch, e só fazer o merge com `test:resiliencia`, os testes de RLS, o
+  script da §3 (6 de 6 rodadas rejeitando) e uma busca por `Date` em colunas sem fuso, tudo verde.
+  Item na [fila](../00-governanca/fila.md).
+- **Correção de segurança da v4 que também vale para a v3** (NUL em parâmetro de conexão permitia injetar
+  parâmetros de startup): não nos afeta, porque nenhum parâmetro de conexão vem de entrada do usuário (o
+  tenant vai por `set_config` na transação, não pela conexão).

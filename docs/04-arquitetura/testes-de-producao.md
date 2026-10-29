@@ -88,9 +88,11 @@ banco é injetada por um **proxy TCP** entre a API e o Postgres real (mesmo comp
   got message type 81`). RLS + WITH CHECK fazem falhar fechado, mas é exatamente a classe de bug que a
   defesa em profundidade não deveria precisar segurar. Correção: `patches/postgres@3.4.9.patch`
   (`pnpm.patchedDependencies`): guarda de socket nulo em `nextWrite`, reset do timer em `closed()`, e
-  `begin()` rejeita queries do callback depois que a conexão da transação caiu. **Pendência:** reportar
-  upstream (rascunho pronto, com reprodução mínima: [bug-postgresjs-3.4.9.md](bug-postgresjs-3.4.9.md)); ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar
-  `test:resiliencia` antes de remover o patch.
+  `begin()` rejeita queries do callback depois que a conexão da transação caiu. **Upstream (29/10/2026):** o
+  bug já tinha sido relatado por terceiros (porsager/postgres#1248, #1250, #1208, fechadas como resolvidas)
+  e a v4.0.0 corrige; detalhes e plano de migração em [bug-postgresjs-3.4.9.md](bug-postgresjs-3.4.9.md) §7.
+  Ao atualizar o postgres.js o patch deixa de aplicar e o install falha — rodar `test:resiliencia` antes de
+  remover o patch.
 
 ## 4. Backup e restauração
 
