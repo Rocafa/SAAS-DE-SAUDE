@@ -257,7 +257,7 @@ Números-chave (fonte: relatório executivo §1): TAM de R$ 0,6 a 2,0 bi/ano e S
 | E2E do front (Playwright), imagem Docker com varredura, Terraform e os testes novos da API | PRs #59, #58 e #73 | 🛠️ chegam com os PRs (ver §5) |
 | Actions fixadas por SHA (proteção da cadeia de suprimentos) | workflows | ✅ |
 | Modelos de issue (feature, pesquisa, decisão, incidente LGPD) e de PR | [.github/ISSUE_TEMPLATE/](../../.github/ISSUE_TEMPLATE/), [pull_request_template.md](../../.github/pull_request_template.md) | ✅ |
-| Proteção da `main` (impedir merge com CI vermelho) | — | 📋 exige plano pago em repositório privado |
+| Proteção da `main` (impedir merge com CI vermelho) | configuração do GitHub, descrita em [ambientes-e-devops](../04-arquitetura/ambientes-e-devops.md) | ✅ desde 28/10/2026: PR obrigatório e 10 checks; aprovação obrigatória ainda não |
 
 ---
 
@@ -356,7 +356,7 @@ Estes ainda **não rodaram no CI** (só localmente, quando possível). Passam a 
 | **IAM das chaves KMS** (trava "R3-b") | `infra.yml` (#58) | Confere cada regra de permissão das chaves de lote do importador: só servem para o lote e a clínica certos, ninguém cancela a destruição de uma chave sem disparar alerta, e a eliminação de chave de clínica fica com um papel próprio (gestor de chaves) | PR vermelho. A validação final só acontece num *apply* real no staging |
 | **Segredos fora do Terraform** | `infra.yml` (#58) | Reprova senha ou token escritos no código ou guardados no estado do Terraform, e cópia automática do backup para outro cofre (`copy_action`) | PR vermelho |
 
-**Limite importante:** sem a proteção da `main` (que exige plano pago), o GitHub **não impede** um merge com CI vermelho. Hoje a regra é de disciplina: ninguém faz merge com check vermelho. Fonte: [rodada 3](2026-10-08-rodada-3.md) §6.
+**Proteção da `main` (desde 28/10/2026):** com o repositório público, o GitHub passou a **impedir** merge com qualquer um dos 10 checks obrigatórios vermelho ou com a branch desatualizada. E2E, imagem e os jobs pesados de infra rodam só quando o PR toca nos arquivos deles. Para esses vale a disciplina: não se faz merge com check vermelho.
 
 ---
 

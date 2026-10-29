@@ -61,7 +61,26 @@ Todo PR precisa de:
 3. **Gate do Guardião LGPD** quando tocar dado pessoal/de saúde, autenticação, criptografia, integrações, logs ou IA (rótulo `lgpd-review`). Veto do Guardião bloqueia merge.
 4. **Aprovação humana (N0 — sócios)** para merge na `main`.
 
-Configuração no GitHub: branch protection com *required reviews*, *required status checks*, *dismiss stale approvals*, `CODEOWNERS` (ex.: `apps/api/src/modules/records/**` e `**/migrations/**` exigem revisor de segurança).
+**Proteção da `main` (ligada em 28/10/2026):**
+
+- **PR obrigatório.** Nenhum push direto de quem não é administrador.
+- **Branch atualizada com a `main`** antes do merge (*strict*).
+- **Proibido** force push e apagar a `main`.
+- **10 checks obrigatórios**, todos rodam em todo PR:
+  - CI: lint, typecheck e testes; RLS; auditoria de dependências; gitleaks.
+  - CodeQL.
+  - Segurança: testes ofensivos; ZAP.
+  - Testes de produção: k6 + SIGTERM; resiliência + backup.
+  - Infra: trava de TLS.
+
+E2E, imagem e os jobs pesados de infra só rodam quando o PR mexe nos arquivos deles. Por isso não são obrigatórios: se fossem, um PR que não os dispara ficaria travado esperando. Quando rodam, a regra é a mesma: não se faz merge com check vermelho.
+
+Ainda **não** estão ligados:
+- **Aprovação obrigatória (0 por enquanto).** O GitHub não deixa o autor aprovar o próprio PR, e hoje um sócio sozinho travaria.
+- **`enforce_admins`.** O administrador ainda consegue empurrar relatórios direto na `main`.
+- **`CODEOWNERS`.**
+
+Próximos passos, quando os dois sócios revisarem rotineiramente: 1 aprovação, `CODEOWNERS` (ex.: `apps/api/src/modules/records/**` e `**/migrations/**` com revisor de segurança) e *dismiss stale approvals*.
 
 Checklist do PR (template a criar em `.github/pull_request_template.md`):
 - [ ] Nenhum segredo, certificado ou dado real de paciente

@@ -57,7 +57,8 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 - **#49 (ioredis 6): entrou.** No CI de Segurança, com Redis real (`JOBS_REDIS_TESTE=1`), `agendador-redis` e `rate-limit-redis` rodaram e passaram (88/88, nenhum pulado).
 - **#54:** fora da fila. O motivo (billing) sumiu e ele reduziria a cobertura.
 - **#55 e #36 (@Lopesloro):** antigos, sem relação com a fila. Ficam com ele.
-- **Recomendação aos sócios:** ligar a proteção da `main` (PR obrigatório e checks verdes). Agora é grátis, e com o
-  repositório público isso conta mais. Não liguei porque muda configuração do repositório.
+- **Proteção da `main`: ligada em 28/10/2026** com o OK do sócio. Configuração: PR obrigatório, branch atualizada, 10 checks
+  obrigatórios, sem force push nem exclusão. Aprovação obrigatória e `CODEOWNERS` ficaram para depois. Detalhes em
+  [ambientes-e-devops](../04-arquitetura/ambientes-e-devops.md).
 - **Staging e piloto:** continuam dependendo da D4 (login real) e de rodar as provas K-c3/K-c5 na AWS
   ([runbook](../04-arquitetura/runbook-primeiro-dia-staging.md)).
