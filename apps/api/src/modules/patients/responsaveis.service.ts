@@ -327,6 +327,11 @@ export class ResponsaveisService {
           const indice = dados.cpf === null ? null : await this.indiceCpf.indexar(tx, ctx, dados.cpf, 'guardians');
           mud.cpfBidx = indice?.cpfBidx ?? null;
           mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
+          // Índice gravado igual ao novo (forjado, ou a pessoa já estava com esse valor): o gatilho de índice
+          // ausente zeraria o índice novo junto com a cifra nova. Zera antes (UPDATE só do índice) e grava depois.
+          if (indice && g.cpfBidx === indice.cpfBidx && g.cpfBidxVersion === indice.cpfBidxVersion) {
+            await tx.update(guardians).set({ cpfBidx: null, cpfBidxVersion: null }).where(and(eq(guardians.tenantId, ctx.tenantId), eq(guardians.id, g.id)));
+          }
           campos.push('cpf');
         }
         if (dados.telefone !== undefined) {
