@@ -70,6 +70,14 @@ function Documentos() {
     },
   );
 
+  // O vínculo não pode sair de `agendamentos` do provedor: no modo http ele guarda só a janela de
+  // -30/+90 dias, e quem atendeu há quatro meses era recusado com "você não atendeu este paciente".
+  // Esta consulta pergunta pelo paciente, sem janela.
+  const vinculo = useConsulta(
+    async (a) => (pacienteId ? a.listarAgendamentos({ pacienteId }) : []),
+    [pacienteId],
+  );
+
   const recibosDoPaciente = useMemo(
     () => (consulta.estado === 'pronto' ? consulta.dados.recibos.filter((r) => r.pacienteId === pacienteId) : []),
     [consulta, pacienteId],
@@ -84,8 +92,9 @@ function Documentos() {
   const paciente = pacientes.find((p) => p.id === pacienteId);
   const assinante = tipoAtual === 'atestado' ? (usuario?.profissionalId ?? '') : profissionalId;
   const prof = profissionais.find((p) => p.id === assinante);
+  const atendimentos = vinculo.estado === 'pronto' ? vinculo.dados : agendamentos;
   const semVinculo =
-    tipoAtual === 'atestado' && paciente && !agendamentos.some((a) => a.pacienteId === paciente.id && a.profissionalId === assinante)
+    tipoAtual === 'atestado' && paciente && vinculo.estado !== 'carregando' && !atendimentos.some((a) => a.pacienteId === paciente.id && a.profissionalId === assinante)
       ? 'Você não atendeu este paciente. O atestado é do profissional que atendeu.'
       : null;
   
