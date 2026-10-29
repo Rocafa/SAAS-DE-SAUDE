@@ -32,7 +32,7 @@ ALTER TABLE patient_guardians
 -- O runner roda a migração inteira numa transação: se algo falhar, os gatilhos não ficam desligados. A contagem
 -- vai para o log do deploy (R7 do parecer de 29/10), já que o preenchimento não entra no histórico.
 ALTER TABLE patient_guardians DISABLE TRIGGER USER;
-DO $
+DO $$
 DECLARE
   v_n integer;
 BEGIN
@@ -40,7 +40,7 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RAISE NOTICE '0056: % marca(s) de informação clínica já ligada(s) passaram ao escopo essencial', v_n;
 END;
-$;
+$$;
 ALTER TABLE patient_guardians ENABLE TRIGGER USER;
 
 ALTER TABLE patient_guardians

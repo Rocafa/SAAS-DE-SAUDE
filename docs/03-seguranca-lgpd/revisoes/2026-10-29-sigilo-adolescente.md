@@ -91,3 +91,41 @@ Sem bloqueio para o merge: ainda não há consumidor de `podeReceberInformacaoCl
   3. exista um **catálogo explícito** do que cabe em `essencial` (orientações, cuidados, riscos) e do que só sai em `integral`. Hoje o escopo é um rótulo sem mapa de conteúdo. Sem catálogo, o consumidor entrega só `essencial`, e o que não estiver catalogado conta como `integral`;
   4. a negativa chegue ao responsável sem revelar o motivo (nunca "o adolescente pediu sigilo");
   5. enquanto a D8 / 1.15 não responder, o conteúdo `integral` não seja entregue de forma automática (portal ou mensagem). Ele continua só pelo profissional, fora do canal automático.
+
+---
+
+## Re-revisão (29/10/2026, commit `96921e5`)
+
+- **Escopo:** `git diff c065a4d..96921e5`: migração 0056, `responsaveis-regras.ts`, `responsaveis.service.ts`, `guardians-export.ts`, `schema.ts`, testes (`responsaveis.rls`, `portal.rls`, regra) e `api-dominio.md` §11.
+- **Testes:** não rodei nada (Postgres não roda localmente). Conferi os bytes da migração e o estado do CI (`gh pr checks 110`).
+
+### Veredito: **VETADO** (1 bloqueio técnico: a 0056 não executa)
+
+O mérito das correções está certo. Corrigido o B1 abaixo e com o CI verde (RLS, ofensivos, guardas do banco), o PR fica **APROVADO COM RESSALVAS** sem nova rodada de mérito.
+
+### Bloqueio
+
+#### B1. Bloco `DO` da 0056 com um cifrão só: a migração quebra
+
+- **Onde:** `0056_escopo_e_sigilo_do_adolescente.sql`, linhas 35 e 43 (preenchimento com `RAISE NOTICE`, R7).
+- **Problema:** o arquivo tem `DO $` … `$;`. Conferido com `od -c`: é `D O ␠ $ \n` e `$ ; \n`. O Postgres só aceita `$$` ou `$tag$`, então é erro de sintaxe. Provavelmente o PowerShell ou o heredoc comeu um dos cifrões. A migração inteira falha, e nenhum teste de banco desta rodada roda. Os jobs com Postgres já falham no PR: "Testes ofensivos", "Resiliência + backup/restauração", "conferência das guardas do banco" e DAST. Sem a 0056 aplicada, nada do que garante o sigilo (RLS `portal_fora`, gatilhos, eliminação) está provado.
+- **Correção:** trocar por `DO $$` … `$$;` (ou `$preenche$`). Depois, conferir que os jobs "Isolamento entre tenants (RLS)", "Testes ofensivos" e "conferência das guardas do banco" passam. Vale um `grep -nE '^\s*(DO|AS) \$[^$a-z]'` nas migrações como trava.
+
+### Conferência das ressalvas
+
+| Ressalva | Situação |
+|---|---|
+| **R1** motivo genérico | ✅ `motivoVisivel(r, marcaLigada, veClinico)`: para quem não tem vínculo de cuidado, toda negativa com a marca ligada vira `restrita_pelo_profissional`. A pendência sai do motivo já mascarado, então também não denuncia o pedido. Teste com recepção vendo `paciente_maior_de_idade` como genérico. Com a marca desligada, `marca_desligada` continua visível. Correto: a marca em si é dado de cadastro e não revela o pedido. |
+| **R2** porteiro clínico no DTO | ✅ `veClinico` = permissão `liberar_informacao_clinica` **e** `podeLerConteudoClinico(perfis, calcularVinculoDeCuidado(...))`, o mesmo porteiro da lista de pedidos. `superaSigiloPorRisco` usa o mesmo filtro. Teste com profissional sem vínculo. Observação de desempenho (não de segurança): `calcularVinculoDeCuidado` roda uma vez por vínculo na listagem; dá para calcular uma vez por paciente. |
+| **R3** pedido segue a pessoa | ✅ `guardian_id` com FK composta, CHECK de par com o vínculo, e o gatilho confere que o vínculo é do mesmo paciente e da mesma pessoa. A regra, a exceção por risco e o "já vigente" passam a usar a pessoa. Teste encerrando e refazendo o vínculo. |
+| **R3** eliminação | ✅ `app_patient_guardians_eliminate` tem o mesmo corpo da 0037 (conferido com `diff`), mais o `DELETE` dos pedidos antes dos vínculos, sob a marca transacional `app.guardians_eliminating` (`tenant:paciente`, local à transação, limpa logo depois). A marca sozinha não abre o `DELETE`: `app_user` não tem esse privilégio, então só a função dona (SECURITY DEFINER, admin ou job, com a RLS forçada) apaga. Teste A4 cobre. |
+| **R4** portal | ✅ Teste em `portal.rls` com sessão de responsável e de titular: 0 linhas e inserção recusada. |
+| **R5** prova | ⏳ Opcional, na fila e no §11. Aceito. |
+| **R6** limites no §11 | ✅ Os 4 pontos estão lá. Complemento menor, sem bloquear: na exceção por risco, o responsável que é a **fonte** do risco não deve ser o destinatário. Acrescentar meia frase ao 2º ponto. |
+| **R7** contagem | ✅ no mérito (`GET DIAGNOSTICS` + `RAISE NOTICE`), mas é justamente o bloco quebrado do B1. |
+
+### Condições
+
+- **C1 (merge):** B1 corrigido e CI verde nos jobs com Postgres.
+- **C2 (fila):** R5 e o complemento da R6.
+- **C3 (portal/COM):** R1 a R3 resolvidas. Fica destravada para avaliação no PR de consumidor, com novo parecer, nas condições 2 a 5 acima.

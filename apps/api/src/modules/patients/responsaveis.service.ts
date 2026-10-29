@@ -231,7 +231,9 @@ export class ResponsaveisService {
         .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.patientId, pacienteId)))
         .orderBy(asc(patientGuardians.validFrom), asc(patientGuardians.createdAt), asc(patientGuardians.id));
       const todos: ResponsavelDto[] = [];
-      for (const l of linhas) todos.push(await this.paraDto(tx, ctx, l.v, l.g, quadro, hoje));
+      // O porteiro clínico é do paciente: calculado uma vez para a lista inteira.
+      const veClinico = await this.veClinico(tx, ctx, pacienteId);
+      for (const l of linhas) todos.push(await this.paraDto(tx, ctx, l.v, l.g, quadro, hoje, veClinico));
       const itens = filtro.situacao === 'todos' ? todos : todos.filter((r) => r.vigencia.vigente);
       const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
       await recordAudit(tx, ctx, {
@@ -929,14 +931,29 @@ export class ResponsaveisService {
     };
   }
 
-  private async paraDto(tx: TenantTx, ctx: RequestContext, v: LinhaVinculo, g: LinhaPessoa, quadro: QuadroDoPaciente, hoje: string): Promise<ResponsavelDto> {
+  /**
+   * R1/R2 do parecer de 29/10: o motivo real da negativa (e a exceção por risco) só para o profissional COM vínculo
+   * de cuidado, o mesmo porteiro da lista de pedidos de sigilo.
+   */
+  private async veClinico(tx: TenantTx, ctx: RequestContext, pacienteId: string): Promise<boolean> {
+    const perfis = ctx.roles.filter(ehPerfil);
+    if (!temPermissao(perfis, 'responsaveis:liberar_informacao_clinica')) return false;
+    return podeLerConteudoClinico(perfis, await calcularVinculoDeCuidado(tx, ctx, pacienteId));
+  }
+
+  private async paraDto(
+    tx: TenantTx,
+    ctx: RequestContext,
+    v: LinhaVinculo,
+    g: LinhaPessoa,
+    quadro: QuadroDoPaciente,
+    hoje: string,
+    veClinicoJa?: boolean,
+  ): Promise<ResponsavelDto> {
     const tenantId = ctx.tenantId;
     const perfis = ctx.roles.filter(ehPerfil);
     const cpf = await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc);
-    // R1/R2 do parecer de 29/10: o motivo real da negativa (e a exceção por risco) só para o profissional COM vínculo
-    // de cuidado, o mesmo porteiro da lista de pedidos de sigilo.
-    const veClinico =
-      temPermissao(perfis, 'responsaveis:liberar_informacao_clinica') && podeLerConteudoClinico(perfis, await calcularVinculoDeCuidado(tx, ctx, v.patientId));
+    const veClinico = veClinicoJa ?? (await this.veClinico(tx, ctx, v.patientId));
     // Curatela e termo de apoio ficam nas mesmas colunas cifradas; o tipo do vínculo diz qual é.
     const decisaoJudicial =
       v.courtDecisionRefEnc && v.curatorshipScopeEnc && temPermissao(perfis, 'responsaveis:ver_curatela')
