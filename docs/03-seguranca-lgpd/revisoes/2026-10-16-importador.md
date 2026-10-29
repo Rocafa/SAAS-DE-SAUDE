@@ -362,3 +362,32 @@ Conferido:
 - `app_close_import_batch_key_intent` não confere o perfil admin, só a clínica. Só o runtime a chama, e o pior caso é uma chave sem dado ficar sem destruição.
 
 **Varredura de testes instáveis (`e281e88..6e3b54d`): nenhuma garantia ficou mais fraca.** Os detalhes estão na conferência da rodada 23 em `2026-10-22-pr73.md`.
+
+## Conferência PR #88 (28/10/2026)
+
+> Escopo: `git diff origin/main...origin/eng/reindexacao-indice-cpf` (job `cpf-indice-reindexacao`, passos 2 e 3 do §12d como `sistema`). Leitura de código; unitários informados como verdes (995/995), RLS no CI.
+
+**Veredito: APROVADO COM RESSALVAS.** O job fecha a observação "antes do GA" da conferência R3-a/R3-b sem script manual, com uma correção obrigatória (C1) antes do merge.
+
+**O que conferi e aceito:**
+- **Ator `sistema` em vez de admin: aceito.** O passo 1 (girar a chave) continua decisão humana de admin. Os passos 2 e 3 são manutenção mecânica, sem leitura de conteúdo clínico, com trilha de ator `sistema` (mesmo padrão de `descartarAnuladosComoSistema`). A destruição automática da aposentada é segura: só roda com `pendentes = 0`, sob a trava da clínica, e o banco recusa destruir versão com paciente indexado (`not exists` em `descartarChavesAntigas`). Ela apaga só uma chave de HMAC sem uso, sem perda de dado. Depois de uma suspeita de vazamento, fechar a troca sozinho é o comportamento desejado.
+- **CPF fora de log, trilha e retorno.** O retorno e a trilha (`cpf_reindex`, `key_destroy`) têm só contagens e versões. O CPF decifrado fica na memória do lote e não é logado. Os erros de cripto têm mensagem fixa.
+- **Isolamento.** Toda transação é `db.run(tenantId, …)` da própria clínica, e todas as consultas novas (`pendentes`, `temChaveAposentada`) filtram `tenant_id` além do RLS. Nenhuma consulta cruza clínicas.
+- **Sem pendente, não decifra nem cria chave.** `pendentes` e `temChaveAposentada` não tocam o `FieldCipher`. Com pendente e sem chave ativa, `criarChave` cria a versão 1 como `sistema`, o mesmo que o primeiro cadastro faria.
+- **Todas as clínicas, inclusive canceladas (R1 dos jobs): aceito.** O job não envia nada nem age em nome da clínica, e concluir uma troca de chave aberta (por exemplo, depois de suspeita de vazamento) tem valor de segurança também na clínica cancelada. O §14 registra a exceção.
+- **Testes.** O teste RLS prova o lote limitado (`maxLotes: 1` deixa pendente e não destrói a aposentada em uso), que a rodada seguinte zera e destrói a aposentada, a busca pelo índice novo, a trilha só com contagens e o ator `sistema`, e a ausência de decifração sem pendente (com espião em `decrypt`/`decryptString`).
+
+**Correções exigidas:**
+
+1. **C1 (antes do merge): clínica de chave destruída (G3) falha todo dia.** Arquivo: `apps/api/src/modules/patients/patients.service.ts`, linhas 93–103 (`reindexarIndiceCpfComoSistema`). Depois do *crypto-shredding*, se ainda houver `cpf_enc` fora da chave ativa, `reindexar` lança erro em toda rodada. Com chave de índice ativa, `chaveAtiva` lança `KeyUnavailableError` (DEK `destroyed`). Sem chave ativa, `criarChave` → `provisionTenant` lança `TenantKeysDestroyedError`. Não há vazamento nem chave nova: `provisionTenant` recusa, e isso está correto. Mas o job é `critico: true`, e a clínica vira `clinicasComFalha` todo dia, para sempre. Esse alarme permanente esconde falhas reais (fadiga de alarme). **Correção:** tratar `KeyUnavailableError` e `TenantKeysDestroyedError` nesse caminho, ou conferir antes se a clínica tem chaves destruídas. Devolver contagens zeradas mais um indicador numérico/booleano (ex.: `chaveDestruida: 1`), sem falhar, sem tentar provisionar e sem decifrar. Acrescentar em `apps/api/test/importador.rls.test.ts` um caso com a DEK da clínica destruída que prove: o job não falha, nenhuma chave nova em `tenant_keys`/`patient_cpf_index_keys`, nenhuma trilha `cpf_reindex`. Registrar o comportamento numa linha do §12d de `docs/04-arquitetura/api-dominio.md` (linha 762).
+2. **C2 (junto com C1): provar "não cria chave".** No mesmo teste (`apps/api/test/importador.rls.test.ts`, bloco "Sem pendente", perto da linha 1068), conferir também que a contagem de `patient_cpf_index_keys` não mudou. O §12d e o comentário do serviço afirmam isso, e hoje o teste só prova "não decifra".
+
+**Observações (sem bloqueio):**
+- **Encerramento da observação R3-a/R3-b.** Ela fica atendida quando o job tiver rodado em produção com Redis (`JOBS_HABILITADOS`) e a trilha de cada clínica existente mostrar `cpf_reindex` com `pending = 0`. Conferir isso no checklist do GA.
+- **Lote de 500 numa transação de 15 s** (`pool-config.ts:36`). Cada linha faz cerca de 3 consultas (`findById`, `UPDATE`, mais o KMS na primeira DEK). Deve caber, mas acompanhar a duração. Se chegar perto do teto, baixar o lote padrão.
+- **Responsáveis (0048)** continuam fora do índice e decifrando na dedup. O prazo segue o mesmo, antes do GA. Este job não cobre `guardians`.
+
+**Reconferência (28/10/2026, `ef7ddd6..28b16d4`): APROVADO.** C1 e C2 atendidas.
+- **C1.** `FieldCipher.tenantKeysDestroyed` delega a `hasDestroyedKeys`, que só olha `tenant_master_keys` em `destroying`/`destroyed`. Conferi `data-key-store.ts`: esse estado só nasce em `beginDestroy`, a eliminação da clínica inteira. A rotação normal de DEK não marca a clínica, então nenhuma clínica viva é pulada por engano. O estado `destroying` (eliminação a meio caminho) também é pulado, e isso está correto. A conferência roda na 1ª transação, antes de qualquer `chaveAtiva`/`criarChave`: não decifra, não provisiona, não grava trilha e não falha. O retorno traz só contagens e `chaveDestruida`. O teste da clínica E prova duas rodadas sem erro, `patient_cpf_index_keys` idêntica e trilha `cpf_reindex` vazia. O §12d registra o comportamento.
+- **C2.** O bloco "sem pendente" agora confere que a contagem de `patient_cpf_index_keys` não muda.
+- As observações anteriores continuam valendo (encerramento da R3-a/R3-b pela trilha `pending = 0` em produção; duração do lote; responsáveis antes do GA).

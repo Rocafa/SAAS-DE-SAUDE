@@ -7,7 +7,7 @@ import { CURSOR_DE_PAGINACAO, CursorDePaginacao, type PosicaoLida } from './curs
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
@@ -71,6 +71,46 @@ export class PatientsService {
     @Inject(CURSOR_DE_PAGINACAO) private readonly cursor: CursorDePaginacao,
   ) {
     this.indiceCpf = new IndiceCegoCpf(cipher);
+  }
+
+  /**
+   * Job `cpf-indice-reindexacao` (R9 do importador; observação "antes do GA" da conferência R3-a/R3-b):
+   * os passos 2 e 3 da troca de chave do índice (api-dominio.md §12d) rodando sozinhos, todo dia, como
+   * `sistema`. Cobre os pacientes anteriores à 0046, os que ficaram sem índice (gatilho de índice ausente) e o
+   * que sobrou de um `girarChave`. Sem pendente, não decifra nada nem cria chave. Cada lote é uma transação
+   * curta da clínica (`reindexar` trava as linhas do lote); no máximo `maxLotes` por dia, o resto fica para
+   * a rodada seguinte. Com tudo na chave ativa, destrói as versões aposentadas sem paciente (o banco recusa
+   * destruir versão em uso). Trilha e retorno só com contagens.
+   *
+   * Clínica eliminada (chaves destruídas, G3): o CPF que sobrou é ilegível de propósito. O job não tenta
+   * decifrar, não provisiona chave e não falha (C1 do parecer do #88: um erro diário eterno esconderia as
+   * falhas reais); devolve `chaveDestruida = 1` com a contagem e não grava trilha de reindexação.
+   */
+  async reindexarIndiceCpfComoSistema(
+    tenantId: TenantId,
+    opcoes: { readonly lote?: number; readonly maxLotes?: number } = {},
+  ): Promise<{ readonly reindexados: number; readonly pendentes: number; readonly chavesDescartadas: number; readonly chaveDestruida: number }> {
+    const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
+    const lote = opcoes.lote ?? 500;
+    const maxLotes = opcoes.maxLotes ?? 20;
+    let reindexados = 0;
+    const inicio = await this.db.run(tenantId, async (tx) => ({
+      destruida: await this.cipher.tenantKeysDestroyed(tx, tenantId),
+      pendentes: await this.indiceCpf.pendentes(tx, tenantId),
+    }));
+    if (inicio.destruida) return { reindexados: 0, pendentes: inicio.pendentes, chavesDescartadas: 0, chaveDestruida: 1 };
+    let pendentes = inicio.pendentes;
+    for (let i = 0; pendentes > 0 && i < maxLotes; i++) {
+      const r = await this.db.run(tenantId, (tx) => this.indiceCpf.reindexar(tx, ctx, lote));
+      reindexados += r.reindexados;
+      pendentes = r.pendentes;
+      if (r.reindexados === 0) break;
+    }
+    const chavesDescartadas =
+      pendentes > 0
+        ? 0
+        : await this.db.run(tenantId, async (tx) => ((await this.indiceCpf.temChaveAposentada(tx, tenantId)) ? this.indiceCpf.descartarChavesAntigas(tx, ctx) : 0));
+    return { reindexados, pendentes, chavesDescartadas, chaveDestruida: 0 };
   }
 
   /**
