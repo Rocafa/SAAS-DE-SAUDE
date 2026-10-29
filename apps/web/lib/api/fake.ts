@@ -164,7 +164,7 @@ export interface OpcoesFake {
    * foi recusado também no recomeço: mesmo erro que o adaptador HTTP entrega, `erroListaMudou`).
    */
   simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
-  /** Papel do usuário da demonstração (padrão: admin). */
+  /** Papel de quem ENTRA na demonstração (padrão: admin). `entrarComo` troca depois. */
   papel?: Papel;
 }
 
@@ -217,7 +217,13 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
     { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
   ];
-  let usuario: Usuario = opcoes.papel ? { ...USUARIOS[0]!, papel: opcoes.papel } : USUARIOS[0]!;
+  // `papel` é só o ESTADO INICIAL: escolhe quem entra na demonstração, e `entrarComo` sobrepõe depois.
+  // Tem de ser um usuário da lista, não a administradora com o papel trocado: o perfil clínico é
+  // decidido pelo `profissionalId` (`ehPerfilClinico`), e um "profissional" sem vínculo não existe —
+  // veria todo registro oculto e não conseguiria assinar nada.
+  let usuario: Usuario = opcoes.papel
+    ? (USUARIOS.find((u) => u.papel === opcoes.papel) ?? { ...USUARIOS[0]!, papel: opcoes.papel })
+    : USUARIOS[0]!;
   const registros: Registro[] = vazio
     ? []
     : agendamentos

@@ -39,10 +39,13 @@ function TrocarUsuario() {
 
 export default function PaginaMais() {
   const grupos = ['Páginas', 'Configurações'] as const;
+  // Só na demonstração: `entrarComo` e `usuariosDemo` vêm do adaptador falso mesmo no modo http
+  // (`criarApi` junta os dois), então deixar o trocador na tela viraria troca de papel pelo cliente.
+  const { modo } = useDados();
   return (
     <>
       <Titulo descricao="Tudo o que não cabe no menu. Ou aperte “Ajudante” e escreva o que procura.">Mais opções</Titulo>
-      <TrocarUsuario />
+      {modo === 'fake' && <TrocarUsuario />}
       {grupos.map((g) => (
         <section key={g} aria-labelledby={`t-${g}`} className="mb-8">
           <h2 id={`t-${g}`} className="mb-3 text-xl font-bold">

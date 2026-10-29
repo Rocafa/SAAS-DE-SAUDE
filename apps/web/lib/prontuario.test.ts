@@ -63,6 +63,16 @@ describe('fake: registro clínico', () => {
     expect(Object.keys(comoPsicologo.find((r) => r.restrito)!.campos).length).toBeGreaterThan(0);
   });
 
+  it('abrir a demonstração como profissional dá um profissional de verdade, com vínculo', async () => {
+    const api = criarApiFake({ agora, papel: 'profissional' });
+    const usuario = await api.usuarioAtual();
+    expect(usuario.papel).toBe('profissional');
+    // Sem o vínculo o perfil não é clínico: todo registro voltaria oculto e nada poderia ser assinado.
+    expect(usuario.profissionalId).toBeTruthy();
+    const registros = await api.listarRegistros('p04');
+    expect(registros.some((r) => Object.keys(r.campos).length > 0)).toBe(true);
+  });
+
   it('só o profissional do atendimento escreve e assina; assinado não muda', async () => {
     const api = criarApiFake({ agora });
     const ag = (await api.listarAgendamentos({ de: '2026-10-12', ate: '2026-10-12', profissionalId: 'pr1' })).find((a) => a.status === 'chegou')!;
