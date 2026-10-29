@@ -414,3 +414,9 @@ Conferido:
 **Observações (sem bloqueio):**
 - O `alterar` com `cpf: null` numa pessoa já sem CPF continua gravando `cpf` no histórico (comportamento anterior, sem dado exposto). Dá para alinhar junto com a C1.
 - A observação de encerramento do #88 vale aqui também: a pendência dos responsáveis fecha quando a trilha `cpf_reindex` com `table: 'guardians'` mostrar `pending = 0` em cada clínica existente, em produção.
+
+**Reconferência (29/10/2026, `7a47299..73ce1d7`): APROVADO.** C1 atendida.
+- `alterar` (`responsaveis.service.ts:320-336`) decide "mesmo CPF" decifrando o atual (`decifrarCampoResponsavel`; `null` sobre `null` também não regrava), igual aos pacientes. O índice deixou de afirmar igualdade. A observação do `cpf: null` repetido ficou alinhada junto.
+- O defeito revelado pelo teste foi corrigido do jeito certo: quando o índice gravado (forjado) coincide com o novo, uma UPDATE só do índice o zera antes, dentro da exceção da guarda e sem histórico. A escrita principal grava depois a cifra e o índice novos, e o gatilho de índice ausente não os apaga.
+- O teste novo forja o índice com o de outra pessoa e faz o PATCH para o CPF dela. Ele prova que a cifra muda, que a resposta traz o CPF novo, que o índice fica correto, que o histórico cresce e que a trilha registra `changed: 'cpf'`. Nenhum CPF em claro entra na trilha.
+- As observações anteriores continuam valendo (encerramento pela trilha `pending = 0` com `table: 'guardians'` em produção).
