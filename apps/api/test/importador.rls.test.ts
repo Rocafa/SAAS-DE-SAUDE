@@ -1045,9 +1045,9 @@ describe('R9 do #66: índice cego do CPF por clínica (HMAC com chave da clínic
     const antes = await withTenant(api.db.db, clinicaC, (tx) => indice.pendentes(tx, clinicaC));
     expect(antes).toBeGreaterThanOrEqual(3);
     // 1 lote de 2 por rodada: sobra pendente, e a aposentada (ainda em uso) não é tocada.
-    expect(await servico.reindexarIndiceCpfComoSistema(clinicaC, { lote: 2, maxLotes: 1 })).toEqual({ reindexados: 2, pendentes: antes - 2, chavesDescartadas: 0 });
+    expect(await servico.reindexarIndiceCpfComoSistema(clinicaC, { lote: 2, maxLotes: 1 })).toEqual({ reindexados: 2, pendentes: antes - 2, chavesDescartadas: 0, chaveDestruida: 0 });
     // Rodada seguinte: zera e destrói a aposentada.
-    expect(await servico.reindexarIndiceCpfComoSistema(clinicaC, { lote: 2 })).toEqual({ reindexados: antes - 2, pendentes: 0, chavesDescartadas: 1 });
+    expect(await servico.reindexarIndiceCpfComoSistema(clinicaC, { lote: 2 })).toEqual({ reindexados: antes - 2, pendentes: 0, chavesDescartadas: 1, chaveDestruida: 0 });
     for (const id of semIndice) expect((await bidxDe(clinicaC, id))?.v).toBe(ativa);
     const chaves = await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(patientCpfIndexKeys).orderBy(patientCpfIndexKeys.version));
     expect(chaves.filter((k) => k.status !== 'destroyed').map((k) => [k.version, k.status])).toEqual([[ativa, 'active']]);
@@ -1064,12 +1064,13 @@ describe('R9 do #66: índice cego do CPF por clínica (HMAC com chave da clínic
     ]);
     expect(JSON.stringify(trilha)).not.toContain(CPF(450));
     // Sem pendente: nenhuma decifração, nenhuma chave nova, nenhuma trilha de reindexação.
+    const chavesAntes = (await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(patientCpfIndexKeys))).length;
     let decifrados = 0;
     const [dec, decStr] = [cipher.decrypt.bind(cipher), cipher.decryptString.bind(cipher)];
     cipher.decrypt = (...a: Parameters<typeof dec>) => ((decifrados += 1), dec(...a));
     cipher.decryptString = (...a: Parameters<typeof decStr>) => ((decifrados += 1), decStr(...a));
     try {
-      expect(await servico.reindexarIndiceCpfComoSistema(clinicaC)).toEqual({ reindexados: 0, pendentes: 0, chavesDescartadas: 0 });
+      expect(await servico.reindexarIndiceCpfComoSistema(clinicaC)).toEqual({ reindexados: 0, pendentes: 0, chavesDescartadas: 0, chaveDestruida: 0 });
     } finally {
       cipher.decrypt = dec;
       cipher.decryptString = decStr;
@@ -1077,6 +1078,25 @@ describe('R9 do #66: índice cego do CPF por clínica (HMAC com chave da clínic
     expect(decifrados).toBe(0);
     const depois = await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'cpf_reindex'`));
     expect(depois.filter((l) => l.actorKind === 'sistema')).toHaveLength(trilha.length);
+    expect(await withTenant(api.db.db, clinicaC, (tx) => tx.select().from(patientCpfIndexKeys))).toHaveLength(chavesAntes);
+  });
+
+  it('job cpf-indice-reindexacao em clínica eliminada (chaves destruídas, G3): não falha, não decifra, não cria chave nem grava trilha', async () => {
+    const servico = api.app.get(PatientsService);
+    const cipher = api.app.get<FieldCipher<TenantTx>>(FIELD_CIPHER);
+    const clinicaE = await api.novaClinica();
+    const adminE = await api.membro(clinicaE, api.sessao(clinicaE, 'admin'), 'admin');
+    const id = await novoPaciente(adminE, 'Eliminada Ficticio', CPF(460));
+    // Pendente de reindexação (como um paciente anterior à 0046) e, depois, a eliminação da clínica.
+    await withTenant(api.db.db, clinicaE, (tx) => tx.update(patients).set({ cpfBidx: null, cpfBidxVersion: null }).where(eq(patients.id, id)), adminE.userId);
+    await cipher.destroyTenantKeys((fn) => withTenant(api.db.db, clinicaE, fn), clinicaE, adminE.userId);
+    const chavesAntes = await withTenant(api.db.db, clinicaE, (tx) => tx.select().from(patientCpfIndexKeys));
+    for (let rodada = 1; rodada <= 2; rodada++) {
+      expect(await servico.reindexarIndiceCpfComoSistema(clinicaE), `rodada ${rodada}`).toEqual({ reindexados: 0, pendentes: 1, chavesDescartadas: 0, chaveDestruida: 1 });
+    }
+    expect(await withTenant(api.db.db, clinicaE, (tx) => tx.select().from(patientCpfIndexKeys))).toEqual(chavesAntes);
+    const trilha = await withTenant(api.db.db, clinicaE, (tx) => tx.select().from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'cpf_reindex'`));
+    expect(trilha).toEqual([]);
   });
 
   it('nenhum CPF em claro na trilha nem no log (stdout/stderr) das operações do índice e do importador', async () => {

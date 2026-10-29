@@ -21,7 +21,7 @@ function servicos(chamadas: string[]): ServicosDosJobs {
     notas: { executarCicloComoSistema: marca('notas', { guardaClinica: 0, lacradas: 0, eliminadas: 0, suspensasPorRetencao: 0, expurgadas: 0 }) },
     retencaoFiscal: { executarComoSistema: marca('fiscal', { recibosEliminados: 0, cobrancasEliminadas: 0, pagadoresEliminados: 0, politica: { anos: 5 } }) } as unknown as ServicosDosJobs['retencaoFiscal'],
     responsaveis: { descartarAnuladosComoSistema: marca('responsaveis', { descartados: 0 }) },
-    pacientes: { reindexarIndiceCpfComoSistema: marca('cpf-indice', { reindexados: 0, pendentes: 0, chavesDescartadas: 0 }) },
+    pacientes: { reindexarIndiceCpfComoSistema: marca('cpf-indice', { reindexados: 0, pendentes: 0, chavesDescartadas: 0, chaveDestruida: 0 }) },
   };
 }
 

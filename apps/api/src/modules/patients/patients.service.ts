@@ -81,16 +81,25 @@ export class PatientsService {
    * curta da clínica (`reindexar` trava as linhas do lote); no máximo `maxLotes` por dia, o resto fica para
    * a rodada seguinte. Com tudo na chave ativa, destrói as versões aposentadas sem paciente (o banco recusa
    * destruir versão em uso). Trilha e retorno só com contagens.
+   *
+   * Clínica eliminada (chaves destruídas, G3): o CPF que sobrou é ilegível de propósito. O job não tenta
+   * decifrar, não provisiona chave e não falha (C1 do parecer do #88: um erro diário eterno esconderia as
+   * falhas reais); devolve `chaveDestruida = 1` com a contagem e não grava trilha de reindexação.
    */
   async reindexarIndiceCpfComoSistema(
     tenantId: TenantId,
     opcoes: { readonly lote?: number; readonly maxLotes?: number } = {},
-  ): Promise<{ readonly reindexados: number; readonly pendentes: number; readonly chavesDescartadas: number }> {
+  ): Promise<{ readonly reindexados: number; readonly pendentes: number; readonly chavesDescartadas: number; readonly chaveDestruida: number }> {
     const ctx: RequestContext = { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] };
     const lote = opcoes.lote ?? 500;
     const maxLotes = opcoes.maxLotes ?? 20;
     let reindexados = 0;
-    let pendentes = await this.db.run(tenantId, (tx) => this.indiceCpf.pendentes(tx, tenantId));
+    const inicio = await this.db.run(tenantId, async (tx) => ({
+      destruida: await this.cipher.tenantKeysDestroyed(tx, tenantId),
+      pendentes: await this.indiceCpf.pendentes(tx, tenantId),
+    }));
+    if (inicio.destruida) return { reindexados: 0, pendentes: inicio.pendentes, chavesDescartadas: 0, chaveDestruida: 1 };
+    let pendentes = inicio.pendentes;
     for (let i = 0; pendentes > 0 && i < maxLotes; i++) {
       const r = await this.db.run(tenantId, (tx) => this.indiceCpf.reindexar(tx, ctx, lote));
       reindexados += r.reindexados;
@@ -101,7 +110,7 @@ export class PatientsService {
       pendentes > 0
         ? 0
         : await this.db.run(tenantId, async (tx) => ((await this.indiceCpf.temChaveAposentada(tx, tenantId)) ? this.indiceCpf.descartarChavesAntigas(tx, ctx) : 0));
-    return { reindexados, pendentes, chavesDescartadas };
+    return { reindexados, pendentes, chavesDescartadas, chaveDestruida: 0 };
   }
 
   /**
