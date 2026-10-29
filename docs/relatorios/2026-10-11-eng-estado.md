@@ -17,5 +17,7 @@ Atualizado a cada entrega. Ordens vêm do Maestro (`.maestro/ordens-eng.md`), at
 ## CI da `main`
 Parado em 12/10 à noite por cobrança da conta no GitHub Actions: os jobs não iniciam. A bateria completa na `main` (`e24031b`) foi rodada localmente e passou (números no relatório, §5 item 7).
 
+**Resolvido.** Em 29/10 a conta voltou a rodar jobs. Os PRs desta aba ficaram com as execuções antigas marcadas como falha, porque a falha de cobrança marca o job como falho, e não como cancelado; só o `gh run rerun --failed` em cada execução limpa o estado. Refeitas as execuções do #44 ao #47 e do #55: passam 8 de 9 checks, e o único que falha é a **Auditoria de dependências**, por `multer` abaixo de 2.5.0 e por mais duas vulnerabilidades altas e duas críticas que já foram corrigidas na `main`. Ou seja: é atraso da branch, não defeito novo — some ao trazer a `main`.
+
 ## Ambiente de teste (sem Docker neste Mac)
 Postgres 16.15 nativo em 127.0.0.1:5441 e Redis 8.10 em 6381, com dados em `~/Documents/Dev/projetos/.r8-dados/eng`.
