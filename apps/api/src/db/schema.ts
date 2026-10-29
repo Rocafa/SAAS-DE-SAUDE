@@ -1033,6 +1033,12 @@ export const guardians = pgTable('guardians', {
   discardedAt: timestamp('discarded_at', { withTimezone: true }),
   /** 0048: marca imutável do lote de importação que CRIOU a pessoa (pessoa que já existia não a tem). */
   importBatchId: uuid('import_batch_id'),
+  /**
+   * 0054: índice cego do CPF (HMAC com a MESMA chave de índice da clínica dos pacientes, domínio
+   * `guardians.cpf:v1:`) e a versão da chave. Mudar só estas colunas não exige usuário nem gera histórico.
+   */
+  cpfBidx: text('cpf_bidx'),
+  cpfBidxVersion: smallint('cpf_bidx_version'),
 });
 
 /** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */

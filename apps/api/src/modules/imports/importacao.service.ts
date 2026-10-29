@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -31,7 +31,7 @@ import { keyFailureKind, type KeyFailureKind } from '../crypto/crypto-errors';
 import type { DisposableKeys } from '../crypto/disposable-keys';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
-import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel } from '../patients/guardian-fields';
+import { cifrarCampoResponsavel, cifrarCampoVinculo } from '../patients/guardian-fields';
 import { SCOPE_RESPONSAVEIS } from '../patients/responsaveis.service';
 import { PatientsService } from '../patients/patients.service';
 import { normalizarBusca } from '../patients/patients.validation';
@@ -962,22 +962,13 @@ export class ImportacaoService {
   }
 
   /**
-   * R5 (0048): CPF (decifrado) -> pessoa responsável da clínica, pela MESMA busca que o importador usa para
-   * pacientes (`cpfsDaClinica`: decifra na transação da clínica, nada sai dela). Pessoa descartada (sem CPF)
-   * não entra. Duas pessoas com o mesmo CPF (cadastro antigo): fica a mais antiga.
+   * R5 (0048) + 0054: CPF do arquivo -> pessoa responsável da clínica, pelo índice cego (domínio
+   * `guardians.cpf:v1:`, mesma chave da clínica): decifra só as pessoas que casaram (para confirmar) e as
+   * ainda sem índice, nunca o cadastro inteiro. Pessoa descartada (sem CPF) não entra. Duas pessoas com o
+   * mesmo CPF (cadastro antigo): fica a mais antiga. Só dentro da clínica; nada sai da transação.
    */
-  private async cpfsDeResponsaveisDaClinica(tx: TenantTx, ctx: RequestContext): Promise<Map<string, string>> {
-    const linhas = await tx
-      .select({ id: guardians.id, cpfEnc: guardians.cpfEnc })
-      .from(guardians)
-      .where(and(eq(guardians.tenantId, ctx.tenantId), isNotNull(guardians.cpfEnc), isNull(guardians.discardedAt)))
-      .orderBy(asc(guardians.createdAt), asc(guardians.id));
-    const mapa = new Map<string, string>();
-    for (const l of linhas) {
-      const cpf = await decifrarCampoResponsavel(this.cipher, tx, ctx.tenantId, l.id, 'cpf', l.cpfEnc);
-      if (cpf && !mapa.has(cpf)) mapa.set(cpf, l.id);
-    }
-    return mapa;
+  private cpfsDeResponsaveisDaClinica(tx: TenantTx, ctx: RequestContext, cpfs: readonly string[]): Promise<Map<string, string>> {
+    return this.pacientes.indiceCpf.procurarResponsaveis(tx, ctx.tenantId, [...new Set(cpfs)]);
   }
 
   private async planejar(tx: TenantTx, ctx: RequestContext, kind: ImportKind, planilha: Planilha, mapa: Mapeamento): Promise<Plano> {
@@ -996,7 +987,8 @@ export class ImportacaoService {
       for (const e of existentes) nomes.add(normalizarBusca(e.nome));
     }
     // R5 (0048): pessoa responsável já cadastrada na clínica, pelo CPF (mesma busca do paciente acima).
-    const cpfsResp = v.validas.some((p) => p.responsavel?.cpf) ? await this.cpfsDeResponsaveisDaClinica(tx, ctx) : new Map<string, string>();
+    const cpfsDosResponsaveis = v.validas.flatMap((p) => (p.responsavel?.cpf ? [p.responsavel.cpf] : []));
+    const cpfsResp = cpfsDosResponsaveis.length > 0 ? await this.cpfsDeResponsaveisDaClinica(tx, ctx, cpfsDosResponsaveis) : new Map<string, string>();
     const acoes: AcaoPlanejada[] = [];
     const porLinha = new Map<number, PacienteDaLinha>();
     const responsaveis = new Map<number, DestinoDoResponsavel>();
@@ -1162,6 +1154,8 @@ export class ImportacaoService {
               tenantId: ctx.tenantId,
               nameEnc: await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'name', r.nome),
               cpfEnc: r.cpf ? await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'cpf', r.cpf) : null,
+              // 0054: índice cego do CPF na MESMA escrita (domínio dos responsáveis).
+              ...(r.cpf ? await this.pacientes.indiceCpf.indexar(tx, ctx, r.cpf, 'guardians') : {}),
               phoneEnc: r.telefone ? await cifrarCampoResponsavel(this.cipher, tx, ctx, guardianId, 'phone', r.telefone) : null,
               createdBy: ctx.userId,
               updatedBy: ctx.userId,

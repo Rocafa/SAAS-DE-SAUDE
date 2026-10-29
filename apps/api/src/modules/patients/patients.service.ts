@@ -77,9 +77,10 @@ export class PatientsService {
    * Job `cpf-indice-reindexacao` (R9 do importador; observação "antes do GA" da conferência R3-a/R3-b):
    * os passos 2 e 3 da troca de chave do índice (api-dominio.md §12d) rodando sozinhos, todo dia, como
    * `sistema`. Cobre os pacientes anteriores à 0046, os que ficaram sem índice (gatilho de índice ausente) e o
-   * que sobrou de um `girarChave`. Sem pendente, não decifra nada nem cria chave. Cada lote é uma transação
-   * curta da clínica (`reindexar` trava as linhas do lote); no máximo `maxLotes` por dia, o resto fica para
-   * a rodada seguinte. Com tudo na chave ativa, destrói as versões aposentadas sem paciente (o banco recusa
+   * que sobrou de um `girarChave`; desde a 0054, também os responsáveis (`guardians`, sem tocar `updated_at`
+   * nem histórico). Sem pendente, não decifra nada nem cria chave. Cada lote é uma transação curta da clínica
+   * (`reindexar` trava as linhas do lote); no máximo `maxLotes` por dia, o resto fica para a rodada seguinte.
+   * Com tudo na chave ativa, destrói as versões aposentadas sem paciente nem responsável (o banco recusa
    * destruir versão em uso). Trilha e retorno só com contagens.
    *
    * Clínica eliminada (chaves destruídas, G3): o CPF que sobrou é ilegível de propósito. O job não tenta

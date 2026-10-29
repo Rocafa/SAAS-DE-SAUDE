@@ -22,6 +22,7 @@ import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { ehPerfil, temPermissao } from '../auth/perfis';
 import { exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
+import { IndiceCegoCpf } from './cpf-indice-cego';
 import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel, decifrarCampoVinculo } from './guardian-fields';
 import { patientFieldRef } from './patient-fields';
 import {
@@ -177,10 +178,15 @@ export async function pagadorVivoDoCadastro(
  */
 @Injectable()
 export class ResponsaveisService {
+  /** 0054: índice cego do CPF da pessoa (mesma chave da clínica, domínio `guardians.cpf:v1:`), na mesma escrita do CPF. */
+  private readonly indiceCpf: IndiceCegoCpf;
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
     @Inject(FIELD_CIPHER) private readonly cipher: FieldCipher<TenantTx>,
-  ) {}
+  ) {
+    this.indiceCpf = new IndiceCegoCpf(cipher);
+  }
 
   listar(ctx: RequestContext, pacienteId: string, filtro: { situacao: 'vigentes' | 'todos' }): Promise<ListaDeResponsaveis> {
     return lerNaClinica(this.db, ctx, async (tx) => {
@@ -234,6 +240,7 @@ export class ResponsaveisService {
             tenantId: ctx.tenantId,
             nameEnc: await cifrarCampoResponsavel(this.cipher, tx, ctx, id, 'name', p.nome),
             cpfEnc: p.cpf ? await cifrarCampoResponsavel(this.cipher, tx, ctx, id, 'cpf', p.cpf) : null,
+            ...(p.cpf ? await this.indiceCpf.indexar(tx, ctx, p.cpf, 'guardians') : {}),
             phoneEnc: p.telefone ? await cifrarCampoResponsavel(this.cipher, tx, ctx, id, 'phone', p.telefone) : null,
             createdBy: ctx.userId,
             updatedBy: ctx.userId,
@@ -312,6 +319,10 @@ export class ResponsaveisService {
         }
         if (dados.cpf !== undefined) {
           mud.cpfEnc = dados.cpf === null ? null : await cifrarCampoResponsavel(this.cipher, tx, ctx, g.id, 'cpf', dados.cpf);
+          // 0054: o índice vai na MESMA escrita (sem CPF, sem índice).
+          const indice = dados.cpf === null ? null : await this.indiceCpf.indexar(tx, ctx, dados.cpf, 'guardians');
+          mud.cpfBidx = indice?.cpfBidx ?? null;
+          mud.cpfBidxVersion = indice?.cpfBidxVersion ?? null;
           campos.push('cpf');
         }
         if (dados.telefone !== undefined) {

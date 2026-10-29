@@ -194,7 +194,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   import_raw_files:
     'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
   patient_cpf_index_keys:
-    'chave interna (cifrada) do índice cego do CPF (0046, R9); o CPF sai decifrado em patients e o índice (cpf_bidx) é derivado dele',
+    'chave interna (cifrada) do índice cego do CPF (0046, R9; responsáveis desde a 0054); o CPF sai decifrado em patients e guardians e o índice (cpf_bidx) é derivado dele',
   import_batch_keys:
     'chave interna e transitória do lote de importação (0046, R3): só a DEK embrulhada do arquivo bruto, apagada no descarte; não é dado da clínica (o bruto nem sai no pacote) e a evidência do descarte está em import_batches',
   import_batch_key_intents:

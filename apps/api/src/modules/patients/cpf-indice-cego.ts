@@ -1,19 +1,29 @@
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { createHmac, randomBytes } from 'node:crypto';
-import { patientCpfIndexKeys, patients } from '../../db/schema';
+import { guardians, patientCpfIndexKeys, patients } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { TenantKeyMissingError } from '../crypto/crypto-errors';
 import type { FieldCipher } from '../crypto/field-cipher';
 import type { FieldRef } from '../crypto/field-format';
+import { guardianFieldRef } from './guardian-fields';
 import { patientFieldRef } from './patient-fields';
 
-/** Rótulo de domínio do HMAC: o mesmo CPF em outro uso (outra coluna/finalidade) dá outro valor. */
-const DOMINIO = 'patients.cpf:v1:';
+/** Tabela cujo CPF é indexado. A chave da clínica é a mesma; o domínio do HMAC muda. */
+export type TabelaDoIndice = 'patients' | 'guardians';
+
+/**
+ * Rótulo de domínio do HMAC: o mesmo CPF em outro uso (outra coluna/finalidade) dá outro valor. O dos
+ * pacientes é o da 0046 e não muda (os índices gravados continuam válidos); o dos responsáveis é da 0054.
+ */
+export const DOMINIO_DO_INDICE: Readonly<Record<TabelaDoIndice, string>> = {
+  patients: 'patients.cpf:v1:',
+  guardians: 'guardians.cpf:v1:',
+};
 const KEY_BYTES = 32;
 
-/** Índice cego pronto para gravar em `patients` (cpf_bidx + cpf_bidx_version). */
+/** Índice cego pronto para gravar em `patients`/`guardians` (cpf_bidx + cpf_bidx_version). */
 export interface IndiceDoCpf {
   readonly cpfBidx: string;
   readonly cpfBidxVersion: number;
@@ -24,10 +34,16 @@ interface ChaveViva {
   readonly bytes: Buffer;
 }
 
-/** HMAC-SHA256(chave, domínio + 11 dígitos) em base64url (43 caracteres). Puro, para teste. */
-export function hmacDoCpf(chave: Uint8Array, cpf: string): string {
-  return createHmac('sha256', chave).update(DOMINIO + cpf.replace(/\D/g, ''), 'utf8').digest('base64url');
+/** HMAC-SHA256(chave, domínio da tabela + 11 dígitos) em base64url (43 caracteres). Puro, para teste. */
+export function hmacDoCpf(chave: Uint8Array, cpf: string, tabela: TabelaDoIndice = 'patients'): string {
+  return createHmac('sha256', chave).update(DOMINIO_DO_INDICE[tabela] + cpf.replace(/\D/g, ''), 'utf8').digest('base64url');
 }
+
+function refDoCpf(tabela: TabelaDoIndice, tenantId: TenantId, id: string): FieldRef {
+  return tabela === 'patients' ? patientFieldRef(tenantId, id, 'cpf') : guardianFieldRef(tenantId, id, 'cpf');
+}
+
+const tabelaDe = (tabela: TabelaDoIndice) => (tabela === 'patients' ? patients : guardians);
 
 function refDaChave(tenantId: TenantId, versao: number): FieldRef {
   return { tenantId, table: 'patient_cpf_index_keys', column: 'key', rowId: String(versao) };
@@ -43,14 +59,55 @@ function refDaChave(tenantId: TenantId, versao: number): FieldRef {
  * Troca da chave (documentada em api-dominio.md §12d): `girarChave` → `reindexar` em lotes até `pendentes = 0`
  * → `descartarChavesAntigas`. Enquanto a reindexação não termina, a busca casa por todas as chaves vivas
  * (ativa + aposentadas) e decifra só os pacientes ainda sem índice.
+ *
+ * 0054: os responsáveis (`guardians`) usam a MESMA chave e a mesma tabela de chaves, com o domínio
+ * `guardians.cpf:v1:`; reindexação, pendentes e descarte de versão cobrem as duas tabelas.
  */
 export class IndiceCegoCpf {
   constructor(private readonly cipher: FieldCipher<TenantTx>) {}
 
-  /** Índice do CPF com a chave ATIVA da clínica (cria a versão 1 na primeira vez). */
-  async indexar(tx: TenantTx, ctx: RequestContext, cpf: string): Promise<IndiceDoCpf> {
+  /** Índice do CPF com a chave ATIVA da clínica (cria a versão 1 na primeira vez), no domínio da tabela. */
+  async indexar(tx: TenantTx, ctx: RequestContext, cpf: string, tabela: TabelaDoIndice = 'patients'): Promise<IndiceDoCpf> {
     const chave = (await this.chaveAtiva(tx, ctx.tenantId)) ?? (await this.criarChave(tx, ctx));
-    return { cpfBidx: hmacDoCpf(chave.bytes, cpf), cpfBidxVersion: chave.versao };
+    return { cpfBidx: hmacDoCpf(chave.bytes, cpf, tabela), cpfBidxVersion: chave.versao };
+  }
+
+  /**
+   * 0054: pessoas responsáveis da clínica por CPF (deduplicação do importador, 0048). Como `procurar`: casa
+   * pelo índice com todas as chaves vivas e confirma decifrando só os casados mais os pendentes sem índice
+   * válido. Pessoa descartada não entra; duas pessoas com o mesmo CPF (cadastro antigo) = fica a mais antiga.
+   * Nenhum CPF sai daqui para log ou trilha.
+   */
+  async procurarResponsaveis(tx: TenantTx, tenantId: TenantId, cpfs: readonly string[]): Promise<Map<string, string>> {
+    const achados = new Map<string, string>();
+    if (cpfs.length === 0) return achados;
+    const procurados = new Set(cpfs);
+    const chaves = await this.chavesVivas(tx, tenantId);
+    const porIndice = new Set<string>();
+    for (const k of chaves) for (const cpf of procurados) porIndice.add(`${k.versao}|${hmacDoCpf(k.bytes, cpf, 'guardians')}`);
+    const vivos = and(eq(guardians.tenantId, tenantId), isNotNull(guardians.cpfEnc), isNull(guardians.discardedAt));
+    const colunas = { id: guardians.id, cpfEnc: guardians.cpfEnc, criado: guardians.createdAt, bidx: guardians.cpfBidx, versao: guardians.cpfBidxVersion };
+    const candidatos =
+      porIndice.size === 0
+        ? []
+        : await tx
+            .select(colunas)
+            .from(guardians)
+            .where(and(vivos, inArray(guardians.cpfBidx, [...porIndice].map((k) => k.split('|')[1] as string))));
+    const vivas = chaves.map((k) => k.versao);
+    const pendentes = await tx
+      .select(colunas)
+      .from(guardians)
+      .where(and(vivos, vivas.length === 0 ? sql`true` : or(isNull(guardians.cpfBidxVersion), notInArray(guardians.cpfBidxVersion, vivas))));
+    // Só os casados (versão viva + índice) e os pendentes; a mais antiga primeiro, para ficar com ela.
+    const confirmar = [...candidatos.filter((l) => porIndice.has(`${l.versao}|${l.bidx}`)), ...pendentes].sort(
+      (a, b) => a.criado.getTime() - b.criado.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+    for (const l of confirmar) {
+      const cpf = await this.cipher.decryptString(tx, guardianFieldRef(tenantId, l.id, 'cpf'), l.cpfEnc as string);
+      if (procurados.has(cpf) && !achados.has(cpf)) achados.set(cpf, l.id);
+    }
+    return achados;
   }
 
   /**
@@ -111,50 +168,69 @@ export class IndiceCegoCpf {
   }
 
   /**
-   * Reindexa até `limite` pacientes com CPF cujo índice não é da chave ativa (lote; chamar até `pendentes = 0`).
-   * Só grava cpf_bidx/cpf_bidx_version (não toca o CPF cifrado nem `updated_at`). Trilha só com contagens.
+   * Reindexa até `limite` pessoas com CPF cujo índice não é da chave ativa (lote; chamar até `pendentes = 0`):
+   * primeiro pacientes, e o que sobrar do lote vai para os responsáveis (0054). Só grava
+   * cpf_bidx/cpf_bidx_version: não toca o CPF cifrado nem `updated_at`; no responsável, o banco também não
+   * gera histórico nem exige usuário (exceção do índice no guardians_guard, 0054), então a reindexação não
+   * conta como `alterado_depois` no desfazer do lote. Trilha só com contagens; a dos responsáveis só quando
+   * há responsável a reindexar, com `table: 'guardians'`. `pendentes` soma as duas tabelas.
    */
   async reindexar(tx: TenantTx, ctx: RequestContext, limite = 500): Promise<{ reindexados: number; pendentes: number }> {
     const chave = (await this.chaveAtiva(tx, ctx.tenantId)) ?? (await this.criarChave(tx, ctx));
-    const foraDaAtiva = and(
-      eq(patients.tenantId, ctx.tenantId),
-      isNotNull(patients.cpfEnc),
-      or(isNull(patients.cpfBidxVersion), ne(patients.cpfBidxVersion, chave.versao)),
-    );
-    const lote = await tx.select({ id: patients.id, cpfEnc: patients.cpfEnc }).from(patients).where(foraDaAtiva).orderBy(patients.id).limit(limite).for('update');
-    for (const l of lote) {
-      const cpf = await this.cipher.decryptString(tx, patientFieldRef(ctx.tenantId, l.id, 'cpf'), l.cpfEnc as string);
-      await tx
-        .update(patients)
-        .set({ cpfBidx: hmacDoCpf(chave.bytes, cpf), cpfBidxVersion: chave.versao })
-        .where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, l.id)));
+    const p = await this.reindexarTabela(tx, ctx, chave, 'patients', limite);
+    await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'patients', metadata: { op: 'cpf_reindex', version: chave.versao, count: p.reindexados, pending: p.pendentes } });
+    const g = await this.reindexarTabela(tx, ctx, chave, 'guardians', limite - p.reindexados);
+    if (g.reindexados > 0 || g.pendentes > 0) {
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: 'patient_guardians',
+        metadata: { op: 'cpf_reindex', table: 'guardians', version: chave.versao, count: g.reindexados, pending: g.pendentes },
+      });
     }
-    const [r] = await tx.select({ n: sql<number>`count(*)::int` }).from(patients).where(foraDaAtiva);
-    const pendentes = Number(r?.n ?? 0);
-    await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'patients', metadata: { op: 'cpf_reindex', version: chave.versao, count: lote.length, pending: pendentes } });
-    return { reindexados: lote.length, pendentes };
+    return { reindexados: p.reindexados + g.reindexados, pendentes: p.pendentes + g.pendentes };
+  }
+
+  private async reindexarTabela(
+    tx: TenantTx,
+    ctx: RequestContext,
+    chave: ChaveViva,
+    tabela: TabelaDoIndice,
+    limite: number,
+  ): Promise<{ reindexados: number; pendentes: number }> {
+    const t = tabelaDe(tabela);
+    const foraDaAtiva = and(eq(t.tenantId, ctx.tenantId), isNotNull(t.cpfEnc), or(isNull(t.cpfBidxVersion), ne(t.cpfBidxVersion, chave.versao)));
+    const lote = limite <= 0 ? [] : await tx.select({ id: t.id, cpfEnc: t.cpfEnc }).from(t).where(foraDaAtiva).orderBy(t.id).limit(limite).for('update');
+    for (const l of lote) {
+      const cpf = await this.cipher.decryptString(tx, refDoCpf(tabela, ctx.tenantId, l.id), l.cpfEnc as string);
+      const indice = { cpfBidx: hmacDoCpf(chave.bytes, cpf, tabela), cpfBidxVersion: chave.versao };
+      // Só as colunas do índice (no responsável, é o que a exceção do guardians_guard aceita sem usuário).
+      if (tabela === 'patients') await tx.update(patients).set(indice).where(and(eq(patients.tenantId, ctx.tenantId), eq(patients.id, l.id)));
+      else await tx.update(guardians).set(indice).where(and(eq(guardians.tenantId, ctx.tenantId), eq(guardians.id, l.id)));
+    }
+    const [r] = await tx.select({ n: sql<number>`count(*)::int` }).from(t).where(foraDaAtiva);
+    return { reindexados: lote.length, pendentes: Number(r?.n ?? 0) };
   }
 
   /**
-   * Quantos pacientes com CPF ainda estão fora da chave ativa (sem índice ou em versão antiga). Não decifra
-   * nada e não cria chave: é a conferência barata que o job faz antes de abrir a chave da clínica.
+   * Quantos pacientes e responsáveis com CPF ainda estão fora da chave ativa (sem índice ou em versão
+   * antiga). Não decifra nada e não cria chave: é a conferência barata que o job faz antes de abrir a chave
+   * da clínica.
    */
   async pendentes(tx: TenantTx, tenantId: TenantId): Promise<number> {
     const [k] = await tx
       .select({ versao: patientCpfIndexKeys.version })
       .from(patientCpfIndexKeys)
       .where(and(eq(patientCpfIndexKeys.tenantId, tenantId), eq(patientCpfIndexKeys.status, 'active')));
-    const [r] = await tx
-      .select({ n: sql<number>`count(*)::int` })
-      .from(patients)
-      .where(
-        and(
-          eq(patients.tenantId, tenantId),
-          isNotNull(patients.cpfEnc),
-          k ? or(isNull(patients.cpfBidxVersion), ne(patients.cpfBidxVersion, k.versao)) : sql`true`,
-        ),
-      );
-    return Number(r?.n ?? 0);
+    let total = 0;
+    for (const tabela of ['patients', 'guardians'] as const) {
+      const t = tabelaDe(tabela);
+      const [r] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(t)
+        .where(and(eq(t.tenantId, tenantId), isNotNull(t.cpfEnc), k ? or(isNull(t.cpfBidxVersion), ne(t.cpfBidxVersion, k.versao)) : sql`true`));
+      total += Number(r?.n ?? 0);
+    }
+    return total;
   }
 
   /** Há versão aposentada ainda não destruída? (sem decifrar; evita a trava da clínica quando não há) */
@@ -167,7 +243,10 @@ export class IndiceCegoCpf {
     return k !== undefined;
   }
 
-  /** Depois da reindexação: chaves aposentadas sem paciente indexado viram `destroyed` (key_enc apagada). */
+  /**
+   * Depois da reindexação: chaves aposentadas sem paciente nem responsável indexado viram `destroyed`
+   * (key_enc apagada). O banco recusa destruir versão em uso (patient_cpf_index_keys_guard, 0054).
+   */
   async descartarChavesAntigas(tx: TenantTx, ctx: RequestContext): Promise<number> {
     await this.travar(tx, ctx.tenantId);
     const r = await tx
@@ -178,6 +257,7 @@ export class IndiceCegoCpf {
           eq(patientCpfIndexKeys.tenantId, ctx.tenantId),
           eq(patientCpfIndexKeys.status, 'retired'),
           sql`not exists (select 1 from patients p where p.tenant_id = ${patientCpfIndexKeys.tenantId} and p.cpf_bidx_version = ${patientCpfIndexKeys.version})`,
+          sql`not exists (select 1 from guardians g where g.tenant_id = ${patientCpfIndexKeys.tenantId} and g.cpf_bidx_version = ${patientCpfIndexKeys.version})`,
         ),
       )
       .returning({ versao: patientCpfIndexKeys.version });
