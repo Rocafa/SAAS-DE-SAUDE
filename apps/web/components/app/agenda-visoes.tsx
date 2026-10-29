@@ -318,6 +318,9 @@ export function VisaoProfissional({ dia }: { dia: string }) {
 
 export function ListaEspera() {
   const { api, atualizar, pacientes } = useDados();
+  // Erro de rede ou 401 nestas duas ações ficava sem dono: a promessa era rejeitada e a tela não
+  // dizia nada. `acao` mostra o aviso de erro, como no resto do arquivo.
+  const acao = useAcao();
   const avisar = useAviso();
   const consulta = useConsulta((a) => a.listarEspera());
   const [busca, setBusca] = useState('');
@@ -333,32 +336,36 @@ export function ListaEspera() {
       setErro('Falta o paciente. Digite o nome e escolha na lista.');
       return;
     }
-    const item = await api.adicionarEspera(pacienteId, preferencia);
-    setPacienteId('');
-    setBusca('');
-    setPreferencia('');
-    setErro('');
-    atualizar();
-    avisar({
-      texto: 'Colocado na lista de espera.',
-      desfazer: async () => {
-        await api.removerEspera(item.id);
-        atualizar();
-      },
+    await acao(async () => {
+      const item = await api.adicionarEspera(pacienteId, preferencia);
+      setPacienteId('');
+      setBusca('');
+      setPreferencia('');
+      setErro('');
+      atualizar();
+      avisar({
+        texto: 'Colocado na lista de espera.',
+        desfazer: async () => {
+          await api.removerEspera(item.id);
+          atualizar();
+        },
+      });
     });
   }
 
   async function tirar(id: string) {
-    const item = await api.removerEspera(id);
-    atualizar();
-    if (item)
-      avisar({
-        texto: 'Tirado da lista de espera.',
-        desfazer: async () => {
-          await api.devolverEspera(item);
-          atualizar();
-        },
-      });
+    await acao(async () => {
+      const item = await api.removerEspera(id);
+      atualizar();
+      if (item)
+        avisar({
+          texto: 'Tirado da lista de espera.',
+          desfazer: async () => {
+            await api.devolverEspera(item);
+            atualizar();
+          },
+        });
+    });
   }
 
   return (

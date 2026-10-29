@@ -72,7 +72,35 @@ async function axe(page: Page) {
   return r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical').map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
 }
 
+/**
+ * As capturas entram no repositório. Fotografar um build ligado à API real gravaria prontuário, CPF e
+ * nome de paciente REAL no git, que é o que a regra do projeto proíbe acima de tudo — e `.env*` é
+ * ignorado pelo git, então o modo não aparece na revisão. Confere o ambiente do processo e, porque o
+ * build pode ter sido feito com outro ambiente, confere também a página servida: a faixa de
+ * demonstração só existe no modo fake.
+ */
+async function exigirModoFake(page: Page): Promise<void> {
+  for (const chave of ['NEXT_PUBLIC_API_MODO', 'NEXT_PUBLIC_PORTAL_MODO'] as const) {
+    const valor = process.env[chave]?.trim() || 'fake';
+    if (valor !== 'fake') throw new Error(`${chave}=${valor}: captura de tela só com dado fictício (${chave}=fake)`);
+  }
+  await page.goto('/inicio');
+  const faixa = page.getByText('Demonstração com pacientes fictícios', { exact: false });
+  if ((await faixa.count()) === 0) {
+    throw new Error('O build servido não está em modo de demonstração: captura abortada antes de gravar PNG no repositório');
+  }
+}
+
 test.describe('telas do PR 1', () => {
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await exigirModoFake(page);
+    } finally {
+      await page.close();
+    }
+  });
+
   for (const [nome, rota] of TELAS) {
     test(`${nome}: acessível, só cinza, letra de 18 px e captura`, async ({ page }, info) => {
       await page.goto(rota);

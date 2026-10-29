@@ -36,6 +36,8 @@ function Estrutura({ children }: { children: ReactNode }) {
   ];
   return (
     <div className="min-h-dvh pb-28 md:pb-10">
+      {/* Manifesto próprio do portal: instalado no celular, o ícone abre /portal, não a área da equipe. */}
+      <link rel="manifest" href="/portal.webmanifest" />
       {!online && <SemInternet />}
       <Faixa fake={modo === 'fake'} />
       <header className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2 px-4 pt-4">

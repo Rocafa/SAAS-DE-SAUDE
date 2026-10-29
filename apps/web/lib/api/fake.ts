@@ -6,6 +6,7 @@ import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
+import { ehAdmin } from './papeis';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
 import { fimDaJanela } from '../conta';
 import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
@@ -303,6 +304,15 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'x2', pacienteId: 'p01', nome: 'Encaminhamento médico (fictício).pdf', tipo: 'laudo', data: paraIsoLocal(somarDias(agora, -21)), clinico: true },
         { id: 'x3', pacienteId: 'p01', nome: 'Carteirinha do convênio (fictício).pdf', tipo: 'documento', data: paraIsoLocal(somarDias(agora, -21)), clinico: false },
       ];
+
+  /**
+   * Trava de papel do que é só do administrador: equipe, convite, acesso, trilha de acesso,
+   * assinatura e exportação total. Mesmo erro que a API responderá (403), para a tela nunca ser a
+   * única guardiã.
+   */
+  function exigirAdmin(): void {
+    if (!ehAdmin(usuario.papel)) throw new ErroApi(MENSAGENS.proibido, 403, 'proibido');
+  }
 
   async function resposta<T>(valor: T): Promise<T> {
     if (opcoes.simular === 'erro') throw new ErroApi('Não conseguimos falar com o servidor.', 0, 'rede');
@@ -628,8 +638,12 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       registrar('Alterou os dados da clínica');
       return resposta(clinica);
     },
-    listarEquipe: () => resposta(equipe),
+    listarEquipe: async () => {
+      exigirAdmin();
+      return resposta(equipe);
+    },
     async convidar(email, papel) {
+      exigirAdmin();
       if (equipe.some((m) => m.email === email.trim().toLowerCase())) throw new Error('Essa pessoa já está na equipe.');
       const m: MembroEquipe = { id: novoId('m'), nome: email.split('@')[0]!, email: email.trim().toLowerCase(), papel, situacao: 'convite_enviado' };
       equipe.push(m);
@@ -637,6 +651,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       return resposta(m);
     },
     async removerAcesso(id) {
+      exigirAdmin();
       const i = equipe.findIndex((m) => m.id === id);
       if (i < 0) return resposta(null);
       if (equipe.filter((m) => m.papel === 'admin').length === 1 && equipe[i]!.papel === 'admin') throw new Error('A clínica precisa de pelo menos um administrador.');
@@ -649,9 +664,13 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       registrar(`Devolveu o acesso de ${m.nome}`);
       await resposta(null);
     },
-    listarAuditoria: () => resposta(auditoria),
+    listarAuditoria: async () => {
+      exigirAdmin();
+      return resposta(auditoria);
+    },
     obterAssinatura: () => resposta(assinatura),
     async cancelarAssinatura() {
+      exigirAdmin();
       const { proximaCobranca: _ignorado, ...resto } = assinatura;
       void _ignorado;
       assinatura = { ...resto, status: 'cancelada', canceladaEm: hojeIso, disponivelAte: fimDaJanela(hojeIso) };
@@ -664,6 +683,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       return resposta(assinatura);
     },
     async pedirExportacao(codigo) {
+      exigirAdmin();
       if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
       if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
       const p: PedidoExportacao = { id: novoId('x'), status: 'aguardando_rt', pedidoEm: hojeIso };
@@ -672,6 +692,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       return resposta(p);
     },
     async aprovarExportacao(id) {
+      exigirAdmin();
       const p = exportacoes.find((x) => x.id === id);
       if (!p) throw new Error('Pedido não encontrado.');
       p.status = 'pronto';
