@@ -119,8 +119,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        (só ids e datas), com a contagem em `manifest.counts.guardians`.
  * 1.21.0: `patientGuardians[].adultConfirmedBy`/`adultConfirmedAt` (migração 0057: pai/mãe ou tutor confirmado para
  *        paciente maior).
+ * 1.22.0: `guardians.adolescentConfidentialityRequests[].encounterId` (migração 0058, R5 do parecer de 29/10: o
+ *        atendimento do prontuário onde o pedido de sigilo foi registrado; só o id).
  */
-export const EXPORT_SCHEMA_VERSION = '1.21.0';
+export const EXPORT_SCHEMA_VERSION = '1.22.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

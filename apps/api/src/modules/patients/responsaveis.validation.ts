@@ -63,6 +63,8 @@ export interface AlteracaoVinculo {
 /** Pedido de sigilo do adolescente (0056): para todos os responsáveis ou para um vínculo. */
 export interface NovoPedidoDeSigilo {
   readonly vinculoId?: string;
+  /** 0058 (R5): atendimento do prontuário onde o pedido foi registrado (do mesmo paciente, do próprio profissional). */
+  readonly atendimentoId?: string;
 }
 
 export interface Encerramento {
@@ -147,10 +149,11 @@ function extrasDaDecisao(v: Validador, liga: boolean | undefined): { escopoInfor
 
 /** Corpo do pedido de sigilo: `{}` (todos os responsáveis) ou `{ vinculoId }`. */
 export function validarPedidoDeSigilo(corpo: unknown): NovoPedidoDeSigilo {
-  const v = new Validador(exigirObjeto(corpo ?? {}, ['vinculoId']));
+  const v = new Validador(exigirObjeto(corpo ?? {}, ['vinculoId', 'atendimentoId']));
   const vinculoId = v.uuid('vinculoId', false);
+  const atendimentoId = v.uuid('atendimentoId', false);
   v.concluir();
-  return vinculoId ? { vinculoId } : {};
+  return { ...(vinculoId ? { vinculoId } : {}), ...(atendimentoId ? { atendimentoId } : {}) };
 }
 
 function dataNaoFutura(v: Validador, campo: string, hoje: string): string | undefined {

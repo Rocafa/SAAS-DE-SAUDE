@@ -7,6 +7,7 @@ import { EntradaInvalidaError } from '../../common/validacao';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   adolescentConfidentialityRequests,
+  encounters,
   guardians,
   patientGuardianHistory,
   patientGuardians,
@@ -150,6 +151,8 @@ export interface PedidoDeSigiloDto {
   readonly pedidoEm: string;
   readonly registradoPor: string;
   readonly revogadoEm: string | null;
+  /** 0058 (R5): atendimento do prontuário onde o pedido foi registrado (só o id). */
+  readonly atendimentoId: string | null;
 }
 
 export const SCOPE_SIGILO_ADOLESCENTE = 'adolescent_confidentiality_requests';
@@ -798,6 +801,23 @@ export class ResponsaveisService {
         pessoaDoPedido = v.guardianId;
       }
       const alvo = dados.vinculoId ?? null;
+      // 0058 (R5): o atendimento é do mesmo paciente e de autoria de quem registra (o banco confere de novo).
+      // Um único código para inexistente, de outro paciente ou de outro autor: não revela a evolução alheia.
+      const atendimento = dados.atendimentoId ?? null;
+      if (atendimento !== null) {
+        const [e] = await tx
+          .select({ id: encounters.id })
+          .from(encounters)
+          .where(
+            and(
+              eq(encounters.tenantId, ctx.tenantId),
+              eq(encounters.id, atendimento),
+              eq(encounters.patientId, pacienteId),
+              eq(encounters.authorUserId, ctx.userId),
+            ),
+          );
+        if (!e) throw new ConflitoError('atendimento_nao_confere');
+      }
       const [repetido] = await tx
         .select({ id: adolescentConfidentialityRequests.id })
         .from(adolescentConfidentialityRequests)
@@ -812,13 +832,13 @@ export class ResponsaveisService {
       if (repetido) throw new ConflitoError('pedido_de_sigilo_ja_vigente');
       const [p] = await tx
         .insert(adolescentConfidentialityRequests)
-        .values({ tenantId: ctx.tenantId, patientId: pacienteId, guardianLinkId: alvo, guardianId: pessoaDoPedido, requestedBy: ctx.userId })
+        .values({ tenantId: ctx.tenantId, patientId: pacienteId, guardianLinkId: alvo, guardianId: pessoaDoPedido, encounterId: atendimento, requestedBy: ctx.userId })
         .returning();
       const pedido = p as typeof adolescentConfidentialityRequests.$inferSelect;
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: SCOPE_SIGILO_ADOLESCENTE,
-        metadata: { patient_id: pacienteId, request_id: pedido.id, link_id: alvo, guardian_id: pessoaDoPedido, all_guardians: alvo === null },
+        metadata: { patient_id: pacienteId, request_id: pedido.id, link_id: alvo, guardian_id: pessoaDoPedido, all_guardians: alvo === null, encounter_id: atendimento },
       });
       return paraPedidoDto(pedido);
     });
@@ -1031,6 +1051,7 @@ function paraPedidoDto(p: typeof adolescentConfidentialityRequests.$inferSelect)
     pedidoEm: p.requestedAt.toISOString(),
     registradoPor: p.requestedBy,
     revogadoEm: p.revokedAt?.toISOString() ?? null,
+    atendimentoId: p.encounterId,
   };
 }
 

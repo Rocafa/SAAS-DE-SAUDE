@@ -202,6 +202,9 @@ describe('0056 (A1 b/c do #67): escopo e pedido de sigilo do adolescente', () =>
     expect(validarPedidoDeSigilo({})).toEqual({});
     expect(validarPedidoDeSigilo({ vinculoId: '00000000-0000-4000-8000-000000000000' })).toEqual({ vinculoId: '00000000-0000-4000-8000-000000000000' });
     expect(() => validarPedidoDeSigilo({ vinculoId: 'x' })).toThrow();
+    // 0058 (R5): atendimento opcional, só uuid.
+    expect(validarPedidoDeSigilo({ atendimentoId: '00000000-0000-4000-8000-000000000001' })).toEqual({ atendimentoId: '00000000-0000-4000-8000-000000000001' });
+    expect(() => validarPedidoDeSigilo({ atendimentoId: 'x' })).toThrow();
     expect(() => validarPedidoDeSigilo({ motivo: 'texto' })).toThrow();
   });
 });
