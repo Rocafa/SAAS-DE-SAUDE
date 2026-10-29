@@ -73,3 +73,19 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 - **Fila:** o item "#66 R3/R9" estava velho, porque os dois já tinham entrado pelo #73. Foi trocado pelas pendências reais de antes do GA:
   - índice cego dos responsáveis;
   - conferir `pending = 0` em produção.
+
+## 5. 29/10: índice cego nos responsáveis (#89)
+
+- **O que entrou:**
+  - migração 0054, que leva o índice cego do CPF aos responsáveis com a mesma chave da clínica e o domínio `guardians.cpf:v1:`;
+  - a deduplicação do importador passa a usar o índice;
+  - o job `cpf-indice-reindexacao` cobre as duas tabelas;
+  - uma versão de chave só é destruída sem paciente nem responsável indexado nela.
+- **Execução:** feito por um agente de engenharia num worktree próprio e conferido pelo Maestro. O Maestro corrigiu:
+  - os testes do agente: um comparava `updated_at` e outro mudava um telefone que a pessoa não tinha;
+  - um defeito: reenviar o mesmo CPF zerava o índice a cada edição;
+  - o teste do adaptador web, que agendava "hoje às 23:00" e falhava quando o CI rodava depois das 23h.
+- **Guardião: APROVADO COM RESSALVAS, depois APROVADO.**
+  - **C1:** decidir "mesmo CPF" pelo índice, que pode ser trocado sem usuário, deixaria um índice forjado descartar em silêncio uma alteração legítima. Agora a decisão é tomada decifrando o CPF atual, como nos pacientes.
+  - **Defeito revelado pelo teste da C1:** com o índice forjado igual ao novo, o gatilho de índice ausente zerava o índice gravado. Corrigido.
+- **Situação:** CI todo verde com RLS. Fica no checklist do GA conferir `pending = 0` também com `table: guardians`.
