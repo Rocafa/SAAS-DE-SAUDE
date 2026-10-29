@@ -33,8 +33,11 @@ describe('maioridade (CC art. 5º) e informação clínica', () => {
     expect(informacaoClinica({ ...marca, tipo: 'representante' }, '1980-01-01', HOJE).permitida).toBe(false);
   });
 
-  it('0055: apoiador recebe só com a marca e a decisão do profissional; não representa', () => {
-    expect(informacaoClinica({ ...marca, tipo: 'apoiador' }, '1980-01-01', HOJE).permitida).toBe(true);
+  it('0055: apoiador recebe só com a marca, a decisão do profissional e a autorização do paciente (B1); não representa', () => {
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador', autorizadoPeloPaciente: true }, '1980-01-01', HOJE)).toEqual({ permitida: true, motivo: 'permitida' });
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador' }, '1980-01-01', HOJE)).toEqual({ permitida: false, motivo: 'sem_autorizacao_do_paciente' });
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador', autorizadoPeloPaciente: false }, '1980-01-01', HOJE).motivo).toBe('sem_autorizacao_do_paciente');
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador', autorizadoPeloPaciente: true, ate: HOJE }, '1980-01-01', HOJE).motivo).toBe('vinculo_nao_vigente');
     expect(informacaoClinica({ ...marca, tipo: 'apoiador', decididaEm: null }, '1980-01-01', HOJE).motivo).toBe('sem_decisao_do_profissional');
     expect(informacaoClinica({ ...marca, tipo: 'apoiador', recebeInformacaoClinica: false }, '1980-01-01', HOJE).motivo).toBe('marca_desligada');
     expect(tipoRepresentaPaciente('apoiador')).toBe(false);
@@ -109,6 +112,12 @@ describe('validação', () => {
     expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', confirmaPacienteMaior: true }, HOJE)).toMatchObject({ confirmaPacienteMaior: true });
     expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'tutor' }, HOJE)).toMatchObject({ confirmaPacienteMaior: false });
     expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'representante', confirmaPacienteMaior: true }, HOJE)).toThrow();
+    // B1: autorização do paciente só no apoiador, só `true` e só com a marca ligada.
+    const liga = { recebeInformacaoClinica: true, justificativa: 'Paciente autorizou por escrito (ficticio)' };
+    expect(validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio, ...liga, autorizacaoDoPaciente: true }, HOJE)).toMatchObject({ autorizacaoDoPaciente: true });
+    expect(() => validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio, autorizacaoDoPaciente: true }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio, ...liga, autorizacaoDoPaciente: false }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', ...liga, autorizacaoDoPaciente: true }, HOJE)).toThrow();
   });
 
   it('recepção cadastra, mas não liga informação clínica', () => {

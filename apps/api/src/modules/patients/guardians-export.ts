@@ -46,10 +46,17 @@ export interface ExportedGuardians {
     clinicalInfoDecidedBy: string | null;
     clinicalInfoDecidedAt: string | null;
     clinicalInfoBasis: string | null;
+    /** Curatela (kind = curador). Desde a 1.19.0 vem null para o apoiador: o termo dele sai em `supportTerm*`. */
     courtDecisionRef: string | null;
     curatorshipScope: string | null;
+    /** 1.19.0 (0055): termo de decisão apoiada (kind = apoiador): referência da homologação e limites do apoio. */
+    supportTermRef: string | null;
+    supportTermScope: string | null;
     payerPatientAwareBy: string | null;
     payerPatientAwareAt: string | null;
+    /** 1.19.0 (0055, B1): autorização expressa do paciente para o apoiador receber informação clínica. */
+    patientAuthorizedBy: string | null;
+    patientAuthorizedAt: string | null;
     annulReason: string | null;
     discardAfter: string | null;
     /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
@@ -167,10 +174,15 @@ export async function exportarResponsaveis(
       clinicalInfoDecidedBy: v.clinicalInfoDecidedBy,
       clinicalInfoDecidedAt: iso(v.clinicalInfoDecidedAt),
       clinicalInfoBasis: await decVinculo(v.id, 'clinical_info_basis', v.clinicalInfoBasisEnc),
-      courtDecisionRef: await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc),
-      curatorshipScope: await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc),
+      // Curatela e termo de apoio dividem as colunas cifradas; o tipo decide em que campo cada um sai (R3 de 29/10).
+      courtDecisionRef: v.kind === 'apoiador' ? null : await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc),
+      curatorshipScope: v.kind === 'apoiador' ? null : await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc),
+      supportTermRef: v.kind === 'apoiador' ? await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc) : null,
+      supportTermScope: v.kind === 'apoiador' ? await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc) : null,
       payerPatientAwareBy: v.payerPatientAwareBy,
       payerPatientAwareAt: iso(v.payerPatientAwareAt),
+      patientAuthorizedBy: v.patientAuthorizedBy,
+      patientAuthorizedAt: iso(v.patientAuthorizedAt),
       annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
       discardAfter: v.discardAfter,
       eliminatedAt: iso(v.eliminatedAt),

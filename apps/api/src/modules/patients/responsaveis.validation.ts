@@ -18,6 +18,8 @@ export interface NovoVinculo {
   readonly recebeInformacaoClinica: boolean;
   /** Obrigatória ao ligar a informação clínica: a avaliação do profissional (cifrada; nunca na trilha). */
   readonly justificativa?: string;
+  /** Apoiador (0055, B1): o profissional atesta a autorização expressa do paciente (como e em que limites, na justificativa). */
+  readonly autorizacaoDoPaciente?: boolean;
   /** Início da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
   readonly desde?: string;
   /**
@@ -37,6 +39,8 @@ export interface AlteracaoVinculo {
   readonly telefone?: string | null;
   readonly recebeInformacaoClinica?: boolean;
   readonly justificativa?: string;
+  /** Apoiador (0055, B1): autorização expressa do paciente ao ligar a marca. */
+  readonly autorizacaoDoPaciente?: boolean;
 }
 
 export interface Encerramento {
@@ -61,8 +65,9 @@ const CAMPOS_NOVO = [
   'apoioReferencia',
   'apoioEscopo',
   'confirmaPacienteMaior',
+  'autorizacaoDoPaciente',
 ] as const;
-const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica', 'justificativa'] as const;
+const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica', 'justificativa', 'autorizacaoDoPaciente'] as const;
 
 function cpfOuFalha(v: Validador, bruto: string | null | undefined): string | null | undefined {
   if (bruto === undefined || bruto === null) return bruto;
@@ -86,6 +91,13 @@ function justificativaDaDecisao(v: Validador, liga: boolean | undefined): string
   return j;
 }
 
+/** Autorização do paciente (apoiador, 0055): só `true`, e só junto com a marca LIGADA. O tipo é conferido no serviço. */
+function autorizacaoDaDecisao(v: Validador, liga: boolean | undefined): boolean {
+  const a = v.booleano('autorizacaoDoPaciente');
+  if (a === false || (a === true && liga !== true)) v.falhar('autorizacaoDoPaciente');
+  return a === true;
+}
+
 function dataNaoFutura(v: Validador, campo: string, hoje: string): string | undefined {
   const d = v.texto(campo, { max: 10 });
   if (d === undefined) return undefined;
@@ -106,6 +118,7 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
   const pagador = v.booleano('pagador') ?? false;
   const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica') ?? false;
   const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
+  const autorizacaoDoPaciente = autorizacaoDaDecisao(v, recebeInformacaoClinica);
   const desde = dataNaoFutura(v, 'desde', hoje);
   const curatelaReferencia = v.texto('curatelaReferencia', { min: 3, max: 300 });
   const curatelaEscopo = v.texto('curatelaEscopo', { min: 3, max: 1000 });
@@ -120,6 +133,7 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
   const cienciaDoPaciente = v.booleano('cienciaDoPaciente') ?? false;
   const confirmaPacienteMaior = v.booleano('confirmaPacienteMaior') ?? false;
   if (confirmaPacienteMaior && tipo !== 'pai_mae' && tipo !== 'tutor') v.falhar('confirmaPacienteMaior');
+  if (autorizacaoDoPaciente && tipo !== 'apoiador') v.falhar('autorizacaoDoPaciente');
   // Ou a pessoa existente, ou os dados de uma nova (nunca os dois, nunca nenhum).
   const temPessoa = v.tem('nome') || v.tem('cpf') || v.tem('telefone');
   if (v.tem('responsavelId') === temPessoa) v.falhar(v.tem('responsavelId') ? 'responsavelId' : 'nome');
@@ -131,6 +145,7 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
     pagador,
     recebeInformacaoClinica,
     ...(justificativa ? { justificativa } : {}),
+    ...(autorizacaoDoPaciente ? { autorizacaoDoPaciente } : {}),
     ...(desde ? { desde } : {}),
     ...(curatelaReferencia && curatelaEscopo ? { curatela: { referencia: curatelaReferencia, escopo: curatelaEscopo } } : {}),
     ...(apoioReferencia && apoioEscopo ? { curatela: { referencia: apoioReferencia, escopo: apoioEscopo } } : {}),
@@ -146,6 +161,7 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   const telefone = telefoneOuFalha(v, v.textoOuNulo('telefone', { max: 25 }));
   const recebeInformacaoClinica = v.booleano('recebeInformacaoClinica');
   const justificativa = justificativaDaDecisao(v, recebeInformacaoClinica);
+  const autorizacaoDoPaciente = autorizacaoDaDecisao(v, recebeInformacaoClinica);
   v.concluir();
   if (!CAMPOS_ALTERACAO.some((c) => v.tem(c))) throw new EntradaInvalidaError(['corpo']);
   const out: { -readonly [K in keyof AlteracaoVinculo]: AlteracaoVinculo[K] } = {};
@@ -154,6 +170,7 @@ export function validarAlteracaoVinculo(corpo: unknown): AlteracaoVinculo {
   if (telefone !== undefined) out.telefone = telefone;
   if (recebeInformacaoClinica !== undefined) out.recebeInformacaoClinica = recebeInformacaoClinica;
   if (justificativa !== undefined) out.justificativa = justificativa;
+  if (autorizacaoDoPaciente) out.autorizacaoDoPaciente = true;
   return out;
 }
 

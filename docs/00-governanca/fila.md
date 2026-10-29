@@ -98,6 +98,8 @@
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
 | **Checklist do GA:** conferir na trilha de cada clínica que o job `cpf-indice-reindexacao` chegou a `pending = 0` em produção, nos pacientes e nos responsáveis (`table: 'guardians'`) | pareceres do #88 e #89 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
+| **R4 do parecer do apoiador (#109):** pai/mãe ou tutor confirmado para paciente maior fica só na trilha; se a data de nascimento for cadastrada depois e mostrar um adulto, criar pendência de revisão do vínculo | [parecer de 29/10](../03-seguranca-lgpd/revisoes/2026-10-29-apoiador.md) |
+| **A1 (b)/(c) do #67:** escopo da informação ao responsável e pedido de sigilo do adolescente (bloqueia consumidor de `podeReceberInformacaoClinica`) | parecer do #67 (21/10) |
 
 ## Feito
 | Item | Quem | Quando |

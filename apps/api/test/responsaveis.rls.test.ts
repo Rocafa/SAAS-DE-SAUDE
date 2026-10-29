@@ -519,7 +519,7 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
     expect((lig.body as Resp).informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
   });
 
-  it('0055: apoiador exige o termo e os limites (cifrados), não vale para menor e só recebe informação clínica por decisão do profissional', async () => {
+  it('0055: apoiador exige o termo e os limites (cifrados), não vale para menor nem sem nascimento; informação clínica só com decisão E autorização do paciente', async () => {
     const adulto = await paciente(recepA, { nome: 'Paciente Ficticio Apoiado', nascimento: nascidoHa(38) });
     const menor = await paciente(recepA, { nome: 'Paciente Ficticio Menor Apoio', nascimento: nascidoHa(12) });
     const REF = 'Termo ficticio de decisao apoiada QZA0001';
@@ -529,6 +529,11 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
     expect((await post(recepA, `/pacientes/${adulto}/responsaveis`, { nome: 'Apoiador Ficticio', tipo: 'apoiador', curatelaReferencia: REF, curatelaEscopo: 'x'.repeat(5) })).status).toBe(400);
     expect((await post(recepA, `/pacientes/${adulto}/responsaveis`, { nome: 'Rep Ficticio', tipo: 'representante', ...apoio })).status).toBe(400);
     expect((await post(recepA, `/pacientes/${menor}/responsaveis`, { nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio })).body).toMatchObject({ codigo: 'apoio_de_menor' });
+    // R2: sem data de nascimento não se presume a maioridade.
+    const semData = await paciente(recepA, { nome: 'Paciente Ficticio Apoio Sem Data' });
+    expect((await post(recepA, `/pacientes/${semData}/responsaveis`, { nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio })).body).toMatchObject({ codigo: 'apoio_sem_data_de_nascimento' });
+    // R5: apoiador pagador de adulto também exige a ciência do paciente.
+    expect((await post(recepA, `/pacientes/${adulto}/responsaveis`, { nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio, pagador: true })).body).toMatchObject({ codigo: 'ciencia_do_paciente_obrigatoria' });
     const a = await responsavel(recepA, adulto, { nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio });
     expect(a.informacaoClinica.motivo).toBe('marca_desligada');
     const [linha] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, a.id)), recepA.userId);
@@ -556,10 +561,27 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
       recepA.userId,
     );
     expect(wa?.ok).toBe(false);
-    // Com a decisão do profissional: permitida (como na curatela).
+    // B1: a decisão do profissional sozinha não basta; o apoiado é capaz e precisa autorizar.
     await cuidar(adulto);
-    const lig = await patch(profA, `/pacientes/${adulto}/responsaveis/${a.id}`, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA });
+    const rota = `/pacientes/${adulto}/responsaveis/${a.id}`;
+    expect((await patch(profA, rota, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA })).body).toMatchObject({ codigo: 'autorizacao_do_paciente_obrigatoria' });
+    const lig = await patch(profA, rota, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA, autorizacaoDoPaciente: true });
+    expect(lig.status, JSON.stringify(lig.body)).toBe(200);
     expect((lig.body as Resp).informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
+    const autorizacao = async () =>
+      (await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, a.id)), recepA.userId))[0];
+    expect(await autorizacao()).toMatchObject({ patientAuthorizedBy: profA.userId });
+    // Banco: sem a coluna da autorização, a marca do apoiador não fica ligada; nem dá para trocar quem autorizou
+    // sem nova decisão.
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ patientAuthorizedBy: null, patientAuthorizedAt: null, updatedBy: profA.userId }).where(eq(patientGuardians.id, a.id)), profA.userId))).toContain('42501');
+    expect(await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(patientGuardians).set({ patientAuthorizedBy: recepA.userId, updatedBy: recepA.userId }).where(eq(patientGuardians.id, a.id)), recepA.userId))).toContain('42501');
+    // Revogar = desligar a marca: a autorização some junto.
+    const desl = await patch(recepA, rota, { recebeInformacaoClinica: false });
+    expect((desl.body as Resp).informacaoClinica.motivo).toBe('marca_desligada');
+    expect(await autorizacao()).toMatchObject({ patientAuthorizedBy: null, patientAuthorizedAt: null });
+    // A autorização não cabe em outro tipo.
+    const outro = await responsavel(recepA, adulto, { nome: 'Rep Ficticio Autorizacao', tipo: 'representante' });
+    expect((await patch(profA, `/pacientes/${adulto}/responsaveis/${outro.id}`, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA, autorizacaoDoPaciente: true })).status).toBe(400);
   });
 
   it('A3 do #67: pai/mãe ou tutor de paciente MAIOR só com confirmação explícita (registrada na trilha)', async () => {

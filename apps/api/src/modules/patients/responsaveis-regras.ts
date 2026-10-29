@@ -43,7 +43,7 @@ export const ROTULO_DO_TIPO: Readonly<Record<GuardianKind, string>> = {
 /**
  * Decisão apoiada (CC art. 1.783-A; 0055): o apoiador NÃO representa. O paciente é maior e capaz e decide em
  * nome próprio. O apoiador não age pelo paciente no portal nem recebe lembrete por ele, e a informação clínica
- * só chega a ele por decisão do profissional, como na curatela.
+ * só chega a ele com a autorização expressa do paciente e a decisão do profissional.
  */
 export function tipoRepresentaPaciente(tipo: GuardianKind): boolean {
   return tipo !== 'apoiador';
@@ -57,6 +57,7 @@ export type MotivoInformacaoClinica =
   | 'adolescente_requer_nova_decisao'
   | 'paciente_maior_de_idade'
   | 'paciente_emancipado'
+  | 'sem_autorizacao_do_paciente'
   | 'sem_data_de_nascimento';
 
 export type FaixaEtaria = 'crianca' | 'adolescente' | 'adulto';
@@ -109,6 +110,8 @@ export interface VinculoParaInformacaoClinica extends Vigencia {
   readonly recebeInformacaoClinica: boolean;
   /** Data (AAAA-MM-DD, fuso da clínica) da decisão do profissional; null sem decisão. */
   readonly decididaEm: string | null;
+  /** Apoiador (0055, B1): autorização expressa do paciente registrada. Os outros tipos ignoram. */
+  readonly autorizadoPeloPaciente?: boolean;
 }
 
 export function informacaoClinica(
@@ -122,8 +125,10 @@ export function informacaoClinica(
   if (!vinculo.recebeInformacaoClinica) return negar('marca_desligada');
   if (!vigenteEm(vinculo, hoje)) return negar('vinculo_nao_vigente');
   if (vinculo.decididaEm === null) return negar('sem_decisao_do_profissional');
-  // Curatela e decisão apoiada são de adulto: basta a decisão do profissional (a idade não muda nada).
-  if (vinculo.tipo === 'curador' || vinculo.tipo === 'apoiador') return { permitida: true, motivo: 'permitida' };
+  if (vinculo.tipo === 'curador') return { permitida: true, motivo: 'permitida' };
+  // Decisão apoiada (B1 do parecer de 29/10): o apoiado é capaz; além da decisão do profissional, exige a
+  // autorização expressa do paciente (CEM art. 73, LGPD art. 11, I). Sem regra de idade.
+  if (vinculo.tipo === 'apoiador') return vinculo.autorizadoPeloPaciente === true ? { permitida: true, motivo: 'permitida' } : negar('sem_autorizacao_do_paciente');
   const menor = menorEm(nascimentoDoPaciente, hoje, emancipadoEm);
   if (menor === null) return negar('sem_data_de_nascimento');
   if (!menor) return negar(emancipadoEm !== null && emancipadoEm <= hoje ? 'paciente_emancipado' : 'paciente_maior_de_idade');
