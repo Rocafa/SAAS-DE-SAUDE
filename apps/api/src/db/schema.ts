@@ -994,8 +994,8 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   documentRequired: boolean('document_required').notNull().default(sql`null`),
 });
 
-/** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */
-export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante'] as const;
+/** Responsáveis do paciente (migração 0028; `apoiador` na 0055). Valores no mesmo CHECK do banco. */
+export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante', 'apoiador'] as const;
 export type GuardianKind = (typeof GUARDIAN_KINDS)[number];
 export const GUARDIAN_END_REASONS = [
   'maioridade',
@@ -1071,6 +1071,9 @@ export const patientGuardians = pgTable('patient_guardians', {
   /** Paciente adulto ciente de que um terceiro é o pagador (autor/data pelo banco). */
   payerPatientAwareBy: uuid('payer_patient_aware_by'),
   payerPatientAwareAt: timestamp('payer_patient_aware_at', { withTimezone: true }),
+  /** 0055 (B1): autorização expressa do paciente para o APOIADOR receber informação clínica (quem registrou e quando). */
+  patientAuthorizedBy: uuid('patient_authorized_by'),
+  patientAuthorizedAt: timestamp('patient_authorized_at', { withTimezone: true }),
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),

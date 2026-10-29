@@ -410,7 +410,7 @@ beforeAll(async () => {
     .http()
     .post(`/pacientes/${pacienteId}/responsaveis`)
     .set(cab(admin))
-    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true, confirmaPacienteMaior: true });
   expect(resp.status, JSON.stringify(resp.body)).toBe(201);
   const vinculoId = (resp.body as { id: string }).id;
   await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);

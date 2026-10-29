@@ -62,6 +62,8 @@ export interface ResponsavelDto {
   readonly encerramento: { readonly motivo: GuardianEndReason; readonly em: string } | null;
   /** Curatela (decisão judicial e escopo), só para admin e profissional; null nos outros tipos. */
   readonly curatela: { readonly referencia: string; readonly escopo: string } | null;
+  /** Termo de decisão apoiada (referência da homologação e limites do apoio, 0055): mesma leitura da curatela; null nos outros tipos. */
+  readonly termoDeApoio: { readonly referencia: string; readonly escopo: string } | null;
   /** Pagador de paciente adulto com a ciência do paciente registrada (A7 do #67). */
   readonly pagadorComCienciaDoPaciente: boolean;
   /** Anulado (cadastro errado): data a partir da qual a pessoa é descartada. */
@@ -133,6 +135,7 @@ function paraRegra(v: LinhaVinculo): VinculoParaInformacaoClinica {
     tipo: v.kind,
     recebeInformacaoClinica: v.receivesClinicalInfo,
     decididaEm: v.clinicalInfoDecidedAt ? noFusoDaClinica(v.clinicalInfoDecidedAt).data : null,
+    autorizadoPeloPaciente: v.patientAuthorizedAt !== null,
   };
 }
 
@@ -256,8 +259,17 @@ export class ResponsaveisService {
       if (dados.pagador && vivos.some((v) => v.isPayer)) throw new ConflitoError('pagador_ja_definido');
       const quadro = await this.quadro(tx, ctx.tenantId, pac);
       const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
-      // A3: curatela é para maior (menor tem pais/tutor); A7: terceiro pagador de adulto exige a ciência dele.
+      // A3: curatela e decisão apoiada são para maior (menor tem pais/tutor); pai/mãe ou tutor de paciente maior
+      // (ou emancipado) só com confirmação explícita, porque não representa mais. A7: terceiro pagador de adulto
+      // exige a ciência dele.
       if (dados.tipo === 'curador' && menor === true) throw new ConflitoError('curatela_de_menor');
+      if (dados.tipo === 'apoiador' && menor === true) throw new ConflitoError('apoio_de_menor');
+      // R2 do parecer de 29/10: sem data de nascimento não se presume a maioridade do apoiado.
+      if (dados.tipo === 'apoiador' && menor === null) throw new ConflitoError('apoio_sem_data_de_nascimento');
+      // B1: apoiador com a marca ligada exige a autorização expressa do paciente.
+      if (dados.tipo === 'apoiador' && dados.recebeInformacaoClinica && !dados.autorizacaoDoPaciente) throw new ConflitoError('autorizacao_do_paciente_obrigatoria');
+      const paiOuTutorDeMaior = (dados.tipo === 'pai_mae' || dados.tipo === 'tutor') && menor === false;
+      if (paiOuTutorDeMaior && !dados.confirmaPacienteMaior) throw new ConflitoError('pai_mae_tutor_de_maior_requer_confirmacao');
       if (dados.pagador && menor !== true && !dados.cienciaDoPaciente) throw new ConflitoError('ciencia_do_paciente_obrigatoria');
       const vinculoId = randomUUID();
       const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, vinculoId, dados.justificativa) : {};
@@ -273,6 +285,7 @@ export class ResponsaveisService {
               }
             : {}),
           ...(dados.pagador && menor !== true ? { payerPatientAwareBy: ctx.userId, payerPatientAwareAt: new Date() } : {}),
+          ...(dados.autorizacaoDoPaciente ? { patientAuthorizedBy: ctx.userId, patientAuthorizedAt: new Date() } : {}),
           tenantId: ctx.tenantId,
           patientId: pacienteId,
           guardianId: pessoa.id,
@@ -297,6 +310,8 @@ export class ResponsaveisService {
           clinical_info: dados.recebeInformacaoClinica,
           existing_guardian: dados.responsavelId !== undefined,
           ...(dados.pagador && menor !== true ? { patient_aware: true } : {}),
+          ...(paiOuTutorDeMaior ? { adult_patient_confirmed: true } : {}),
+          ...(dados.autorizacaoDoPaciente ? { patient_authorized: true } : {}),
         },
       });
       return this.paraDto(tx, ctx, vinculo, pessoa, quadro, hoje);
@@ -348,11 +363,23 @@ export class ResponsaveisService {
       let vinculo = v;
       // Ligar (ou renovar a decisão com nova justificativa, ex.: o paciente fez 12 anos) é decisão do
       // profissional; desligar é livre (fail-safe).
+      // Apoiador (0055, B1): ligar (ou renovar a decisão) exige a autorização expressa do paciente; desligar
+      // revoga e apaga a autorização. Nos outros tipos o campo não cabe.
+      if (dados.autorizacaoDoPaciente && v.kind !== 'apoiador') throw new EntradaInvalidaError(['autorizacaoDoPaciente']);
+      if (dados.recebeInformacaoClinica === true && v.kind === 'apoiador' && !dados.autorizacaoDoPaciente) {
+        throw new ConflitoError('autorizacao_do_paciente_obrigatoria');
+      }
       if (dados.recebeInformacaoClinica === true || (dados.recebeInformacaoClinica === false && v.receivesClinicalInfo)) {
         const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, v.id, dados.justificativa) : {};
+        const autorizacao =
+          v.kind !== 'apoiador'
+            ? {}
+            : dados.recebeInformacaoClinica
+              ? { patientAuthorizedBy: ctx.userId, patientAuthorizedAt: new Date() }
+              : { patientAuthorizedBy: null, patientAuthorizedAt: null };
         const [nv] = await tx
           .update(patientGuardians)
-          .set({ receivesClinicalInfo: dados.recebeInformacaoClinica, ...decisao, updatedBy: ctx.userId })
+          .set({ receivesClinicalInfo: dados.recebeInformacaoClinica, ...decisao, ...autorizacao, updatedBy: ctx.userId })
           .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, v.id)))
           .returning();
         vinculo = nv as LinhaVinculo;
@@ -362,7 +389,15 @@ export class ResponsaveisService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE_RESPONSAVEIS,
-        metadata: { patient_id: pacienteId, link_id: v.id, guardian_id: g.id, changed: campos.join(',') },
+        metadata: {
+          patient_id: pacienteId,
+          link_id: v.id,
+          guardian_id: g.id,
+          changed: campos.join(','),
+          // C1 do parecer de 29/10: a prova da autorização do paciente (e da revogação) fica na trilha (LGPD art. 8º, § 2º).
+          ...(v.kind === 'apoiador' && dados.recebeInformacaoClinica === true ? { patient_authorized: true } : {}),
+          ...(v.kind === 'apoiador' && dados.recebeInformacaoClinica === false && v.receivesClinicalInfo ? { patient_authorization_revoked: true } : {}),
+        },
       });
       return this.paraDto(tx, ctx, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });
@@ -736,7 +771,8 @@ export class ResponsaveisService {
     const tenantId = ctx.tenantId;
     const perfis = ctx.roles.filter(ehPerfil);
     const cpf = await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc);
-    const curatela =
+    // Curatela e termo de apoio ficam nas mesmas colunas cifradas; o tipo do vínculo diz qual é.
+    const decisaoJudicial =
       v.courtDecisionRefEnc && v.curatorshipScopeEnc && temPermissao(perfis, 'responsaveis:ver_curatela')
         ? {
             referencia: (await decifrarCampoVinculo(this.cipher, tx, tenantId, v.id, 'court_decision_ref', v.courtDecisionRefEnc)) ?? '',
@@ -760,7 +796,8 @@ export class ResponsaveisService {
       faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
-      curatela,
+      curatela: v.kind === 'curador' ? decisaoJudicial : null,
+      termoDeApoio: v.kind === 'apoiador' ? decisaoJudicial : null,
       pagadorComCienciaDoPaciente: v.payerPatientAwareAt !== null,
       descarteApos: v.discardAfter,
       pessoaDescartada: g.discardedAt !== null,

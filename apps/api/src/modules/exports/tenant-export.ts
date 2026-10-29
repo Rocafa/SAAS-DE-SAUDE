@@ -111,8 +111,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *          `whatsappOptIns[].phonePurgedAt` (número e HMAC apagados com a eliminação do paciente).
  * 1.18.0: responsáveis no importador (migração 0048, R5 do parecer do importador): `guardians[].importBatchId`
  *        e `patientGuardians[].importBatchId` (marca imutável do lote que criou a pessoa/o vínculo).
+ * 1.19.0: decisão apoiada (migração 0055, A3 do #67): `patientGuardians[].kind` aceita `apoiador`; o termo dele
+ *        sai em `supportTermRef`/`supportTermScope` (e `courtDecisionRef`/`curatorshipScope` ficam null, para não
+ *        ser lido como curatela); `patientAuthorizedBy`/`patientAuthorizedAt` (autorização do paciente, B1).
  */
-export const EXPORT_SCHEMA_VERSION = '1.18.0';
+export const EXPORT_SCHEMA_VERSION = '1.19.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
