@@ -7,15 +7,26 @@ import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
+import { fimDaJanela } from '../conta';
+import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   AlteracaoPaciente,
   Agendamento,
   Anexo,
+  Assinatura,
+  DadosClinica,
+  EventoAuditoria,
+  MembroEquipe,
+  PedidoExportacao,
+  Conversa,
+  Guia,
+  NovaGuia,
   EventoLinhaTempo,
   ItemEspera,
   NovoPaciente,
   Pacote,
   Papel,
+  Registro,
   Repeticao,
   NovoAgendamento,
   Paciente,
@@ -135,6 +146,17 @@ const SEMENTES: Semente[] = [
   { paciente: 13, prof: 2, tipo: 2, dia: -2, hora: '14:00', status: 'faltou' },
 ];
 
+// Histórico de 4 semanas para os relatórios (dias úteis, 2 atendimentos e às vezes uma falta).
+const HISTORICO: Semente[] = Array.from({ length: 28 }, (_, k) => -(k + 15)).flatMap((dia, k) => [
+  { paciente: (k % 28) + 1, prof: (k % 3) + 1, tipo: (k % 4) + 1, dia, hora: '10:00', status: 'atendido' as const },
+  { paciente: ((k + 7) % 28) + 1, prof: ((k + 1) % 3) + 1, tipo: 1, dia, hora: '15:00', status: (k % 5 === 0 ? 'faltou' : 'atendido') as StatusAgendamento },
+]);
+// E alguns atendimentos recentes ainda sem pagamento (contas a receber).
+const SEM_PAGAMENTO: Semente[] = [
+  { paciente: 11, prof: 1, tipo: 1, dia: -1, hora: '10:00', status: 'atendido' },
+  { paciente: 14, prof: 3, tipo: 4, dia: -4, hora: '11:00', status: 'atendido' },
+];
+
 export interface OpcoesFake {
   agora?: Date;
   /**
@@ -152,7 +174,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   const pacientes = vazio ? [] : criarPacientesFicticios();
   const agendamentos: Agendamento[] = vazio
     ? []
-    : SEMENTES.map((s, i) => {
+    : [...SEMENTES, ...HISTORICO, ...SEM_PAGAMENTO].map((s, i) => {
         const tipo = TIPOS[s.tipo - 1]!;
         return {
           id: `a${dois(i + 1)}`,
@@ -166,8 +188,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
           encaixe: false,
         };
       });
+  const semPagamentoIds = new Set(agendamentos.slice(SEMENTES.length + HISTORICO.length).map((a) => a.id));
   const recibos: Recibo[] = agendamentos
-    .filter((a) => a.status === 'atendido')
+    .filter((a) => a.status === 'atendido' && !semPagamentoIds.has(a.id))
     .map((a, i) => ({
       id: `r${dois(i + 1)}`,
       agendamentoId: a.id,
@@ -187,11 +210,92 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'e2', pacienteId: 'p20', preferencia: 'Terça ou quinta depois das 17h', criadoEm: paraIsoLocal(somarDias(agora, -1)) },
       ];
   const pacotes: Pacote[] = vazio ? [] : [{ id: 'k1', pacienteId: 'p01', nome: 'Pacote de 10 sessões de fisioterapia', total: 10, usadas: 3 }];
+  const USUARIOS: Usuario[] = [
+    { id: 'u1', nome: 'Administradora (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
+    { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
+    { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
+    { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
+    { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
+  ];
+  let usuario: Usuario = opcoes.papel ? { ...USUARIOS[0]!, papel: opcoes.papel } : USUARIOS[0]!;
+  const registros: Registro[] = vazio
+    ? []
+    : agendamentos
+        .filter((a) => a.status === 'atendido' && a.data < hojeIso)
+        .map((a, i) => {
+          const modelo = modeloDoProfissional(PROFISSIONAIS.find((p) => p.id === a.profissionalId));
+          const campos: Record<string, string> =
+            modelo === 'psicologia'
+              ? { tema: 'Conteúdo fictício de demonstração.', evolucao: 'Processo em andamento (fictício).' }
+              : { queixa: 'Relata melhora da dor no joelho (fictício).', dor: '3', conduta: 'Fortalecimento de quadríceps, 3 séries de 12 (fictício).', plano: 'Manter exercícios em casa.' };
+          return {
+            id: `g${i + 1}`,
+            pacienteId: a.pacienteId,
+            agendamentoId: a.id,
+            profissionalId: a.profissionalId,
+            modelo,
+            data: a.data,
+            campos,
+            status: 'assinado' as const,
+            assinadoEm: a.data,
+            adendos: [],
+            restrito: ehRestrito(modelo),
+          };
+        });
+  /** Emissões de documento (auditoria: tipo, paciente, quem; nunca o texto). */
+  const emissoes: { tipo: string; pacienteId: string; profissionalId?: string; por: string; em: string }[] = [];
+  const temVinculo = (pacienteId: string) =>
+    !!usuario.profissionalId && agendamentos.some((a) => a.pacienteId === pacienteId && a.profissionalId === usuario.profissionalId);
+  const motivoOculto = (r: Registro): Registro['motivoOculto'] | null => {
+    if (!ehPerfilClinico(usuario)) return 'perfil_nao_clinico';
+    if (r.restrito) return usuario.profissionalId === r.profissionalId ? null : 'sigilo_psicologia';
+    return temVinculo(r.pacienteId) ? null : 'sem_vinculo';
+  };
+  const visivel = (r: Registro): Registro => {
+    const motivo = motivoOculto(r);
+    return motivo ? { ...r, campos: {}, adendos: [], conteudoOculto: true, motivoOculto: motivo } : r;
+  };
+  const anexoVisivel = (x: Anexo): Anexo =>
+    x.clinico && !(ehPerfilClinico(usuario) && temVinculo(x.pacienteId)) ? { ...x, nome: 'Anexo clínico', conteudoOculto: true } : x;
+  const guias: Guia[] = vazio
+    ? []
+    : [
+        { id: 'gu1', pacienteId: 'p03', convenio: 'Convênio Exemplo (fictício)', numero: '000123', sessoesAutorizadas: 10, sessoesUsadas: 9, validade: paraIsoLocal(somarDias(agora, 20)) },
+        { id: 'gu2', pacienteId: 'p07', convenio: 'Plano Demonstração (fictício)', numero: '000456', sessoesAutorizadas: 12, sessoesUsadas: 4, validade: paraIsoLocal(somarDias(agora, 5)) },
+        { id: 'gu3', pacienteId: 'p08', convenio: 'Convênio Exemplo (fictício)', numero: '000789', sessoesAutorizadas: 8, sessoesUsadas: 2, validade: paraIsoLocal(somarDias(agora, 60)) },
+      ];
+  const conversas: Conversa[] = vazio
+    ? []
+    : [
+        { id: 'c1', pacienteId: 'p02', naoLidas: 1, mensagens: [{ de: 'clinica', texto: 'Olá! Lembrete da sua consulta hoje às 11:00. Confirma?', hora: '08:00' }, { de: 'paciente', texto: 'Confirmo, obrigado!', hora: '08:12' }] },
+        { id: 'c2', pacienteId: 'p12', naoLidas: 2, mensagens: [{ de: 'paciente', texto: 'Bom dia, posso trocar meu horário de hoje para amanhã?', hora: '07:40' }, { de: 'paciente', texto: 'Pode ser à tarde.', hora: '07:41' }] },
+        { id: 'c3', pacienteId: 'p05', naoLidas: 0, mensagens: [{ de: 'clinica', texto: 'Sua consulta de amanhã às 10:00 está confirmada.', hora: 'ontem' }] },
+      ];
+  let clinica: DadosClinica = { nome: 'Clínica Demonstração', cnpj: '', telefone: '(11) 3000-0000', endereco: 'Rua Fictícia, 100 — São Paulo/SP' };
+  const equipe: MembroEquipe[] = [
+    { id: 'm1', nome: 'Administradora (demonstração)', email: 'administracao@exemplo.test', papel: 'admin', situacao: 'ativo' },
+    { id: 'm2', nome: 'Dra. Beatriz Nogueira', email: 'beatriz@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm3', nome: 'Dr. Henrique Sales', email: 'henrique@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm4', nome: 'Dra. Lúcia Prates', email: 'lucia@exemplo.test', papel: 'profissional', situacao: 'ativo' },
+    { id: 'm5', nome: 'Recepcionista (demonstração)', email: 'recepcionista@exemplo.test', papel: 'recepcao', situacao: 'ativo' },
+  ];
+  const auditoria: EventoAuditoria[] = [
+    { id: 'v1', quando: `${hojeIso} 08:02`, quem: 'Dra. Beatriz Nogueira', acao: 'Abriu o prontuário de Maria Silva' },
+    { id: 'v2', quando: `${hojeIso} 08:40`, quem: 'Dra. Beatriz Nogueira', acao: 'Assinou uma evolução de Maria Silva' },
+    { id: 'v3', quando: `${hojeIso} 09:05`, quem: 'Recepcionista (demonstração)', acao: 'Marcou consulta para João Pereira' },
+    { id: 'v4', quando: `${hojeIso} 09:10`, quem: 'Recepcionista (demonstração)', acao: 'Abriu a ficha de Ana Souza' },
+    { id: 'v5', quando: `${paraIsoLocal(somarDias(agora, -1))} 17:30`, quem: 'Administradora (demonstração)', acao: 'Exportou a lista de pacientes (CSV)' },
+  ];
+  const registrar = (acao: string) =>
+    auditoria.unshift({ id: novoId('v'), quando: `${hojeIso} ${new Date().toTimeString().slice(0, 5)}`, quem: usuario.nome, acao });
+  let assinatura: Assinatura = { plano: 'Clínica (até 5 profissionais)', valorMensal: 349, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 18)) };
+  const exportacoes: PedidoExportacao[] = [];
   const anexos: Anexo[] = vazio
     ? []
     : [
-        { id: 'x1', pacienteId: 'p01', nome: 'Raio-x do joelho (fictício).pdf', tipo: 'exame', data: paraIsoLocal(somarDias(agora, -20)) },
-        { id: 'x2', pacienteId: 'p01', nome: 'Encaminhamento médico (fictício).pdf', tipo: 'documento', data: paraIsoLocal(somarDias(agora, -21)) },
+        { id: 'x1', pacienteId: 'p01', nome: 'Raio-x do joelho (fictício).pdf', tipo: 'exame', data: paraIsoLocal(somarDias(agora, -20)), clinico: true },
+        { id: 'x2', pacienteId: 'p01', nome: 'Encaminhamento médico (fictício).pdf', tipo: 'laudo', data: paraIsoLocal(somarDias(agora, -21)), clinico: true },
+        { id: 'x3', pacienteId: 'p01', nome: 'Carteirinha do convênio (fictício).pdf', tipo: 'documento', data: paraIsoLocal(somarDias(agora, -21)), clinico: false },
       ];
 
   async function resposta<T>(valor: T): Promise<T> {
@@ -201,8 +305,26 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   }
 
   return {
-    usuarioAtual: () =>
-      resposta<Usuario>({ id: 'u1', nome: 'Recepção (demonstração)', papel: opcoes.papel ?? 'admin', clinica: 'Clínica Demonstração' }),
+    usuarioAtual: () => resposta<Usuario>(usuario),
+    usuariosDemo: () => resposta(USUARIOS),
+    async registrarEmissaoDocumento(d) {
+      if (d.tipo === 'atestado') {
+        if (!ehPerfilClinico(usuario)) throw new Error('O atestado é emitido pelo profissional que atendeu.');
+        if (d.profissionalId && d.profissionalId !== usuario.profissionalId) throw new Error('Você só assina atestado em seu próprio nome.');
+        if (!temVinculo(d.pacienteId)) throw new Error('Você não atendeu este paciente. O atestado é do profissional que atendeu.');
+      }
+      emissoes.push({ ...d, por: usuario.id, em: hojeIso });
+      // Imprimir documento é ação auditável (R5): tipo, paciente e quem; nunca o texto.
+      const p = pacientes.find((x) => x.id === d.pacienteId);
+      registrar(`Emitiu ${d.tipo === 'atestado' ? 'atestado' : d.tipo === 'declaracao' ? 'declaração de comparecimento' : 'recibo'} para ${p ? (p.nomeSocial ?? p.nome) : 'paciente'}`);
+      await resposta(null);
+    },
+    async entrarComo(id) {
+      const u = USUARIOS.find((x) => x.id === id);
+      if (!u) throw new Error('Usuário não existe.');
+      usuario = u;
+      return resposta(u);
+    },
     // O fake não pagina (devolve tudo de uma vez), mas entrega o mesmo erro final do HTTP quando o
     // recomeço por cursor recusado falha: nada parcial chega à tela.
     listarPacientes: async () => {
@@ -379,7 +501,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       if (mudou && mudancaDeNascimentoExigeDocumento(p.nascimento, novoNascimento, hojeIso) && dados.documentoConferido !== true) {
         throw new ErroApi(MENSAGENS.documentoNaoConferido, 422, 'documento_nao_conferido');
       }
-      if (mudou && dados.documentoConferido === true && !podeConferirDocumento(opcoes.papel ?? 'admin')) {
+      if (mudou && dados.documentoConferido === true && !podeConferirDocumento(usuario.papel)) {
         throw new ErroApi(MENSAGENS.conferenciaPerfil, 403, 'conferencia_exige_perfil');
       }
       if (dados.telefone !== undefined) p.telefone = dados.telefone.trim();
@@ -407,7 +529,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       delete p.inativacao;
       await resposta(null);
     },
-    listarAnexos: (pacienteId) => resposta(anexos.filter((x) => x.pacienteId === pacienteId)),
+    listarAnexos: (pacienteId) => resposta(anexos.filter((x) => x.pacienteId === pacienteId).map(anexoVisivel)),
     linhaDoTempo: (pacienteId) => {
       const ev: EventoLinhaTempo[] = [];
       for (const a of agendamentos.filter((x) => x.pacienteId === pacienteId && x.data <= hojeIso)) {
@@ -417,9 +539,142 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         else if (a.status === 'cancelado') ev.push({ data: a.data, hora: a.hora, tipo: 'cancelamento', texto: `Consulta cancelada com ${prof}` });
       }
       for (const r of recibos.filter((x) => x.pacienteId === pacienteId)) ev.push({ data: r.data, tipo: 'recibo', texto: `Pagamento recebido: R$ ${r.valor},00` });
-      for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${x.nome}` });
+      for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${anexoVisivel(x).nome}` });
       return resposta(ev.sort((a, b) => (b.data + (b.hora ?? '')).localeCompare(a.data + (a.hora ?? ''))));
     },
+
+    listarRegistros: (pacienteId) =>
+      resposta(registros.filter((r) => r.pacienteId === pacienteId).map(visivel).sort((a, b) => b.data.localeCompare(a.data))),
+    obterRegistroDoAgendamento: (agendamentoId) => {
+      const r = registros.find((x) => x.agendamentoId === agendamentoId);
+      return resposta(r ? visivel(r) : null);
+    },
+    async salvarRascunho(agendamentoId, campos) {
+      const a = agendamentos.find((x) => x.id === agendamentoId);
+      if (!a) throw new Error('Esse atendimento não existe mais. Volte para Atendimento.');
+      if (usuario.profissionalId !== a.profissionalId) throw new Error('Só o profissional do atendimento pode escrever a evolução.');
+      let r = registros.find((x) => x.agendamentoId === agendamentoId);
+      if (r?.status === 'assinado') throw new Error('Registro já assinado. Para corrigir, use “Adicionar adendo”.');
+      if (!r) {
+        const modelo = modeloDoProfissional(PROFISSIONAIS.find((p) => p.id === a.profissionalId));
+        r = { id: novoId('g'), pacienteId: a.pacienteId, agendamentoId, profissionalId: a.profissionalId, modelo, data: a.data, campos: {}, status: 'rascunho', adendos: [], restrito: ehRestrito(modelo) };
+        registros.push(r);
+        if (a.status !== 'atendido') a.status = 'em_atendimento';
+      }
+      r.campos = { ...campos };
+      return resposta(r);
+    },
+    async assinarRegistro(id) {
+      const r = registros.find((x) => x.id === id);
+      if (!r) throw new Error('Registro não encontrado.');
+      if (usuario.profissionalId !== r.profissionalId) throw new Error('Só o profissional do atendimento pode assinar.');
+      const faltas = faltasParaAssinar(r.modelo, r.campos);
+      if (faltas.length) throw new Error(faltas.join(' '));
+      r.status = 'assinado';
+      r.assinadoEm = hojeIso;
+      const a = agendamentos.find((x) => x.id === r.agendamentoId);
+      if (a) a.status = 'atendido';
+      return resposta(r);
+    },
+    async adicionarAdendo(id, texto) {
+      const r = registros.find((x) => x.id === id);
+      if (!r) throw new Error('Registro não encontrado.');
+      if (usuario.profissionalId !== r.profissionalId) throw new Error('Só o profissional do atendimento pode adicionar adendo.');
+      if (!texto.trim()) throw new Error('Escreva o que precisa corrigir ou acrescentar.');
+      r.adendos.push({ texto: texto.trim(), em: hojeIso, autor: usuario.nome });
+      return resposta(r);
+    },
+
+    async registrarPagamento(agendamentoId, forma) {
+      const a = agendamentos.find((x) => x.id === agendamentoId);
+      if (!a) throw new Error('Atendimento não encontrado.');
+      if (recibos.some((r) => r.agendamentoId === agendamentoId)) throw new Error('Esse atendimento já está pago.');
+      const r: Recibo = { id: novoId('r'), agendamentoId, pacienteId: a.pacienteId, data: hojeIso, valor: TIPOS.find((t) => t.id === a.tipoId)!.valor, forma };
+      recibos.push(r);
+      return resposta(r);
+    },
+    async removerRecibo(id) {
+      const i = recibos.findIndex((r) => r.id === id);
+      if (i >= 0) recibos.splice(i, 1);
+      await resposta(null);
+    },
+    listarGuias: () => resposta(guias),
+    async criarGuia(d: NovaGuia) {
+      if (!pacientes.some((p) => p.id === d.pacienteId)) throw new Error('Falta o paciente. Escolha na lista.');
+      if (!d.convenio.trim()) throw new Error('Falta o nome do convênio.');
+      if (!d.numero.trim()) throw new Error('Falta o número da guia. Ele está no papel do convênio.');
+      if (!(d.sessoesAutorizadas >= 1)) throw new Error('Quantas sessões o convênio autorizou? Digite um número.');
+      const g: Guia = { id: novoId('gu'), ...d, convenio: d.convenio.trim(), numero: d.numero.trim(), sessoesUsadas: 0 };
+      guias.push(g);
+      return resposta(g);
+    },
+    async removerGuia(id) {
+      const i = guias.findIndex((g) => g.id === id);
+      if (i >= 0) guias.splice(i, 1);
+      await resposta(null);
+    },
+    listarConversas: () => resposta(conversas),
+
+    obterClinica: () => resposta(clinica),
+    async salvarClinica(d) {
+      if (!d.nome.trim()) throw new Error('Falta o nome da clínica.');
+      clinica = { ...d, nome: d.nome.trim() };
+      registrar('Alterou os dados da clínica');
+      return resposta(clinica);
+    },
+    listarEquipe: () => resposta(equipe),
+    async convidar(email, papel) {
+      if (equipe.some((m) => m.email === email.trim().toLowerCase())) throw new Error('Essa pessoa já está na equipe.');
+      const m: MembroEquipe = { id: novoId('m'), nome: email.split('@')[0]!, email: email.trim().toLowerCase(), papel, situacao: 'convite_enviado' };
+      equipe.push(m);
+      registrar(`Convidou ${m.email} como ${papel}`);
+      return resposta(m);
+    },
+    async removerAcesso(id) {
+      const i = equipe.findIndex((m) => m.id === id);
+      if (i < 0) return resposta(null);
+      if (equipe.filter((m) => m.papel === 'admin').length === 1 && equipe[i]!.papel === 'admin') throw new Error('A clínica precisa de pelo menos um administrador.');
+      const [m] = equipe.splice(i, 1);
+      registrar(`Tirou o acesso de ${m!.nome}`);
+      return resposta(m!);
+    },
+    async devolverAcesso(m) {
+      if (!equipe.some((x) => x.id === m.id)) equipe.push(m);
+      registrar(`Devolveu o acesso de ${m.nome}`);
+      await resposta(null);
+    },
+    listarAuditoria: () => resposta(auditoria),
+    obterAssinatura: () => resposta(assinatura),
+    async cancelarAssinatura() {
+      const { proximaCobranca: _ignorado, ...resto } = assinatura;
+      void _ignorado;
+      assinatura = { ...resto, status: 'cancelada', canceladaEm: hojeIso, disponivelAte: fimDaJanela(hojeIso) };
+      registrar('Cancelou a assinatura');
+      return resposta(assinatura);
+    },
+    async reativarAssinatura() {
+      assinatura = { plano: assinatura.plano, valorMensal: assinatura.valorMensal, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 30)) };
+      registrar('Reativou a assinatura');
+      return resposta(assinatura);
+    },
+    async pedirExportacao(codigo) {
+      if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
+      if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
+      const p: PedidoExportacao = { id: novoId('x'), status: 'aguardando_rt', pedidoEm: hojeIso };
+      exportacoes.push(p);
+      registrar('Pediu a exportação total dos dados');
+      return resposta(p);
+    },
+    async aprovarExportacao(id) {
+      const p = exportacoes.find((x) => x.id === id);
+      if (!p) throw new Error('Pedido não encontrado.');
+      p.status = 'pronto';
+      p.expiraEm = paraIsoLocal(somarDias(agora, 1));
+      p.downloadsRestantes = 3;
+      registrar('Responsável técnico aprovou a exportação');
+      return resposta(p);
+    },
+
   };
 }
 

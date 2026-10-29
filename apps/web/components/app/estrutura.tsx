@@ -77,7 +77,7 @@ export function Estrutura({ children }: { children: ReactNode }) {
         })}
       </nav>
 
-      <div className="flex min-h-dvh flex-col pb-28 md:pb-24">
+      <div className="flex min-h-dvh flex-col pb-52 md:pb-28">
         {!online && <SemInternet />}
         <p className="border-b-2 border-borda bg-superficie-2 px-4 py-2 text-center text-[0.95rem] font-bold">
           Demonstração com pacientes fictícios. Nenhum dado é real nem é gravado de verdade.

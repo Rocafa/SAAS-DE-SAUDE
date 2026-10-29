@@ -12,6 +12,36 @@ export interface Usuario {
   clinica: string;
   /** Id opaco da clínica da sessão (só no modo http): trocar de clínica limpa o retrato em memória. */
   clinicaId?: string;
+  /** Quando o usuário é um profissional de saúde. */
+  profissionalId?: string;
+}
+
+export interface Adendo {
+  texto: string;
+  em: string;
+  autor: string;
+}
+
+/** Registro clínico (evolução). Assinado não muda mais: correção vira adendo. */
+export interface Registro {
+  id: string;
+  pacienteId: string;
+  agendamentoId?: string;
+  profissionalId: string;
+  modelo: 'fisio' | 'to' | 'psicologia';
+  data: string;
+  campos: Record<string, string>;
+  status: 'rascunho' | 'assinado';
+  assinadoEm?: string;
+  adendos: Adendo[];
+  /** Psicologia: compartimento separado; só o profissional autor lê o conteúdo. */
+  restrito: boolean;
+  /**
+   * true quando quem pediu não pode ler o conteúdo: aí `campos` e `adendos` vêm vazios e só os
+   * metadados (data e profissional) aparecem. A tela decide a mensagem por este campo.
+   */
+  conteudoOculto?: boolean;
+  motivoOculto?: 'perfil_nao_clinico' | 'sem_vinculo' | 'sigilo_psicologia';
 }
 
 export interface Responsavel {
@@ -99,6 +129,9 @@ export interface Anexo {
   nome: string;
   tipo: 'exame' | 'laudo' | 'documento' | 'imagem';
   data: string;
+  /** Exame, laudo e imagem são conteúdo clínico: o nome só aparece para quem cuida do paciente. */
+  clinico: boolean;
+  conteudoOculto?: boolean;
 }
 
 export interface EventoLinhaTempo {
@@ -187,4 +220,74 @@ export type ListaPacientes = Paciente[] & { truncado?: true };
 /** Anota (ou não) o truncamento numa lista nova. */
 export function comTruncado(lista: Paciente[], truncado: boolean | undefined): ListaPacientes {
   return truncado ? Object.assign(lista, { truncado: true as const }) : lista;
+}
+
+/** Controle simples de guia de convênio (M1, sem XML TISS). */
+export interface Guia {
+  id: string;
+  pacienteId: string;
+  convenio: string;
+  numero: string;
+  sessoesAutorizadas: number;
+  sessoesUsadas: number;
+  /** AAAA-MM-DD */
+  validade: string;
+}
+
+export interface NovaGuia {
+  pacienteId: string;
+  convenio: string;
+  numero: string;
+  sessoesAutorizadas: number;
+  validade: string;
+}
+
+/** Prévia da caixa de mensagens do WhatsApp (M2). Nada é enviado. */
+export interface Conversa {
+  id: string;
+  pacienteId: string;
+  naoLidas: number;
+  mensagens: { de: 'paciente' | 'clinica'; texto: string; hora: string }[];
+}
+
+export interface MembroEquipe {
+  id: string;
+  nome: string;
+  email: string;
+  papel: Papel;
+  situacao: 'ativo' | 'convite_enviado';
+}
+
+/** Registro de auditoria: quem fez o quê, sem conteúdo clínico. */
+export interface EventoAuditoria {
+  id: string;
+  quando: string;
+  quem: string;
+  acao: string;
+}
+
+export interface Assinatura {
+  plano: string;
+  valorMensal: number;
+  status: 'ativa' | 'cancelada';
+  proximaCobranca?: string;
+  canceladaEm?: string;
+  /** Até quando os dados ficam em leitura e exportação (G3: no mínimo 90 dias). */
+  disponivelAte?: string;
+}
+
+/** Exportação total (G2): MFA recente, aprovação do responsável técnico, link pessoal de 24 h. */
+export interface PedidoExportacao {
+  id: string;
+  status: 'aguardando_rt' | 'pronto';
+  pedidoEm: string;
+  expiraEm?: string;
+  downloadsRestantes?: number;
+}
+
+export interface DadosClinica {
+  nome: string;
+  cnpj: string;
+  telefone: string;
+  endereco: string;
 }

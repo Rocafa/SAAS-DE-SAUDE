@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import nextConfig, { contentSecurityPolicy, securityHeaders } from './next.config';
+import nextConfig, { conferirConfigPortal, contentSecurityPolicy, securityHeaders } from './next.config';
 
 function directive(csp: string, name: string): string[] {
   const found = csp.split(';').map((d) => d.trim().split(/\s+/)).find(([n]) => n === name);
@@ -10,7 +10,7 @@ describe('headers de segurança do web', () => {
   it('aplicados a todas as rotas, sem X-Powered-By', async () => {
     expect(nextConfig.poweredByHeader).toBe(false);
     const rules = await nextConfig.headers!();
-    expect(rules).toHaveLength(1);
+    expect(rules).toHaveLength(2);
     expect(rules[0]?.source).toBe('/:path*');
     const keys = rules[0]!.headers.map((h) => h.key);
     for (const k of [
@@ -63,6 +63,21 @@ describe('headers de segurança do web', () => {
     expect(() => contentSecurityPolicy({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'outro' })).toThrow(/MODO/);
     // Modo fake (padrão) sem origem: nenhuma origem externa no connect-src.
     expect(directive(contentSecurityPolicy({ NODE_ENV: 'production' }), 'connect-src')).toEqual(["'self'"]);
+  });
+
+  it('convite do portal sem Referer (o token vem no #fragmento; P4)', async () => {
+    const rules = await nextConfig.headers!();
+    const convite = rules.find((r) => r.source === '/portal/convite');
+    expect(convite?.headers).toEqual([{ key: 'Referrer-Policy', value: 'no-referrer' }]);
+    // Vem depois da regra geral: no Next, a última que casa vence.
+    expect(rules.indexOf(convite!)).toBeGreaterThan(0);
+  });
+
+  it('portal em modo http e sessão fictícia recusados em build de produção (até a D4)', () => {
+    expect(() => conferirConfigPortal({ NODE_ENV: 'production', NEXT_PUBLIC_PORTAL_MODO: 'http' })).toThrow(/D4/);
+    expect(() => conferirConfigPortal({ NODE_ENV: 'production', NEXT_PUBLIC_PORTAL_SESSAO_DEV: 'ptl_x' })).toThrow(/desenvolvimento/);
+    expect(() => conferirConfigPortal({ NODE_ENV: 'production' })).not.toThrow();
+    expect(() => conferirConfigPortal({ NODE_ENV: 'development', NEXT_PUBLIC_PORTAL_MODO: 'http' })).not.toThrow();
   });
 
   it('referrer-policy e permissions-policy restritivas', () => {

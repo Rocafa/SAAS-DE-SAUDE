@@ -442,11 +442,15 @@ export function ListaEspera() {
             <label htmlFor="espera-preferencia" className="font-bold">
               Que horário serve? (opcional)
             </label>
+            <p id="espera-dica" className="text-texto-suave">
+              Só dia e horário. Não escreva informação de saúde aqui.
+            </p>
             <input
               id="espera-preferencia"
               value={preferencia}
               onChange={(e) => setPreferencia(e.target.value)}
               placeholder="Ex.: terça de manhã"
+              aria-describedby="espera-dica"
               className="min-h-14 rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg"
             />
           </div>
