@@ -1100,6 +1100,8 @@ export const adolescentConfidentialityRequests = pgTable('adolescent_confidentia
   tenantId: uuid('tenant_id').notNull(),
   patientId: uuid('patient_id').notNull(),
   guardianLinkId: uuid('guardian_link_id'),
+  /** A pessoa do vínculo: o pedido vale para qualquer vínculo dela com o paciente. */
+  guardianId: uuid('guardian_id'),
   requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
   requestedBy: uuid('requested_by').notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),

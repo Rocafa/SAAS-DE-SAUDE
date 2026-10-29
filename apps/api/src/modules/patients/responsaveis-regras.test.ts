@@ -168,14 +168,14 @@ describe('0056 (A1 b/c do #67): escopo e pedido de sigilo do adolescente', () =>
     expect(faixaDoPedidoDeSigilo('2013-01-01', HOJE, '2030-01-01')).toBe('sigilo_so_para_adolescente');
     expect(faixaDoPedidoDeSigilo(null, HOJE, null)).toBe('nascimento_nao_informado');
   });
-  it('pedido que alcança o vínculo: o de todos ou o do próprio vínculo, o mais recente', () => {
+  it('pedido que alcança o vínculo: o de todos ou o da pessoa do vínculo, o mais recente', () => {
     const pedidos = [
-      { vinculoId: 'a', em: '2030-01-02T00:00:00.000Z' },
-      { vinculoId: null, em: '2030-01-01T00:00:00.000Z' },
+      { responsavelId: 'a', em: '2030-01-02T00:00:00.000Z' },
+      { responsavelId: null, em: '2030-01-01T00:00:00.000Z' },
     ];
     expect(pedidoDeSigiloDoVinculo(pedidos, 'a')).toBe('2030-01-02T00:00:00.000Z');
     expect(pedidoDeSigiloDoVinculo(pedidos, 'b')).toBe('2030-01-01T00:00:00.000Z');
-    expect(pedidoDeSigiloDoVinculo([{ vinculoId: 'a', em: '2030-01-02T00:00:00.000Z' }], 'b')).toBeNull();
+    expect(pedidoDeSigiloDoVinculo([{ responsavelId: 'a', em: '2030-01-02T00:00:00.000Z' }], 'b')).toBeNull();
   });
   it('validação: escopo e exceção por risco só com a marca ligada; ligada sem escopo = essencial', () => {
     const liga = { recebeInformacaoClinica: true, justificativa: 'Avaliacao ficticia do profissional' };

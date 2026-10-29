@@ -22,8 +22,8 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { ehPerfil, temPermissao } from '../auth/perfis';
-import { exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
+import { ehPerfil, podeLerConteudoClinico, temPermissao } from '../auth/perfis';
+import { calcularVinculoDeCuidado, exigirConteudoClinico } from '../auth/vinculo-de-cuidado';
 import { IndiceCegoCpf } from './cpf-indice-cego';
 import { cifrarCampoResponsavel, cifrarCampoVinculo, decifrarCampoResponsavel, decifrarCampoVinculo } from './guardian-fields';
 import { patientFieldRef } from './patient-fields';
@@ -134,7 +134,7 @@ interface QuadroDoPaciente {
   readonly nascimento: string | null;
   readonly emancipadoEm: string | null;
   /** 0056 (A1 c): pedidos de sigilo VIGENTES do adolescente (vínculo null = todos), instante ISO. */
-  readonly pedidosDeSigilo: readonly { readonly vinculoId: string | null; readonly em: string }[];
+  readonly pedidosDeSigilo: readonly { readonly responsavelId: string | null; readonly em: string }[];
 }
 
 /** Pedido de sigilo do adolescente (0056) na resposta: só ids e datas. */
@@ -143,6 +143,8 @@ export interface PedidoDeSigiloDto {
   readonly pacienteId: string;
   /** null = todos os responsáveis do paciente. */
   readonly vinculoId: string | null;
+  /** A pessoa do vínculo (o pedido vale para qualquer vínculo dela com o paciente); null = todos. */
+  readonly responsavelId: string | null;
   readonly pedidoEm: string;
   readonly registradoPor: string;
   readonly revogadoEm: string | null;
@@ -161,7 +163,7 @@ function paraRegra(v: LinhaVinculo, quadro: QuadroDoPaciente): VinculoParaInform
     autorizadoPeloPaciente: v.patientAuthorizedAt !== null,
     decisaoInstante: v.clinicalInfoDecidedAt?.toISOString() ?? null,
     superaSigiloPorRisco: v.clinicalInfoRiskOverride,
-    sigiloPedidoEm: pedidoDeSigiloDoVinculo(quadro.pedidosDeSigilo, v.id),
+    sigiloPedidoEm: pedidoDeSigiloDoVinculo(quadro.pedidosDeSigilo, v.guardianId),
   };
 }
 
@@ -295,7 +297,7 @@ export class ResponsaveisService {
       // B1: apoiador com a marca ligada exige a autorização expressa do paciente.
       if (dados.tipo === 'apoiador' && dados.recebeInformacaoClinica && !dados.autorizacaoDoPaciente) throw new ConflitoError('autorizacao_do_paciente_obrigatoria');
       // A1 (c): a exceção por risco só existe contra um pedido de sigilo vigente que alcance o vínculo novo (pedido para todos).
-      if (dados.superaSigiloPorRisco && !quadro.pedidosDeSigilo.some((p) => p.vinculoId === null)) throw new ConflitoError('sem_pedido_de_sigilo_vigente');
+      if (dados.superaSigiloPorRisco && pedidoDeSigiloDoVinculo(quadro.pedidosDeSigilo, pessoa.id) === null) throw new ConflitoError('sem_pedido_de_sigilo_vigente');
       const paiOuTutorDeMaior = (dados.tipo === 'pai_mae' || dados.tipo === 'tutor') && menor === false;
       if (paiOuTutorDeMaior && !dados.confirmaPacienteMaior) throw new ConflitoError('pai_mae_tutor_de_maior_requer_confirmacao');
       if (dados.pagador && menor !== true && !dados.cienciaDoPaciente) throw new ConflitoError('ciencia_do_paciente_obrigatoria');
@@ -403,7 +405,7 @@ export class ResponsaveisService {
       // A1 (c): a exceção por risco só existe contra um pedido de sigilo vigente que alcance este vínculo.
       if (dados.superaSigiloPorRisco) {
         const q = await this.quadro(tx, ctx.tenantId, pac);
-        if (pedidoDeSigiloDoVinculo(q.pedidosDeSigilo, v.id) === null) throw new ConflitoError('sem_pedido_de_sigilo_vigente');
+        if (pedidoDeSigiloDoVinculo(q.pedidosDeSigilo, v.guardianId) === null) throw new ConflitoError('sem_pedido_de_sigilo_vigente');
       }
       if (dados.recebeInformacaoClinica === true || (dados.recebeInformacaoClinica === false && v.receivesClinicalInfo)) {
         const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, v.id, dados.justificativa) : {};
@@ -752,13 +754,15 @@ export class ResponsaveisService {
       const quadro = await this.quadro(tx, ctx.tenantId, pac);
       const faixa = faixaDoPedidoDeSigilo(quadro.nascimento, hojeNaClinica(), quadro.emancipadoEm);
       if (faixa !== 'ok') throw new ConflitoError(faixa);
+      let pessoaDoPedido: string | null = null;
       if (dados.vinculoId) {
         const [v] = await tx
-          .select({ id: patientGuardians.id, endedAt: patientGuardians.endedAt })
+          .select({ id: patientGuardians.id, endedAt: patientGuardians.endedAt, guardianId: patientGuardians.guardianId })
           .from(patientGuardians)
           .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, dados.vinculoId), eq(patientGuardians.patientId, pacienteId)));
         if (!v) throw new NaoEncontradoError();
         if (v.endedAt) throw new ConflitoError('vinculo_encerrado');
+        pessoaDoPedido = v.guardianId;
       }
       const alvo = dados.vinculoId ?? null;
       const [repetido] = await tx
@@ -769,19 +773,19 @@ export class ResponsaveisService {
             eq(adolescentConfidentialityRequests.tenantId, ctx.tenantId),
             eq(adolescentConfidentialityRequests.patientId, pacienteId),
             isNull(adolescentConfidentialityRequests.revokedAt),
-            alvo === null ? isNull(adolescentConfidentialityRequests.guardianLinkId) : eq(adolescentConfidentialityRequests.guardianLinkId, alvo),
+            pessoaDoPedido === null ? isNull(adolescentConfidentialityRequests.guardianId) : eq(adolescentConfidentialityRequests.guardianId, pessoaDoPedido),
           ),
         );
       if (repetido) throw new ConflitoError('pedido_de_sigilo_ja_vigente');
       const [p] = await tx
         .insert(adolescentConfidentialityRequests)
-        .values({ tenantId: ctx.tenantId, patientId: pacienteId, guardianLinkId: alvo, requestedBy: ctx.userId })
+        .values({ tenantId: ctx.tenantId, patientId: pacienteId, guardianLinkId: alvo, guardianId: pessoaDoPedido, requestedBy: ctx.userId })
         .returning();
       const pedido = p as typeof adolescentConfidentialityRequests.$inferSelect;
       await recordAudit(tx, ctx, {
         action: AuditAction.Create,
         scope: SCOPE_SIGILO_ADOLESCENTE,
-        metadata: { patient_id: pacienteId, request_id: pedido.id, link_id: alvo, all_guardians: alvo === null },
+        metadata: { patient_id: pacienteId, request_id: pedido.id, link_id: alvo, guardian_id: pessoaDoPedido, all_guardians: alvo === null },
       });
       return paraPedidoDto(pedido);
     });
@@ -912,7 +916,7 @@ export class ResponsaveisService {
       emancipadoEm: pac.emancipatedOn,
       pedidosDeSigilo: (
         await tx
-          .select({ vinculoId: adolescentConfidentialityRequests.guardianLinkId, em: adolescentConfidentialityRequests.requestedAt })
+          .select({ responsavelId: adolescentConfidentialityRequests.guardianId, em: adolescentConfidentialityRequests.requestedAt })
           .from(adolescentConfidentialityRequests)
           .where(
             and(
@@ -921,7 +925,7 @@ export class ResponsaveisService {
               isNull(adolescentConfidentialityRequests.revokedAt),
             ),
           )
-      ).map((p) => ({ vinculoId: p.vinculoId, em: p.em.toISOString() })),
+      ).map((p) => ({ responsavelId: p.responsavelId, em: p.em.toISOString() })),
     };
   }
 
@@ -929,6 +933,10 @@ export class ResponsaveisService {
     const tenantId = ctx.tenantId;
     const perfis = ctx.roles.filter(ehPerfil);
     const cpf = await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc);
+    // R1/R2 do parecer de 29/10: o motivo real da negativa (e a exceção por risco) só para o profissional COM vínculo
+    // de cuidado, o mesmo porteiro da lista de pedidos de sigilo.
+    const veClinico =
+      temPermissao(perfis, 'responsaveis:liberar_informacao_clinica') && podeLerConteudoClinico(perfis, await calcularVinculoDeCuidado(tx, ctx, v.patientId));
     // Curatela e termo de apoio ficam nas mesmas colunas cifradas; o tipo do vínculo diz qual é.
     const decisaoJudicial =
       v.courtDecisionRefEnc && v.curatorshipScopeEnc && temPermissao(perfis, 'responsaveis:ver_curatela')
@@ -950,9 +958,9 @@ export class ResponsaveisService {
       parentesco: ROTULO_DO_TIPO[v.kind],
       pagador: v.isPayer,
       recebeInformacaoClinica: v.receivesClinicalInfo,
-      informacaoClinica: motivoVisivel(informacaoClinica(paraRegra(v, quadro), quadro.nascimento, hoje, quadro.emancipadoEm), perfis),
+      informacaoClinica: motivoVisivel(informacaoClinica(paraRegra(v, quadro), quadro.nascimento, hoje, quadro.emancipadoEm), v.receivesClinicalInfo, veClinico),
       escopoInformacaoClinica: v.clinicalInfoScope,
-      superaSigiloPorRisco: v.clinicalInfoRiskOverride && temPermissao(perfis, 'responsaveis:liberar_informacao_clinica'),
+      superaSigiloPorRisco: v.clinicalInfoRiskOverride && veClinico,
       faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
@@ -970,6 +978,7 @@ function paraPedidoDto(p: typeof adolescentConfidentialityRequests.$inferSelect)
     id: p.id,
     pacienteId: p.patientId,
     vinculoId: p.guardianLinkId,
+    responsavelId: p.guardianId,
     pedidoEm: p.requestedAt.toISOString(),
     registradoPor: p.requestedBy,
     revogadoEm: p.revokedAt?.toISOString() ?? null,
@@ -977,10 +986,11 @@ function paraPedidoDto(p: typeof adolescentConfidentialityRequests.$inferSelect)
 }
 
 /**
- * O pedido de sigilo do adolescente é dado sensível: quem não é profissional (recepção, financeiro, admin não
- * clínico) vê só que a informação está restrita, sem saber por quê (A1 c do #67).
+ * O pedido de sigilo do adolescente é dado sensível (A1 c do #67; R1 do parecer de 29/10). Para quem não é o
+ * profissional com vínculo de cuidado, TODA negativa com a marca ligada vira um motivo genérico: assim o genérico
+ * não denuncia o pedido. Com a marca desligada, `marca_desligada` continua (a marca em si é visível).
  */
-function motivoVisivel<T extends { readonly motivo: MotivoInformacaoClinica }>(r: T, perfis: Parameters<typeof temPermissao>[0]): T {
-  if (r.motivo !== 'sigilo_pedido_pelo_adolescente' || temPermissao(perfis, 'responsaveis:liberar_informacao_clinica')) return r;
+function motivoVisivel<T extends { readonly permitida: boolean; readonly motivo: MotivoInformacaoClinica }>(r: T, marcaLigada: boolean, veClinico: boolean): T {
+  if (veClinico || r.permitida || !marcaLigada) return r;
   return { ...r, motivo: 'restrita_pelo_profissional' };
 }

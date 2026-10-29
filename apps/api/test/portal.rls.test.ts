@@ -22,6 +22,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  adolescentConfidentialityRequests,
   appointments,
   auditLog,
   clinicalNotices,
@@ -740,6 +741,32 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
       ...base, patientId: eman, tokenHash: 'f'.repeat(64), guardianLinkId: respEman, guardianId: g?.guardianId as string, representUntil: nascidoHa(-1),
     }), adminA.userId)).rejects.toThrow();
+  });
+
+  it('0056 (R4 do parecer de 29/10): a sessão do portal, do responsável ou do titular, não lê nem grava pedido de sigilo', async () => {
+    const prof = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
+    const teen = await criarPaciente(adminA, 'Gabi Ficticia Sigilo Portal', { nascimento: nascidoHa(14) });
+    const resp = await responsavelDe(teen, 'Heitor Ficticio Pai Sigilo Portal');
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, resp)), adminA.userId);
+    const contaResp = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    const contaTitular = await contaDe(adminA, pacA1);
+    await withTenant(api.db.db, clinicaA, async (tx) => {
+      await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: teen, guardianLinkId: resp, guardianId: g?.guardianId as string, requestedBy: prof.userId });
+      await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacA1, requestedBy: prof.userId });
+    }, prof.userId);
+    for (const c of [contaResp, contaTitular]) {
+      const vistos = await api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+        return tx.execute<{ n: number }>(sql`select count(*)::int as n from adolescent_confidentiality_requests`);
+      });
+      expect(vistos[0]?.n).toBe(0);
+      await expect(
+        api.db.db.transaction(async (tx) => {
+          await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+          await tx.execute(sql`insert into adolescent_confidentiality_requests (tenant_id, patient_id, requested_by) values (${clinicaA}, ${teen}, ${prof.userId})`);
+        }),
+      ).rejects.toThrow();
+    }
   });
 
   it('0055 (A3 do #67): apoiador de decisão apoiada não representa no portal (API 409 e banco recusa)', async () => {

@@ -92,6 +92,7 @@ export interface ExportedGuardians {
     id: string;
     patientId: string;
     guardianLinkId: string | null;
+    guardianId: string | null;
     requestedAt: string;
     requestedBy: string;
     revokedAt: string | null;
@@ -238,6 +239,7 @@ export async function exportarResponsaveis(
       id: p.id,
       patientId: p.patientId,
       guardianLinkId: p.guardianLinkId,
+      guardianId: p.guardianId,
       requestedAt: p.requestedAt.toISOString(),
       requestedBy: p.requestedBy,
       revokedAt: iso(p.revokedAt),

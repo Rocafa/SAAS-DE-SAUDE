@@ -171,13 +171,16 @@ export function faixaDoPedidoDeSigilo(
   return faixa === 'adolescente' ? 'ok' : 'sigilo_so_para_adolescente';
 }
 
-/** Pedido vigente mais recente que alcança o vínculo (pedido para todos, ou para este vínculo). */
+/**
+ * Pedido vigente mais recente que alcança o vínculo: o pedido para todos, ou o pedido sobre a PESSOA do vínculo
+ * (vale para qualquer vínculo dela com o paciente; refazer o vínculo não apaga o sigilo).
+ */
 export function pedidoDeSigiloDoVinculo(
-  pedidos: readonly { readonly vinculoId: string | null; readonly em: string }[],
-  vinculoId: string,
+  pedidos: readonly { readonly responsavelId: string | null; readonly em: string }[],
+  responsavelId: string,
 ): string | null {
   let ultimo: string | null = null;
-  for (const p of pedidos) if ((p.vinculoId === null || p.vinculoId === vinculoId) && (ultimo === null || p.em > ultimo)) ultimo = p.em;
+  for (const p of pedidos) if ((p.responsavelId === null || p.responsavelId === responsavelId) && (ultimo === null || p.em > ultimo)) ultimo = p.em;
   return ultimo;
 }
 

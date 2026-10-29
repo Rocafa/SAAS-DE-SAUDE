@@ -762,6 +762,13 @@ describe('A4 do 2º parecer do #67: responsáveis na guarda de 20 anos do prontu
     await patch(recepA, `/pacientes/${pac}/responsaveis/${so.id}`, { cpf: cpfFicticio(851) }).expect(200);
     const comp = await responsavel(recepA, pac, { nome: 'Resp Ficticio Compartilhado QZE5', tipo: 'representante' });
     await responsavel(recepA, irmao, { responsavelId: comp.responsavelId, tipo: 'representante' });
+    // 0056 (R3 do parecer de 29/10): um pedido de sigilo gravado direto (o banco não lê a idade) some com a eliminação.
+    await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pac, guardianLinkId: so.id, guardianId: so.responsavelId, requestedBy: profA.userId }),
+      profA.userId);
+    const pedidosDe = async () =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(adolescentConfidentialityRequests).where(eq(adolescentConfidentialityRequests.patientId, pac)), adminA.userId);
+    expect(await pedidosDe()).toHaveLength(1);
     const rota = `/pacientes/${pac}/responsaveis/eliminacao`;
 
     // Na guarda: recepção 403; admin 409; banco recusa (55000) até para o admin.
@@ -784,6 +791,7 @@ describe('A4 do 2º parecer do #67: responsáveis na guarda de 20 anos do prontu
     const r = await post(adminA, rota);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toEqual({ vinculosEliminados: 2, pessoasDescartadas: 1 });
+    expect(await pedidosDe()).toEqual([]);
     const links = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.patientId, pac)), recepA.userId);
     expect(links.every((l) => l.eliminatedAt !== null && l.annulReasonEnc === null && l.clinicalInfoBasisEnc === null)).toBe(true);
     const [pSo] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(guardians).where(eq(guardians.id, so.responsavelId)), recepA.userId);
@@ -1311,7 +1319,9 @@ describe('0056 (A1 b/c do #67): escopo da informação clínica e pedido de sigi
     expect((await post(profA, sigilo(adulto))).body).toMatchObject({ codigo: 'sigilo_so_para_adolescente' });
     expect((await post(profA, sigilo(semData))).body).toMatchObject({ codigo: 'nascimento_nao_informado' });
     // Vínculo de outro paciente: 404.
-    expect((await post(profA, sigilo(crianca), { vinculoId: pai.id })).status).toBe(404);
+    const teen2 = await paciente(recepA, { nome: 'Paciente Ficticio Sigilo Outro', nascimento: nascidoHa(15) });
+    await cuidar(teen2);
+    expect((await post(profA, sigilo(teen2), { vinculoId: pai.id })).status).toBe(404);
 
     // Pedido em relação ao pai.
     const r1 = await post(profA, sigilo(teen), { vinculoId: pai.id });
@@ -1323,6 +1333,8 @@ describe('0056 (A1 b/c do #67): escopo da informação clínica e pedido de sigi
     expect(await motivoDe(profA, teen, mae.id)).toBe('permitida');
     // Quem não é profissional vê só que está restrita, sem saber por quê.
     expect(await motivoDe(recepA, teen, pai.id)).toBe('restrita_pelo_profissional');
+    // R2: o profissional SEM vínculo de cuidado também vê só o genérico.
+    expect(await motivoDe(outroProf, teen, pai.id)).toBe('restrita_pelo_profissional');
     expect((await get(recepA, sigilo(teen))).status).toBe(403);
 
     // Exceção por risco: só contra pedido vigente que alcance o vínculo, e só com nova decisão.
@@ -1386,5 +1398,41 @@ describe('0056 (A1 b/c do #67): escopo da informação clínica e pedido de sigi
     );
     expect(trilha.length).toBeGreaterThanOrEqual(3);
     for (const proibido of ['Sigilo', 'Ficticio']) expect(JSON.stringify(trilha.map((t) => t.metadata))).not.toContain(proibido);
+  });
+});
+
+describe('0056: ressalvas do parecer de 29/10 sobre o sigilo do adolescente', () => {
+  const liga = { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA };
+  it('R1: para quem não tem vínculo de cuidado, qualquer negativa com a marca ligada é o mesmo motivo genérico', async () => {
+    const fez18 = await paciente(recepA, { nome: 'Paciente Ficticio Generico 18', nascimento: nascidoHa(18) });
+    await cuidar(fez18);
+    const b = await responsavel(profA, fez18, { nome: 'Resp Ficticio Generico', tipo: 'pai_mae', confirmaPacienteMaior: true, ...liga });
+    expect(b.informacaoClinica.motivo).toBe('paciente_maior_de_idade');
+    const pelaRecepcao = ((await get(recepA, `/pacientes/${fez18}/responsaveis`)).body as { itens: Resp[] }).itens.find((i) => i.id === b.id);
+    expect(pelaRecepcao?.informacaoClinica).toEqual({ permitida: false, motivo: 'restrita_pelo_profissional' });
+  });
+
+  it('R3: o pedido sobre um responsável segue a PESSOA (encerrar e refazer o vínculo não apaga o sigilo)', async () => {
+    const teen = await paciente(recepA, { nome: 'Paciente Ficticio Sigilo Pessoa', nascimento: nascidoHa(13) });
+    await cuidar(teen);
+    const v1 = await responsavel(profA, teen, { nome: 'Pai Ficticio Sigilo Pessoa', tipo: 'pai_mae', ...liga });
+    const pedido = await post(profA, `/pacientes/${teen}/responsaveis/sigilo`, { vinculoId: v1.id });
+    expect(pedido.status, JSON.stringify(pedido.body)).toBe(201);
+    expect(pedido.body).toMatchObject({ vinculoId: v1.id, responsavelId: v1.responsavelId });
+    await post(recepA, `/pacientes/${teen}/responsaveis/${v1.id}/encerrar`, { motivo: 'fim_da_representacao' }).expect(200);
+    const v2 = await responsavel(profA, teen, { responsavelId: v1.responsavelId, tipo: 'pai_mae', ...liga });
+    expect(v2.informacaoClinica.motivo).toBe('sigilo_pedido_pelo_adolescente');
+    // A exceção por risco também vale para o vínculo novo da mesma pessoa.
+    const risco = await patch(profA, `/pacientes/${teen}/responsaveis/${v2.id}`, { ...liga, justificativa: `${JUSTIFICATIVA} (risco)`, superaSigiloPorRisco: true });
+    expect((risco.body as Resp).informacaoClinica).toEqual({ permitida: true, motivo: 'permitida' });
+    // Banco: o pedido aponta para o vínculo e para a MESMA pessoa (outra pessoa = recusado).
+    const outra = await responsavel(recepA, teen, { nome: 'Mae Ficticia Sigilo Pessoa', tipo: 'pai_mae' });
+    expect(
+      await sqlstate(
+        withTenant(api.db.db, clinicaA, (tx) =>
+          tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: teen, guardianLinkId: v2.id, guardianId: outra.responsavelId, requestedBy: profA.userId }),
+          profA.userId),
+      ),
+    ).toContain('23514');
   });
 });
