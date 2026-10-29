@@ -1,28 +1,47 @@
 'use client';
 
-/** Lista de pacientes (versão do PR 1). Cadastro, linha do tempo e anexos chegam no PR 2. */
-import { Search, UserRound } from 'lucide-react';
+/** Lista de pacientes: busca, cadastro e inativos (escondidos por padrão). */
+import { Search, UserPlus, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { useConsulta } from '@/components/app/dados';
+import { AvisoTruncado } from '@/components/app/aviso-truncado';
+import { useConsulta, useDados } from '@/components/app/dados';
 import { Titulo } from '@/components/app/estrutura';
+import { useAtrasado } from '@/components/app/use-atrasado';
+import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { acharPacientes } from '@/lib/ajudante/busca';
 import { nomeExibido } from '@/lib/api/tipos';
+import { ATRASO_BUSCA_MS, TERMO_MINIMO } from '@/lib/selecao-paciente';
 
 export default function PaginaPacientes() {
-  const consulta = useConsulta((a) => a.listarPacientes());
+  const { api } = useDados();
   const [busca, setBusca] = useState('');
+  const [verInativos, setVerInativos] = useState(false);
+  // Modo http: a busca vai ao servidor, que a registra na auditoria (sem o termo). Fake: local.
+  const termo = useAtrasado(busca.trim(), ATRASO_BUSCA_MS);
+  const noServidor = Boolean(api.buscarPacientes) && termo.length >= TERMO_MINIMO;
+  const consulta = useConsulta(
+    (a) => (noServidor && a.buscarPacientes ? a.buscarPacientes(termo) : a.listarPacientes()),
+    [noServidor ? termo : ''],
+  );
   const lista = useMemo(() => {
     if (consulta.estado !== 'pronto') return [];
-    const todos = consulta.dados;
+    const todos = consulta.dados.filter((p) => verInativos || p.ativo);
+    if (noServidor) return todos;
     return busca.trim() ? acharPacientes(busca, todos).map((x) => x.paciente) : [...todos].sort((a, b) => nomeExibido(a).localeCompare(nomeExibido(b)));
-  }, [consulta, busca]);
+  }, [consulta, busca, verInativos, noServidor]);
 
   return (
     <>
       <Titulo descricao="Procure pelo nome, nome social, telefone ou final do CPF.">Pacientes</Titulo>
-      <div className="relative mb-6 max-w-xl">
+      <Botao asChild tamanho="grande" className="mb-6">
+        <Link href="/pacientes/novo">
+          <UserPlus aria-hidden />
+          Cadastrar paciente
+        </Link>
+      </Botao>
+      <div className="relative mb-3 max-w-xl">
         <label htmlFor="busca-pacientes" className="sr-only">
           Procurar paciente
         </label>
@@ -37,8 +56,13 @@ export default function PaginaPacientes() {
           className="min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo pl-12 pr-4 text-lg"
         />
       </div>
+      <label className="mb-6 flex min-h-12 items-center gap-3">
+        <input type="checkbox" checked={verInativos} onChange={(e) => setVerInativos(e.target.checked)} className="size-6 accent-[var(--texto)]" />
+        Mostrar também os inativos
+      </label>
       {consulta.estado === 'carregando' && <Carregando />}
       {consulta.estado === 'erro' && <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />}
+      {consulta.estado === 'pronto' && <AvisoTruncado truncado={consulta.dados.truncado} />}
       {consulta.estado === 'pronto' &&
         (lista.length === 0 ? (
           <Vazio

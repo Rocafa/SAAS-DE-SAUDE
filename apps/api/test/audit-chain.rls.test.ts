@@ -75,8 +75,11 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  await h?.close();
-  await owner?.end({ timeout: 5 });
+  try {
+    await h?.close();
+  } finally {
+    await owner?.end({ timeout: 5 });
+  }
 });
 
 describe('cadeia de auditoria (0005)', () => {
@@ -291,10 +294,11 @@ describe('enum de ações × CHECK do banco (0006)', () => {
       AuditAction.AiUse,
       AuditAction.AiRefusal,
       AuditAction.BreakGlass,
+      AuditAction.AnomalyAlert,
     ]) {
       await withTenant(h.db, ctx.tenantId, (tx) => recordAudit(tx, ctx, { action, scope: 'teste.acoes', metadata: {} }));
     }
-    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 6 });
+    expect(await verificar(ctx)).toMatchObject({ ok: true, checked: 7 });
     const msg = await errorText(
       withTenant(h.db, ctx.tenantId, (tx) =>
         tx.execute(sql`insert into audit_log (tenant_id, actor_id, action, scope)

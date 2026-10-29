@@ -48,7 +48,7 @@ async function seedTenant(
 
 function exportAuditRows(t: FakeTenant) {
   return withTenant(h.db, t.ctx.tenantId, (tx) =>
-    tx.select().from(auditLog).where(eq(auditLog.action, 'export')),
+    tx.select().from(auditLog).where(eq(auditLog.action, 'export')).orderBy(sql`seq`),
   );
 }
 
@@ -101,7 +101,46 @@ describe('G2 — exportação total do tenant', () => {
     const { manifest, data } = pkg.json;
     expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
     expect(manifest.tenant.id).toBe(a.ctx.tenantId);
-    expect(manifest.counts).toEqual({ tenants: 1, patients: 2 });
+    expect(manifest.counts).toEqual({
+      tenants: 1,
+      patients: 2,
+      professionals: 0,
+      appointmentTypes: 0,
+      appointments: 0,
+      insurers: 0,
+      insuranceGuides: 0,
+      guideSessions: 0,
+      guideSessionSignatures: 0,
+      sessionPackages: 0,
+      packageSessions: 0,
+      packageProfessionalChanges: 0,
+      clinicalSettings: 0,
+      encounters: 0,
+      clinicalRecordVersions: 0,
+      clinicalAddenda: 0,
+      privateNotes: 0,
+      privateNotesWithheld: 0,
+      appointmentReschedules: 0,
+      legalHolds: 0,
+      noteCustodies: 0,
+      finance: {
+        financeSettings: 0,
+        professionalFiscalProfiles: 0,
+        cashSessions: 0,
+        charges: 0,
+        payments: 0,
+        paymentReversals: 0,
+        receiptCounters: 0,
+        receipts: 0,
+        receiptCancellations: 0,
+      },
+      guardians: { guardians: 0, patientGuardians: 0, patientGuardianHistory: 0 },
+      whatsapp: { whatsappSettings: 0, whatsappOptIns: 0, whatsappOutbox: 0, whatsappInbound: 0 },
+      clinicMembers: 0,
+      portal: { invites: 0, links: 0, consents: 0, rightsRequests: 0 },
+      imports: { batches: 0, batchRecords: 0 },
+      auditEvents: pkg.auditEvents.length,
+    });
     expect(Date.parse(manifest.generatedAt)).not.toBeNaN();
     expect(data.patients.map((p) => p.displayName).sort()).toEqual([...a.patientNames].sort());
 
@@ -199,10 +238,21 @@ describe('G3 — auditoria append-only da exportação', () => {
     expect(row?.scope).toBe(EXPORT_AUDIT_SCOPE);
     expect(row?.metadata).toEqual({
       schemaVersion: EXPORT_SCHEMA_VERSION,
-      formats: 'json+csv',
+      formats: 'json+csv+jsonl',
       subscriptionStatus: 'active',
       tenants: 1,
       patients: 3,
+      professionals: 0,
+      appointmentTypes: 0,
+      appointments: 0,
+      guides: 0,
+      packages: 0,
+      encounters: 0,
+      recordVersions: 0,
+      privateNotes: 0,
+      privateNotesWithheld: 0,
+      appointmentReschedules: 0,
+      auditEvents: 0,
     });
     const serial = JSON.stringify(row);
     for (const nome of t.patientNames) expect(serial).not.toContain(nome);

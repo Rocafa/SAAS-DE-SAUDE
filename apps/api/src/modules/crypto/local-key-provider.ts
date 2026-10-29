@@ -14,7 +14,7 @@ export interface LocalKeyProviderOptions {
    * que os dados cifrados sobrevivam a um reinício local. Sem ele, as chaves vivem só na memória.
    */
   readonly rootSecret?: Uint8Array;
-  /** Ambiente (padrão: process.env.NODE_ENV). Em `production` o provedor local é recusado. */
+  /** Ambiente (padrão: process.env.NODE_ENV). Só aceita `development` ou `test` (lista fechada). */
   readonly nodeEnv?: string | undefined;
 }
 
@@ -31,8 +31,8 @@ export class LocalKeyProvider implements KeyProvider {
 
   constructor(options: LocalKeyProviderOptions = {}) {
     const nodeEnv = 'nodeEnv' in options ? options.nodeEnv : process.env.NODE_ENV;
-    if (nodeEnv === 'production') {
-      throw new Error('LocalKeyProvider é só para dev/teste: em produção use o KMS');
+    if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+      throw new Error('LocalKeyProvider é só para development/test: em produção ou staging use o KMS');
     }
     if (options.rootSecret && options.rootSecret.length < 32) {
       throw new Error('rootSecret do LocalKeyProvider precisa de ao menos 32 bytes');

@@ -10,6 +10,8 @@ export interface Usuario {
   nome: string;
   papel: Papel;
   clinica: string;
+  /** Id opaco da clínica da sessão (só no modo http): trocar de clínica limpa o retrato em memória. */
+  clinicaId?: string;
 }
 
 export interface Responsavel {
@@ -29,6 +31,8 @@ export interface Paciente {
   nascimento: string;
   responsaveis: Responsavel[];
   ativo: boolean;
+  /** Inativar não apaga: o prontuário fica guardado pelo prazo legal do conselho. */
+  inativacao?: { data: string; motivo: string };
   /** Todo paciente da demonstração é inventado. */
   ficticio: true;
 }
@@ -46,6 +50,8 @@ export interface Profissional {
   id: string;
   nome: string;
   especialidade: string;
+  /** Quantos pacientes atende ao mesmo tempo (fisio em ginásio: mais de um). Padrão 1. */
+  limiteSimultaneo?: number;
 }
 
 export interface TipoAtendimento {
@@ -67,6 +73,67 @@ export interface Agendamento {
   minutos: number;
   status: StatusAgendamento;
   encaixe: boolean;
+  /** Sessões recorrentes da mesma série. */
+  serieId?: string;
+  pacoteId?: string;
+}
+
+export interface ItemEspera {
+  id: string;
+  pacienteId: string;
+  preferencia: string;
+  criadoEm: string;
+}
+
+export interface Pacote {
+  id: string;
+  pacienteId: string;
+  nome: string;
+  total: number;
+  usadas: number;
+}
+
+export interface Anexo {
+  id: string;
+  pacienteId: string;
+  nome: string;
+  tipo: 'exame' | 'laudo' | 'documento' | 'imagem';
+  data: string;
+}
+
+export interface EventoLinhaTempo {
+  data: string;
+  hora?: string;
+  tipo: 'consulta' | 'falta' | 'cancelamento' | 'recibo' | 'anexo' | 'cadastro';
+  texto: string;
+}
+
+export interface NovoPaciente {
+  nome: string;
+  nomeSocial?: string;
+  telefone: string;
+  cpf?: string;
+  nascimento?: string;
+  responsavel?: { nome: string; parentesco: string; telefone: string };
+}
+
+/** Correção de dados do cadastro (PATCH /pacientes/:id). Só o que a ficha deixa mudar. */
+export interface AlteracaoPaciente {
+  telefone?: string;
+  /** AAAA-MM-DD; vazio ou null apaga a data. */
+  nascimento?: string | null;
+  /**
+   * "Conferi o documento original": exigido quando a data nova reduz a idade de paciente com 12 anos ou
+   * mais (ver `nascimento.ts`). Só admin ou profissional declara.
+   */
+  documentoConferido?: boolean;
+}
+
+export interface Repeticao {
+  intervaloDias: 7 | 14;
+  vezes: number;
+  /** Cria um pacote com esse número de sessões. */
+  pacote?: boolean;
 }
 
 export interface Recibo {
@@ -105,4 +172,19 @@ export const NOME_STATUS: Record<StatusAgendamento, string> = {
 
 export function nomeExibido(p: Pick<Paciente, 'nome' | 'nomeSocial'>): string {
   return p.nomeSocial ?? p.nome;
+}
+
+/** Teto de nomes que o adaptador junta numa lista/busca (10 páginas de 100). */
+export const TETO_LISTA_PACIENTES = 1000;
+
+/**
+ * Lista/busca de pacientes. `truncado: true` quando o servidor ainda tinha mais nomes e o adaptador
+ * parou no teto (`TETO_LISTA_PACIENTES`): a tela avisa para refinar a busca. Continua sendo um array,
+ * então quem só lê a lista não muda (mesmo espírito do `truncado` da agenda).
+ */
+export type ListaPacientes = Paciente[] & { truncado?: true };
+
+/** Anota (ou não) o truncamento numa lista nova. */
+export function comTruncado(lista: Paciente[], truncado: boolean | undefined): ListaPacientes {
+  return truncado ? Object.assign(lista, { truncado: true as const }) : lista;
 }

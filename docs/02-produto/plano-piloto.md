@@ -76,11 +76,12 @@ Meta: **30 clínicas ativas** no fim (critério de GA do roadmap); recrutar ~40 
 | 1. Contratação | Termo de piloto + **DPA** + política de privacidade e termos (LGP-01.3/01.4) aceitos por versão; nomeação do ponto focal de privacidade | Produto + clínica | 1 dia |
 | 2. Kickoff | Reunião de 45 min: objetivos, métricas, canal de feedback, regras de dado real | CS do piloto | 1 dia |
 | 3. Configuração | Wizard (NUC-01.2): dados da clínica, nicho, profissionais, horários; convites; **MFA obrigatório** para acesso clínico | Clínica, com apoio | < 1 dia |
+| 3a. Perfis no banco | Antes do go-live (R21 do parecer #65): todo usuário que opera agenda, pacote ou guia tem o perfil concedido por `POST /clinica/membros` (linha ativa em `clinic_members`). Sem isso, estorno de guia/pacote e a correção de status que estorna (ex.: atendido → faltou) devolvem 403 `perfil_nao_registrado`. Verificação: usuários do provedor de identidade com perfil da clínica e sem linha ativa em `clinic_members`, só com ids | CS + Engenharia | < 1 dia |
 | 4. Modelos | Seleção de modelos por nicho (PRO-01.3) e ajuste fino com o profissional | CS + consultor do nicho | 1–2 dias |
 | 5. Migração (**só a partir da onda 3 / M4**) | Importação assistida com *dry-run* e divergências (MIG-02), somente depois de: DPA aceito, termo de migração (MIG-02.4), canal de transferência cifrado e descarte evidenciado do arquivo bruto em até 7 dias | Time de migração | ≤ 5 dias úteis |
 | 6. Canais | Conexão do número WhatsApp oficial, templates, opt-in (COM-01) | CS + clínica | 3–10 dias (aprovação Meta) |
 | 7. Consentimentos | Modelos de termos aos pacientes (escriba, imagem, marketing) configurados (LGP-01.2) | Clínica (controladora) | 1 dia |
-| 8. Treinamento | 2 sessões de 1 h (recepção; profissionais) + central de ajuda (SUP-01.1) | CS | 1 semana |
+| 8. Treinamento | 2 sessões de 1 h (recepção; profissionais) + central de ajuda (SUP-01.1). Na sessão da recepção/financeiro, item obrigatório (R8 do parecer #65): **não descrever o atendimento na mensagem do Pix nem da transferência** (nada de "sessão de psicoterapia" ou especialidade) — o texto fica no extrato do banco, fora do sistema. O mesmo aviso aparece na tela de recebimento (`aviso` do recebimento Pix/transferência, `AVISO_PIX_MANUAL`) | CS | 1 semana |
 | 9. Go-live | Primeira semana com acompanhamento diário (*hypercare*) | CS + Engenharia de plantão | 1 semana |
 
 ## 6. Critérios de sucesso para GA

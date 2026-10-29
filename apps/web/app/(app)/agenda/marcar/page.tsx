@@ -7,15 +7,18 @@
 import { CalendarCheck, ChevronDown, Search, UserRound, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useId, useMemo, useState, type FormEvent } from 'react';
+import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { textoDoErro, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { usePreenchimento } from '@/components/app/executor';
+import { useAtrasado } from '@/components/app/use-atrasado';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro } from '@/components/ui/estados';
-import { acharPacientes } from '@/lib/ajudante/busca';
+import { conflito } from '@/lib/agenda';
 import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
-import { nomeExibido, type Paciente } from '@/lib/api/tipos';
+import { comTruncado, nomeExibido, type Paciente } from '@/lib/api/tipos';
+import { ATRASO_BUSCA_MS, buscarParaEscolha, sugestoesParaEscolha, TERMO_MINIMO } from '@/lib/selecao-paciente';
 
 export default function PaginaMarcar() {
   return (
@@ -37,12 +40,15 @@ function FormularioMarcar() {
   const encaixe = params.get('encaixe') === '1';
   const { api, atualizar } = useDados();
   const avisar = useAviso();
-  const ids = { paciente: useId(), dia: useId(), hora: useId(), prof: useId(), tipo: useId() };
+  const esperaId = params.get('espera');
+  const ids = { paciente: useId(), dia: useId(), hora: useId(), prof: useId(), tipo: useId(), repetir: useId(), vezes: useId() };
 
   const consulta = useConsulta(
     async (a) => {
+      // F-1: no modo http a escolha do paciente busca no servidor; a lista completa (teto de 1.000)
+      // só é carregada no fake, que não tem `buscarPacientes`.
       const [pacientes, profissionais, tipos, agendamentos] = await Promise.all([
-        a.listarPacientes(),
+        a.buscarPacientes ? Promise.resolve(comTruncado([], false)) : a.listarPacientes(),
         a.listarProfissionais(),
         a.listarTiposAtendimento(),
         remarcarId ? a.listarAgendamentos() : Promise.resolve([]),
@@ -59,14 +65,28 @@ function FormularioMarcar() {
   const [profissionalId, setProfissionalId] = useState('pr1');
   const [tipoId, setTipoId] = useState('t1');
   const [maisOpcoes, setMaisOpcoes] = useState(false);
+  const [repetir, setRepetir] = useState<'nao' | '7' | '14'>('nao');
+  const [vezes, setVezes] = useState('10');
+  const [pacote, setPacote] = useState(false);
   const [erros, setErros] = useState<Erros>({});
   const [enviando, setEnviando] = useState(false);
 
   const original = consulta.estado === 'pronto' ? consulta.dados.original : null;
   const pacienteDaUrl = params.get('paciente');
+  const diaDaUrl = params.get('dia');
   useEffect(() => {
     if (pacienteDaUrl) setPacienteId(pacienteDaUrl);
-  }, [pacienteDaUrl]);
+    if (diaDaUrl && /^\d{4}-\d{2}-\d{2}$/.test(diaDaUrl)) setDia(diaDaUrl);
+  }, [pacienteDaUrl, diaDaUrl]);
+  // Na API real os ids são UUID: o padrão 'pr1'/'t1' do fake vira o primeiro da lista.
+  const listas = consulta.estado === 'pronto' ? consulta.dados : null;
+  useEffect(() => {
+    if (!listas) return;
+    const primeiroProf = listas.profissionais[0]?.id;
+    const primeiroTipo = listas.tipos[0]?.id;
+    if (primeiroProf) setProfissionalId((atual) => (listas.profissionais.some((p) => p.id === atual) ? atual : primeiroProf));
+    if (primeiroTipo) setTipoId((atual) => (listas.tipos.some((t) => t.id === atual) ? atual : primeiroTipo));
+  }, [listas]);
   useEffect(() => {
     if (!original) return;
     setPacienteId(original.pacienteId);
@@ -84,12 +104,34 @@ function FormularioMarcar() {
   usePreenchimento('marcar-dia', (v) => setDia(v), () => setDia(''));
   usePreenchimento('marcar-hora', (v) => setHora(v), () => setHora(''));
 
-  const pacientes = consulta.estado === 'pronto' ? consulta.dados.pacientes : [];
-  const escolhido: Paciente | undefined = pacientes.find((p) => p.id === pacienteId);
+  const pacientes = useMemo(() => (consulta.estado === 'pronto' ? consulta.dados.pacientes : comTruncado([], false)), [consulta]);
+  const noServidor = Boolean(api.buscarPacientes);
+  const termo = useAtrasado(busca.trim(), ATRASO_BUSCA_MS);
+  const buscaServidor = useConsulta(async (a) => ({ termo, lista: await buscarParaEscolha(a, termo) }), [termo]);
+  const respostaServidor = buscaServidor.estado === 'pronto' ? buscaServidor.dados : null;
+  const termoCurto = noServidor && busca.trim().length > 0 && busca.trim().length < TERMO_MINIMO;
+  const procurando = noServidor && !termoCurto && busca.trim().length > 0 && buscaServidor.estado !== 'erro' && respostaServidor?.termo !== busca.trim();
   const sugestoes = useMemo(
-    () => (busca.trim() ? acharPacientes(busca, pacientes.filter((p) => p.ativo)).slice(0, 6).map((x) => x.paciente) : []),
-    [busca, pacientes],
+    () => sugestoesParaEscolha({ termo: busca, doServidor: noServidor ? (respostaServidor?.lista ?? comTruncado([], false)) : null, local: pacientes }),
+    [busca, noServidor, respostaServidor, pacientes],
   );
+
+  // Paciente escolhido: guardado ao clicar; quando vem de fora (URL, remarcar, ajudante) e não está
+  // na lista local, busca o cadastro pelo id (leitura que a API audita por paciente).
+  const [escolhidoGuardado, setEscolhidoGuardado] = useState<Paciente | null>(null);
+  const daLista = pacientes.find((p) => p.id === pacienteId);
+  const escolhido: Paciente | undefined = escolhidoGuardado?.id === pacienteId ? escolhidoGuardado : daLista;
+  useEffect(() => {
+    if (!pacienteId || daLista || escolhidoGuardado?.id === pacienteId) return;
+    let vivo = true;
+    api
+      .obterPaciente(pacienteId)
+      .then((p) => vivo && p && setEscolhidoGuardado(p))
+      .catch(() => undefined);
+    return () => {
+      vivo = false;
+    };
+  }, [api, pacienteId, daLista, escolhidoGuardado]);
 
   if (consulta.estado === 'carregando') return <Carregando />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
@@ -105,6 +147,14 @@ function FormularioMarcar() {
     if (!dia) novos.dia = 'Falta o dia. Escolha no calendário.';
     else if (dia < paraIsoLocal(new Date())) novos.dia = 'Esse dia já passou. Escolha hoje ou um dia depois.';
     if (!hora) novos.hora = 'Falta o horário. Digite como 14:00.';
+    const nVezes = Number(vezes);
+    if (repetir !== 'nao' && !(nVezes >= 2 && nVezes <= 52)) novos.geral = 'Quantas sessões? Digite um número de 2 a 52.';
+    if (!novos.dia && !novos.hora && !encaixe) {
+      const profId = original?.profissionalId ?? profissionalId;
+      const doDia = await api.listarAgendamentos({ de: dia, ate: dia });
+      const ocupado = conflito(doDia, { profissionalId: profId, data: dia, hora, ...(remarcarId ? { ignorarId: remarcarId } : {}) }, profissionais.find((p) => p.id === profId));
+      if (ocupado) novos.hora = `Esse horário já está ocupado. Escolha outro horário ou faça um encaixe.`;
+    }
     setErros(novos);
     if (Object.keys(novos).length) {
       document.getElementById(novos.paciente ? ids.paciente : novos.dia ? ids.dia : ids.hora)?.focus();
@@ -123,6 +173,18 @@ function FormularioMarcar() {
             atualizar();
           },
         });
+      } else if (repetir !== 'nao') {
+        const serie = await api.criarSerie(
+          { pacienteId, data: dia, hora, profissionalId, tipoId },
+          { intervaloDias: repetir === '7' ? 7 : 14, vezes: Number(vezes), pacote },
+        );
+        avisar({
+          texto: `${serie.length} sessões marcadas para ${nome}, começando ${quando}.`,
+          desfazer: async () => {
+            await api.removerSerie(serie[0]!.serieId!);
+            atualizar();
+          },
+        });
       } else {
         const novo = await api.criarAgendamento({ pacienteId, data: dia, hora, profissionalId, tipoId, encaixe });
         avisar({
@@ -133,10 +195,11 @@ function FormularioMarcar() {
           },
         });
       }
+      if (esperaId) await api.removerEspera(esperaId);
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {
-      setErros({ geral: err instanceof Error ? err.message : 'Não deu para marcar. Tente de novo.' });
+      setErros({ geral: textoDoErro(err, 'Não deu para marcar. Tente de novo.') });
       setEnviando(false);
     }
   }
@@ -185,13 +248,29 @@ function FormularioMarcar() {
                   className={`${CAMPO} pl-12`}
                 />
               </div>
-              {sugestoes.length > 0 && (
+              <div aria-live="polite" className="flex flex-col gap-2">
+                {termoCurto && <p className="text-texto-suave">Digite pelo menos {TERMO_MINIMO} letras ou números para procurar.</p>}
+                {procurando && <p className="text-texto-suave">Procurando…</p>}
+                {buscaServidor.estado === 'erro' && <Erro mensagem={buscaServidor.mensagem} tentarDeNovo={buscaServidor.tentarDeNovo} />}
+                {!procurando && <AvisoTruncado truncado={sugestoes.truncado} />}
+                {!procurando && sugestoes.itens.length > 0 && (
+                  <p className="sr-only">{sugestoes.itens.length === 1 ? '1 paciente encontrado.' : `${sugestoes.itens.length} pacientes encontrados.`}</p>
+                )}
+                {!procurando && sugestoes.haMais && (
+                  <p className="text-texto-suave">Há mais pacientes com esse nome. Continue digitando (sobrenome ou telefone) para achar.</p>
+                )}
+                {busca.trim() && !termoCurto && !procurando && buscaServidor.estado !== 'erro' && sugestoes.itens.length === 0 && (
+                  <p className="text-texto-suave">Ninguém com esse nome. Confira a escrita ou cadastre o paciente em Pacientes.</p>
+                )}
+              </div>
+              {!procurando && sugestoes.itens.length > 0 && (
                 <ul aria-label="Pacientes encontrados" className="flex flex-col gap-1">
-                  {sugestoes.map((p) => (
+                  {sugestoes.itens.map((p) => (
                     <li key={p.id}>
                       <button
                         type="button"
                         onClick={() => {
+                          setEscolhidoGuardado(p);
                           setPacienteId(p.id);
                           setBusca('');
                           setErros((e) => ({ ...e, paciente: undefined }));
@@ -205,9 +284,6 @@ function FormularioMarcar() {
                     </li>
                   ))}
                 </ul>
-              )}
-              {busca.trim() && sugestoes.length === 0 && (
-                <p className="text-texto-suave">Ninguém com esse nome. Confira a escrita ou cadastre o paciente em Pacientes.</p>
               )}
             </>
           )}
@@ -283,6 +359,28 @@ function FormularioMarcar() {
                     ))}
                   </select>
                 </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor={ids.repetir} className="font-bold">
+                    Repetir
+                  </label>
+                  <select id={ids.repetir} value={repetir} onChange={(e) => setRepetir(e.target.value as 'nao' | '7' | '14')} className={CAMPO} disabled={encaixe}>
+                    <option value="nao">Não repetir</option>
+                    <option value="7">Toda semana</option>
+                    <option value="14">A cada 2 semanas</option>
+                  </select>
+                </div>
+                {repetir !== 'nao' && (
+                  <div className="flex flex-col gap-2">
+                    <label htmlFor={ids.vezes} className="font-bold">
+                      Quantas sessões
+                    </label>
+                    <input id={ids.vezes} type="number" inputMode="numeric" min={2} max={52} value={vezes} onChange={(e) => setVezes(e.target.value)} className={CAMPO} />
+                    <label className="flex min-h-12 items-center gap-3 font-bold">
+                      <input type="checkbox" checked={pacote} onChange={(e) => setPacote(e.target.checked)} className="size-6 accent-[var(--texto)]" />
+                      Faz parte de um pacote (controla o saldo de sessões)
+                    </label>
+                  </div>
+                )}
                 <div className="flex flex-col gap-2">
                   <label htmlFor={ids.tipo} className="font-bold">
                     Tipo de atendimento

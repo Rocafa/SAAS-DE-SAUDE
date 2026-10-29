@@ -4,12 +4,13 @@
  * Ficha do paciente (versão do PR 1): nome social em destaque, responsáveis, próximas consultas
  * (remarcar/cancelar), prontuário (chega no PR 3) e recibos.
  */
-import { CalendarClock, CalendarPlus, FileText, Phone, Printer, Receipt, ShieldAlert, Users, XCircle } from 'lucide-react';
+import { Archive, CalendarClock, CalendarPlus, FileText, History, Package, Paperclip, Phone, Printer, Receipt, RotateCcw, ShieldAlert, Users, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { useAviso } from '@/components/app/desfazer';
+import { CorrigirDados } from '@/components/app/corrigir-dados';
+import { useAcao, useAviso } from '@/components/app/desfazer';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { cpfMascarado } from '@/lib/ajudante/busca';
@@ -21,23 +22,29 @@ export default function PaginaFicha() {
   const { id } = useParams<{ id: string }>();
   const { api, atualizar } = useDados();
   const avisar = useAviso();
+  const acao = useAcao();
   const [cancelando, setCancelando] = useState<string | null>(null);
+  const [inativando, setInativando] = useState(false);
+  const [motivo, setMotivo] = useState('Terminou o tratamento');
   const consulta = useConsulta(
     async (a) => {
-      const [paciente, ags, recibos, profissionais] = await Promise.all([
+      const [paciente, ags, recibos, profissionais, linha, anexos, pacotes] = await Promise.all([
         a.obterPaciente(id),
         a.listarAgendamentos({ pacienteId: id }),
         a.listarRecibos(id),
         a.listarProfissionais(),
+        a.linhaDoTempo(id),
+        a.listarAnexos(id),
+        a.listarPacotes(id),
       ]);
-      return { paciente, ags, recibos, profissionais: new Map(profissionais.map((p) => [p.id, p])) };
+      return { paciente, ags, recibos, linha, anexos, pacotes, profissionais: new Map(profissionais.map((p) => [p.id, p])) };
     },
     [id],
   );
 
   if (consulta.estado === 'carregando') return <Carregando texto="Abrindo a ficha…" />;
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
-  const { paciente, ags, recibos, profissionais } = consulta.dados;
+  const { paciente, ags, recibos, profissionais, linha, anexos, pacotes } = consulta.dados;
   if (!paciente) {
     return (
       <Vazio
@@ -56,18 +63,40 @@ export default function PaginaFicha() {
   const proximas = ags.filter((a) => a.data >= hoje && (a.status === 'agendado' || a.status === 'confirmado'));
   const nome = nomeExibido(paciente);
 
-  async function cancelar(a: Agendamento) {
-    const anterior = await api.alterarStatus(a.id, 'cancelado');
-    setCancelando(null);
-    atualizar();
-    avisar({
-      texto: `Consulta de ${formatarDia(a.data, new Date())} às ${a.hora} cancelada.`,
-      desfazer: async () => {
-        await api.alterarStatus(a.id, anterior);
-        atualizar();
-      },
+  const cancelar = (a: Agendamento) =>
+    acao(async () => {
+      const anterior = await api.alterarStatus(a.id, 'cancelado');
+      setCancelando(null);
+      atualizar();
+      avisar({
+        texto: `Consulta de ${formatarDia(a.data, new Date())} às ${a.hora} cancelada.`,
+        desfazer: async () => {
+          await api.alterarStatus(a.id, anterior);
+          atualizar();
+        },
+      });
     });
-  }
+
+  const inativar = () =>
+    acao(async () => {
+      await api.inativarPaciente(id, motivo);
+      setInativando(false);
+      atualizar();
+      avisar({
+        texto: `${nome} inativado. O prontuário continua guardado.`,
+        desfazer: async () => {
+          await api.reativarPaciente(id);
+          atualizar();
+        },
+      });
+    });
+
+  const reativar = () =>
+    acao(async () => {
+      await api.reativarPaciente(id);
+      atualizar();
+      avisar({ texto: `${nome} está ativo de novo.` });
+    });
 
   return (
     <article className="flex flex-col gap-8">
@@ -82,7 +111,8 @@ export default function PaginaFicha() {
         {!paciente.ativo && (
           <p className="flex items-center gap-2 rounded-md border-2 border-dashed border-borda p-2 font-bold">
             <ShieldAlert aria-hidden className="size-6" />
-            Inativo. O prontuário continua guardado pelo prazo legal.
+            Inativo desde {paciente.inativacao ? formatarDia(paciente.inativacao.data, new Date()) : '—'}
+            {paciente.inativacao ? ` (${paciente.inativacao.motivo})` : ''}. O prontuário continua guardado pelo prazo legal.
           </p>
         )}
         <dl className="mt-2 grid gap-x-8 gap-y-1 sm:grid-cols-2">
@@ -103,6 +133,9 @@ export default function PaginaFicha() {
               Marcar consulta
             </Link>
           </Botao>
+        </div>
+        <div className="mt-2">
+          <CorrigirDados key={`${paciente.id}-${paciente.telefone}-${paciente.nascimento}`} paciente={paciente} />
         </div>
       </header>
 
@@ -180,6 +213,35 @@ export default function PaginaFicha() {
         )}
       </section>
 
+      {pacotes.length > 0 && (
+        <section aria-labelledby="t-pacotes">
+          <h2 id="t-pacotes" className="mb-3 flex items-center gap-2 text-xl font-bold">
+            <Package aria-hidden className="size-6" />
+            Pacotes de sessões
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {pacotes.map((k) => (
+              <li key={k.id} className="flex flex-col gap-2 rounded-md border-2 border-borda p-3">
+                <p className="font-bold">{k.nome}</p>
+                <p>
+                  Usadas <strong>{k.usadas}</strong> de {k.total}. Saldo: <strong>{k.total - k.usadas} sessões</strong>.
+                </p>
+                <div
+                  role="meter"
+                  aria-label={`Sessões usadas de ${k.nome}`}
+                  aria-valuemin={0}
+                  aria-valuemax={k.total}
+                  aria-valuenow={k.usadas}
+                  className="h-4 overflow-hidden rounded-sm border-2 border-borda-forte"
+                >
+                  <div className="h-full bg-principal" style={{ width: `${(k.usadas / k.total) * 100}%` }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section aria-labelledby="t-pront" data-assist-id="ficha-prontuario">
         <h2 id="t-pront" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <FileText aria-hidden className="size-6" />
@@ -218,6 +280,96 @@ export default function PaginaFicha() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+      <section aria-labelledby="t-anexos">
+        <h2 id="t-anexos" className="mb-3 flex items-center gap-2 text-xl font-bold">
+          <Paperclip aria-hidden className="size-6" />
+          Anexos
+        </h2>
+        {anexos.length === 0 ? (
+          <Vazio titulo="Nenhum anexo" oQueFazer="Exames e documentos do paciente aparecem aqui." />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {anexos.map((x) => (
+              <li key={x.id} className="flex flex-wrap items-center gap-3 rounded-md border-2 border-borda p-3">
+                <Paperclip aria-hidden className="size-5" />
+                <span className="flex-1 font-bold">{x.nome}</span>
+                <span className="text-texto-suave">{formatarDia(x.data, new Date())}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-texto-suave">Enviar arquivo chega junto com a API real (guardado cifrado, só para a clínica).</p>
+      </section>
+
+      <section aria-labelledby="t-linha">
+        <h2 id="t-linha" className="mb-3 flex items-center gap-2 text-xl font-bold">
+          <History aria-hidden className="size-6" />
+          Linha do tempo
+        </h2>
+        {linha.length === 0 ? (
+          <Vazio titulo="Ainda sem histórico" oQueFazer="Consultas, faltas, pagamentos e anexos aparecem aqui, do mais novo para o mais antigo." />
+        ) : (
+          <ol className="flex flex-col border-l-[3px] border-borda-forte pl-4">
+            {linha.map((ev, i) => (
+              <li key={`${ev.data}-${i}`} className="relative pb-4">
+                <span aria-hidden className="absolute -left-[1.6rem] top-1.5 size-4 rounded-full border-[3px] border-borda-forte bg-fundo" />
+                <p className="text-[0.95rem] font-bold">
+                  {formatarDia(ev.data, new Date())}
+                  {ev.hora ? ` às ${ev.hora}` : ''}
+                </p>
+                <p className={ev.tipo === 'falta' || ev.tipo === 'cancelamento' ? 'italic' : ''}>{ev.texto}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+
+      <section aria-labelledby="t-inativar" className="rounded-md border-2 border-dashed border-borda p-4">
+        <h2 id="t-inativar" className="mb-2 flex items-center gap-2 text-xl font-bold">
+          <Archive aria-hidden className="size-6" />
+          {paciente.ativo ? 'Inativar paciente' : 'Paciente inativo'}
+        </h2>
+        {paciente.ativo ? (
+          inativando ? (
+            <div role="alertdialog" aria-label="Confirmar inativação" className="flex flex-col gap-3">
+              <p>
+                <strong>O prontuário não é apagado.</strong> Ele fica guardado pelo prazo legal do conselho (ex.: CFM 20 anos, CFP 5
+                anos) e continua disponível para consulta e exportação. As consultas futuras deste paciente serão canceladas.
+              </p>
+              <label htmlFor="motivo" className="font-bold">
+                Motivo
+              </label>
+              <select id="motivo" value={motivo} onChange={(e) => setMotivo(e.target.value)} className="min-h-14 rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg">
+                {['Terminou o tratamento', 'Mudou de clínica', 'Mudou de cidade', 'Pediu para sair', 'Outro'].map((m) => (
+                  <option key={m}>{m}</option>
+                ))}
+              </select>
+              <div className="flex flex-wrap gap-2">
+                <Botao variante="perigo" onClick={inativar}>
+                  <Archive aria-hidden />
+                  Sim, inativar
+                </Botao>
+                <Botao variante="suave" onClick={() => setInativando(false)}>
+                  Não, manter ativo
+                </Botao>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="mb-3 text-texto-suave">Use quando o paciente não vem mais. Nada é apagado.</p>
+              <Botao variante="contorno" onClick={() => setInativando(true)}>
+                <Archive aria-hidden />
+                Inativar paciente
+              </Botao>
+            </>
+          )
+        ) : (
+          <Botao variante="contorno" onClick={reativar}>
+            <RotateCcw aria-hidden />
+            Reativar paciente
+          </Botao>
         )}
       </section>
     </article>

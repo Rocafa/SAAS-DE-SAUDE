@@ -76,6 +76,11 @@ export class FieldCipher<Tx> {
     this.usageFlushEvery = options.usageFlushEvery ?? DEK_USAGE_FLUSH_EVERY;
   }
 
+  /** A clínica teve as chaves destruídas (eliminação, G3)? Não decifra nada nem chama o provedor. */
+  tenantKeysDestroyed(tx: Tx, tenantId: TenantId): Promise<boolean> {
+    return this.store.hasDestroyedKeys(tx, tenantId);
+  }
+
   /** Garante chave mestra e DEK ativas para a clínica. Idempotente; devolve o id da DEK ativa. */
   async provisionTenant(tx: Tx, tenantId: TenantId, actorId: string | null): Promise<string> {
     await this.store.lockTenant(tx, tenantId);
