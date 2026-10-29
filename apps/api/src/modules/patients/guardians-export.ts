@@ -96,6 +96,8 @@ export interface ExportedGuardians {
     patientId: string;
     guardianLinkId: string | null;
     guardianId: string | null;
+    /** 1.22.0 (0058, R5): atendimento do prontuário onde o pedido foi registrado. */
+    encounterId: string | null;
     requestedAt: string;
     requestedBy: string;
     revokedAt: string | null;
@@ -245,6 +247,7 @@ export async function exportarResponsaveis(
       patientId: p.patientId,
       guardianLinkId: p.guardianLinkId,
       guardianId: p.guardianId,
+      encounterId: p.encounterId,
       requestedAt: p.requestedAt.toISOString(),
       requestedBy: p.requestedBy,
       revokedAt: iso(p.revokedAt),

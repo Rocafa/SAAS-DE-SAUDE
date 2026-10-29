@@ -100,7 +100,6 @@
 | **Checklist do GA:** conferir na trilha de cada clínica que o job `cpf-indice-reindexacao` chegou a `pending = 0` em produção, nos pacientes e nos responsáveis (`table: 'guardians'`) | pareceres do #88 e #89 |
 | **Avaliar o postgres.js 4.0.0 (sai o patch da 3.4.9):** o bug do patch já foi relatado por terceiros (porsager/postgres#1248, #1250, #1208, fechadas como resolvidas em 29/10/2026) e a v4.0.0 (29/10/2026) corrige. Não há 3.4.10. A v4 quebra compatibilidade: o servidor passa a decidir o tipo dos parâmetros (`infer: false`; `Date` em coluna `timestamp`/`date` vira UTC), só ESM, sai `sql.array()`, e Node 20+. Esperar ≥ 2 semanas de maturidade (a partir de ~12/11/2026), conferir o driver `drizzle-orm/postgres-js` com a v4, rodar `test:resiliencia`, RLS e o script da §3 do rascunho, e só então remover o patch | [bug-postgresjs-3.4.9.md](../04-arquitetura/bug-postgresjs-3.4.9.md) §5 e §7 |
 | **A1 (b)/(c) do #67:** feito no código (0056, #110); falta a confirmação jurídica (pergunta 1.15 do pacote do advogado, D8). **Consumidor (portal/COM):** novo parecer e as 5 condições do parecer de 29/10 (uso só de `podeReceberInformacaoClinica` com o escopo; catálogo do que cabe em `essencial`, senão só `essencial`; negativa sem motivo ao responsável; nada `integral` por canal automático até a D8) | [parecer de 29/10](../03-seguranca-lgpd/revisoes/2026-10-29-sigilo-adolescente.md) |
-| **R5 do parecer do sigilo (opcional):** guardar no pedido o id da evolução do prontuário onde o profissional registrou o pedido | idem |
 
 ## Feito
 | Item | Quem | Quando |
