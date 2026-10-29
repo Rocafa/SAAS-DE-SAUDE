@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { temPermissao } from '../auth/perfis';
-import { faixaEtariaEm, idadeEm, informacaoClinica, menorEm, pendenciasDoCadastro, REGRA_INFORMACAO_CLINICA, tipoRepresentaPaciente, vigenteEm } from './responsaveis-regras';
-import { validarEncerramento, validarNovoVinculo } from './responsaveis.validation';
+import {
+  faixaDoPedidoDeSigilo,
+  faixaEtariaEm,
+  idadeEm,
+  informacaoClinica,
+  menorEm,
+  pedidoDeSigiloDoVinculo,
+  pendenciasDoCadastro,
+  REGRA_INFORMACAO_CLINICA,
+  tipoRepresentaPaciente,
+  vigenteEm,
+} from './responsaveis-regras';
+import { validarAlteracaoVinculo, validarEncerramento, validarNovoVinculo, validarPedidoDeSigilo } from './responsaveis.validation';
 
 const HOJE = '2030-06-15';
 /** Decisão do profissional tomada HOJE. */
@@ -128,5 +139,60 @@ describe('validação', () => {
     expect(temPermissao(['profissional'], 'responsaveis:liberar_informacao_clinica')).toBe(true);
     // A2 do #67: admin sem perfil clínico não liga a informação clínica.
     expect(temPermissao(['admin'], 'responsaveis:liberar_informacao_clinica')).toBe(false);
+  });
+});
+
+describe('0056 (A1 b/c do #67): escopo e pedido de sigilo do adolescente', () => {
+  // Adolescente de 14 anos em HOJE, decisão tomada já na adolescência.
+  const TEEN = '2016-03-01';
+  const decisao = { ...marca, decisaoInstante: '2030-06-15T12:00:00.000Z' };
+  it('sem pedido vigente: a marca vale como antes', () => {
+    expect(informacaoClinica({ ...decisao, sigiloPedidoEm: null }, TEEN, HOJE)).toEqual({ permitida: true, motivo: 'permitida' });
+  });
+  it('pedido vigente: negada, salvo decisão POSTERIOR que o supere por risco', () => {
+    const pedido = '2030-06-15T10:00:00.000Z';
+    expect(informacaoClinica({ ...decisao, sigiloPedidoEm: pedido }, TEEN, HOJE).motivo).toBe('sigilo_pedido_pelo_adolescente');
+    expect(informacaoClinica({ ...decisao, sigiloPedidoEm: pedido, superaSigiloPorRisco: true }, TEEN, HOJE)).toEqual({ permitida: true, motivo: 'permitida' });
+    // Exceção por risco tomada ANTES do pedido não vale contra ele.
+    expect(informacaoClinica({ ...decisao, sigiloPedidoEm: '2030-06-15T13:00:00.000Z', superaSigiloPorRisco: true }, TEEN, HOJE).motivo).toBe('sigilo_pedido_pelo_adolescente');
+    // Sem o instante da decisão não há como provar que ela é posterior: continua negada.
+    expect(informacaoClinica({ ...decisao, decisaoInstante: null, sigiloPedidoEm: pedido, superaSigiloPorRisco: true }, TEEN, HOJE).motivo).toBe('sigilo_pedido_pelo_adolescente');
+  });
+  it('aos 18 anos o motivo é a maioridade, não o pedido', () => {
+    expect(informacaoClinica({ ...decisao, sigiloPedidoEm: '2030-01-01T00:00:00.000Z' }, '2012-06-15', HOJE).motivo).toBe('paciente_maior_de_idade');
+  });
+  it('pedido só para adolescente com nascimento e não emancipado', () => {
+    expect(faixaDoPedidoDeSigilo(TEEN, HOJE, null)).toBe('ok');
+    expect(faixaDoPedidoDeSigilo('2020-01-01', HOJE, null)).toBe('sigilo_so_para_adolescente');
+    expect(faixaDoPedidoDeSigilo('1990-01-01', HOJE, null)).toBe('sigilo_so_para_adolescente');
+    expect(faixaDoPedidoDeSigilo('2013-01-01', HOJE, '2030-01-01')).toBe('sigilo_so_para_adolescente');
+    expect(faixaDoPedidoDeSigilo(null, HOJE, null)).toBe('nascimento_nao_informado');
+  });
+  it('pedido que alcança o vínculo: o de todos ou o do próprio vínculo, o mais recente', () => {
+    const pedidos = [
+      { vinculoId: 'a', em: '2030-01-02T00:00:00.000Z' },
+      { vinculoId: null, em: '2030-01-01T00:00:00.000Z' },
+    ];
+    expect(pedidoDeSigiloDoVinculo(pedidos, 'a')).toBe('2030-01-02T00:00:00.000Z');
+    expect(pedidoDeSigiloDoVinculo(pedidos, 'b')).toBe('2030-01-01T00:00:00.000Z');
+    expect(pedidoDeSigiloDoVinculo([{ vinculoId: 'a', em: '2030-01-02T00:00:00.000Z' }], 'b')).toBeNull();
+  });
+  it('validação: escopo e exceção por risco só com a marca ligada; ligada sem escopo = essencial', () => {
+    const liga = { recebeInformacaoClinica: true, justificativa: 'Avaliacao ficticia do profissional' };
+    expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', ...liga }, HOJE)).toMatchObject({ escopoInformacao: 'essencial' });
+    expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', ...liga, escopoInformacao: 'integral', superaSigiloPorRisco: true }, HOJE)).toMatchObject({
+      escopoInformacao: 'integral',
+      superaSigiloPorRisco: true,
+    });
+    expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae' }, HOJE)).not.toHaveProperty('escopoInformacao');
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', escopoInformacao: 'essencial' }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', ...liga, escopoInformacao: 'tudo' }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', ...liga, superaSigiloPorRisco: false }, HOJE)).toThrow();
+    expect(() => validarAlteracaoVinculo({ superaSigiloPorRisco: true })).toThrow();
+    expect(validarAlteracaoVinculo({ ...liga, escopoInformacao: 'integral' })).toMatchObject({ escopoInformacao: 'integral' });
+    expect(validarPedidoDeSigilo({})).toEqual({});
+    expect(validarPedidoDeSigilo({ vinculoId: '00000000-0000-4000-8000-000000000000' })).toEqual({ vinculoId: '00000000-0000-4000-8000-000000000000' });
+    expect(() => validarPedidoDeSigilo({ vinculoId: 'x' })).toThrow();
+    expect(() => validarPedidoDeSigilo({ motivo: 'texto' })).toThrow();
   });
 });

@@ -1,6 +1,6 @@
 import type { TenantId } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
-import { guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
+import { adolescentConfidentialityRequests, guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { guardianFieldRef, guardianLinkFieldRef, type GuardianEncryptedColumn, type GuardianLinkEncryptedColumn } from './guardian-fields';
@@ -57,6 +57,9 @@ export interface ExportedGuardians {
     /** 1.19.0 (0055, B1): autorização expressa do paciente para o apoiador receber informação clínica. */
     patientAuthorizedBy: string | null;
     patientAuthorizedAt: string | null;
+    /** 1.20.0 (0056): escopo da marca e exceção por risco ao pedido de sigilo do adolescente. */
+    clinicalInfoScope: string | null;
+    clinicalInfoRiskOverride: boolean;
     annulReason: string | null;
     discardAfter: string | null;
     /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
@@ -83,6 +86,16 @@ export interface ExportedGuardians {
     endReason: string | null;
     actorId: string;
     occurredAt: string;
+  }[];
+  /** 1.20.0 (0056, A1 c do #67): pedidos de sigilo do adolescente (só ids e datas; vínculo null = todos). */
+  readonly adolescentConfidentialityRequests: readonly {
+    id: string;
+    patientId: string;
+    guardianLinkId: string | null;
+    requestedAt: string;
+    requestedBy: string;
+    revokedAt: string | null;
+    revokedBy: string | null;
   }[];
 }
 
@@ -140,6 +153,15 @@ export async function exportarResponsaveis(
     tenantId,
   );
 
+  const pedidosDeSigilo = soDaClinica(
+    await tx
+      .select()
+      .from(adolescentConfidentialityRequests)
+      .where(eq(adolescentConfidentialityRequests.tenantId, tenantId))
+      .orderBy(asc(adolescentConfidentialityRequests.requestedAt), asc(adolescentConfidentialityRequests.id)),
+    tenantId,
+  );
+
   const data: ExportedGuardians = {
     guardians: await Promise.all(
       pessoas.map(async (g) => ({
@@ -183,6 +205,8 @@ export async function exportarResponsaveis(
       payerPatientAwareAt: iso(v.payerPatientAwareAt),
       patientAuthorizedBy: v.patientAuthorizedBy,
       patientAuthorizedAt: iso(v.patientAuthorizedAt),
+      clinicalInfoScope: v.clinicalInfoScope,
+      clinicalInfoRiskOverride: v.clinicalInfoRiskOverride,
       annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
       discardAfter: v.discardAfter,
       eliminatedAt: iso(v.eliminatedAt),
@@ -210,6 +234,15 @@ export async function exportarResponsaveis(
         occurredAt: h.occurredAt.toISOString(),
       })),
     ),
+    adolescentConfidentialityRequests: pedidosDeSigilo.map((p) => ({
+      id: p.id,
+      patientId: p.patientId,
+      guardianLinkId: p.guardianLinkId,
+      requestedAt: p.requestedAt.toISOString(),
+      requestedBy: p.requestedBy,
+      revokedAt: iso(p.revokedAt),
+      revokedBy: p.revokedBy,
+    })),
   };
   const counts = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, (v as readonly unknown[]).length])) as GuardiansCounts;
   return { data, counts };

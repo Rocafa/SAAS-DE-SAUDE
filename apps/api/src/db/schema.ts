@@ -1074,6 +1074,10 @@ export const patientGuardians = pgTable('patient_guardians', {
   /** 0055 (B1): autorização expressa do paciente para o APOIADOR receber informação clínica (quem registrou e quando). */
   patientAuthorizedBy: uuid('patient_authorized_by'),
   patientAuthorizedAt: timestamp('patient_authorized_at', { withTimezone: true }),
+  /** 0056 (A1 b do #67): escopo da marca decidido pelo profissional; null com a marca desligada. */
+  clinicalInfoScope: text('clinical_info_scope').$type<EscopoInformacaoClinica>(),
+  /** 0056 (A1 c): a decisão supera o pedido de sigilo do adolescente por risco (justificativa na decisão). */
+  clinicalInfoRiskOverride: boolean('clinical_info_risk_override').notNull().default(false),
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),
@@ -1081,6 +1085,25 @@ export const patientGuardians = pgTable('patient_guardians', {
   eliminatedAt: timestamp('eliminated_at', { withTimezone: true }),
   /** 0048: marca imutável do lote de importação que criou o vínculo (só INSERT, só pelo lote em aplicação). */
   importBatchId: uuid('import_batch_id'),
+});
+
+/** 0056 (A1 b do #67): escopo da informação clínica ao responsável. */
+export const ESCOPOS_INFORMACAO_CLINICA = ['essencial', 'integral'] as const;
+export type EscopoInformacaoClinica = (typeof ESCOPOS_INFORMACAO_CLINICA)[number];
+
+/**
+ * Pedido de sigilo do adolescente (0056, A1 c do #67): só ids e datas. `guardianLinkId` null = todos os
+ * responsáveis. Registrado e revogado só pelo profissional; nada se apaga.
+ */
+export const adolescentConfidentialityRequests = pgTable('adolescent_confidentiality_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  patientId: uuid('patient_id').notNull(),
+  guardianLinkId: uuid('guardian_link_id'),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  requestedBy: uuid('requested_by').notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */

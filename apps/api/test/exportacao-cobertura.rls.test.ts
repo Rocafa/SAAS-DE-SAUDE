@@ -11,6 +11,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
 import {
+  adolescentConfidentialityRequests,
   auditLog,
   patients,
   professionals,
@@ -121,6 +122,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guardians: 'guardians.guardians',
   patient_guardians: 'guardians.patientGuardians',
   patient_guardian_history: 'guardians.patientGuardianHistory',
+  adolescent_confidentiality_requests: 'guardians.adolescentConfidentialityRequests',
   import_batches: 'imports.batches',
   import_batch_records: 'imports.batchRecords',
   whatsapp_settings: 'whatsapp.whatsappSettings',
@@ -415,6 +417,13 @@ beforeAll(async () => {
   const vinculoId = (resp.body as { id: string }).id;
   await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
   await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
+  // 0056: um pedido de sigilo do adolescente, gravado direto pelo profissional (o banco não lê a idade), e revogado.
+  const profSigilo = api.sessao(clinicaA, 'profissional');
+  await api.membro(clinicaA, profSigilo, 'profissional');
+  await withTenant(api.db.db, clinicaA, async (tx) => {
+    const [p] = await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacienteId, guardianLinkId: vinculoId, requestedBy: profSigilo.userId }).returning();
+    await tx.update(adolescentConfidentialityRequests).set({ revokedBy: profSigilo.userId, revokedAt: new Date() }).where(eq(adolescentConfidentialityRequests.id, (p as { id: string }).id));
+  }, profSigilo.userId);
 
   // Importador (0024): um lote de pacientes aplicado (1 paciente criado), com o aceite do termo.
   const lote = await api
@@ -533,6 +542,7 @@ describe('G2 — conteúdo do pacote', () => {
       const n = async (
         t:
           | typeof patients
+          | typeof adolescentConfidentialityRequests
           | typeof professionals
           | typeof appointmentTypes
           | typeof appointments
@@ -612,6 +622,7 @@ describe('G2 — conteúdo do pacote', () => {
           guardians: await n(guardians),
           patientGuardians: await n(patientGuardians),
           patientGuardianHistory: await n(patientGuardianHistory),
+          adolescentConfidentialityRequests: await n(adolescentConfidentialityRequests),
         },
         whatsapp: {
           whatsappSettings: await n(whatsappSettings),
@@ -675,6 +686,7 @@ describe('G2 — conteúdo do pacote', () => {
         guardians: 1,
         patientGuardians: 1,
         patientGuardianHistory: 4,
+        adolescentConfidentialityRequests: 1,
       },
       whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });

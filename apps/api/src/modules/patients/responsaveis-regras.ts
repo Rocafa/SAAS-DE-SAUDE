@@ -1,4 +1,4 @@
-import type { GuardianKind } from '../../db/schema';
+import type { EscopoInformacaoClinica, GuardianKind } from '../../db/schema';
 import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 
 /**
@@ -58,6 +58,10 @@ export type MotivoInformacaoClinica =
   | 'paciente_maior_de_idade'
   | 'paciente_emancipado'
   | 'sem_autorizacao_do_paciente'
+  /** 0056 (A1 c): o adolescente pediu sigilo e não há decisão posterior que o supere por risco. */
+  | 'sigilo_pedido_pelo_adolescente'
+  /** Como o motivo acima aparece para quem não é profissional (o pedido em si é dado sensível). */
+  | 'restrita_pelo_profissional'
   | 'sem_data_de_nascimento';
 
 export type FaixaEtaria = 'crianca' | 'adolescente' | 'adulto';
@@ -112,6 +116,12 @@ export interface VinculoParaInformacaoClinica extends Vigencia {
   readonly decididaEm: string | null;
   /** Apoiador (0055, B1): autorização expressa do paciente registrada. Os outros tipos ignoram. */
   readonly autorizadoPeloPaciente?: boolean;
+  /** 0056 (A1 c): instante (ISO) da decisão do profissional, para comparar com o pedido de sigilo. */
+  readonly decisaoInstante?: string | null;
+  /** 0056 (A1 c): a decisão supera o pedido de sigilo por risco. */
+  readonly superaSigiloPorRisco?: boolean;
+  /** 0056 (A1 c): instante (ISO) do pedido de sigilo vigente mais recente que alcança este vínculo; null sem pedido. */
+  readonly sigiloPedidoEm?: string | null;
 }
 
 export function informacaoClinica(
@@ -137,7 +147,38 @@ export function informacaoClinica(
     const inicio = aniversarioDe(nascimentoDoPaciente as string, regra.idadeInicioAdolescencia);
     if (vinculo.decididaEm < inicio) return negar('adolescente_requer_nova_decisao');
   }
+  // A1 (c) do #67: pedido de sigilo do adolescente. Só uma decisão TOMADA DEPOIS do pedido, que o supere por
+  // risco (CEM art. 74, parte final), devolve o efeito à marca.
+  if (vinculo.sigiloPedidoEm) {
+    const superou = vinculo.superaSigiloPorRisco === true && !!vinculo.decisaoInstante && vinculo.decisaoInstante > vinculo.sigiloPedidoEm;
+    if (!superou) return negar('sigilo_pedido_pelo_adolescente');
+  }
   return { permitida: true, motivo: 'permitida' };
+}
+
+/** Escopo padrão quando o profissional liga a marca sem dizer (A1 b do #67): o mais restrito. */
+export const ESCOPO_PADRAO: EscopoInformacaoClinica = 'essencial';
+
+/** Pedido de sigilo pode ser registrado? Só para adolescente (12 a 17 anos, não emancipado, com nascimento). */
+export function faixaDoPedidoDeSigilo(
+  nascimento: string | null,
+  hoje: string,
+  emancipadoEm: string | null,
+  regra: RegraInformacaoClinica = REGRA_INFORMACAO_CLINICA,
+): 'ok' | 'nascimento_nao_informado' | 'sigilo_so_para_adolescente' {
+  const faixa = faixaEtariaEm(nascimento, hoje, emancipadoEm, regra);
+  if (faixa === null) return 'nascimento_nao_informado';
+  return faixa === 'adolescente' ? 'ok' : 'sigilo_so_para_adolescente';
+}
+
+/** Pedido vigente mais recente que alcança o vínculo (pedido para todos, ou para este vínculo). */
+export function pedidoDeSigiloDoVinculo(
+  pedidos: readonly { readonly vinculoId: string | null; readonly em: string }[],
+  vinculoId: string,
+): string | null {
+  let ultimo: string | null = null;
+  for (const p of pedidos) if ((p.vinculoId === null || p.vinculoId === vinculoId) && (ultimo === null || p.em > ultimo)) ultimo = p.em;
+  return ultimo;
 }
 
 /**

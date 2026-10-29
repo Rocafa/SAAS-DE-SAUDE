@@ -114,8 +114,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.19.0: decisão apoiada (migração 0055, A3 do #67): `patientGuardians[].kind` aceita `apoiador`; o termo dele
  *        sai em `supportTermRef`/`supportTermScope` (e `courtDecisionRef`/`curatorshipScope` ficam null, para não
  *        ser lido como curatela); `patientAuthorizedBy`/`patientAuthorizedAt` (autorização do paciente, B1).
+ * 1.20.0: escopo da informação clínica e sigilo do adolescente (migração 0056, A1 b/c do #67):
+ *        `patientGuardians[].clinicalInfoScope`/`clinicalInfoRiskOverride` e `guardians.adolescentConfidentialityRequests`
+ *        (só ids e datas), com a contagem em `manifest.counts.guardians`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.19.0';
+export const EXPORT_SCHEMA_VERSION = '1.20.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -169,6 +172,8 @@ export const EXPORTED_TABLES = [
   'guardians',
   'patient_guardians',
   'patient_guardian_history',
+  // Pedido de sigilo do adolescente (0056): em data.guardians.adolescentConfidentialityRequests.
+  'adolescent_confidentiality_requests',
   // Importador (0024): em data.imports. Arquivo bruto e divergências ficam fora (EXPORT_EXCLUDED_TABLES).
   'import_batches',
   'import_batch_records',
