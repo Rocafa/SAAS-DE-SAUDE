@@ -421,7 +421,7 @@ beforeAll(async () => {
   const profSigilo = api.sessao(clinicaA, 'profissional');
   await api.membro(clinicaA, profSigilo, 'profissional');
   await withTenant(api.db.db, clinicaA, async (tx) => {
-    const [p] = await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacienteId, guardianLinkId: vinculoId, requestedBy: profSigilo.userId }).returning();
+    const [p] = await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacienteId, guardianLinkId: vinculoId, guardianId: (resp.body as { responsavelId: string }).responsavelId, requestedBy: profSigilo.userId }).returning();
     await tx.update(adolescentConfidentialityRequests).set({ revokedBy: profSigilo.userId, revokedAt: new Date() }).where(eq(adolescentConfidentialityRequests.id, (p as { id: string }).id));
   }, profSigilo.userId);
 
