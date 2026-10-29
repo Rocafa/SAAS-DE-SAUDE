@@ -129,3 +129,9 @@ O mérito das correções está certo. Corrigido o B1 abaixo e com o CI verde (R
 - **C1 (merge):** B1 corrigido e CI verde nos jobs com Postgres.
 - **C2 (fila):** R5 e o complemento da R6.
 - **C3 (portal/COM):** R1 a R3 resolvidas. Fica destravada para avaliação no PR de consumidor, com novo parecer, nas condições 2 a 5 acima.
+
+## Registro do Maestro (29/10/2026)
+
+- B1 da re-revisão corrigido em fce7305: o bloco `DO` da 0056 voltou a usar `$$`. O `replace` do JavaScript tinha trocado `$$` por `$`. A frase da R6 sobre a fonte do risco e o cálculo do vínculo de cuidado uma vez por paciente na listagem entraram no mesmo commit.
+- O seed do teste de cobertura do G2 passou a informar a pessoa do vínculo (2901673).
+- CI do PR #110 todo verde no head 2901673 (16/16), inclusive Isolamento entre tenants (RLS), Testes ofensivos e conferência das guardas do banco. Pela conferência acima, o veredito passa a **APROVADO COM RESSALVAS**. R5 fica na fila.
