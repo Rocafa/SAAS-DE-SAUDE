@@ -62,6 +62,8 @@ export interface ResponsavelDto {
   readonly encerramento: { readonly motivo: GuardianEndReason; readonly em: string } | null;
   /** Curatela (decisão judicial e escopo), só para admin e profissional; null nos outros tipos. */
   readonly curatela: { readonly referencia: string; readonly escopo: string } | null;
+  /** Termo de decisão apoiada (referência da homologação e limites do apoio, 0055): mesma leitura da curatela; null nos outros tipos. */
+  readonly termoDeApoio: { readonly referencia: string; readonly escopo: string } | null;
   /** Pagador de paciente adulto com a ciência do paciente registrada (A7 do #67). */
   readonly pagadorComCienciaDoPaciente: boolean;
   /** Anulado (cadastro errado): data a partir da qual a pessoa é descartada. */
@@ -256,8 +258,13 @@ export class ResponsaveisService {
       if (dados.pagador && vivos.some((v) => v.isPayer)) throw new ConflitoError('pagador_ja_definido');
       const quadro = await this.quadro(tx, ctx.tenantId, pac);
       const menor = menorEm(quadro.nascimento, hoje, quadro.emancipadoEm);
-      // A3: curatela é para maior (menor tem pais/tutor); A7: terceiro pagador de adulto exige a ciência dele.
+      // A3: curatela e decisão apoiada são para maior (menor tem pais/tutor); pai/mãe ou tutor de paciente maior
+      // (ou emancipado) só com confirmação explícita, porque não representa mais. A7: terceiro pagador de adulto
+      // exige a ciência dele.
       if (dados.tipo === 'curador' && menor === true) throw new ConflitoError('curatela_de_menor');
+      if (dados.tipo === 'apoiador' && menor === true) throw new ConflitoError('apoio_de_menor');
+      const paiOuTutorDeMaior = (dados.tipo === 'pai_mae' || dados.tipo === 'tutor') && menor === false;
+      if (paiOuTutorDeMaior && !dados.confirmaPacienteMaior) throw new ConflitoError('pai_mae_tutor_de_maior_requer_confirmacao');
       if (dados.pagador && menor !== true && !dados.cienciaDoPaciente) throw new ConflitoError('ciencia_do_paciente_obrigatoria');
       const vinculoId = randomUUID();
       const decisao = dados.recebeInformacaoClinica ? await this.decisaoClinica(tx, ctx, pacienteId, vinculoId, dados.justificativa) : {};
@@ -297,6 +304,7 @@ export class ResponsaveisService {
           clinical_info: dados.recebeInformacaoClinica,
           existing_guardian: dados.responsavelId !== undefined,
           ...(dados.pagador && menor !== true ? { patient_aware: true } : {}),
+          ...(paiOuTutorDeMaior ? { adult_patient_confirmed: true } : {}),
         },
       });
       return this.paraDto(tx, ctx, vinculo, pessoa, quadro, hoje);
@@ -736,7 +744,8 @@ export class ResponsaveisService {
     const tenantId = ctx.tenantId;
     const perfis = ctx.roles.filter(ehPerfil);
     const cpf = await decifrarCampoResponsavel(this.cipher, tx, tenantId, g.id, 'cpf', g.cpfEnc);
-    const curatela =
+    // Curatela e termo de apoio ficam nas mesmas colunas cifradas; o tipo do vínculo diz qual é.
+    const decisaoJudicial =
       v.courtDecisionRefEnc && v.curatorshipScopeEnc && temPermissao(perfis, 'responsaveis:ver_curatela')
         ? {
             referencia: (await decifrarCampoVinculo(this.cipher, tx, tenantId, v.id, 'court_decision_ref', v.courtDecisionRefEnc)) ?? '',
@@ -760,7 +769,8 @@ export class ResponsaveisService {
       faixaEtaria: faixaEtariaEm(quadro.nascimento, hoje, quadro.emancipadoEm),
       vigencia: { ...vig, vigente: vigenteEm(vig, hoje) },
       encerramento: v.endReason && v.endedAt ? { motivo: v.endReason, em: v.endedAt.toISOString() } : null,
-      curatela,
+      curatela: v.kind === 'curador' ? decisaoJudicial : null,
+      termoDeApoio: v.kind === 'apoiador' ? decisaoJudicial : null,
       pagadorComCienciaDoPaciente: v.payerPatientAwareAt !== null,
       descarteApos: v.discardAfter,
       pessoaDescartada: g.discardedAt !== null,

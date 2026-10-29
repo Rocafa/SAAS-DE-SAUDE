@@ -994,8 +994,8 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   documentRequired: boolean('document_required').notNull().default(sql`null`),
 });
 
-/** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */
-export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante'] as const;
+/** Responsáveis do paciente (migração 0028; `apoiador` na 0055). Valores no mesmo CHECK do banco. */
+export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante', 'apoiador'] as const;
 export type GuardianKind = (typeof GUARDIAN_KINDS)[number];
 export const GUARDIAN_END_REASONS = [
   'maioridade',

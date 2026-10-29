@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { temPermissao } from '../auth/perfis';
-import { faixaEtariaEm, idadeEm, informacaoClinica, menorEm, pendenciasDoCadastro, REGRA_INFORMACAO_CLINICA, vigenteEm } from './responsaveis-regras';
+import { faixaEtariaEm, idadeEm, informacaoClinica, menorEm, pendenciasDoCadastro, REGRA_INFORMACAO_CLINICA, tipoRepresentaPaciente, vigenteEm } from './responsaveis-regras';
 import { validarEncerramento, validarNovoVinculo } from './responsaveis.validation';
 
 const HOJE = '2030-06-15';
@@ -31,6 +31,14 @@ describe('maioridade (CC art. 5º) e informação clínica', () => {
     expect(informacaoClinica(marca, '2012-06-15', HOJE)).toEqual({ permitida: false, motivo: 'paciente_maior_de_idade' });
     expect(informacaoClinica({ ...marca, tipo: 'curador' }, '1980-01-01', HOJE).permitida).toBe(true);
     expect(informacaoClinica({ ...marca, tipo: 'representante' }, '1980-01-01', HOJE).permitida).toBe(false);
+  });
+
+  it('0055: apoiador recebe só com a marca e a decisão do profissional; não representa', () => {
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador' }, '1980-01-01', HOJE).permitida).toBe(true);
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador', decididaEm: null }, '1980-01-01', HOJE).motivo).toBe('sem_decisao_do_profissional');
+    expect(informacaoClinica({ ...marca, tipo: 'apoiador', recebeInformacaoClinica: false }, '1980-01-01', HOJE).motivo).toBe('marca_desligada');
+    expect(tipoRepresentaPaciente('apoiador')).toBe(false);
+    for (const t of ['pai_mae', 'tutor', 'curador', 'representante'] as const) expect(tipoRepresentaPaciente(t), t).toBe(true);
   });
 
   it('sem marca, fora da vigência ou sem nascimento: negada', () => {
@@ -87,6 +95,20 @@ describe('validação', () => {
     expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'tutor', tenantId: 'x' }, HOJE)).toThrow();
     expect(() => validarEncerramento({ motivo: 'maioridade', ate: '2030-06-16' }, HOJE)).toThrow();
     expect(validarEncerramento({ motivo: 'maioridade' }, HOJE)).toEqual({ motivo: 'maioridade' });
+  });
+
+  it('0055: apoiador exige termo e limites; campos do apoio só no apoiador; confirmação só para pai/mãe e tutor', () => {
+    const apoio = { apoioReferencia: 'Termo ficticio 1', apoioEscopo: 'Limites ficticios' };
+    expect(validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador', ...apoio }, HOJE)).toMatchObject({
+      tipo: 'apoiador',
+      curatela: { referencia: 'Termo ficticio 1', escopo: 'Limites ficticios' },
+    });
+    expect(() => validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador' }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Apoiador Ficticio', tipo: 'apoiador', apoioReferencia: 'Termo ficticio 1' }, HOJE)).toThrow();
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'curador', curatelaReferencia: 'Proc 1', curatelaEscopo: 'Escopo', ...apoio }, HOJE)).toThrow();
+    expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'pai_mae', confirmaPacienteMaior: true }, HOJE)).toMatchObject({ confirmaPacienteMaior: true });
+    expect(validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'tutor' }, HOJE)).toMatchObject({ confirmaPacienteMaior: false });
+    expect(() => validarNovoVinculo({ nome: 'Resp Ficticio', tipo: 'representante', confirmaPacienteMaior: true }, HOJE)).toThrow();
   });
 
   it('recepção cadastra, mas não liga informação clínica', () => {

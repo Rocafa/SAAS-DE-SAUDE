@@ -232,6 +232,12 @@ describe('R4 do #69: o responsável representa para o lembrete?', () => {
     expect(responsavelRepresentaParaLembrete('curador', '1980-01-01', null, hoje)).toBe(true);
     expect(responsavelRepresentaParaLembrete('curador', null, null, hoje)).toBe(true);
   });
+  it('0055: apoiador (decisão apoiada) nunca representa para o lembrete; sigilo como na curatela', () => {
+    expect(responsavelRepresentaParaLembrete('apoiador', '1980-01-01', null, hoje)).toBe(false);
+    expect(responsavelRepresentaParaLembrete('apoiador', '2015-03-01', null, hoje)).toBe(false);
+    expect(responsavelRepresentaParaLembrete('apoiador', null, null, hoje)).toBe(false);
+    expect(sigiloDoAdolescenteNoLembrete('apoiador', '1980-01-01', hoje)).toBe(true);
+  });
   it('R4 (c): sigilo do adolescente a partir dos 12 anos, com idade desconhecida e na curatela', () => {
     expect(sigiloDoAdolescenteNoLembrete('pai_mae', '2014-10-23', hoje)).toBe(false);
     expect(sigiloDoAdolescenteNoLembrete('pai_mae', '2014-10-22', hoje)).toBe(true);

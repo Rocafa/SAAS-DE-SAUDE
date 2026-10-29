@@ -37,7 +37,17 @@ export const ROTULO_DO_TIPO: Readonly<Record<GuardianKind, string>> = {
   tutor: 'Tutor(a)',
   curador: 'Curador(a)',
   representante: 'Representante legal',
+  apoiador: 'Apoiador(a) (decisão apoiada)',
 };
+
+/**
+ * Decisão apoiada (CC art. 1.783-A; 0055): o apoiador NÃO representa. O paciente é maior e capaz e decide em
+ * nome próprio. O apoiador não age pelo paciente no portal nem recebe lembrete por ele, e a informação clínica
+ * só chega a ele por decisão do profissional, como na curatela.
+ */
+export function tipoRepresentaPaciente(tipo: GuardianKind): boolean {
+  return tipo !== 'apoiador';
+}
 
 export type MotivoInformacaoClinica =
   | 'permitida'
@@ -112,7 +122,8 @@ export function informacaoClinica(
   if (!vinculo.recebeInformacaoClinica) return negar('marca_desligada');
   if (!vigenteEm(vinculo, hoje)) return negar('vinculo_nao_vigente');
   if (vinculo.decididaEm === null) return negar('sem_decisao_do_profissional');
-  if (vinculo.tipo === 'curador') return { permitida: true, motivo: 'permitida' };
+  // Curatela e decisão apoiada são de adulto: basta a decisão do profissional (a idade não muda nada).
+  if (vinculo.tipo === 'curador' || vinculo.tipo === 'apoiador') return { permitida: true, motivo: 'permitida' };
   const menor = menorEm(nascimentoDoPaciente, hoje, emancipadoEm);
   if (menor === null) return negar('sem_data_de_nascimento');
   if (!menor) return negar(emancipadoEm !== null && emancipadoEm <= hoje ? 'paciente_emancipado' : 'paciente_maior_de_idade');

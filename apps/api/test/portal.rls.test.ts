@@ -716,7 +716,7 @@ describe('V2 do #68: SQL arbitrário na sessão do portal não lê a trilha nem 
 
 describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao responsável da 0028', () => {
   it('convite: adulto, sem responsável, criança/adolescente como titular e emancipado são recusados (API e banco)', async () => {
-    const respAdulto = await responsavelDe(pacA1, 'Hugo Ficticio Parente', { cienciaDoPaciente: true });
+    const respAdulto = await responsavelDe(pacA1, 'Hugo Ficticio Parente', { cienciaDoPaciente: true, confirmaPacienteMaior: true });
     expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacA1, agindoComo: 'responsavel_legal', responsavelId: respAdulto })).body)
       .toMatchObject({ statusCode: 409, codigo: 'responsavel_so_para_menor' });
     await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacMenor, agindoComo: 'responsavel_legal' }).expect(400);
@@ -740,6 +740,26 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
       ...base, patientId: eman, tokenHash: 'f'.repeat(64), guardianLinkId: respEman, guardianId: g?.guardianId as string, representUntil: nascidoHa(-1),
     }), adminA.userId)).rejects.toThrow();
+  });
+
+  it('0055 (A3 do #67): apoiador de decisão apoiada não representa no portal (API 409 e banco recusa)', async () => {
+    const adulto = await criarPaciente(adminA, 'Rita Ficticia Apoiada', { nascimento: nascidoHa(35) });
+    const apoiador = await responsavelDe(adulto, 'Davi Ficticio Apoiador', {
+      tipo: 'apoiador',
+      apoioReferencia: 'Termo ficticio de decisao apoiada QZA0068',
+      apoioEscopo: 'Apoio em decisoes de saude e contratos (ficticio)',
+    });
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: adulto, agindoComo: 'responsavel_legal', responsavelId: apoiador })).body)
+      .toMatchObject({ statusCode: 409, codigo: 'apoiador_nao_representa' });
+    // Direto no banco, até com uma data de representação coerente: o gatilho da 0055 recusa pelo tipo do vínculo.
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, apoiador)), adminA.userId);
+    const erro = await withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
+      tenantId: clinicaA, patientId: adulto, actingAs: 'responsavel_legal', expiresAt: sql`now() + interval '1 day'`, createdBy: adminA.userId,
+      tokenHash: 'a5'.repeat(32), guardianLinkId: apoiador, guardianId: g?.guardianId as string, confidentialFrom: hojeNaClinica(), representUntil: nascidoHa(-1),
+    }), adminA.userId).then(() => null, (e: unknown) => e);
+    const e = erro as { message?: string; cause?: { message?: string } } | null;
+    expect(e, 'o banco aceitou convite de apoiador').not.toBeNull();
+    expect(`${e?.message ?? ''} ${e?.cause?.message ?? ''}`).toMatch(/apoiador/);
   });
 
   it('o código vai ao telefone DO RESPONSÁVEL; vínculo, consentimento, pedido e trilha registram qual responsável agiu', async () => {

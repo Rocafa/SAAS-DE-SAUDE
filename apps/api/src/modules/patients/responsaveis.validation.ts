@@ -20,10 +20,15 @@ export interface NovoVinculo {
   readonly justificativa?: string;
   /** Início da vigência (AAAA-MM-DD, não futuro). Padrão: hoje no fuso da clínica. */
   readonly desde?: string;
-  /** Curatela (obrigatória para o tipo curador, A3 do #67): referência da decisão judicial e escopo, cifrados. */
+  /**
+   * Decisão judicial, cifrada (A3 do #67): curatela (tipo curador, campos `curatelaReferencia`/`curatelaEscopo`) ou
+   * termo de decisão apoiada (tipo apoiador, 0055, campos `apoioReferencia`/`apoioEscopo`). Mesmas colunas no banco.
+   */
   readonly curatela?: { readonly referencia: string; readonly escopo: string };
   /** Paciente adulto ciente de que um terceiro é o pagador (A7 do #67). */
   readonly cienciaDoPaciente: boolean;
+  /** Pai/mãe ou tutor de paciente MAIOR (ou emancipado): a recepção confirma ciência de que ele não representa mais (A3 do #67). */
+  readonly confirmaPacienteMaior: boolean;
 }
 
 export interface AlteracaoVinculo {
@@ -53,6 +58,9 @@ const CAMPOS_NOVO = [
   'curatelaReferencia',
   'curatelaEscopo',
   'cienciaDoPaciente',
+  'apoioReferencia',
+  'apoioEscopo',
+  'confirmaPacienteMaior',
 ] as const;
 const CAMPOS_ALTERACAO = ['nome', 'cpf', 'telefone', 'recebeInformacaoClinica', 'justificativa'] as const;
 
@@ -104,7 +112,14 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
   // Curador exige a decisão judicial e o escopo; os outros tipos não levam estes campos.
   if (tipo === 'curador' && (curatelaReferencia === undefined || curatelaEscopo === undefined)) v.falhar(curatelaReferencia === undefined ? 'curatelaReferencia' : 'curatelaEscopo');
   if (tipo !== 'curador' && (v.tem('curatelaReferencia') || v.tem('curatelaEscopo'))) v.falhar('curatelaReferencia');
+  // Apoiador (0055) exige o termo homologado e os limites do apoio (CC art. 1.783-A); só ele leva estes campos.
+  const apoioReferencia = v.texto('apoioReferencia', { min: 3, max: 300 });
+  const apoioEscopo = v.texto('apoioEscopo', { min: 3, max: 1000 });
+  if (tipo === 'apoiador' && (apoioReferencia === undefined || apoioEscopo === undefined)) v.falhar(apoioReferencia === undefined ? 'apoioReferencia' : 'apoioEscopo');
+  if (tipo !== 'apoiador' && (v.tem('apoioReferencia') || v.tem('apoioEscopo'))) v.falhar('apoioReferencia');
   const cienciaDoPaciente = v.booleano('cienciaDoPaciente') ?? false;
+  const confirmaPacienteMaior = v.booleano('confirmaPacienteMaior') ?? false;
+  if (confirmaPacienteMaior && tipo !== 'pai_mae' && tipo !== 'tutor') v.falhar('confirmaPacienteMaior');
   // Ou a pessoa existente, ou os dados de uma nova (nunca os dois, nunca nenhum).
   const temPessoa = v.tem('nome') || v.tem('cpf') || v.tem('telefone');
   if (v.tem('responsavelId') === temPessoa) v.falhar(v.tem('responsavelId') ? 'responsavelId' : 'nome');
@@ -118,7 +133,9 @@ export function validarNovoVinculo(corpo: unknown, hoje: string): NovoVinculo {
     ...(justificativa ? { justificativa } : {}),
     ...(desde ? { desde } : {}),
     ...(curatelaReferencia && curatelaEscopo ? { curatela: { referencia: curatelaReferencia, escopo: curatelaEscopo } } : {}),
+    ...(apoioReferencia && apoioEscopo ? { curatela: { referencia: apoioReferencia, escopo: apoioEscopo } } : {}),
     cienciaDoPaciente,
+    confirmaPacienteMaior,
   };
 }
 
