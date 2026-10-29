@@ -16,6 +16,7 @@ import { nomeExibido, type Agendamento, type Paciente, type Profissional, type S
 import { cn } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
 import { useAcao, useAviso } from './desfazer';
+import { indexarPorId } from '@/lib/indexar';
 
 interface Base {
   ags: Agendamento[];
@@ -31,7 +32,7 @@ function useBase(de: string, ate: string) {
         a.listarPacientes(),
         a.listarProfissionais(),
       ]);
-      return { ags, pacientes: new Map(pacientes.map((p) => [p.id, p])), profissionais };
+      return { ags, pacientes: indexarPorId(pacientes), profissionais };
     },
     [de, ate],
   );
@@ -318,13 +319,16 @@ export function VisaoProfissional({ dia }: { dia: string }) {
 
 export function ListaEspera() {
   const { api, atualizar, pacientes } = useDados();
+  // Erro de rede ou 401 nestas duas ações ficava sem dono: a promessa era rejeitada e a tela não
+  // dizia nada. `acao` mostra o aviso de erro, como no resto do arquivo.
+  const acao = useAcao();
   const avisar = useAviso();
   const consulta = useConsulta((a) => a.listarEspera());
   const [busca, setBusca] = useState('');
   const [pacienteId, setPacienteId] = useState('');
   const [preferencia, setPreferencia] = useState('');
   const [erro, setErro] = useState('');
-  const porId = useMemo(() => new Map(pacientes.map((p) => [p.id, p])), [pacientes]);
+  const porId = useMemo(() => indexarPorId(pacientes), [pacientes]);
   const sugestoes = busca.trim() && !pacienteId ? acharPacientes(busca, pacientes.filter((p) => p.ativo)).slice(0, 5) : [];
 
   async function adicionar(e: FormEvent) {
@@ -333,32 +337,36 @@ export function ListaEspera() {
       setErro('Falta o paciente. Digite o nome e escolha na lista.');
       return;
     }
-    const item = await api.adicionarEspera(pacienteId, preferencia);
-    setPacienteId('');
-    setBusca('');
-    setPreferencia('');
-    setErro('');
-    atualizar();
-    avisar({
-      texto: 'Colocado na lista de espera.',
-      desfazer: async () => {
-        await api.removerEspera(item.id);
-        atualizar();
-      },
+    await acao(async () => {
+      const item = await api.adicionarEspera(pacienteId, preferencia);
+      setPacienteId('');
+      setBusca('');
+      setPreferencia('');
+      setErro('');
+      atualizar();
+      avisar({
+        texto: 'Colocado na lista de espera.',
+        desfazer: async () => {
+          await api.removerEspera(item.id);
+          atualizar();
+        },
+      });
     });
   }
 
   async function tirar(id: string) {
-    const item = await api.removerEspera(id);
-    atualizar();
-    if (item)
-      avisar({
-        texto: 'Tirado da lista de espera.',
-        desfazer: async () => {
-          await api.devolverEspera(item);
-          atualizar();
-        },
-      });
+    await acao(async () => {
+      const item = await api.removerEspera(id);
+      atualizar();
+      if (item)
+        avisar({
+          texto: 'Tirado da lista de espera.',
+          desfazer: async () => {
+            await api.devolverEspera(item);
+            atualizar();
+          },
+        });
+    });
   }
 
   return (

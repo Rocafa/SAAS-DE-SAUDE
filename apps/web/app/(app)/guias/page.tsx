@@ -12,8 +12,9 @@ import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia, paraIsoLocal } from '@/lib/ajudante/datas';
 import { nomeExibido } from '@/lib/api/tipos';
 import { alertasGuia } from '@/lib/financeiro';
+import { CAMPO } from '@/components/ui/formulario';
+import { indexarPorId } from '@/lib/indexar';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 export default function PaginaGuias() {
   const { api, atualizar, pacientes } = useDados();
@@ -22,7 +23,7 @@ export default function PaginaGuias() {
   const [aberto, setAberto] = useState(false);
   const [f, setF] = useState({ pacienteId: '', convenio: '', numero: '', sessoes: '10', validade: '' });
   const [erro, setErro] = useState('');
-  const porId = new Map(pacientes.map((p) => [p.id, p]));
+  const porId = indexarPorId(pacientes);
   const ativos = [...pacientes].filter((p) => p.ativo).sort((a, b) => nomeExibido(a).localeCompare(nomeExibido(b)));
 
   async function salvar(e: FormEvent) {

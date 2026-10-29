@@ -6,8 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { REGRAS_SENHA, errosSenha, validarCodigo } from '@/lib/conta';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 export default function PaginaConvite() {
   const router = useRouter();

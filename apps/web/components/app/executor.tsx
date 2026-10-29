@@ -214,7 +214,7 @@ export function ExecutorProvider({ children }: { children: ReactNode }) {
     parar();
   }, [exec, parar, router]);
 
-  // Clicar no botão destacado (ou mudar de tela por conta própria) encerra o destaque.
+  // Clicar no botão destacado encerra o destaque (mudar de tela também: efeito logo abaixo).
   useEffect(() => {
     if (!exec?.terminou) return;
     const ao = (e: MouseEvent) => {
@@ -231,7 +231,14 @@ export function ExecutorProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', esc);
   }, [exec, parar]);
 
-  void pathname;
+  // Promessa que o comentário acima fazia e o código não cumpria: sair da tela encerra o destaque.
+  // Só depois que a execução termina — no meio do fluxo é o próprio Ajudante que navega.
+  const telaDoDestaque = useRef(pathname);
+  useEffect(() => {
+    if (telaDoDestaque.current === pathname) return;
+    telaDoDestaque.current = pathname;
+    if (exec?.terminou) parar();
+  }, [pathname, exec?.terminou, parar]);
 
   return (
     <Ctx.Provider value={{ executar }}>

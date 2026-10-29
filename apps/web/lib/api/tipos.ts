@@ -80,6 +80,8 @@ export interface Profissional {
   id: string;
   nome: string;
   especialidade: string;
+  /** Registro do conselho (CREFITO, CRP, CRM…). Sem ele o documento emitido não tem valor. */
+  registro?: string;
   /** Quantos pacientes atende ao mesmo tempo (fisio em ginásio: mais de um). Padrão 1. */
   limiteSimultaneo?: number;
 }
@@ -290,4 +292,6 @@ export interface DadosClinica {
   cnpj: string;
   telefone: string;
   endereco: string;
+  /** Cidade do documento ("São Paulo, 12 de outubro de 2026"). */
+  cidade?: string;
 }

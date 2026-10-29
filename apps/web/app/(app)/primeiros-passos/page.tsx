@@ -11,8 +11,8 @@ import { useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { Botao } from '@/components/ui/botao';
 import { PASSOS_PRIMEIRO_USO } from '@/lib/conta';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 const NICHOS = ['Fisioterapia', 'Terapia ocupacional', 'Psicologia', 'Fonoaudiologia', 'Nutrição', 'Outra'];
 
 export default function PaginaPrimeirosPassos() {

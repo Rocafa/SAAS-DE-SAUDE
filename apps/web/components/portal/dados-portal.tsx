@@ -157,6 +157,10 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
   const [estado, setEstado] = useState<EstadoPortal<T>>({ estado: 'carregando' });
   useEffect(() => {
     let vivo = true;
+    // Volta a "carregando" ao tentar de novo: sem isto, o "Tentar de novo" depois de um erro deixava
+    // a mensagem de erro na tela até a nova resposta chegar, e nada dizia que a tentativa começou.
+    // (Cópia proposital da regra do lado da clínica: o portal não importa nada de lá — R-47a.)
+    setEstado((e) => (e.estado === 'pronto' ? e : { estado: 'carregando' }));
     carregar(api)
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
