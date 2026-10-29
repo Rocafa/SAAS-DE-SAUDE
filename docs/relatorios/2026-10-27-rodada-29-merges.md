@@ -89,3 +89,11 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
   - **C1:** decidir "mesmo CPF" pelo índice, que pode ser trocado sem usuário, deixaria um índice forjado descartar em silêncio uma alteração legítima. Agora a decisão é tomada decifrando o CPF atual, como nos pacientes.
   - **Defeito revelado pelo teste da C1:** com o índice forjado igual ao novo, o gatilho de índice ausente zerava o índice gravado. Corrigido.
 - **Situação:** CI todo verde com RLS. Fica no checklist do GA conferir `pending = 0` também com `table: guardians`.
+
+## 6. 29/10: CodeQL na aba Security (#90)
+
+- **Antes:** o CodeQL rodava com `upload: never`, herança do repositório privado. Os achados de nível warning nunca eram vistos.
+- **Agora:** os resultados vão para a aba Security e para as anotações do PR. O artefato SARIF e a trava de achado grave continuam.
+- **1ª análise na `main`:** 103 regras do conjunto `security-extended`, **0 alertas**.
+- **Configuração do repositório, sem mudança:** varredura de segredos e proteção de push já estavam ligadas. Os **alertas do Dependabot estão desligados**. As atualizações do Dependabot por PR funcionam, mas os alertas de vulnerabilidade não. Ligar é recomendado; depende do OK do sócio, por ser configuração do repositório.
+- **Verificado:** a O-R17d do #63 (lista branca no registro do fundador) já tinha sido fechada na 0047. Não sobra item de código "antes do GA" nos pareceres. O que falta depende de infraestrutura e dos sócios.
