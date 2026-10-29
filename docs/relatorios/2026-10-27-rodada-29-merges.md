@@ -62,3 +62,14 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
   [ambientes-e-devops](../04-arquitetura/ambientes-e-devops.md).
 - **Staging e piloto:** continuam dependendo da D4 (login real) e de rodar as provas K-c3/K-c5 na AWS
   ([runbook](../04-arquitetura/runbook-primeiro-dia-staging.md)).
+
+## 4. 28/10: proteção da main e índice cego
+
+- **#87, proteção da `main`:** ligada com o OK do sócio. PR obrigatório, branch atualizada, 10 checks obrigatórios, sem force push nem exclusão. O próprio #87 serviu de teste.
+- **#54 fechado.** Pular o CI em PRs só de documentação travaria esses PRs, porque os checks obrigatórios nunca chegariam.
+- **#88, job `cpf-indice-reindexacao` (diário, 05:30):** fecha a observação "antes do GA" do parecer do importador. Os pacientes anteriores à 0046 só ganhavam índice cego por um passo de runbook que não tinha script. O job faz até 20 lotes de 500 por clínica e por dia. Sem pendente, não decifra nada nem cria chave. Quando zera, destrói as versões aposentadas.
+  - **Guardião: APROVADO COM RESSALVAS, depois APROVADO.** A C1 apontava que uma clínica eliminada (G3) faria o job falhar todo dia, e esse alarme eterno esconderia as falhas reais. Agora o job devolve `chaveDestruida = 1` sem falhar. A C2 pediu que o teste prove que nenhuma chave é criada.
+  - CI todo verde, com RLS.
+- **Fila:** o item "#66 R3/R9" estava velho, porque os dois já tinham entrado pelo #73. Foi trocado pelas pendências reais de antes do GA:
+  - índice cego dos responsáveis;
+  - conferir `pending = 0` em produção.

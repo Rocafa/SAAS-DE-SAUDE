@@ -88,7 +88,7 @@
 | Rodada 28.2: ✅ 2º ensaio do merge completo — 25 PRs, api 986, web 349, rls 618, E2E 223, audit limpo ([relatório](../relatorios/2026-10-27-ensaio-de-merge-2.md)); teste do adaptador web corrigido no #76 (f260a16) | Maestro @Rocafa | 27/10/2026 | main / PR #76 |
 | Rodada 28.3: ✅ R4 na key policy por clínica — `HumanoNaoDecifra` (humano não decifra fora do break-glass), achado pelo kit do staging — API (15e3303) e Terraform (f4a679d, c2e0c77) — **APROVADO** (1f30a20) | Maestro @Rocafa | 27/10/2026 | `eng/integracao-r19` |
 | Rodada 28.4: ✅ condições da evidência das provas (H3 pela sessão SSO, SHA da política e do commit, eventos da K-c5, evidência sem dado pessoal) + `kms:CreateGrant` no HumanoNaoDecifra (API e Terraform) — **APROVADO** (7ea09ec; condição 1 em c4eaf69) · [relatório](../relatorios/2026-10-27-rodada-28.md) | Maestro @Rocafa | 27/10/2026 | PRs #58/#73 |
-| Rodada 29 (merges): ✅ repositório **público** → Actions de volta. Entraram com CI verde: #77, #52, #51, #43, #57, #61, #62, #63, #65, #78, #79, #56, #59, #73 (com #66–#69), #60, #58, #76, #83, #84, #81, #82. 4 defeitos que só o CI real mostrou, corrigidos (imagem, Trivy/OpenSSL, k6, infra) · [relatório](../relatorios/2026-10-27-rodada-29-merges.md). #49 (ioredis 6) entrou depois, com os testes de Redis real rodando (88/88). #85 (client-kms 3.1156.0, bullmq 6.4.2) também entrou. Pilha do front: proposta pronta no **#86** (rascunho, #44→#47 + #75 sobre a main, CI todo verde com E2E e RLS), aguardando o @Lopesloro decidir o `fake.ts`. **Proteção da `main` ligada** (28/10): PR obrigatório e 10 checks | Maestro @Rocafa | 27/10/2026 | main |
+| Rodada 29 (merges): ✅ repositório **público** → Actions de volta. Entraram com CI verde: #77, #52, #51, #43, #57, #61, #62, #63, #65, #78, #79, #56, #59, #73 (com #66–#69), #60, #58, #76, #83, #84, #81, #82. 4 defeitos que só o CI real mostrou, corrigidos (imagem, Trivy/OpenSSL, k6, infra) · [relatório](../relatorios/2026-10-27-rodada-29-merges.md). #49 (ioredis 6) entrou depois, com os testes de Redis real rodando (88/88). #85 (client-kms 3.1156.0, bullmq 6.4.2) também entrou. Pilha do front: proposta pronta no **#86** (rascunho, #44→#47 + #75 sobre a main, CI todo verde com E2E e RLS), aguardando o @Lopesloro decidir o `fake.ts`. **Proteção da `main` ligada** (28/10): PR obrigatório e 10 checks. **#88**: job diário `cpf-indice-reindexacao` (índice cego do CPF sem script manual), APROVADO pelo Guardião após a C1/C2. #54 fechado (incompatível com a proteção) | Maestro @Rocafa | 27/10/2026 | main |
 
 ## Livre (pegue colocando seu nome)
 
@@ -96,7 +96,8 @@
 |---|---|
 | **Antes do piloto (devops-ci, em staging):** K-c3 de integração (chave por clínica não abre sem contexto/outro tenant) e prova de disparo do alarme K-c5 | parecer #76, conferência K-c4a/F-1/K-c5 (27/10/2026) |
 | **R10 do #66 (infra, dono devops-ci):** apagar `IMPORT_CPF_FP_KEY` do cofre e registrar o descarte — antes da 1ª importação real | parecer do importador, conferência 22/10/2026 |
-| **#66 R3/R9:** crypto-shredding por lote e índice cego HMAC no KMS — R3 antes de ligar o importador em produção; R9 antes do GA | idem |
+| **Antes do GA (índice cego):** levar o índice cego para os responsáveis (`guardians`, domínio `guardians.cpf:v1:`, proposta no §12d) | parecer do importador, conferência R3-a/R3-b |
+| **Checklist do GA:** conferir na trilha de cada clínica que o job `cpf-indice-reindexacao` chegou a `pending = 0` em produção | parecer do #88 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 
 ## Feito
