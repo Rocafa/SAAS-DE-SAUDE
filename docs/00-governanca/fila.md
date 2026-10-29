@@ -100,7 +100,8 @@
 | **Checklist do GA:** conferir na trilha de cada clínica que o job `cpf-indice-reindexacao` chegou a `pending = 0` em produção, nos pacientes e nos responsáveis (`table: 'guardians'`) | pareceres do #88 e #89 |
 | Reportar o bug do postgres.js 3.4.9 | idem §3 |
 | **R4 do parecer do apoiador (#109):** pai/mãe ou tutor confirmado para paciente maior fica só na trilha; se a data de nascimento for cadastrada depois e mostrar um adulto, criar pendência de revisão do vínculo | [parecer de 29/10](../03-seguranca-lgpd/revisoes/2026-10-29-apoiador.md) |
-| **A1 (b)/(c) do #67:** escopo da informação ao responsável e pedido de sigilo do adolescente (bloqueia consumidor de `podeReceberInformacaoClinica`) | parecer do #67 (21/10) |
+| **A1 (b)/(c) do #67:** feito no código (0056, #110); falta a confirmação jurídica (pergunta 1.15 do pacote do advogado, D8). **Consumidor (portal/COM):** novo parecer e as 5 condições do parecer de 29/10 (uso só de `podeReceberInformacaoClinica` com o escopo; catálogo do que cabe em `essencial`, senão só `essencial`; negativa sem motivo ao responsável; nada `integral` por canal automático até a D8) | [parecer de 29/10](../03-seguranca-lgpd/revisoes/2026-10-29-sigilo-adolescente.md) |
+| **R5 do parecer do sigilo (opcional):** guardar no pedido o id da evolução do prontuário onde o profissional registrou o pedido | idem |
 
 ## Feito
 | Item | Quem | Quando |

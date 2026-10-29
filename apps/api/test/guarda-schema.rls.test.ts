@@ -104,6 +104,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   import_batch_key_intents: { privilegios: ['SELECT', 'INSERT'] },
   // R9 (0046): chave do índice cego do CPF; UPDATE só nas transições active -> retired -> destroyed (trigger).
   patient_cpf_index_keys: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // A1 c do #67 (0056): pedido de sigilo do adolescente; UPDATE só para revogar (uma vez), nada se apaga (trigger).
+  adolescent_confidentiality_requests: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   import_issues: { privilegios: ['SELECT', 'INSERT'] },
   import_batch_records: { privilegios: ['SELECT', 'INSERT'] },
   // WhatsApp (migração 0032): sem DELETE/TRUNCATE. Opt-in só revoga (uma vez), envio só
@@ -451,6 +453,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'guardians',
       'patient_guardians',
       'patient_guardian_history',
+      // 0056: pedido de sigilo do adolescente nunca é visto pela sessão do portal.
+      'adolescent_confidentiality_requests',
       // WhatsApp (0032): adicionadas no merge do #69 (abaixo, em PORTAL_FORA_WHATSAPP).
       ...PORTAL_FORA_WHATSAPP,
     ];
