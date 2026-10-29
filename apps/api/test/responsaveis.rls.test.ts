@@ -1522,6 +1522,29 @@ describe('0058 (R5 do parecer do sigilo): pedido ligado ao atendimento do prontu
     expect((await post(profA, sigilo(teen), { atendimentoId: encOutro })).body).toMatchObject({ codigo: 'atendimento_nao_confere' });
     expect((await post(profA, sigilo(teen), { atendimentoId: randomUUID() })).body).toMatchObject({ codigo: 'atendimento_nao_confere' });
     expect((await post(profA, sigilo(teen), { atendimentoId: 'x' })).status).toBe(400);
+    // R1 do parecer da 0058: outro profissional COM vínculo de cuidado com o paciente recebe o mesmo 409 (corpo igual
+    // ao do id inexistente) ao apontar para a evolução de profA. (Atendimento de outra clínica: o RLS o esconde,
+    // cai no mesmo caso do inexistente.)
+    const prof2 = api.sessao(clinicaA, 'profissional');
+    await api.membro(clinicaA, prof2, 'profissional');
+    const profissional2 = id(await post(adminA, '/profissionais', { nome: 'Profissional Ficticia Sigilo Dois', especialidade: 'Fisioterapia', usuarioId: prof2.userId }));
+    const inicio2 = new Date(Date.now() + 90 * 60_000);
+    await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.insert(appointments).values({
+        tenantId: clinicaA,
+        createdBy: recepA.userId,
+        patientId: teen,
+        professionalId: profissional2,
+        appointmentTypeId: tipoA,
+        startsAt: inicio2,
+        endsAt: new Date(inicio2.getTime() + 40 * 60_000),
+        status: 'confirmed',
+      }), recepA.userId);
+    const alheio = await post(prof2, sigilo(teen), { atendimentoId: enc });
+    const inexistente = await post(prof2, sigilo(teen), { atendimentoId: randomUUID() });
+    expect(alheio.status, JSON.stringify(alheio.body)).toBe(409);
+    expect(alheio.body).toEqual(inexistente.body);
+    expect(alheio.body).toMatchObject({ codigo: 'atendimento_nao_confere' });
     // Banco: outro profissional não aponta para a evolução de profA.
     const outroProf = api.sessao(clinicaA, 'profissional');
     await api.membro(clinicaA, outroProf, 'profissional');
@@ -1540,6 +1563,11 @@ describe('0058 (R5 do parecer do sigilo): pedido ligado ao atendimento do prontu
     expect(
       await sqlstate(withTenant(api.db.db, clinicaA, (tx) => tx.update(adolescentConfidentialityRequests).set({ encounterId: enc2, revokedBy: profA.userId }).where(eq(adolescentConfidentialityRequests.id, pedido.id)), profA.userId)),
     ).toContain('42501');
+    // R2 do parecer da 0058: revogar o pedido com atendimento ligado funciona e mantém a referência.
+    const rev = await post(profA, `${sigilo(teen)}/${pedido.id}/revogar`);
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    expect(rev.body).toMatchObject({ atendimentoId: enc });
+    expect((rev.body as { revogadoEm: string | null }).revogadoEm).not.toBeNull();
     // Sem atendimento continua valendo (opcional).
     const semRef = await post(profA, sigilo(outro));
     expect((semRef.body as { atendimentoId: string | null }).atendimentoId).toBeNull();
