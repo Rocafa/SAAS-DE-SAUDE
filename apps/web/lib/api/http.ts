@@ -51,6 +51,7 @@ import type {
   Usuario,
 } from './tipos';
 import { comTruncado } from './tipos';
+import { CURSOR_INVALIDO, type PaginaPorCursor } from '@plataforma/shared';
 
 /** Parte da ApiClinica que já fala com a API real. */
 export type ApiHttpPacientesAgenda = Pick<
@@ -200,11 +201,8 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
   return new ErroApi(MENSAGENS.servidor, status);
 }
 
-/**
- * Código do 409 de cursor recusado. Espelha `CURSOR_INVALIDO` de `packages/shared/src/paginacao.ts`
- * (#73); fica local para o front não depender do shared antes do merge.
- */
-export const CURSOR_INVALIDO = 'cursor_invalido';
+/** Código do 409 de cursor recusado: uma fonte só, a do contrato em `packages/shared`. */
+export { CURSOR_INVALIDO };
 /** Cursor que o adaptador aceita repassar: opaco, até 512 caracteres, só caracteres seguros de URL. */
 const CURSOR_RE = /^[A-Za-z0-9._~-]{1,512}$/;
 
@@ -252,11 +250,8 @@ interface SessaoApi {
 }
 
 /** Resposta da lista/busca (contrato `PaginaPorCursor` de `packages/shared/src/paginacao.ts`). */
-interface PaginaPacientesApi {
-  itens: PacienteApi[];
-  temMais: boolean;
-  proximoCursor?: string | null;
-}
+/** A página do contrato, não uma cópia: renomear campo no shared passa a quebrar o build aqui. */
+type PaginaPacientesApi = PaginaPorCursor<PacienteApi>;
 
 interface PacienteApi {
   id: string;
@@ -432,6 +427,24 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     if (token) headers.Authorization = `Bearer ${token}`;
     const controle = new AbortController();
     const relogio = setTimeout(() => controle.abort(), timeoutMs);
+    try {
+      return await chamarComRelogio<T>(metodo, caminho, corpo, headers, controle);
+    } finally {
+      clearTimeout(relogio);
+    }
+  }
+
+  /**
+   * O relógio do timeout fica com quem chama: ele tem de cobrir também a leitura do corpo, porque um
+   * servidor pode responder os cabeçalhos e travar no meio do corpo.
+   */
+  async function chamarComRelogio<T>(
+    metodo: 'GET' | 'POST' | 'PATCH',
+    caminho: string,
+    corpo: unknown,
+    headers: Record<string, string>,
+    controle: AbortController,
+  ): Promise<T> {
     let resposta: Response;
     try {
       resposta = await fazerFetch(`${base}${caminho}`, {
@@ -446,8 +459,6 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       });
     } catch {
       throw controle.signal.aborted ? new ErroApi(MENSAGENS.demorou, 0, 'timeout') : new ErroApi(MENSAGENS.rede, 0, 'rede');
-    } finally {
-      clearTimeout(relogio);
     }
     if (!resposta.ok) {
       const corpoErro: unknown = await resposta.json().catch(() => null);
@@ -462,6 +473,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     try {
       return (await resposta.json()) as T;
     } catch {
+      if (controle.signal.aborted) throw new ErroApi(MENSAGENS.demorou, 0, 'timeout');
       throw new ErroApi(MENSAGENS.servidor, resposta.status, 'resposta_invalida');
     }
   }
