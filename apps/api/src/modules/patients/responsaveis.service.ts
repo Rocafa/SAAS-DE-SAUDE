@@ -389,7 +389,15 @@ export class ResponsaveisService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE_RESPONSAVEIS,
-        metadata: { patient_id: pacienteId, link_id: v.id, guardian_id: g.id, changed: campos.join(',') },
+        metadata: {
+          patient_id: pacienteId,
+          link_id: v.id,
+          guardian_id: g.id,
+          changed: campos.join(','),
+          // C1 do parecer de 29/10: a prova da autorização do paciente (e da revogação) fica na trilha (LGPD art. 8º, § 2º).
+          ...(v.kind === 'apoiador' && dados.recebeInformacaoClinica === true ? { patient_authorized: true } : {}),
+          ...(v.kind === 'apoiador' && dados.recebeInformacaoClinica === false && v.receivesClinicalInfo ? { patient_authorization_revoked: true } : {}),
+        },
       });
       return this.paraDto(tx, ctx, vinculo, pessoa, await this.quadro(tx, ctx.tenantId, pac), hojeNaClinica());
     });

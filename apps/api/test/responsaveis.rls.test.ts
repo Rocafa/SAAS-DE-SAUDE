@@ -579,6 +579,15 @@ describe('ressalvas do #67: curatela, emancipação, anulação, CPF mascarado e
     const desl = await patch(recepA, rota, { recebeInformacaoClinica: false });
     expect((desl.body as Resp).informacaoClinica.motivo).toBe('marca_desligada');
     expect(await autorizacao()).toMatchObject({ patientAuthorizedBy: null, patientAuthorizedAt: null });
+    // C1: autorização e revogação ficam na trilha.
+    const trilha = await withTenant(
+      api.db.db,
+      clinicaA,
+      (tx) => tx.select().from(auditLog).where(and(eq(auditLog.scope, 'patient_guardians'), sql`${auditLog.metadata}->>'link_id' = ${a.id}`)).orderBy(sql`seq`),
+      recepA.userId,
+    );
+    expect(trilha.some((e) => (e.metadata as Record<string, unknown>).patient_authorized === true)).toBe(true);
+    expect(trilha.some((e) => (e.metadata as Record<string, unknown>).patient_authorization_revoked === true)).toBe(true);
     // A autorização não cabe em outro tipo.
     const outro = await responsavel(recepA, adulto, { nome: 'Rep Ficticio Autorizacao', tipo: 'representante' });
     expect((await patch(profA, `/pacientes/${adulto}/responsaveis/${outro.id}`, { recebeInformacaoClinica: true, justificativa: JUSTIFICATIVA, autorizacaoDoPaciente: true })).status).toBe(400);
