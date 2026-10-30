@@ -188,3 +188,8 @@ A conferir no CI: testes de RLS (inferência de tipo dos parâmetros pelo servid
 testes ofensivos, resiliência com backup/restauração, carga com SIGTERM, imagem Docker e E2E. Só o lint
 reclamou de uma conversão de tipo que a v4 dispensa (`sql.begin` agora devolve `Promise<T>`), corrigida.
 Falta, para o merge: o script da §3 (6 de 6 rodadas rejeitando) e a data ≥ 12/11/2026.
+
+**§3 automatizada (head `0109402`):** o teste `conexão encerrada no meio da transação: rejeita e nada parcial fica
+gravado` (em `test/resiliencia/transacoes.resiliencia.ts`) reproduz a §3 dentro da aplicação, em 6 tempos de
+ociosidade, e passou no CI com a v4. A condição "script da §3, 6 de 6" passa a ser conferida pelo CI em todo PR.
+**Única condição restante para o merge: a data ≥ 12/11/2026.**
