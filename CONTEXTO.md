@@ -1,13 +1,13 @@
 # Contexto do projeto — leia primeiro
 
-> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 27, 27/10/2026): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
+> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 30, 29/10/2026; a §0 resume as rodadas 28 a 30): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
 >
 > 🚀 **O que falta para produção (rodada 7, 10/10/2026):** [checklist P0/P1/P2 + pesquisa regulatória atualizada](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
 >
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 27/10/2026 (rodadas 16–27: importador, responsáveis, portal, WhatsApp, agendador de tarefas, integração #73, vetos do front levantados e portal ligado ao backend no #75, ensaio do merge completo, pacientes/agenda no backend novo (#76), chave por clínica trancada à própria clínica e Terraform do staging aprovado). Último relatório: [rodada 27](docs/relatorios/2026-10-27-rodada-27.md). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 29/10/2026 (rodadas 28–30: repositório público e CI de volta, **todo o backend na `main`**, proteção da `main`, alertas do Dependabot e CodeQL publicados, índice cego do CPF, e o fechamento das pendências de código dos pareceres sobre responsáveis). Último relatório: [rodada 30](docs/relatorios/2026-10-29-rodada-30.md). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
@@ -39,7 +39,7 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Garantias ao cliente** contra as queixas nº 1 do mercado (prontuário bloqueado, cancelamento difícil): [garantias-ao-cliente.md](docs/02-produto/garantias-ao-cliente.md).
 - **Backlog do MVP:** 24 épicos, 176 histórias, 898 pontos (M0+M1: 79 histórias, 377 pontos), incluindo controle de guia simples e pacotes no M1. Também prontos: definição de pronto, métricas e plano de piloto (30 clínicas).
 - **Nicho de entrada recomendado:** fisio/TO + psicólogos autônomos; TEA/ABA na onda 2 ([relatório executivo](docs/01-mercado/relatorio-executivo-mercado.md)).
-- **Telas (rodadas 8 a 25):** na `main` ainda com **dados fictícios** e **sem falar com a API**. Na `main` (PR #42): design system em cinza (alto contraste, letra grande), o **Ajudante** (busca e ações digitadas em português, processadas só no navegador), Hoje, Agenda e Pacientes. Em PR: agenda e pacientes completos (#43, pronto, parado sem CI); atendimento/prontuário/documentos (#44), financeiro/guias/mensagens (#45), configurações (#46) e portal do paciente (#47), com os **vetos do Guardião levantados em 24/10** ([re-revisão](docs/03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md)); e o portal ligado ao backend real (#75); pacientes e agenda alinhados ao backend novo (#76, aprovado em 27/10). Capturas em `docs/02-produto/telas/`; parecer em [front-r8](docs/03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md).
+- **Telas (rodadas 8 a 30):** na `main`: design system em cinza (alto contraste, letra grande), o **Ajudante** (busca e ações digitadas em português, processadas só no navegador), Hoje, **Agenda e Pacientes completos (#43)** e o **adaptador HTTP** que liga pacientes e agenda à API real (#60, #76). Em PR, do @Lopesloro: atendimento/prontuário/documentos (#44), financeiro/guias/mensagens (#45), configurações (#46) e portal do paciente (#47), com os vetos do Guardião levantados em 24/10 ([re-revisão](docs/03-seguranca-lgpd/revisoes/2026-10-24-front-vetos.md)); o portal ligado ao backend (#75); a pilha inteira montada sobre a `main` no **#86** (CI verde, aguardando o aval dele no `fake.ts`), e as correções da revisão dela (#91, #92, #103). Capturas em `docs/02-produto/telas/`; parecer em [front-r8](docs/03-seguranca-lgpd/revisoes/2026-10-12-front-r8.md).
   → [PRD](docs/02-produto/PRD.md) · [WBS](docs/02-produto/WBS-micropartes.md) · [roadmap](docs/02-produto/roadmap.md) · [jornadas](docs/02-produto/jornadas.md)
 
 ## 5. LGPD e regulação (inegociável)
@@ -55,23 +55,23 @@ resumo do paciente, chatbot). Tudo com **LGPD desde o desenho** (*by design*).
 - **Stack:** monorepo pnpm + Turborepo; Next.js + shadcn no front; NestJS na API.
 - **Dados:** PostgreSQL com isolamento por clínica (RLS); Redis/BullMQ para filas.
 - **Hospedagem:** AWS São Paulo.
-- **Código na `main` (12/10/2026):**
+- **Código na `main` (29/10/2026, migrações 0001 a 0058):** desde 27/10 o repositório é **público**, o GitHub Actions voltou e tudo o que estava pronto em PR entrou com CI verde ([rodada 29](docs/relatorios/2026-10-27-rodada-29-merges.md)). A base:
   - isolamento por clínica (RLS) com **guarda de schema** (o CI reprova tabela nova sem a trava);
-  - **criptografia por clínica** (cada clínica tem a própria chave; apagar a chave torna os dados dela ilegíveis, até nos backups);
+  - **criptografia por clínica** (cada clínica tem a própria chave, que só abre com a identificação da própria clínica; apagar a chave torna os dados dela ilegíveis, até nos backups);
   - **auditoria encadeada** (cada registro carrega a impressão digital do anterior, então alterar ou apagar deixa rastro);
-  - garantia de saída, **rate limit em Redis**, NestJS 12, interface de IA só com adaptador falso;
-  - 9 checks de CI, verdes na última execução.
-- **Prontos em PR, esperando o CI voltar** (testados localmente contra Postgres real):
+  - garantia de saída, **rate limit em Redis**, NestJS 12, interface de IA só com adaptador falso.
+- **Também na `main`, vindo dos PRs** (cada um aprovado pelo Guardião):
   - rotas de **pacientes e agenda** (#57);
   - **vínculo de cuidado**, alerta de anomalia e pseudônimo via KMS (#61);
   - **guias de convênio e pacotes** (#62);
   - **prontuário** por nicho: cifrado, versionado, só com vínculo de cuidado, notas privadas da psicologia (#63);
   - **financeiro**: cobranças, caixa, recibos sem buraco, insumo do Receita Saúde (#65);
   - **integração #73** (substitui #66–#69): **importador** dos concorrentes (desligado em produção até a R3), **responsáveis** do paciente (pagador congelado no recibo; informação clínica só por decisão do profissional), **backend do portal do paciente** (sessão própria; responsável só para menor/curatela, sem nada clínico; sigilo do adolescente até no banco), **lembretes por WhatsApp** (opt-in amarrado ao número, modelos em lista fechada, canal desligado por padrão). inclui também o **agendador real das tarefas automáticas** (merge só com os testes de Redis real verdes no CI). Guardião: aprovado; migrações até a 0053; `test:rls` 600/600 local;
-  - **telas ligadas à API real** (#60) e **portal do paciente ligado ao backend real** (#75, aguarda @Lopesloro).
+  - **telas ligadas à API real** (#60, #76); o **portal do paciente ligado ao backend real** (#75) segue em PR, aguardando o @Lopesloro;
+  - **rodada 29–30:** índice cego do CPF em pacientes e responsáveis, com job diário (#88, #89); responsáveis completos: tipo `apoiador` (decisão apoiada), escopo da informação clínica, pedido de sigilo do adolescente ligado ao prontuário e revisão de pai/mãe de paciente adulto (#109 a #111, #113).
+- **Proteção e segurança do repositório:** a `main` só aceita PR com branch atualizada e 10 checks verdes (sem force push); CodeQL publica na aba Security (0 alertas); alertas do Dependabot ligados (0 abertos); varredura de segredos ligada.
 - **Ainda não há:** login real (depende da **D4**, o gargalo), conta da Meta/BSP para o WhatsApp real, nem ambiente aplicado na AWS.
-- **Infra em PR:** Terraform do staging (#58, aprovado com ressalvas, nada aplicado na AWS) e imagem Docker distroless com scan (#59).
-- ⚠️ **O GitHub Actions parou por falta de pagamento da conta:** hoje nenhum CI roda, e sem CI verde não se faz merge de código ([fila.md](docs/00-governanca/fila.md)).
+- **Infra na `main`:** Terraform do staging (#58, aprovado; **nada aplicado na AWS** ainda) e imagem Docker distroless com scan (#59). Primeiro dia do staging com roteiro e scripts das provas K-c3/K-c5 ([runbook](docs/04-arquitetura/runbook-primeiro-dia-staging.md)).
 - **O que falta para produção** (infra, regulação, custos e checklist de go-live): [rodada 7](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
   → [arquitetura](docs/04-arquitetura/)
 
