@@ -42,6 +42,8 @@ export const PERMISSOES = {
   'agenda:atender': ['profissional'],
   'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'cadastros:gerir': ['admin'],
+  /** Autorizar (e revogar) o acesso do suporte da plataforma a um chamado (0059, S9): só o dono da clínica. */
+  'suporte:autorizar': ['admin'],
   /** Convênios (CNV-04.1): todos leem (forma de atendimento); só o dono cadastra/inativa. */
   'convenios:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'convenios:gerir': ['admin'],

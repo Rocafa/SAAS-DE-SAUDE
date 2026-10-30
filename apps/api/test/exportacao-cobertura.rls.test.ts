@@ -42,6 +42,7 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  supportAccessGrants,
   portalConsents,
   portalInvites,
   portalLinks,
@@ -115,6 +116,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  support_access_grants: 'supportAccessGrants',
   portal_invites: 'portal.invites',
   portal_links: 'portal.links',
   portal_consents: 'portal.consents',
@@ -248,6 +250,15 @@ beforeAll(async () => {
   await api.http().post('/profissionais').set(cab(adminB)).send({ nome: 'Prof B', especialidade: 'Psico' }).expect(201);
 
   // Acesso de suporte (fictício) nas duas clínicas, pelo mesmo atendente: pseudônimos diferentes.
+  // 0059: cada clínica autoriza o chamado antes (a trilha recusa suporte `pedido_da_clinica` sem autorização).
+  for (const [tenantId, chamado] of [
+    [clinicaA, 'SUP-1234'],
+    [clinicaB, 'SUP-5678'],
+  ] as const) {
+    const dono = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const aut = await api.http().post('/suporte/autorizacoes').set(cab(dono)).send({ chamado, horas: 2 });
+    expect(aut.status, JSON.stringify(aut.body)).toBe(201);
+  }
   for (const [tenantId, chamado] of [
     [clinicaA, 'SUP-1234'],
     [clinicaB, 'SUP-5678'],
@@ -570,6 +581,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receipts
           | typeof receiptCancellations
           | typeof clinicMembers
+          | typeof supportAccessGrants
           | typeof portalInvites
           | typeof portalLinks
           | typeof portalConsents
@@ -631,6 +643,7 @@ describe('G2 — conteúdo do pacote', () => {
           whatsappInbound: await n(whatsappInbound),
         },
         clinicMembers: await n(clinicMembers),
+        supportAccessGrants: await n(supportAccessGrants),
         portal: {
           invites: await n(portalInvites),
           links: await n(portalLinks),
@@ -669,6 +682,8 @@ describe('G2 — conteúdo do pacote', () => {
       privateNotesWithheld: 1,
       legalHolds: 1,
       noteCustodies: 1,
+      // 0059: a autorização do chamado do suporte (a linha de suporte da trilha exige uma vigente).
+      supportAccessGrants: 1,
       portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
       finance: {
         financeSettings: 1,
