@@ -166,3 +166,20 @@ Conferido com `gh issue list -R porsager/postgres`, `gh release view v4.0.0 -R p
 - **Correção de segurança da v4 que também vale para a v3** (NUL em parâmetro de conexão permitia injetar
   parâmetros de startup): não nos afeta, porque nenhum parâmetro de conexão vem de entrada do usuário (o
   tenant vai por `set_config` na transação, não pela conexão).
+
+## 8. Avaliação antecipada da v4 (30/10/2026)
+
+PR de **rascunho** `eng/postgres-v4-avaliacao`: troca a 3.4.9 com patch pela 4.0.0 e roda o CI inteiro. Serve para
+medir o impacto agora; **o merge continua para depois de ~12/11/2026** (plano da §7).
+
+Conferido localmente:
+
+- **ESM só:** a API é CommonJS, mas o Node ≥ 22.12 (piso do `engines` e do CI) carrega ESM por `require`. O
+  `dist/` compilado sobe com a v4 (`require('./dist/app.module.js')`).
+- **`sql.array()`:** não usamos.
+- **`Date` em coluna sem fuso:** nenhuma coluna `timestamp` sem fuso (todas são `timestamptz`); as colunas
+  `date` usam o modo `string` do Drizzle (a v4 não converte).
+- **Drizzle 0.45:** o driver `postgres-js` usa `options.parsers`/`options.serializers`, que a v4 mantém.
+- Typecheck e 977 testes unitários verdes. O `Dockerfile` deixa de copiar `patches/`.
+
+A conferir no CI: testes de RLS (inferência de tipo dos parâmetros pelo servidor), `test:resiliencia` e E2E.
