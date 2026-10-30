@@ -183,3 +183,8 @@ Conferido localmente:
 - Typecheck e 977 testes unitários verdes. O `Dockerfile` deixa de copiar `patches/`.
 
 A conferir no CI: testes de RLS (inferência de tipo dos parâmetros pelo servidor), `test:resiliencia` e E2E.
+
+**Resultado no CI (30/10/2026, head `0b23d1c`): 17 de 17 verdes**, incluindo isolamento entre clínicas (RLS),
+testes ofensivos, resiliência com backup/restauração, carga com SIGTERM, imagem Docker e E2E. Só o lint
+reclamou de uma conversão de tipo que a v4 dispensa (`sql.begin` agora devolve `Promise<T>`), corrigida.
+Falta, para o merge: o script da §3 (6 de 6 rodadas rejeitando) e a data ≥ 12/11/2026.
