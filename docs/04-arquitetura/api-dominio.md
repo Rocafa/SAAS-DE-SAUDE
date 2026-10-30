@@ -906,3 +906,22 @@ Branch `front/adaptador-http-pacientes-agenda` (API do #57 + telas do #43). Sem 
 - **Lacunas conhecidas (viram 4xx com mensagem):** responsável do paciente, reativar, motivo da inativação, pacote de sessões, valor do tipo. "Desfazer" de cadastro inativa (a API não apaga). Sem tela de login até a D4: no navegador o modo http responde "Sua sessão terminou".
 
 Verificar: `pnpm --filter @plataforma/web test` (adaptador com fetch simulado) e `pnpm --filter @plataforma/api test:rls` (inclui `test/adaptador-web.rls.test.ts`: API real numa porta local + Postgres real; recepção fictícia cadastra, agenda e faz check-in pelo adaptador).
+
+## 16. Autorização de acesso do suporte (migração 0059, S9)
+
+Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requisitos de segurança](../03-seguranca-lgpd/requisitos-tecnicos-seguranca.md) §2). O dono da clínica autoriza o chamado por tempo limitado e pode revogar antes.
+
+| Rota | Quem | O quê |
+|---|---|---|
+| `POST /suporte/autorizacoes` | `admin` com perfil ativo no banco | `{chamado: "SUP-<até 7 dígitos>", horas?: 1..72}` (padrão 24); 201 com `{id, chamado, autorizadoPor, autorizadoEm, expiraEm, revogadoPor, revogadoEm, vigente}`; chamado já vigente 409 `autorizacao_ja_vigente` |
+| `GET /suporte/autorizacoes` | `admin` | as 200 mais recentes |
+| `POST /suporte/autorizacoes/:id/revogar` | `admin` (pode ser outro, não só quem autorizou) | `{}`; revogada ou vencida 409 `autorizacao_nao_vigente`; de outra clínica 404 |
+
+- **Banco** (`support_access_grants`): quem autoriza e quem revoga é o usuário da sessão com perfil `admin` ativo; datas do banco; prazo de no máximo 72 h a partir da data do banco (CHECK); depois de criada, só a revogação (uma vez); sem DELETE/TRUNCATE; RLS forçado e `portal_fora`. Só ids, o chamado e datas.
+- **Trilha:** linha de suporte `pedido_da_clinica` sem autorização vigente é recusada (`42501`, [auditoria-encadeada.md](auditoria-encadeada.md) §4c); o prazo é conferido pelo relógio, não pelo início da transação. `break_glass` fica **desligado** no banco até a D4 (R1 do [parecer](../03-seguranca-lgpd/revisoes/2026-10-30-autorizacao-suporte.md)).
+- **Revogar** segue a regra de leitura da assinatura: a clínica com escrita bloqueada ainda revoga (R4). Dois pedidos simultâneos do mesmo chamado não geram duas vigentes (trava por clínica e chamado, R5).
+- **Auditoria:** escopo `support_access_grants`, metadata só com `grant_id`, `ticket` e `hours`/`op`.
+- **G2 1.23.0:** `supportAccessGrants` no pacote e a contagem no manifesto.
+- **Ainda não feito (depende da D4):** a identidade do atendente do operador, a aprovação por duas pessoas do break-glass e o alerta ao dono da clínica quando houver break-glass.
+
+Testes: `test/autorizacao-suporte.rls.test.ts`.

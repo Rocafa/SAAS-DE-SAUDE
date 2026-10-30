@@ -137,6 +137,7 @@ describe('G2 — exportação total do tenant', () => {
       guardians: { guardians: 0, patientGuardians: 0, patientGuardianHistory: 0, adolescentConfidentialityRequests: 0 },
       whatsapp: { whatsappSettings: 0, whatsappOptIns: 0, whatsappOutbox: 0, whatsappInbound: 0 },
       clinicMembers: 0,
+      supportAccessGrants: 0,
       portal: { invites: 0, links: 0, consents: 0, rightsRequests: 0 },
       imports: { batches: 0, batchRecords: 0 },
       auditEvents: pkg.auditEvents.length,

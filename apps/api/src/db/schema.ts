@@ -448,6 +448,23 @@ export const clinicMembers = pgTable('clinic_members', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 });
 
+/**
+ * Autorização de acesso do suporte pela clínica (0059, S9): o admin autoriza um chamado por até 72 h e pode revogar;
+ * a trilha recusa linha de suporte `pedido_da_clinica` sem autorização vigente. Só ids, o chamado e datas.
+ */
+export const supportAccessGrants = pgTable('support_access_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  ticket: text('ticket').notNull(),
+  grantedBy: uuid('granted_by').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedBy: uuid('revoked_by'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
 /** Custódia das notas lacradas de um psicólogo desligado (0017, R2 do #63): designa o admin, aceita o substituto. */
 export const noteCustodies = pgTable('note_custodies', {
   id: uuid('id').primaryKey().defaultRandom(),

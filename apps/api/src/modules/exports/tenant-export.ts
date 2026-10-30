@@ -9,6 +9,7 @@ import {
   appointments,
   appointmentTypes,
   clinicMembers,
+  supportAccessGrants,
   clinicalAddenda,
   clinicalRecordVersions,
   clinicalSettings,
@@ -121,8 +122,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        paciente maior).
  * 1.22.0: `guardians.adolescentConfidentialityRequests[].encounterId` (migração 0058, R5 do parecer de 29/10: o
  *        atendimento do prontuário onde o pedido de sigilo foi registrado; só o id).
+ * 1.23.0: `supportAccessGrants` (migração 0059, S9: autorizações de acesso do suporte dadas pela clínica; chamado,
+ *        quem e quando autorizou/revogou, prazo), com a contagem em `manifest.counts.supportAccessGrants`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.22.0';
+export const EXPORT_SCHEMA_VERSION = '1.23.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -167,6 +170,8 @@ export const EXPORTED_TABLES = [
   'receipts',
   'receipt_cancellations',
   'clinic_members',
+  // Autorizações de acesso do suporte (0059): em data.supportAccessGrants.
+  'support_access_grants',
   // Portal do paciente (0027): em data.portal. portal_invites sai sem token_hash (credencial).
   'portal_invites',
   'portal_links',
@@ -257,6 +262,8 @@ export interface ExportManifest {
     /** WhatsApp (0032), por tabela. */
     readonly whatsapp: WhatsappCounts;
     readonly clinicMembers: number;
+    /** Autorizações de acesso do suporte (0059). */
+    readonly supportAccessGrants: number;
     /** Portal do paciente (0027), por tabela. */
     readonly portal: PortalCounts;
     /** Importador (0024): lotes e livro do lote. */
@@ -531,6 +538,17 @@ export interface ExportedClinicMember {
   readonly revokedAt: string | null;
 }
 
+/** Autorização de acesso do suporte dada pela clínica (0059). */
+export interface ExportedSupportAccessGrant {
+  readonly id: string;
+  readonly ticket: string;
+  readonly grantedBy: string;
+  readonly grantedAt: string;
+  readonly expiresAt: string;
+  readonly revokedBy: string | null;
+  readonly revokedAt: string | null;
+}
+
 /** Custódia das notas lacradas (0017). */
 export interface ExportedNoteCustody {
   readonly id: string;
@@ -572,6 +590,7 @@ export interface TenantExportDocument {
     /** WhatsApp (0032). */
     readonly whatsapp: ExportedWhatsapp;
     readonly clinicMembers: readonly ExportedClinicMember[];
+    readonly supportAccessGrants: readonly ExportedSupportAccessGrant[];
     /** Portal do paciente (0027). */
     readonly portal: ExportedPortal;
     /** Importador (0024). */
@@ -765,6 +784,15 @@ export async function exportInTransaction(
       .from(clinicMembers)
       .where(eq(clinicMembers.tenantId, ctx.tenantId))
       .orderBy(asc(clinicMembers.grantedAt), asc(clinicMembers.id)),
+    ctx.tenantId,
+  );
+
+  const grantRows = soDaClinica(
+    await tx
+      .select()
+      .from(supportAccessGrants)
+      .where(eq(supportAccessGrants.tenantId, ctx.tenantId))
+      .orderBy(asc(supportAccessGrants.grantedAt), asc(supportAccessGrants.id)),
     ctx.tenantId,
   );
 
@@ -1094,6 +1122,16 @@ export async function exportInTransaction(
     revokedAt: iso(m.revokedAt),
   }));
 
+  const exportedGrants: ExportedSupportAccessGrant[] = grantRows.map((g) => ({
+    id: g.id,
+    ticket: g.ticket,
+    grantedBy: g.grantedBy,
+    grantedAt: g.grantedAt.toISOString(),
+    expiresAt: g.expiresAt.toISOString(),
+    revokedBy: g.revokedBy,
+    revokedAt: iso(g.revokedAt),
+  }));
+
   const manifest: ExportManifest = {
     format: EXPORT_FORMAT,
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -1133,6 +1171,7 @@ export async function exportInTransaction(
       guardians: responsaveis.counts,
       whatsapp: whatsapp.counts,
       clinicMembers: exportedMembers.length,
+      supportAccessGrants: exportedGrants.length,
       portal: portal.counts,
       imports: importacoes.counts,
       auditEvents: auditEvents.length,
@@ -1219,6 +1258,7 @@ export async function exportInTransaction(
         guardians: responsaveis.data,
         whatsapp: whatsapp.data,
         clinicMembers: exportedMembers,
+        supportAccessGrants: exportedGrants,
         portal: portal.data,
         imports: importacoes.data,
       },

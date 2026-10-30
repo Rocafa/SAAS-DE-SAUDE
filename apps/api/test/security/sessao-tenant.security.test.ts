@@ -180,6 +180,10 @@ describe('toda rota de domínio exige sessão', () => {
       [RequestMethod.POST, `/pacientes/${id}/responsaveis/sigilo`],
       [RequestMethod.GET, `/pacientes/${id}/responsaveis/sigilo`],
       [RequestMethod.POST, `/pacientes/${id}/responsaveis/sigilo/${id}/revogar`],
+      // Autorização de acesso do suporte (0059).
+      [RequestMethod.POST, '/suporte/autorizacoes'],
+      [RequestMethod.GET, '/suporte/autorizacoes'],
+      [RequestMethod.POST, `/suporte/autorizacoes/${id}/revogar`],
       // WhatsApp (0032). O webhook não tem sessão: é autenticado pelo HMAC (test/whatsapp.rls.test.ts).
       [RequestMethod.GET, '/whatsapp/configuracao'],
       [RequestMethod.PUT, '/whatsapp/configuracao'],
