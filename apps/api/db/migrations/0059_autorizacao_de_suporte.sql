@@ -8,8 +8,9 @@
 --   revogar antes; quem autoriza e quem revoga é o usuário da sessão, com perfil `admin` ativo; datas do banco;
 -- * a trilha RECUSA linha de suporte com motivo `pedido_da_clinica` sem autorização vigente para aquele chamado
 --   naquela clínica. Vale para qualquer caminho de código, inclusive SQL direto.
--- * `break_glass` (emergência) não depende da clínica: continua aceito pelo banco e fica visível na trilha que a
---   clínica exporta. A aprovação por duas pessoas do lado do operador depende da identidade do operador (D4).
+-- * `break_glass` (emergência) fica DESLIGADO no banco até existir a aprovação por duas pessoas do operador, o alerta
+--   à clínica e a revisão posterior (requisitos-tecnicos-seguranca.md §2, MUST; R1 do parecer de 30/10). Tudo isso
+--   depende da identidade do operador (D4); ligar exige migração própria, com parecer.
 -- A autorização só guarda ids, o chamado e datas: nenhum dado de paciente.
 
 CREATE TABLE support_access_grants (
@@ -82,17 +83,21 @@ GRANT SELECT, INSERT, UPDATE ON support_access_grants TO app_user;
 
 -- ---------------------------------------------------------------- a trilha confere a autorização
 
--- Linha de suporte com motivo `pedido_da_clinica` só com autorização vigente do mesmo chamado nesta clínica.
--- Roda com o papel de quem grava (RLS de tenant na autorização). Não altera a linha: a cadeia de hash não muda.
+-- Linha de suporte com motivo `pedido_da_clinica` só com autorização vigente do mesmo chamado nesta clínica; `break_glass`,
+-- nunca (até a D4). Roda com o papel de quem grava (RLS de tenant na autorização). Não altera a linha: a cadeia de hash
+-- não muda. O prazo é conferido pelo relógio (`clock_timestamp`), não pelo início da transação (R3 do parecer).
 CREATE FUNCTION audit_log_support_grant_guard() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public
 AS $$
 BEGIN
+  IF NEW.actor_kind = 'suporte_plataforma' AND (NEW.metadata ->> 'reason') = 'break_glass' THEN
+    RAISE EXCEPTION 'break-glass desligado até a aprovação por duas pessoas do operador (D4)' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   IF NEW.actor_kind = 'suporte_plataforma' AND (NEW.metadata ->> 'reason') = 'pedido_da_clinica' AND NOT EXISTS (
        SELECT 1 FROM support_access_grants g
         WHERE g.tenant_id = NEW.tenant_id AND g.ticket = (NEW.metadata ->> 'ticket')
-          AND g.revoked_at IS NULL AND g.granted_at <= now() AND now() < g.expires_at) THEN
+          AND g.revoked_at IS NULL AND g.granted_at <= clock_timestamp() AND clock_timestamp() < g.expires_at) THEN
     RAISE EXCEPTION 'acesso de suporte sem autorização vigente da clínica para o chamado' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;

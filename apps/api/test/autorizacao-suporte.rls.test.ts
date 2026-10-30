@@ -5,6 +5,7 @@
  */
 import type { TenantId } from '@plataforma/shared';
 import { eq } from 'drizzle-orm';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { supportAccessGrants } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
@@ -38,6 +39,24 @@ async function sqlstate(p: Promise<unknown>): Promise<unknown[]> {
   const codigos: unknown[] = [];
   for (let e: unknown = err; e instanceof Error; e = e.cause) codigos.push((e as { code?: unknown }).code);
   return codigos;
+}
+
+/**
+ * Faz a autorização vencer, recuando as duas datas (o runtime não consegue: gatilho e CHECK). Superusuário do
+ * container efêmero, só no teste.
+ */
+async function envelhecer(id: string, horas: number): Promise<void> {
+  const url = process.env.DATABASE_ADMIN_URL;
+  if (!url) throw new Error('DATABASE_ADMIN_URL é obrigatória para o teste da autorização vencida');
+  const adm = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await adm.begin(async (t) => {
+      await t`set local session_replication_role = replica`;
+      await t`update support_access_grants set granted_at = granted_at - make_interval(hours => ${horas}), expires_at = expires_at - make_interval(hours => ${horas}) where id = ${id}::uuid`;
+    });
+  } finally {
+    await adm.end();
+  }
 }
 
 /** Grava uma linha de suporte na trilha da clínica, como faria o fluxo do operador. */
@@ -107,8 +126,24 @@ describe('0059: autorização de acesso do suporte', () => {
     expect(rev.body).toMatchObject({ vigente: false, revogadoPor: dono2.userId });
     expect((await post(dono, `${ROTA}/${a.id}/revogar`)).body).toMatchObject({ codigo: 'autorizacao_nao_vigente' });
     expect(await sqlstate(acessoDeSuporte(clinica, 'SUP-200', 'pedido_da_clinica'))).toContain('42501');
-    // Break-glass não depende da clínica (a aprovação dupla é do operador, D4): aceito.
-    await acessoDeSuporte(clinica, 'SUP-201', 'break_glass');
+    // R1 do parecer: break-glass desligado no banco até a aprovação dupla do operador (D4), com ou sem autorização.
+    expect(await sqlstate(acessoDeSuporte(clinica, 'SUP-201', 'break_glass'))).toContain('42501');
+    await post(dono, ROTA, { chamado: 'SUP-202', horas: 1 }).expect(201);
+    expect(await sqlstate(acessoDeSuporte(clinica, 'SUP-202', 'break_glass'))).toContain('42501');
+  });
+
+  it('autorização vencida não vale e não se revoga (R6 do parecer)', async () => {
+    const r = await post(dono, ROTA, { chamado: 'SUP-400', horas: 1 });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const a = r.body as Autorizacao;
+    await acessoDeSuporte(clinica, 'SUP-400', 'pedido_da_clinica');
+    await envelhecer(a.id, 2);
+    expect(await sqlstate(acessoDeSuporte(clinica, 'SUP-400', 'pedido_da_clinica'))).toContain('42501');
+    expect((await post(dono, `${ROTA}/${a.id}/revogar`)).body).toMatchObject({ codigo: 'autorizacao_nao_vigente' });
+    const lista = (await api.http().get(ROTA).set(cab(dono))).body as Autorizacao[];
+    expect(lista.find((l) => l.id === a.id)?.vigente).toBe(false);
+    // Vencida, o mesmo chamado pode ser autorizado de novo.
+    expect((await post(dono, ROTA, { chamado: 'SUP-400', horas: 1 })).status).toBe(201);
   });
 
   it('o banco confere autor, perfil, prazo máximo e imutabilidade; não apaga', async () => {

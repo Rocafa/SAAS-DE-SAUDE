@@ -4,7 +4,8 @@
  * Nossa equipe só acessa dados de uma clínica com chamado aberto por ela. O administrador da clínica autoriza
  * o chamado (`SUP-<até 7 dígitos>`) por tempo limitado (1 a 72 horas; padrão 24) e pode revogar antes. A trilha
  * (gatilho da 0059) recusa linha de suporte com motivo `pedido_da_clinica` sem autorização vigente para aquele
- * chamado. A autorização guarda só ids, o chamado e datas; a trilha da autorização leva o mesmo.
+ * chamado; `break_glass` fica desligado no banco até a D4. A autorização guarda só ids, o chamado e datas; a trilha
+ * da autorização leva o mesmo.
  */
 import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
@@ -77,6 +78,8 @@ export class AutorizacaoDeSuporteService {
   autorizar(ctx: RequestContext, dados: NovaAutorizacaoDeSuporte): Promise<AutorizacaoDeSuporteDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await exigirPerfilNoBanco(tx, ctx, 'admin');
+      // R5: dois pedidos simultâneos do mesmo chamado não criam duas autorizações vigentes.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`support_grant:${ctx.tenantId}:${dados.chamado}`}, 0))`);
       const [vigente] = await tx
         .select({ id: supportAccessGrants.id })
         .from(supportAccessGrants)
@@ -109,9 +112,12 @@ export class AutorizacaoDeSuporteService {
     });
   }
 
-  /** Revoga antes do prazo. Revogada ou vencida: 409 `autorizacao_nao_vigente`. */
+  /**
+   * Revoga antes do prazo. Revogada ou vencida: 409 `autorizacao_nao_vigente`. Revogar só reduz exposição, então
+   * segue a regra de LEITURA da assinatura (R4 do parecer): a clínica com escrita bloqueada ainda revoga.
+   */
   revogar(ctx: RequestContext, id: string): Promise<AutorizacaoDeSuporteDto> {
-    return escreverNaClinica(this.db, ctx, async (tx) => {
+    return lerNaClinica(this.db, ctx, async (tx) => {
       await exigirPerfilNoBanco(tx, ctx, 'admin');
       const [atual] = await tx
         .select({ revokedAt: supportAccessGrants.revokedAt, noPrazo: sql<boolean>`${supportAccessGrants.expiresAt} > now()` })

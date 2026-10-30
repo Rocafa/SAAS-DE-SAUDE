@@ -918,7 +918,8 @@ Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requi
 | `POST /suporte/autorizacoes/:id/revogar` | `admin` (pode ser outro, não só quem autorizou) | `{}`; revogada ou vencida 409 `autorizacao_nao_vigente`; de outra clínica 404 |
 
 - **Banco** (`support_access_grants`): quem autoriza e quem revoga é o usuário da sessão com perfil `admin` ativo; datas do banco; prazo de no máximo 72 h a partir da data do banco (CHECK); depois de criada, só a revogação (uma vez); sem DELETE/TRUNCATE; RLS forçado e `portal_fora`. Só ids, o chamado e datas.
-- **Trilha:** linha de suporte `pedido_da_clinica` sem autorização vigente é recusada (`42501`, [auditoria-encadeada.md](auditoria-encadeada.md) §4c). `break_glass` passa e fica visível na trilha.
+- **Trilha:** linha de suporte `pedido_da_clinica` sem autorização vigente é recusada (`42501`, [auditoria-encadeada.md](auditoria-encadeada.md) §4c); o prazo é conferido pelo relógio, não pelo início da transação. `break_glass` fica **desligado** no banco até a D4 (R1 do [parecer](../03-seguranca-lgpd/revisoes/2026-10-30-autorizacao-suporte.md)).
+- **Revogar** segue a regra de leitura da assinatura: a clínica com escrita bloqueada ainda revoga (R4). Dois pedidos simultâneos do mesmo chamado não geram duas vigentes (trava por clínica e chamado, R5).
 - **Auditoria:** escopo `support_access_grants`, metadata só com `grant_id`, `ticket` e `hours`/`op`.
 - **G2 1.23.0:** `supportAccessGrants` no pacote e a contagem no manifesto.
 - **Ainda não feito (depende da D4):** a identidade do atendente do operador, a aprovação por duas pessoas do break-glass e o alerta ao dono da clínica quando houver break-glass.
