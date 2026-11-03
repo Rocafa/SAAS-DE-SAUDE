@@ -160,3 +160,7 @@ próxima requisição escolhe o vínculo de novo e grava de novo. Incluir um tes
 - a resposta é 200, não 500;
 - a sessão não guardou o vínculo, então a próxima requisição escolhe de novo;
 - a trilha tem as duas escolhas automáticas.
+
+### R4 (03/11/2026)
+
+**Feita no #120.** `test/auditoria-leitura.rls.test.ts` chama cada rota de `AUDITADAS_LEITURA` contra Postgres real, com dados fictícios. Exige resposta 200 e uma linha nova `read` ou `export` do mesmo ator na trilha da clínica. Rota auditada sem plano no teste falha. Resultado: 50 de 50 rotas verdes no CI.
