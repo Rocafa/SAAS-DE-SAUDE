@@ -39,7 +39,7 @@ export const GRAVADORES_INCIDENTAIS: readonly { readonly nome: string; readonly 
   { nome: 'alertar', arquivo: 'src/modules/portal/portal-vigilancia.ts', motivo: 'grava só a anomalia do portal, em transação própria' },
 ];
 
-export interface RotaDeEscrita {
+export interface RotaAnalisada {
   /** `POST /pacientes/:id/responsaveis`, normalizado (sem barra dupla nem final). */
   readonly rota: string;
   /** `PatientsController.criar`. */
@@ -213,12 +213,12 @@ function sqlAlcancado(cx: Contexto, inicio: ts.Node): string[] {
 export type TipoDeRota = 'escrita' | 'leitura';
 
 /** Rotas de escrita (`POST/PATCH/PUT/DELETE/ALL`), com a análise de alcance. */
-export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaDeEscrita[] {
+export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaAnalisada[] {
   return analisarRotas('escrita', extras);
 }
 
 /** Rotas de leitura (`GET`), com a análise de alcance (R5 do parecer de 03/11). */
-export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaDeEscrita[] {
+export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaAnalisada[] {
   return analisarRotas('leitura', extras);
 }
 
@@ -226,7 +226,7 @@ export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaDeEs
  * Rotas da API do tipo pedido (ordenadas pela rota), com a análise de alcance. `extras`: arquivos fora de `src/`
  * tratados como nosso código e cujas rotas são as ÚNICAS devolvidas (fixtures de sanidade do teste).
  */
-function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaDeEscrita[] {
+function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisada[] {
   const absolutos = extras.map((f) => path.resolve(f));
   const programa = criarPrograma(absolutos);
   // Código com erro de sintaxe daria análise parcial (e falso "não audita"): melhor falhar com o motivo.
@@ -240,7 +240,7 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaDeEscri
       return f.startsWith(RAIZ_SRC) || doExtra(f);
     },
   };
-  const rotas: RotaDeEscrita[] = [];
+  const rotas: RotaAnalisada[] = [];
   for (const sf of programa.getSourceFiles()) {
     const f = path.resolve(sf.fileName);
     if (absolutos.length > 0 ? !doExtra(f) : !f.startsWith(RAIZ_SRC)) continue;

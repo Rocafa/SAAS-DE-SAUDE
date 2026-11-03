@@ -8,7 +8,7 @@
  *   confere o INSERT em audit_log na última definição da função). `sem_efeito`: a rota não muda nada.
  *
  * Leitura (R5 do parecer de 03/11/2026): toda rota `GET` está em `AUDITADAS_LEITURA` (mesma prova de alcance) ou em
- * `LEITURA_SEM_DADO_PESSOAL` (com o motivo); rota sob caminho clínico nunca é exceção.
+ * `LEITURA_SEM_DADO_DE_PACIENTE` (com o motivo); rota sob caminho clínico (`ehCaminhoClinico` no teste) nunca é exceção.
  *
  * Mudar uma rota de lista exige parecer do Guardião LGPD.
  */
@@ -179,6 +179,7 @@ export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /portal/privacidade/consentimentos/:finalidade/historico',
   'GET /portal/recibos',
   'GET /portal/recibos/:id',
+  'GET /portal/sessao',
   'GET /portal/solicitacoes',
   'GET /portal/vinculos',
   'GET /prontuario/configuracao',
@@ -187,14 +188,15 @@ export const AUDITADAS_LEITURA: readonly string[] = [
 ];
 
 /**
- * Rotas de leitura sem trilha, com o motivo: não devolvem dado pessoal de paciente nem conteúdo clínico. Rota sob
+ * Rotas de leitura sem trilha, com o motivo: não devolvem dado de paciente nem conteúdo clínico (algumas devolvem dado
+ * da equipe, dito no motivo). Rota sob
  * caminho clínico (CAMINHOS_CLINICOS no teste) nunca entra aqui. Mudar exige parecer do Guardião.
  */
-export const LEITURA_SEM_DADO_PESSOAL: Readonly<Record<string, string>> = {
+export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
   'GET /avisos':
-    'avisos do próprio destinatário (usuário da sessão): só ids técnicos, tipo e datas, nada de conteúdo clínico nem nome',
+    'avisos do próprio destinatário (filtro pelo usuário da sessão): ids técnicos, tipo e datas; o aviso de transição do sigilo traz o pacienteId e a transição (que pode deixar inferir incapacidade), aceito porque a criação do aviso é auditada e o passo seguinte (abrir o paciente) também',
   'GET /clinica/membros':
-    'equipe da clínica: só id do usuário, perfil e data da concessão (sem nome, e-mail ou dado de paciente); mudanças de perfil são auditadas',
+    'equipe da clínica: id do usuário, perfil, quem concedeu e quando (sem nome, e-mail nem dado de paciente); concessão e revogação são auditadas',
   'GET /clinica/vinculo-de-cuidado':
     'configuração da clínica (se o vínculo de cuidado vale); sem dado pessoal',
   'GET /financeiro/retencao-fiscal':
@@ -205,10 +207,8 @@ export const LEITURA_SEM_DADO_PESSOAL: Readonly<Record<string, string>> = {
     'prontidão (banco e dependências) para o balanceador; sem sessão e sem dado',
   'GET /importacoes/termo':
     'texto e versão do termo de migração e limites do arquivo; constantes, sem dado',
-  'GET /portal/sessao':
-    'o próprio titular vê o nome da clínica e o próprio primeiro nome na saudação; a entrada e a escolha do vínculo são auditadas (POST /portal/sessao/vinculo)',
   'GET /profissionais':
-    'cadastro da agenda: nome e especialidade dos profissionais da equipe (dado profissional exibido ao agendar), sem dado de paciente',
+    'cadastro da agenda: nome, especialidade, capacidade e marca de área sensível de cada profissional (dado da equipe exibido ao agendar), sem dado de paciente',
   'GET /sessao':
     'a própria sessão: id do usuário, id da clínica e perfis, todos já do contexto de quem pede',
   'GET /tipos-atendimento':

@@ -1437,6 +1437,27 @@ describe('auditoria e limite por conta', () => {
     expect(JSON.stringify(linhas)).not.toMatch(/Bruno|11900001111/);
   });
 
+  it('R1 do parecer do #119: a escolha automática do vínculo e a saudação da sessão deixam registro', async () => {
+    // Conta com um só vínculo e sessão sem vínculo escolhido: o servidor escolhe sozinho.
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const daConta = () =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId))).orderBy(sql`seq`));
+    const antes = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    const novas = (await daConta()).slice(antes);
+    expect(novas.map((l) => [l.action, l.scope, (l.metadata as { op?: string }).op])).toEqual([
+      ['login', 'portal_session', 'select_link'],
+      ['read', 'portal_session', 'session_greeting'],
+    ]);
+    expect(novas[0]?.metadata).toMatchObject({ auto: true, patient_id: pacA1, via: 'portal' });
+    expect(novas[1]?.metadata).toMatchObject({ patient_id: pacA1, via: 'portal' });
+    // A sessão guardou o vínculo: a próxima leitura não repete a escolha.
+    const meio = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    expect((await daConta()).slice(meio).map((l) => (l.metadata as { op?: string }).op)).toEqual(['session_greeting']);
+  });
+
   it('acima do limite por conta: 429 e um anomaly_alert na trilha da clínica do vínculo', async () => {
     const api2 = await subirApi({ portalLimites: { contaMax: 3, contaJanelaMs: 60_000, resgateMax: 2, resgateJanelaMs: 60_000 } });
     try {

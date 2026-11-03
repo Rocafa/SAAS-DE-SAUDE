@@ -141,11 +141,12 @@ A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `
 - **Limite:** a análise prova que EXISTE caminho até a trilha (sem contar gravador incidental), não que todo ramo do
   handler grava. Rotas fora de controller do Nest (o login da D4) ainda não entram (fila, condição da D4).
 - **Leitura (R5):** o mesmo vale para toda rota `GET`: `AUDITADAS_LEITURA` (com a prova de alcance) ou
-  `LEITURA_SEM_DADO_PESSOAL` (com o motivo). Rota sob caminho clínico (`/pacientes`, `/prontuario`, `/atendimentos`,
-  recibos, cobranças, portal do paciente…) nunca pode ser exceção. Os testes RLS de cada
+  `LEITURA_SEM_DADO_DE_PACIENTE` (com o motivo). Rota sob caminho clínico (por prefixo: pacientes, prontuário,
+  atendimentos, agenda, guias, pacotes, convênios, o financeiro inteiro salvo as configurações, importações, o portal
+  inteiro, envios do WhatsApp e suporte) nunca pode ser exceção. Os testes RLS de cada
   módulo conferem a linha gravada nos casos principais. Mudar uma rota de lista exige parecer do Guardião.
 
-Em 03/11/2026: 63 rotas de leitura, 49 auditadas e 14 sem dado pessoal de paciente (com motivo). 99 rotas de escrita, 97 auditadas pelo código, 2 exceções (resgate do convite do portal, gravado pela
+Em 03/11/2026: 63 rotas de leitura, 50 auditadas e 13 sem dado de paciente (com motivo). 99 rotas de escrita, 97 auditadas pelo código, 2 exceções (resgate do convite do portal, gravado pela
 função `app_portal_redeem_invite`; e `POST /whatsapp/modelos`, que sempre responde 409).
 
 ## 5. Linhas antigas
