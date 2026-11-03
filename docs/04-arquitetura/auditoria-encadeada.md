@@ -116,6 +116,27 @@ Decisão 1 do Guardião (parecer do PR #57): a trilha vai no pacote de exportaç
 - Exportação (G2, `schemaVersion` 1.2.0): `auditoria.jsonl` com `seq`, `prevHash`, `hash`, o JSON canônico e `createdAt` com microssegundos; `verifyExportedAuditTrail` confere, sem banco, campo a campo contra o canônico, o SHA-256 e os elos (com âncora, também o corte do fim).
 - Provas: `test/exportacao-cobertura.rls.test.ts` (canônico v1 idêntico para linha sem tipo; CHECKs; pseudônimo por clínica; pacote verificável e adulteração detectada) e `src/modules/audit/ator-suporte.test.ts`. Atualização de banco com linhas antigas conferida localmente (0001 a 0007, linhas no formato antigo, 0008, linhas novas: hashes antigos iguais e cadeia contínua).
 
+## 4d. Cobertura das rotas de escrita (#105, S6)
+
+A trilha é gravada **dentro da transação de quem age** (`recordAudit(tx, ...)`): se a gravação falha, a ação falha
+junto. Por isso não há interceptor global: um interceptor roda em volta do handler, depois que a transação já foi
+confirmada ou desfeita.
+
+A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `apps/api/test/cobertura-auditoria/`:
+
+- **Declaração obrigatória** (`lista.ts`): toda rota `POST/PATCH/PUT/DELETE` está em `AUDITADAS` ou em `EXCECOES`
+  (com o motivo). Rota nova fora das duas falha o CI, com o nome da rota e do handler.
+- **Prova pelo compilador** (`analise.ts`): para cada rota de `AUDITADAS`, o verificador de tipos do TypeScript segue as
+  chamadas a partir do handler (serviços, funções importadas, callbacks como o de `escreverNaClinica`) e exige um
+  caminho até `insertAudit` (`audit-log.ts`), por onde passam `recordAudit`, `recordSupportAudit` e o portal.
+- **Exceções conferidas:** `banco` exige `INSERT INTO audit_log` na última definição da função SQL citada;
+  `sem_efeito` é rota que não muda nada. Exceção que passa a gravar pelo código tem de ir para `AUDITADAS`.
+- **Limite:** a análise prova que EXISTE caminho até a trilha, não que todo ramo do handler grava. Os testes RLS de cada
+  módulo conferem a linha gravada nos casos principais. Mudar uma rota de lista exige parecer do Guardião.
+
+Em 03/11/2026: 99 rotas de escrita, 97 auditadas pelo código, 2 exceções (resgate do convite do portal, gravado pela
+função `app_portal_redeem_invite`; e `POST /whatsapp/modelos`, que sempre responde 409).
+
 ## 5. Linhas antigas
 
 Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-only impede reescrevê-las e o verificador as conta em `legacy`. Hoje só existem em ambientes de teste, porque não há produção.
