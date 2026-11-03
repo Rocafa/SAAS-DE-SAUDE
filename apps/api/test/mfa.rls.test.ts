@@ -1,0 +1,87 @@
+/**
+ * Política de MFA na API real (issue #106, S3; parecer de 03/11): obrigatório para todo perfil e recente nas rotas
+ * sensíveis, com a recusa nessas rotas na trilha. A sessão é fictícia (DevSessionProvider) e aqui passa `mfaEm`
+ * explícito (R7); o provedor real (D4) só vai informar `mfaEm`. Dados fictícios.
+ */
+import { randomUUID } from 'node:crypto';
+import type { TenantId } from '@plataforma/shared';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { auditLog } from '../src/db/schema';
+import { withTenant } from '../src/db/tenant-transaction';
+import { MFA_RECENTE_MS } from '../src/modules/auth/mfa';
+import { SCOPE_MFA_RECUSADO } from '../src/modules/auth/sessao.guard';
+import { cab, subirApi, type ApiDeTeste } from './apoio-api';
+
+let api: ApiDeTeste;
+let clinica: TenantId;
+let pacienteId: string;
+
+function sessao(perfis: string[], mfaEm: Date | null, userId: string = randomUUID()) {
+  return { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId, perfis, mfaEm })}`, userId };
+}
+
+async function recusasDe(userId: string) {
+  return withTenant(api.db.db, clinica, (tx) =>
+    tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinica), eq(auditLog.actorId, userId), eq(auditLog.scope, SCOPE_MFA_RECUSADO))),
+  );
+}
+
+beforeAll(async () => {
+  api = await subirApi();
+  clinica = await api.novaClinica();
+  const r = await api.http().post('/pacientes').set(cab(sessao(['recepcao'], new Date()))).send({ nome: 'Paciente Ficticia MFA', telefone: '11900000031' });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  pacienteId = (r.body as { id: string }).id;
+});
+
+afterAll(async () => {
+  await api?.fechar();
+});
+
+describe('issue #106: MFA obrigatório e recente nas rotas sensíveis', () => {
+  it('B1: todo perfil sem MFA recebe 403 mfa_obrigatorio, inclusive a recepção; MFA de horas atrás basta na rota comum', async () => {
+    for (const perfil of ['admin', 'profissional', 'recepcao', 'financeiro']) {
+      const r = await api.http().get('/pacientes').set(cab(sessao([perfil], null)));
+      expect(r.status, perfil).toBe(403);
+      expect(r.body, perfil).toMatchObject({ codigo: 'mfa_obrigatorio' });
+    }
+    expect((await api.http().get('/pacientes').set(cab(sessao(['recepcao'], new Date(Date.now() - 8 * 3_600_000))))).status).toBe(200);
+  });
+
+  it('notas privadas e custódia exigem MFA dos últimos 15 minutos', async () => {
+    const userId = randomUUID();
+    const antigo = sessao(['profissional'], new Date(Date.now() - MFA_RECENTE_MS - 60_000), userId);
+    for (const url of [`/pacientes/${pacienteId}/notas-privadas`, `/notas-privadas/${randomUUID()}`, `/custodias/${randomUUID()}/notas`]) {
+      const r = await api.http().get(url).set(cab(antigo));
+      expect(r.status, url).toBe(403);
+      expect(r.body, url).toMatchObject({ codigo: 'mfa_recente_obrigatorio' });
+    }
+    // Com MFA recente o guard deixa passar (o que vem depois é regra do serviço, não do MFA).
+    const recente = await api.http().get(`/pacientes/${pacienteId}/notas-privadas`).set(cab(sessao(['profissional'], new Date(), userId)));
+    expect((recente.body as { codigo?: string }).codigo ?? '').not.toMatch(/^mfa_/);
+  });
+
+  it('B2: a recusa por MFA numa rota sensível vai para a trilha, só com ids; na rota comum, não (fica para a D4)', async () => {
+    const userId = randomUUID();
+    const notaQualquer = randomUUID();
+    const antigo = sessao(['profissional'], new Date(Date.now() - MFA_RECENTE_MS - 60_000), userId);
+    await api.http().get(`/notas-privadas/${notaQualquer}`).set(cab(antigo)).expect(403);
+    const linhas = await recusasDe(userId);
+    expect(linhas).toHaveLength(1);
+    expect(linhas[0]).toMatchObject({ action: 'read', actorKind: 'usuario_clinica' });
+    expect(linhas[0]?.metadata).toEqual({ op: 'NotasPrivadasController.obter', reason: 'mfa_recente_obrigatorio', target_id: notaQualquer });
+    // Rota comum sem MFA: 403 sem linha (a trilha das recusas comuns vem com o provedor real).
+    const semMfa = randomUUID();
+    await api.http().get('/pacientes').set(cab(sessao(['recepcao'], null, semMfa))).expect(403);
+    expect(await recusasDe(semMfa)).toHaveLength(0);
+  });
+
+  it('R8: GET /sessao devolve só até quando o MFA conta como recente', async () => {
+    const quando = new Date(Date.now() - 60_000);
+    const r = await api.http().get('/sessao').set(cab(sessao(['recepcao'], quando)));
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ mfaRecenteAte: new Date(quando.getTime() + MFA_RECENTE_MS).toISOString() });
+    expect(r.body).not.toHaveProperty('mfaEm');
+  });
+});

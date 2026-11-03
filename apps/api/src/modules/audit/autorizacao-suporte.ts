@@ -17,6 +17,7 @@ import { supportAccessGrants } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { exigirPerfilNoBanco } from '../auth/membros';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { recordAudit } from './audit-log';
 
@@ -164,6 +165,7 @@ export class AutorizacaoDeSuporteController {
   constructor(@Inject(AutorizacaoDeSuporteService) private readonly service: AutorizacaoDeSuporteService) {}
 
   @Post()
+  @ExigeMfaRecente()
   @Permissao('suporte:autorizar')
   autorizar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<AutorizacaoDeSuporteDto> {
     return this.service.autorizar(paraRequestContext(auth), validarNovaAutorizacaoDeSuporte(corpo));

@@ -53,6 +53,8 @@ export interface RotaAnalisada {
   /** Textos dos templates `sql\`...\`` alcançados a partir do handler (R4: prova da exceção `banco`). Só é
    * calculado para rota que não alcança a trilha (as exceções); nas outras fica vazio. */
   readonly sqlAlcancado: readonly string[];
+  /** Decorators NOSSOS da rota (do método e da classe), pelo nome original; ex.: `ExigeMfaRecente` (R4 do #123). */
+  readonly marcas: readonly string[];
 }
 
 const RAIZ_API = path.resolve(__dirname, '../..');
@@ -249,6 +251,9 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisa
         const ctrl = (ts.getDecorators(n) ?? []).find((d) => ehControllerDoNest(cx, d));
         if (ctrl) {
           const base = argumentoTexto(ctrl);
+          const marcasDe = (decs: readonly ts.Decorator[]) =>
+            decs.map((x) => identidadeDoDecorator(cx, x)).filter((x) => x !== undefined && !x.doNest).map((x) => (x as { nome: string }).nome);
+          const marcasDaClasse = marcasDe(ts.getDecorators(n) ?? []);
           for (const membro of n.members) {
             if (!ts.isMethodDeclaration(membro)) continue;
             for (const d of ts.getDecorators(membro) ?? []) {
@@ -264,6 +269,7 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisa
                 alcancaTrilha,
                 soLanca: soLanca(corpo),
                 sqlAlcancado: alcancaTrilha ? [] : sqlAlcancado(cx, corpo),
+                marcas: [...new Set([...marcasDaClasse, ...marcasDe(ts.getDecorators(membro) ?? [])])].sort(),
               });
             }
           }

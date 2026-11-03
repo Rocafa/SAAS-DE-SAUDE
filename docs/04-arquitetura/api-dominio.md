@@ -925,3 +925,14 @@ Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requi
 - **Ainda não feito (depende da D4):** a identidade do atendente do operador, a aprovação por duas pessoas do break-glass e o alerta ao dono da clínica quando houver break-glass.
 
 Testes: `test/autorizacao-suporte.rls.test.ts`.
+
+## 17. Política de MFA (issue #106, S3; regra 2 do memo da D4; requisitos de segurança §4)
+
+O provedor de login (D4) só informa **quando** o usuário passou pelo segundo fator (`AuthContext.mfaEm`). A obrigatoriedade é decidida pela API (`src/modules/auth/mfa.ts`), no `SessaoGuard`, antes de qualquer leitura:
+
+- **Obrigatório para todos os perfis** (B1 do [parecer](../03-seguranca-lgpd/revisoes/2026-11-03-mfa-politica.md)). Todos acessam dado C3/C4: a recepção vê CPF, agenda, menores e convênio, e opera o financeiro. Sem MFA a resposta é `403 mfa_obrigatorio`.
+- **MFA recente:** as rotas com `@ExigeMfaRecente(janela)` respondem `403 mfa_recente_obrigatorio` fora da janela da rota. O padrão é 15 min. A exportação total (G2) usa 5 min (`MFA_RECENTE_EXPORTACAO_MS`), como promete a cláusula 16.2 da minuta do DPA. MFA com data no futuro também é recusado. A lista fechada fica em `ROTAS_COM_MFA_RECENTE` (teste de cobertura): conteúdo clínico mais sensível e ações irreversíveis ou de alto impacto, 24 rotas hoje.
+- **A recusa numa rota sensível vai para a trilha** (B2), com escopo `mfa_denied` e só ids: o handler, o motivo e o id do alvo. É o caso típico de sessão roubada. A recusa em rota comum vai para a trilha com o provedor real.
+- **`GET /sessao`** devolve só `mfaRecenteAte` (R8, minimização), para o cliente saber se pede o código antes.
+- **Sessão fictícia** (dev/teste): nasce com MFA feito agora. Os testes de rota sensível passam `mfaEm` explícito. **Esse padrão não vale para o provedor real**: lá `mfaEm` vem só da sessão guardada no servidor, e sem informação vale `null` (R6, contrato da D4).
+- **Com o provedor real (D4, R5):** vão para a trilha os eventos do próprio fator (cadastro, verificação, falha, bloqueio após 5 falhas em 15 min, reset com justificativa e alerta ao admin) e as recusas em rotas comuns. Trocar de clínica, perfil ou senha reavalia o MFA.
