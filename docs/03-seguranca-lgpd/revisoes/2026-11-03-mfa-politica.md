@@ -65,3 +65,33 @@ Dois problemas impedem o merge: a lista de perfis contraria um requisito MUST, e
 - **R5 e R6:** estão na fila, como condição da D4.
 - **R7 (feita):** os testes de rota sensível passam `mfaEm` explícito, e o §17 diz que o padrão da sessão fictícia não vale para o provedor real.
 - **R8 (feita):** `GET /sessao` devolve só `mfaRecenteAte`.
+
+## Re-revisão do Guardião (03/11/2026, commit `e7a8c4c`)
+
+### Veredito: **APROVADO com ressalvas.** O veto está levantado.
+
+**Verificação:** `npx vitest run src/modules/auth test/cobertura-auditoria` deu 34/34 verdes e o `tsc --noEmit` está limpo. O `mfa.rls.test.ts` não rodou (não há Postgres local); a confirmação dele fica com o CI.
+
+- **B1 (resolvido):** `PERFIS_COM_MFA_OBRIGATORIO` agora tem os quatro perfis. O comentário e o §17 estão corretos.
+- **B2 (resolvido):** a recusa em rota com `@ExigeMfaRecente` é gravada antes do 403, na clínica da sessão.
+  - O metadata leva só ids: `op` (Controller.handler, até 64 caracteres), `reason` e `target_id` (só se for UUID). Não vai `mfaEm` nem conteúdo.
+  - Se a gravação falhar, a recusa continua (falha fechado), e o log leva só o nome do erro.
+  - A recusa em rota comum não grava, como pedia R5.
+- **R1 (resolvido):** janela por rota, e a exportação total usa `MFA_RECENTE_EXPORTACAO_MS` (5 min), o que fecha com a cláusula 16.2 do DPA.
+- **R2 e R4 (resolvidos):** são 24 rotas, presas à lista fechada `ROTAS_COM_MFA_RECENTE`, conferida pelo teste de cobertura. A custódia ganhou teste RLS. A lista confere com R2.
+- **R7 e R8 (resolvidos).**
+
+### Risco da gravação antes do 403 (pergunta do Maestro)
+- **Contenção na cadeia da trilha (real, limitada):** a trilha é encadeada com `pg_advisory_xact_lock('audit_chain:' || tenant_id)` (migração 0005). Toda linha de recusa disputa o mesmo lock que **todas** as gravações auditadas daquela clínica. Uma sessão válida, ou um cliente com bug que repete a chamada em laço, consegue:
+  - deixar lentas as escritas legítimas da própria clínica;
+  - inflar a trilha, que tem retenção longa (§5: até 20 anos para o acesso a prontuário).
+- **Por que não bloqueia:** exige uma sessão autenticada daquela clínica, então não há vetor anônimo, e o 401 vem antes. O efeito fica restrito à própria clínica, porque o lock é por tenant e o RLS isola. A transação é curta. E não há dado real antes do Portão B.
+- **Não inverter a ordem:** responder o 403 antes e gravar depois, de forma assíncrona, perderia a garantia de que a tentativa ficou registrada. A ordem atual está certa.
+
+### Novas ressalvas
+| # | Ressalva | Prazo |
+|---|---|---|
+| **R9** | **Limitar a gravação de recusas por MFA.** Gravar no máximo 1 linha `mfa_denied` por (usuário, `op`, `reason`) a cada 60 s, com contador no Redis e chave prefixada pela clínica. As repetidas dentro da janela incrementam um contador, que vai em `metadata.repeticoes` na próxima linha gravada. Junto disso, colocar rate limit por sessão nas rotas sensíveis, por exemplo 30 recusas por minuto, e depois 429. Um volume anômalo de `mfa_denied` dispara o alerta do §5. Teste: 100 recusas seguidas geram ≤ 2 linhas. | Antes do Portão B (junto com o rate limit do Redis da regra 4) |
+| **R10** | **O cliente evita a recusa:** o front usa `mfaRecenteAte` para pedir o código **antes** de chamar a rota sensível. Assim, o uso legítimo não gera linhas `mfa_denied`, e a trilha fica com o sinal útil (sessão roubada) em vez de ruído. Atenção: `mfaRecenteAte` usa a janela padrão de 15 min, então a tela da exportação (5 min) precisa sempre pedir o código de novo. | Na ligação das telas com a API |
+
+**R3, R5 e R6** continuam como condição antes do Portão B e da integração da D4, sem mudança.
