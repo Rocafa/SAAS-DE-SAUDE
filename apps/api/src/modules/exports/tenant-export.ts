@@ -1320,5 +1320,5 @@ export function exportTenantData(
   ctx: RequestContext,
   options: ExportOptions = {},
 ): Promise<TenantExportPackage> {
-  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId);
+  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId, 'repeatable read');
 }

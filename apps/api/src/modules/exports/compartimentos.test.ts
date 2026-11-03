@@ -2,6 +2,8 @@
  * R12 do parecer do #123 (G2): o manifesto da exportação marca as seções do prontuário por compartimento.
  * Nada pode sumir em silêncio: item de compartimento desconhecido ou versão sem atendimento derruba a exportação.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RECORD_COMPARTMENTS } from '../../db/schema';
 import { secoesPorCompartimento } from './tenant-export';
@@ -34,5 +36,15 @@ describe('secoesPorCompartimento', () => {
   it('versão ou adendo sem atendimento falha fechado', () => {
     expect(() => secoesPorCompartimento([{ id: 'a1', compartment: 'geral' }], [{ encounterId: 'x' }], [])).toThrow(/sem atendimento/);
     expect(() => secoesPorCompartimento([{ id: 'a1', compartment: 'geral' }], [], [{ encounterId: 'x' }])).toThrow(/sem atendimento/);
+  });
+});
+
+describe('R1 do parecer do #126: exportação em REPEATABLE READ', () => {
+  it('o serviço e a função avulsa abrem a transação consistente', () => {
+    const servico = readFileSync(join(__dirname, 'exports.module.ts'), 'utf8');
+    expect(servico).toContain('tenantDb.runConsistente(');
+    expect(servico).not.toContain('tenantDb.run(');
+    const avulsa = readFileSync(join(__dirname, 'tenant-export.ts'), 'utf8');
+    expect(avulsa).toContain("exportInTransaction(tx, ctx, options), ctx.userId, 'repeatable read')");
   });
 });

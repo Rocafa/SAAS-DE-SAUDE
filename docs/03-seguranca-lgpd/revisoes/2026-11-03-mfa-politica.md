@@ -134,3 +134,25 @@ _Nota do Maestro sobre o teste da R9: a janela do contador em memória começa n
 - **R11 resolvida:** `MFA_RECENTE_POR_COMPARTIMENTO` é tipado pelo enum e tem teste contra `RECORD_COMPARTMENTS`.
 - **R12 parcial:** o teste estático garante que `tenant-export.ts` não usa a regra de tela. O teste de que o pacote sai completo e marcado no manifesto continua devido junto com a rota da G2 (5 min).
 - **Verificação:** os testes de records e auth passaram (26/26) e o `tsc` está limpo. Os testes RLS dependem do CI (não há Postgres local).
+
+#### Parecer do PR #126 (R12)
+
+**03/11/2026, branch `eng/exportacao-compartimentos` (commit `119fc61`): APROVADO COM RESSALVAS.**
+
+- **Ids no manifesto (de acordo):** os ids de `manifest.compartments.*.encounterIds` já estão em `data.encounters[].id`, junto com `compartment`. O manifesto não traz dado novo, só um índice para a clínica conferir o pacote. O destinatário é a própria controladora (art. 18 V e art. 7º/11 II, a da LGPD; dever de guarda da Res. CFP 01/2009). Os ids são UUIDs opacos, sem nome, data nem paciente. Minimização: de acordo.
+- **Falha fechada (de acordo):** compartimento fora do enum ou versão/adendo órfão derrubam a transação com mensagem genérica, sem id nem conteúdo. Um pacote incompleto "que parece completo" é pior para a portabilidade e para a guarda de 20 anos que uma recusa explícita. O enum tipa o `Record`, então compartimento novo entra no manifesto sem passo à parte (coerente com a R11).
+- **Trilha (de acordo):** o `metadata` de `tenant.full_export` continua só com contagens agregadas. `compartments` não vai para a trilha, nem a contagem de psicologia. O teste RLS confere que o tema e o adendo não aparecem no `auditoria.jsonl`.
+- **O teste prova a R12 na forma "no mínimo":** o sigilo está em `restrito_ao_autor`, o admin exporta com `mfaEm: null` e com MFA antigo, a versão e o adendo de psicologia saem decifrados e o manifesto bate com os dados. O teste unitário (4/4) passou aqui. O RLS depende do CI.
+
+Ressalvas:
+1. **Isolamento da transação (antes da rota da G2):** a exportação lê encontros, versões e adendos em comandos separados, no isolamento padrão (READ COMMITTED). Um atendimento aberto e salvo entre as leituras gera uma versão "órfã", e a exportação cai com 500, mesmo sem defeito nos dados. A falha fechada está certa, mas vira indisponibilidade da G2 numa clínica em uso. **Correção:** rodar `exportInTransaction` em `REPEATABLE READ` (ou `SERIALIZABLE READ ONLY DEFERRABLE`), para que o pacote seja uma foto única. O mesmo vale para as contagens do manifesto em geral.
+2. **Recusa auditada (junto com a ressalva 1):** a falha fechada desfaz a transação inteira, inclusive o `recordAudit`. A tentativa de exportação que caiu não deixa rastro. Grave 1 linha fora da transação (`export_failed`, só o motivo genérico, sem ids), para o DPO ver tentativa repetida ou dado corrompido.
+3. **Rota HTTP da G2 (R12 segue aberta nessa parte):** o MFA de 5 min (`MFA_RECENTE_EXPORTACAO_MS`) e a aprovação do RT continuam devidos na rota, como a R12 pede. Nessa rota, o manifesto (com `compartments`) só pode viajar dentro do pacote cifrado. Ele não vai para o corpo do e-mail de aviso, para o nome do objeto no armazenamento nem para o log da aplicação. A contagem de psicologia por clínica também fica fora de qualquer métrica do operador.
+4. **Teste (não bloqueia):** no RLS, some também `clinicalAddenda` de psicologia e geral e compare com `counts.clinicalAddenda`, como já é feito para encontros e versões.
+
+#### Nota do Maestro sobre o parecer do #126 (03/11/2026)
+
+- **R1 (feita):** a exportação roda em `REPEATABLE READ`. Novo `TenantDatabase.runConsistente` (e um parâmetro opcional `isolamento` em `withTenant`), usado pelo `ExportsService` e pela função avulsa `exportTenantData`. As demais transações seguem no padrão. Testes: RLS confere `show transaction_isolation` = `repeatable read`; unitário impede o serviço de voltar a usar `run`.
+- **R2 (fila, com a rota da G2):** hoje não existe caminho HTTP que dispare a exportação, só jobs e testes. O `export_failed` fora da transação entra com a rota, junto com o alerta aos admins.
+- **R3 (registrada para a rota da G2):** o manifesto só viaja dentro do pacote cifrado. Nada dele vai para o e-mail, o nome do objeto, os logs ou as métricas.
+- **R4 (feita):** o teste RLS também soma os adendos contra `counts.clinicalAddenda`.

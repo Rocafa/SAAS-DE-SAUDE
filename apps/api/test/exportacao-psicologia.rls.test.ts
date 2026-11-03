@@ -4,12 +4,14 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appointments } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { MFA_RECENTE_MS } from '../src/modules/auth/mfa';
 import { ExportsService } from '../src/modules/exports/exports.module';
 import type { TenantExportPackage } from '../src/modules/exports/tenant-export';
+import { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 const TEMA_PSI = 'Tema ficticio de psicologia para exportacao';
@@ -87,6 +89,7 @@ describe('R12 do #123: a exportação total leva a psicologia inteira e marcada'
     expect(compartments.geral).toEqual({ encounters: 0, clinicalRecordVersions: 0, clinicalAddenda: 0, encounterIds: [] });
     expect(compartments.psicologia.encounters + compartments.geral.encounters).toBe(counts.encounters);
     expect(compartments.psicologia.clinicalRecordVersions + compartments.geral.clinicalRecordVersions).toBe(counts.clinicalRecordVersions);
+    expect(compartments.psicologia.clinicalAddenda + compartments.geral.clinicalAddenda).toBe(counts.clinicalAddenda);
   });
 
   it('o resultado não depende do MFA de quem pede: com MFA antigo o pacote é o mesmo', async () => {
@@ -94,6 +97,14 @@ describe('R12 do #123: a exportação total leva a psicologia inteira e marcada'
     const outro = await api.app.get(ExportsService).exportTenantData({ tenantId: clinica, userId: adminUserId as UserId, roles: ['admin'], mfaEm: antigo });
     expect(outro.json.manifest.compartments).toEqual(pkg.json.manifest.compartments);
     expect(outro.json.data.clinicalRecordVersions.map((v) => v.content)).toEqual(pkg.json.data.clinicalRecordVersions.map((v) => v.content));
+  });
+
+  it('R1 do parecer do #126: a transação da exportação é REPEATABLE READ (leituras do mesmo instante)', async () => {
+    const nivel = await api.app.get(TenantDatabase).runConsistente(clinica, async (tx) => {
+      const linhas = await tx.execute(sql`show transaction_isolation`);
+      return (linhas as unknown as { transaction_isolation: string }[])[0]?.transaction_isolation;
+    }, adminUserId);
+    expect(nivel).toBe('repeatable read');
   });
 
   it('nada do conteúdo de psicologia vai para a trilha da exportação', () => {
