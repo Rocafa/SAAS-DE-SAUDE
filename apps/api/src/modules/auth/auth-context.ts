@@ -10,6 +10,11 @@ export interface AuthContext {
   readonly tenantId: TenantId;
   readonly userId: UserId;
   readonly perfis: readonly Perfil[];
+  /**
+   * Quando o usuário passou pelo segundo fator nesta sessão (informado pelo provedor), ou null se não passou. A
+   * obrigatoriedade é decidida pela API (mfa.ts), não pelo provedor.
+   */
+  readonly mfaEm: Date | null;
 }
 
 /** Só o que o provedor pode ler da requisição: cabeçalhos (cookie/Authorization). */

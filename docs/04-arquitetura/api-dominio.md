@@ -925,3 +925,13 @@ Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requi
 - **Ainda não feito (depende da D4):** a identidade do atendente do operador, a aprovação por duas pessoas do break-glass e o alerta ao dono da clínica quando houver break-glass.
 
 Testes: `test/autorizacao-suporte.rls.test.ts`.
+
+## 17. Política de MFA (issue #106, S3; regra 2 do memo da D4)
+
+O provedor de login (D4) só informa **quando** o usuário passou pelo segundo fator (`AuthContext.mfaEm`). A obrigatoriedade é decidida pela API (`src/modules/auth/mfa.ts`), no `SessaoGuard`, antes de qualquer leitura:
+
+- **Obrigatório por perfil:** `admin`, `profissional` e `financeiro` não usam a API sem MFA na sessão (`403 mfa_obrigatorio`). A `recepcao` não é obrigada, porque não vê conteúdo clínico nem dado financeiro.
+- **MFA recente** (até 15 min): rotas marcadas com `@ExigeMfaRecente()` respondem `403 mfa_recente_obrigatorio` fora da janela. MFA com data no futuro também não conta. O cliente pede o código de novo e repete. Hoje estão marcadas as notas privadas (todas as rotas) e a custódia (ler e decidir as notas lacradas). A rota HTTP da exportação total (G2) nasce marcada.
+- **`GET /sessao`** devolve `mfaEm` (ISO ou null), para o cliente saber se pede o código antes.
+- **Sessão fictícia** (dev/teste): nasce com MFA feito agora. `criarSessao({ ..., mfaEm })` simula MFA antigo ou ausente.
+- **Com o provedor real (D4):** os eventos do próprio MFA (verificar, falhar, resetar com justificativa) vão para a trilha pelos hooks da biblioteca.

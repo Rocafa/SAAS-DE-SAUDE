@@ -55,7 +55,8 @@ describe('DevSessionProvider', () => {
     const token = p.criarSessao({ tenantId: tenant, userId: usuario, perfis: ['recepcao'] });
     const outra = randomUUID();
     const ctx = await p.resolver({ headers: { authorization: `Bearer ${token}`, 'x-tenant-id': outra, 'x-clinica-id': outra } });
-    expect(ctx).toEqual({ tenantId: tenant, userId: usuario, perfis: ['recepcao'] });
+    expect(ctx).toMatchObject({ tenantId: tenant, userId: usuario, perfis: ['recepcao'] });
+    expect(ctx?.mfaEm).toBeInstanceOf(Date);
   });
 
   it('sem token, token malformado, desconhecido ou de sessão encerrada: null', async () => {

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AUTH_PROVIDER, type AuthContext, type AuthProvider, type RequisicaoParaSessao } from './auth-context';
+import { conferirMfa, MFA_RECENTE_KEY } from './mfa';
 import { temPermissao, type Permissao as NomePermissao } from './perfis';
 
 const PERMISSAO_KEY = 'plataforma:permissao';
@@ -24,7 +25,7 @@ interface RequisicaoComSessao extends RequisicaoParaSessao {
 
 /**
  * Guard das rotas de domínio: (1) resolve a sessão pelo provedor (porta AuthProvider) — sem sessão,
- * 401; (2) confere a permissão do perfil — sem permissão, 403. A clínica usada daqui em diante é a
+ * 401; (2) confere a permissão do perfil — sem permissão, 403; (3) confere o MFA (mfa.ts) — 403 com código. A clínica usada daqui em diante é a
  * da sessão. O guard NÃO lê nenhum cabeçalho de clínica (`x-tenant-id`, `x-clinica-id`...): não
  * existe caminho do cliente até o tenant (regra 1 da D4; teste em test/security).
  */
@@ -46,6 +47,9 @@ export class SessaoGuard implements CanActivate {
     if (!permissao || !temPermissao(auth.perfis, permissao)) {
       throw new ForbiddenException({ statusCode: 403, message: 'Sem permissão' });
     }
+    // (3) MFA (issue #106): obrigatório por perfil e recente nas rotas marcadas. Recusa antes de qualquer leitura.
+    const exigeRecente = this.reflector.getAllAndOverride<boolean | undefined>(MFA_RECENTE_KEY, [context.getHandler(), context.getClass()]) === true;
+    conferirMfa(auth, exigeRecente);
     req.auth = auth;
     return true;
   }

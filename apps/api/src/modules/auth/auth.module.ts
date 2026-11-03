@@ -11,8 +11,8 @@ import { VINCULO_ATENDIMENTO_DIAS_TETO, VinculoDeCuidadoService } from './vincul
 export class SessaoController {
   @Get()
   @Permissao('sessao:ler')
-  atual(@Sessao() auth: AuthContext): { usuarioId: string; clinicaId: string; perfis: readonly string[] } {
-    return { usuarioId: auth.userId, clinicaId: auth.tenantId, perfis: auth.perfis };
+  atual(@Sessao() auth: AuthContext): { usuarioId: string; clinicaId: string; perfis: readonly string[]; mfaEm: string | null } {
+    return { usuarioId: auth.userId, clinicaId: auth.tenantId, perfis: auth.perfis, mfaEm: auth.mfaEm?.toISOString() ?? null };
   }
 }
 

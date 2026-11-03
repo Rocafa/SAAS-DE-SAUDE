@@ -3,6 +3,7 @@ import { exigirUuid } from '../../common/validacao';
 import type { PsychCompartmentMode } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
 import { AvisosService, type AvisoDto } from './avisos';
 import { CicloNotasPrivadasService, type ResultadoDoCiclo } from './ciclo-notas-privadas';
@@ -109,6 +110,7 @@ export class ProntuarioDoPacienteController {
 
   @Get(':id/notas-privadas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   listarNotas(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<NotaPrivadaDto[]> {
     const paciente = exigirUuid(id);
     validarQueryVaziaClinica(query);
@@ -117,15 +119,17 @@ export class ProntuarioDoPacienteController {
 
   @Post(':id/notas-privadas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   criarNota(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<NotaPrivadaDto> {
     const paciente = exigirUuid(id);
     return this.notas.criar(paraRequestContext(auth), paciente, validarNovaNota(corpo));
   }
 }
 
-/** Nota privada pelo id: só o autor (outro autor = 404 + tentativa auditada). */
+/** Nota privada pelo id: só o autor (outro autor = 404 + tentativa auditada). MFA recente em todas (issue #106). */
 @Controller('notas-privadas')
 @UseGuards(SessaoGuard)
+@ExigeMfaRecente()
 export class NotasPrivadasController {
   constructor(@Inject(NotasPrivadasService) private readonly notas: NotasPrivadasService) {}
 
@@ -268,6 +272,7 @@ export class CustodiaController {
 
   @Get('custodias/:id/notas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   notas(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<NotaLacradaDto[]> {
     const alvo = exigirUuid(id);
     validarQueryVaziaClinica(query);
@@ -277,6 +282,7 @@ export class CustodiaController {
   @Post('custodias/:id/notas/:notaId/decisao')
   @HttpCode(200)
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   decidir(
     @Sessao() auth: AuthContext,
     @Param('id') id: string,
