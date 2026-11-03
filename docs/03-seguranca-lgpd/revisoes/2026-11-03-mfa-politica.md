@@ -128,3 +128,9 @@ _Nota do Maestro sobre o teste da R9: a janela do contador em memória começa n
 - **R11 (feita):** `MFA_RECENTE_POR_COMPARTIMENTO` é tipado pelo enum, então compartimento novo sem decisão não compila. O teste confere a lista contra `RECORD_COMPARTMENTS`.
 - **R12:** a exportação lê as tabelas direto. O teste estático (`mfa-compartimentos.test.ts`) impede `tenant-export.ts` de depender da regra de tela. A rota HTTP da G2 com 5 min está na fila.
 - **`POST /atendimentos`:** fica sem MFA recente, como o parecer aceitou.
+
+**B3 re-conferido (03/11/2026, commit `ceaccea`): APROVADO, veto do #125 levantado.**
+- **B3 resolvido:** nas 5 operações, o MFA agora é conferido depois do vínculo e das travas de autor e sigilo. Ele só vale para quem `podeVerConteudo`, então o código `mfa_*` não revela mais o compartimento a quem não pode ver.
+- **R11 resolvida:** `MFA_RECENTE_POR_COMPARTIMENTO` é tipado pelo enum e tem teste contra `RECORD_COMPARTMENTS`.
+- **R12 parcial:** o teste estático garante que `tenant-export.ts` não usa a regra de tela. O teste de que o pacote sai completo e marcado no manifesto continua devido junto com a rota da G2 (5 min).
+- **Verificação:** os testes de records e auth passaram (26/26) e o `tsc` está limpo. Os testes RLS dependem do CI (não há Postgres local).

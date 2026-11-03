@@ -56,7 +56,7 @@ beforeAll(async () => {
   expect(at.status, JSON.stringify(at.body)).toBe(200);
   atPsi = (at.body as { id: string; restrito: boolean }).id;
   expect((at.body as { restrito: boolean }).restrito).toBe(true);
-  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi(new Date()))).send({ versaoBase: 0, conteudo: { queixa: 'Queixa ficticia psi' } }).expect(200);
+  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi(new Date()))).send({ versaoBase: 0, conteudo: { tema: 'Tema ficticio psi' } }).expect(200);
 });
 
 afterAll(async () => {
@@ -69,7 +69,7 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     for (const [metodo, url, corpo] of [
       ['get', `/atendimentos/${atPsi}`, undefined],
       ['get', `/atendimentos/${atPsi}/versoes`, undefined],
-      ['put', `/atendimentos/${atPsi}/registro`, { versaoBase: 1, conteudo: { queixa: 'Tentativa ficticia' } }],
+      ['put', `/atendimentos/${atPsi}/registro`, { versaoBase: 1, conteudo: { tema: 'Tentativa ficticia' } }],
     ] as const) {
       const req = metodo === 'get' ? api.http().get(url) : api.http().put(url).send(corpo);
       const r = await req.set(cab(velho));
@@ -99,7 +99,7 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
   it('com MFA recente, o autor vê o atendimento de psicologia', async () => {
     const r = await api.http().get(`/atendimentos/${atPsi}`).set(cab(sessaoPsi(new Date())));
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    expect(r.body).toMatchObject({ conteudoOculto: false, conteudo: { queixa: 'Queixa ficticia psi' } });
+    expect(r.body).toMatchObject({ conteudoOculto: false, conteudo: { tema: 'Tema ficticio psi' } });
   });
 
   it('histórico sem MFA recente: o atendimento de psicologia aparece com o conteúdo oculto, sem 403', async () => {
