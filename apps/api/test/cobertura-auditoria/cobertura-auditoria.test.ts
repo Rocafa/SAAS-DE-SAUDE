@@ -6,11 +6,11 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analisarRotasDeEscrita, type RotaDeEscrita } from './analise';
-import { AUDITADAS, EXCECOES } from './lista';
+import { analisarRotasDeEscrita, analisarRotasDeLeitura, type RotaAnalisada } from './analise';
+import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, LEITURA_SEM_DADO_DE_PACIENTE } from './lista';
 
-let rotas: RotaDeEscrita[];
-const porRota = new Map<string, RotaDeEscrita>();
+let rotas: RotaAnalisada[];
+const porRota = new Map<string, RotaAnalisada>();
 
 beforeAll(() => {
   rotas = analisarRotasDeEscrita();
@@ -87,9 +87,77 @@ describe('#105: cobertura de auditoria das rotas de escrita', () => {
   });
 });
 
+/**
+ * Rota de leitura sob caminho de dado de paciente ou clínico nunca é exceção (tem de gravar a trilha). Lista por
+ * PREFIXO, do lado seguro (R2 do parecer de 03/11 sobre o #119): o portal inteiro e o financeiro inteiro, salvo as
+ * configurações listadas.
+ */
+const PREFIXOS_CLINICOS = [
+  'pacientes', 'prontuario', 'atendimentos', 'notas-privadas', 'custodias', 'agendamentos', 'guias', 'pacotes', 'convenios',
+  'financeiro', 'importacoes', 'responsaveis', 'portal', 'clinica/portal', 'whatsapp/envios', 'suporte',
+];
+const FORA_DO_CAMINHO_CLINICO = new Set([
+  'GET /financeiro/retencao-fiscal',
+  'GET /financeiro/configuracao',
+  'GET /financeiro/profissionais/:id/perfil-fiscal',
+  'GET /importacoes/termo',
+]);
+function ehCaminhoClinico(rota: string): boolean {
+  if (FORA_DO_CAMINHO_CLINICO.has(rota)) return false;
+  const caminho = rota.replace(/^GET \//, '');
+  return PREFIXOS_CLINICOS.some((p) => caminho === p || caminho.startsWith(`${p}/`));
+}
+
+describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
+  let leituras: Map<string, RotaAnalisada>;
+
+  beforeAll(() => {
+    leituras = new Map(analisarRotasDeLeitura().map((r) => [r.rota, r]));
+  }, 120_000);
+
+  it('a análise acha as rotas de leitura (sanidade)', () => {
+    expect(leituras.size).toBeGreaterThanOrEqual(55);
+    expect(leituras.get('GET /pacientes/:id')?.alcancaTrilha).toBe(true);
+  });
+
+  it('toda rota GET está declarada em exatamente uma lista, e nenhuma declaração sobra', () => {
+    const auditadas = new Set(AUDITADAS_LEITURA);
+    expect(auditadas.size, 'rota repetida em AUDITADAS_LEITURA').toBe(AUDITADAS_LEITURA.length);
+    const semDeclaracao = [...leituras.values()]
+      .filter((r) => !auditadas.has(r.rota) && !(r.rota in LEITURA_SEM_DADO_DE_PACIENTE))
+      .map((r) => `${r.rota} (${r.handler}, ${r.arquivo})`);
+    expect(semDeclaracao, 'rota de leitura nova sem declaração: inclua em AUDITADAS_LEITURA ou em LEITURA_SEM_DADO_DE_PACIENTE (lista.ts)').toEqual([]);
+    expect(AUDITADAS_LEITURA.filter((r) => r in LEITURA_SEM_DADO_DE_PACIENTE), 'rota nas duas listas').toEqual([]);
+    const velhas = [...AUDITADAS_LEITURA, ...Object.keys(LEITURA_SEM_DADO_DE_PACIENTE)].filter((r) => !leituras.has(r));
+    expect(velhas, 'rota de leitura declarada que não existe mais: atualize lista.ts').toEqual([]);
+  });
+
+  it('toda rota em AUDITADAS_LEITURA tem caminho de chamada até insertAudit', () => {
+    const semTrilha = AUDITADAS_LEITURA.filter((r) => leituras.get(r)?.alcancaTrilha === false);
+    expect(semTrilha, 'rota de leitura declarada como auditada não chega a insertAudit').toEqual([]);
+  });
+
+  it('exceção de leitura: tem motivo, não está sob caminho clínico e, se passou a gravar, vai para AUDITADAS_LEITURA', () => {
+    for (const [rota, motivo] of Object.entries(LEITURA_SEM_DADO_DE_PACIENTE)) {
+      expect(motivo.trim().length, `${rota}: motivo vazio`).toBeGreaterThan(20);
+      expect(ehCaminhoClinico(rota), `${rota}: rota sob caminho clínico não pode ficar sem trilha`).toBe(false);
+      expect(leituras.get(rota)?.alcancaTrilha, `${rota}: já grava a trilha, mova para AUDITADAS_LEITURA`).toBe(false);
+    }
+  });
+
+  it('a trava de caminho clínico pega as rotas que importam (sanidade da expressão)', () => {
+    for (const r of ['GET /pacientes', 'GET /pacientes/:id/prontuario', 'GET /portal/meus-dados', 'GET /portal/sessao', 'GET /portal/vinculos', 'GET /financeiro/recibos/:id', 'GET /financeiro/caixas', 'GET /clinica/portal/solicitacoes', 'GET /agendamentos', 'GET /importacoes/:id', 'GET /whatsapp/envios', 'GET /suporte/autorizacoes']) {
+      expect(ehCaminhoClinico(r), r).toBe(true);
+    }
+    for (const r of ['GET /health', 'GET /sessao', 'GET /financeiro/retencao-fiscal', 'GET /importacoes/termo', 'GET /whatsapp/modelos', 'GET /portalx']) {
+      expect(ehCaminhoClinico(r), r).toBe(false);
+    }
+  });
+});
+
 describe('#105: sanidade da análise (fixtures fictícios, parecer de 03/11/2026)', () => {
   const fixture = (nome: string) => path.join(__dirname, 'fixtures', nome);
-  let ficticias: Map<string, RotaDeEscrita>;
+  let ficticias: Map<string, RotaAnalisada>;
 
   beforeAll(() => {
     ficticias = new Map(analisarRotasDeEscrita([fixture('rotas-ficticias.ts')]).map((r) => [r.rota, r]));
@@ -114,8 +182,15 @@ describe('#105: sanidade da análise (fixtures fictícios, parecer de 03/11/2026
     expect(ficticias.get('POST /ficticio/banco')?.sqlAlcancado.join(' ')).toMatch(/app_ficticia_grava_trilha\(/);
   });
 
+  it('leitura: vigilância não conta, a trilha da própria leitura conta (R5)', () => {
+    const l = new Map(analisarRotasDeLeitura([fixture('rotas-ficticias.ts')]).map((r) => [r.rota, r]));
+    expect([...l.keys()].sort()).toEqual(['GET /ficticio/leitura-auditada', 'GET /ficticio/leitura-so-vigilancia']);
+    expect(l.get('GET /ficticio/leitura-so-vigilancia')?.alcancaTrilha).toBe(false);
+    expect(l.get('GET /ficticio/leitura-auditada')?.alcancaTrilha).toBe(true);
+  }, 120_000);
+
   it('decorator de rota não tratado ou composto faz a análise falhar com o nome (R3)', () => {
     expect(() => analisarRotasDeEscrita([fixture('decorator-nao-tratado.ts')])).toThrow(/@Head/);
-    expect(() => analisarRotasDeEscrita([fixture('decorator-composto.ts')])).toThrow(/@RotaDeEscrita/);
+    expect(() => analisarRotasDeEscrita([fixture('decorator-composto.ts')])).toThrow(/@RotaComposta/);
   }, 240_000);
 });

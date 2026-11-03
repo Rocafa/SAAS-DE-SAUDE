@@ -184,9 +184,14 @@ export class PortalService {
     return dto;
   }
 
+  /**
+   * Saudação da sessão (nome da clínica e primeiro nome do paciente). Grava a leitura na trilha (R1 do parecer de
+   * 03/11 sobre o #119): quando quem entra é o responsável, o nome do paciente vai para um terceiro.
+   */
   sessaoAtual(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/sessao'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const d = await this.dadosDaSaudacao(tx, ctx);
+      await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_session', metadata: { op: 'session_greeting', link_id: ctx.vinculoId } });
       return vinculoParaPortal(ctx.vinculoId, d.clinica, d.primeiroNome, ctx.agindoComo);
     });
   }
@@ -621,6 +626,9 @@ export class PortalService {
   /**
    * Abre a transação do portal no vínculo da sessão. Sem vínculo escolhido: com um só, escolhe; com
    * vários, 409 `escolher_vinculo`; com nenhum, 409 `sem_vinculo`. Vínculo revogado: 403 `vinculo_inativo`.
+   * A escolha automática grava `select_link` com `auto: true` na mesma transação da ação, e a sessão só guarda o
+   * vínculo depois que ela confirma (R1 do parecer de 03/11 sobre o #119: abrir o contexto do paciente sempre deixa
+   * registro).
    * Leitura respeita a janela de saída da clínica (G4); conta no limite por conta.
    */
   private async noVinculo<T>(
@@ -630,22 +638,36 @@ export class PortalService {
   ): Promise<T> {
     let vinculoId = sessao.vinculoId;
     await this.vigilancia.requisicao(sessao.contaId, vinculoId);
+    let automatico = false;
     if (!vinculoId) {
       const ids = await this.vinculosDaConta(sessao.contaId);
       if (ids.length === 0) throw new ConflitoError('sem_vinculo');
       if (ids.length > 1) throw new ConflitoError('escolher_vinculo');
       vinculoId = ids[0] as string;
-      await this.provider.escolherVinculo(req, vinculoId);
+      automatico = true;
     }
     let aberta = false;
     try {
-      return await comPoliticaDeAssinatura(this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
+      const r = await comPoliticaDeAssinatura(this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
         aberta = true;
         const ctx = await this.contexto(tx, sessao.contaId, vinculoId);
         const t = await loadTenantSubscription(tx, ctx.tenantId);
         if (!canRead(t.status, t.cancelledAt, new Date(), EXIT_WINDOW_DAYS)) throw new ExitWindowClosedError();
+        if (automatico) {
+          await this.auditar(tx, ctx, { action: AuditAction.Login, scope: 'portal_session', metadata: { op: 'select_link', link_id: vinculoId, auto: true } });
+        }
         return fn(tx, ctx);
       }));
+      if (automatico) {
+        // Melhor esforço (R7 do parecer de 03/11 sobre o #119): a ação já foi gravada; falhar aqui daria 500 e o
+        // paciente repetiria (pedido do titular em dobro). Sem guardar, a próxima requisição escolhe e grava de novo.
+        try {
+          await this.provider.escolherVinculo(req, vinculoId);
+        } catch (err) {
+          this.logger.warn(`PORTAL_VINCULO_NAO_GUARDADO_NA_SESSAO (${err instanceof Error ? err.name : typeof err})`);
+        }
+      }
+      return r;
     } catch (e) {
       if (!aberta && codigoPg(e) === PG_INSUFFICIENT_PRIVILEGE) throw new ProibidoError('vinculo_inativo');
       throw e;
