@@ -39,12 +39,15 @@ describe('secoesPorCompartimento', () => {
   });
 });
 
-describe('R1 do parecer do #126: exportação em REPEATABLE READ', () => {
-  it('o serviço e a função avulsa abrem a transação consistente', () => {
-    const servico = readFileSync(join(__dirname, 'exports.module.ts'), 'utf8');
-    expect(servico).toContain('tenantDb.runConsistente(');
-    expect(servico).not.toContain('tenantDb.run(');
-    const avulsa = readFileSync(join(__dirname, 'tenant-export.ts'), 'utf8');
-    expect(avulsa).toContain("exportInTransaction(tx, ctx, options), ctx.userId, 'repeatable read')");
+describe('B1 do parecer do #126: ordem das leituras em READ COMMITTED', () => {
+  it('versões e adendos são lidos antes dos atendimentos (sem versão órfã), na transação padrão', () => {
+    const fonte = readFileSync(join(__dirname, 'tenant-export.ts'), 'utf8');
+    const pos = (k: string) => fonte.indexOf(k);
+    expect(pos('const versionRows')).toBeGreaterThan(0);
+    expect(pos('const versionRows')).toBeLessThan(pos('const encounterRows'));
+    expect(pos('const addendumRows')).toBeLessThan(pos('const encounterRows'));
+    // A trilha (0005) recusa transação fora de READ COMMITTED: o serviço não pode trocar o isolamento.
+    expect(readFileSync(join(__dirname, 'exports.module.ts'), 'utf8')).not.toMatch(/isolation|repeatable/i);
+    expect(fonte).not.toMatch(/repeatable read/i);
   });
 });

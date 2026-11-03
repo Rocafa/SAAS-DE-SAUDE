@@ -769,13 +769,10 @@ export async function exportInTransaction(
       .orderBy(asc(packageProfessionalChanges.changedAt), asc(packageProfessionalChanges.id)),
   );
   const settingsRows = doTenant(await tx.select().from(clinicalSettings).where(eq(clinicalSettings.tenantId, ctx.tenantId)));
-  const encounterRows = doTenant(
-    await tx
-      .select()
-      .from(encounters)
-      .where(eq(encounters.tenantId, ctx.tenantId))
-      .orderBy(asc(encounters.openedAt), asc(encounters.id)),
-  );
+  // ORDEM DAS LEITURAS (B1 do parecer do #126): versões e adendos ANTES dos atendimentos. A trilha exige
+  // READ COMMITTED (0005), então cada comando vê um instante próprio; atendimento nunca é apagado, logo toda
+  // versão ou adendo lido antes tem o atendimento lido depois. Na ordem inversa, um atendimento aberto entre
+  // as leituras deixaria versão "órfã" e a falha fechada de `secoesPorCompartimento` derrubaria a G2.
   const versionRows = doTenant(
     await tx
       .select()
@@ -789,6 +786,13 @@ export async function exportInTransaction(
       .from(clinicalAddenda)
       .where(eq(clinicalAddenda.tenantId, ctx.tenantId))
       .orderBy(asc(clinicalAddenda.createdAt), asc(clinicalAddenda.id)),
+  );
+  const encounterRows = doTenant(
+    await tx
+      .select()
+      .from(encounters)
+      .where(eq(encounters.tenantId, ctx.tenantId))
+      .orderBy(asc(encounters.openedAt), asc(encounters.id)),
   );
   const noteRows = doTenant(
     await tx
@@ -1320,5 +1324,5 @@ export function exportTenantData(
   ctx: RequestContext,
   options: ExportOptions = {},
 ): Promise<TenantExportPackage> {
-  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId, 'repeatable read');
+  return withTenant(db, ctx.tenantId, (tx) => exportInTransaction(tx, ctx, options), ctx.userId);
 }

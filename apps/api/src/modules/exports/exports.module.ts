@@ -21,7 +21,7 @@ export class ExportsService {
   ) {}
 
   exportTenantData(ctx: RequestContext, now: Date = new Date()): Promise<TenantExportPackage> {
-    return this.tenantDb.runConsistente(ctx.tenantId, (tx) =>
+    return this.tenantDb.run(ctx.tenantId, (tx) =>
       exportInTransaction(tx, ctx, { now, exitWindowDays: this.exitWindowDays, cipher: this.cipher }),
       ctx.userId,
     );

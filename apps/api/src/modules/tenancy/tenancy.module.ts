@@ -27,14 +27,6 @@ export class TenantDatabase implements OnApplicationShutdown {
   }
 
   /**
-   * Como `run`, mas em REPEATABLE READ: todas as leituras veem o mesmo instante. Para quem lê muitas tabelas e
-   * cruza o resultado (exportação total): uma escrita no meio não deixa versão "órfã" (R1 do parecer do #126).
-   */
-  runConsistente<T>(tenantId: TenantId, fn: (tx: TenantTx) => Promise<T>, userId?: string): Promise<T> {
-    return withTenant(this.handle.db, tenantId, fn, userId, 'repeatable read');
-  }
-
-  /**
    * Transação do PORTAL DO PACIENTE (migração 0027): `app_set_portal_session(conta, vínculo)` confere no
    * banco o vínculo ATIVO da conta e trava clínica, paciente e conta na transação (o slot do usuário fica
    * com o sentinela de sistema). Vínculo revogado ou de outra conta: 42501 (quem chama traduz). Com as

@@ -180,8 +180,6 @@ export async function withTenant<T>(
   tenantId: TenantId,
   fn: (tx: TenantTx) => Promise<T>,
   userId?: string,
-  /** `repeatable read`: todas as leituras veem o mesmo instante (exportação total, R1 do parecer do #126). */
-  isolamento?: 'repeatable read',
 ): Promise<T> {
   if (!isTenantId(tenantId)) {
     // Falha fechada: nunca abre transação com contexto inválido.
@@ -195,5 +193,5 @@ export async function withTenant<T>(
     if (userId !== undefined) await tx.execute(sql`select app_set_user(${userId}::uuid)`);
     else await tx.execute(sql`select app_set_system_user()`);
     return fn(tx);
-  }, isolamento ? { isolationLevel: isolamento } : undefined);
+  });
 }
