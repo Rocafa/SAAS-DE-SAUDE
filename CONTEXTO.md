@@ -1,13 +1,13 @@
 # Contexto do projeto — leia primeiro
 
-> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 30, 29/10/2026; a §0 resume as rodadas 28 a 30): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
+> 📘 **Quer entender tudo de uma vez?** Leia o [Relatório Geral](docs/relatorios/RELATORIO-GERAL.md) (atualizado até a rodada 31, 03/11/2026; a §0 resume as rodadas 30 e 31): estado de cada área, migrações, o que cada check do CI protege, decisões pendentes, riscos, ordem de merge quando o CI voltar, o que falta para o piloto e glossário.
 >
 > 🚀 **O que falta para produção (rodada 7, 10/10/2026):** [checklist P0/P1/P2 + pesquisa regulatória atualizada](docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md).
 >
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 29/10/2026 (rodadas 28–30: repositório público e CI de volta, **todo o backend na `main`**, proteção da `main`, alertas do Dependabot e CodeQL publicados, índice cego do CPF, e o fechamento das pendências de código dos pareceres sobre responsáveis). Último relatório: [rodada 30](docs/relatorios/2026-10-29-rodada-30.md). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 03/11/2026 (rodadas 30–31: autorização do suporte pela clínica, **nenhuma rota entra sem trilha de auditoria** (escrita, leitura e fora de controller, conferido no CI), falha de registro no portal corrigida, postgres.js v4 testado, voto de @Rocafa na D4). Último relatório: [rodada 31](docs/relatorios/2026-11-03-rodada-31.md). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,
