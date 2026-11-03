@@ -35,5 +35,5 @@ export interface AuthProvider {
 export const AUTH_PROVIDER = Symbol('AUTH_PROVIDER');
 
 export function paraRequestContext(auth: AuthContext): RequestContext {
-  return { tenantId: auth.tenantId, userId: auth.userId, roles: auth.perfis };
+  return { tenantId: auth.tenantId, userId: auth.userId, roles: auth.perfis, mfaEm: auth.mfaEm };
 }

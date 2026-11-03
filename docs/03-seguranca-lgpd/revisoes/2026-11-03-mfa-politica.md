@@ -103,3 +103,34 @@ Dois problemas impedem o merge: a lista de perfis contraria um requisito MUST, e
 **R9 conferida (03/11/2026, PR #124, commit `afc8eaa`): DE ACORDO.** Na janela de 60 s, cada usuário grava 1 linha por rota e motivo, o que dá no máximo cerca de 48 linhas/min por usuário. Acima de 20 recusas, a resposta vira 429 e sai 1 `anomaly_alert` por janela. A chave do contador vai em sha256 e é prefixada pela clínica. Se o store cair, a linha é gravada e o 429 não acontece: a trilha continua garantida, só o limite fica suspenso. Notas que não bloqueiam: (a) as repetições dentro da janela não deixam os `target_id` seguintes nem o contador `repeticoes` na trilha; o alerta cobre o volume, mas registrar a quantidade de alvos distintos fica para R5. (b) O teste R9 pode falhar de vez em quando: o `MemoryRateLimitStore` usa uma janela fixa compartilhada entre chaves, e o laço pode atravessar a virada da janela. Para estabilizar, injetar o relógio ou um store próprio no teste.
 
 _Nota do Maestro sobre o teste da R9: a janela do contador em memória começa na primeira recusa do arquivo (teste B2), e o R9 roda segundos depois. O vitest recarrega o módulo por arquivo, então o contador não é compartilhado. Cruzar a virada exigiria 60 s entre os dois testes. Aceito como está._
+
+### R3 (03/11/2026)
+
+**Feita em `eng/mfa-psicologia`.**
+
+- O `RequestContext` ganhou `mfaEm`, vindo da sessão. Nos jobs fica ausente e conta como sem MFA.
+- `exigeMfaRecente(registro)` vale para o compartimento de psicologia.
+- Em `obter`, `salvar`, `finalizar`, `adendo` e `versoes` de atendimento de psicologia, sem MFA recente a resposta é `403 mfa_recente_obrigatorio`. A recusa é auditada por `comNegacaoAuditada`, que passou a aceitar os motivos `mfa_*`.
+- No histórico, o atendimento de psicologia vem oculto (`motivoOculto: mfa_recente_obrigatorio`), sem 403, e o resto aparece.
+- Teste RLS em `test/mfa-psicologia.rls.test.ts`.
+- A área sensível do profissional (`sensitive_area`) fora da psicologia, se o Guardião quiser incluir, fica para uma ressalva nova.
+
+**R3 conferida (03/11/2026, PR #125, commit `bdd2dbe`): VETADO, com uma correção de ordem.**
+- **De acordo:** `mfaEm` chega ao `RequestContext`; sem sessão (jobs), conta como sem MFA, o que falha fechado. A checagem vale em ver, salvar, finalizar, adendo e versões. No histórico, o registro de psicologia vem oculto (`motivoOculto: mfa_recente_obrigatorio`) e o resto aparece. Os motivos `mfa_*` são auditados como `clinical_access_denied`.
+- **B3 (bloqueia): a checagem de MFA roda cedo demais e revela o compartimento.** Em `obter`, `salvar`, `finalizar`, `adendo` e `versoes`, `conferirMfaDoRegistro` roda **antes** de `exigirConteudoClinico`. Um profissional **sem vínculo de cuidado** e com MFA antigo recebe `mfa_recente_obrigatorio` num atendimento de psicologia e `sem_vinculo_de_cuidado` num atendimento geral. Ou seja, descobre pela resposta que aquele paciente faz psicoterapia, um dado C4 que hoje ele não consegue obter. A trilha também grava o motivo errado. **Correção:** chamar `conferirMfaDoRegistro` depois de `exigirConteudoClinico` e, onde houver, depois de `podeVerConteudo`/`sigilo_psicologia` (adendo e versões). Assim, só quem já poderia ver o conteúdo é perguntado pelo MFA. Teste RLS: um profissional sem vínculo, com MFA antigo, recebe `sem_vinculo_de_cuidado` tanto em psicologia quanto em atendimento geral.
+- **`POST /atendimentos` (abrir psicologia):** não precisa exigir MFA recente. Abrir não lê conteúdo, o DTO devolvido já sai oculto sem MFA recente e o primeiro `salvar` vai exigir. De acordo como está.
+- **Área sensível fora da psicologia:** hoje o modelo só tem os compartimentos `geral` e `psicologia` (`RECORD_COMPARTMENTS`), então não há outra área a marcar agora. **R11:** quando surgir compartimento sensível novo (por exemplo psiquiatria, saúde sexual/IST, sigilo de adolescente no registro), ele entra em `exigeMfaRecente` no mesmo PR que o criar. Um teste deve falhar se `RECORD_COMPARTMENTS` ganhar valor sem decisão explícita de MFA. Prazo: junto com cada compartimento novo.
+- **R12:** a exportação total (G2) e qualquer job que monte o prontuário rodam sem `mfaEm` e, por isso, **ocultariam a psicologia sem avisar**. O pacote da G2 precisa de um caminho próprio, autorizado pelo MFA de 5 min da rota (com aprovação do RT), que não passe por `montar`/`historico`. Ou, no mínimo, precisa de um teste de que o pacote sai completo e marcado no manifesto. Prazo: antes da rota da G2.
+
+#### Nota do Maestro sobre a R3 conferida (03/11/2026)
+
+- **B3 (feita):** `conferirMfaDoRegistro` passou para depois de `exigirConteudoClinico` e das travas de autor e de sigilo, nas 5 operações. Também só confere quem pode ver o conteúdo (`podeVerConteudo`). Teste RLS: o profissional sem autoria nem vínculo recebe a mesma resposta com MFA antigo e com MFA recente, e nunca um código `mfa_*`.
+- **R11 (feita):** `MFA_RECENTE_POR_COMPARTIMENTO` é tipado pelo enum, então compartimento novo sem decisão não compila. O teste confere a lista contra `RECORD_COMPARTMENTS`.
+- **R12:** a exportação lê as tabelas direto. O teste estático (`mfa-compartimentos.test.ts`) impede `tenant-export.ts` de depender da regra de tela. A rota HTTP da G2 com 5 min está na fila.
+- **`POST /atendimentos`:** fica sem MFA recente, como o parecer aceitou.
+
+**B3 re-conferido (03/11/2026, commit `ceaccea`): APROVADO, veto do #125 levantado.**
+- **B3 resolvido:** nas 5 operações, o MFA agora é conferido depois do vínculo e das travas de autor e sigilo. Ele só vale para quem `podeVerConteudo`, então o código `mfa_*` não revela mais o compartimento a quem não pode ver.
+- **R11 resolvida:** `MFA_RECENTE_POR_COMPARTIMENTO` é tipado pelo enum e tem teste contra `RECORD_COMPARTMENTS`.
+- **R12 parcial:** o teste estático garante que `tenant-export.ts` não usa a regra de tela. O teste de que o pacote sai completo e marcado no manifesto continua devido junto com a rota da G2 (5 min).
+- **Verificação:** os testes de records e auth passaram (26/26) e o `tsc` está limpo. Os testes RLS dependem do CI (não há Postgres local).
