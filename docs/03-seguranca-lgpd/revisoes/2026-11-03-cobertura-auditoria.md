@@ -91,3 +91,7 @@ Quando o Better Auth (D4) for montado (`app.use`/`toNodeHandler` ou equivalente)
   - um `DROP FUNCTION` depois da última definição faz a conferência falhar.
 - **R5 e R6:** na [fila](../../00-governanca/fila.md). A R6 é condição para a D4.
 - **R7 (feita):** §4d de `auditoria-encadeada.md`.
+
+### R6 (b), adiantada (03/11/2026)
+
+A análise ganhou `handlersForaDeController`. Ela acha `use`, `apply` e rotas com caminho em texto registradas fora de controller, identificando o método pelo símbolo do Nest ou do Express. `app.get(Classe)` do contêiner não conta. A lista fechada `HANDLERS_FORA_DE_CONTROLLER` tem hoje 4 middlewares de `http-security.ts`, cada um com o motivo. Handler novo ou declaração que sobra falha o CI, e um fixture prova a detecção. A parte (a), a auditoria dos eventos de login pelos hooks do Better Auth, continua como condição do PR da D4.

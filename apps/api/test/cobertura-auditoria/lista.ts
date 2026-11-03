@@ -220,3 +220,17 @@ export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
   'GET /whatsapp/webhook':
     'desafio de verificação do provedor (hub.challenge); sem sessão e sem dado',
 };
+
+// ------------------------------------------------------------------ fora de controller (R6 do parecer do #117)
+
+/**
+ * Handlers HTTP registrados fora de controller do Nest (`"<arquivo> <método>(<1º argumento>)"`), com o motivo. Hoje só
+ * middlewares de segurança, que não leem nem gravam dado de paciente. O handler de login da D4 (Better Auth) entra
+ * aqui com parecer do Guardião e com a auditoria de login, logout, falha e troca de credencial (condição da D4).
+ */
+export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
+  'src/security/http-security.ts use(helmet)': 'cabeçalhos de segurança (CSP, HSTS, frame); não toca dado',
+  'src/security/http-security.ts use(noStore)': 'Cache-Control: no-store em toda resposta; não toca dado',
+  'src/security/http-security.ts use(rateLimiter)': 'limite de requisições por chave com hash (sem IP em claro); não toca dado de paciente',
+  'src/security/http-security.ts use(safeErrorHandler)': 'erro sem detalhe interno nem dado na resposta; não toca dado',
+};
