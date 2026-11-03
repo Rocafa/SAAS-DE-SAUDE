@@ -9,7 +9,36 @@
 
 ---
 
-## 0. Atualização de 29/10/2026 (rodadas 28 a 30)
+## 0. Atualização de 03/11/2026 (rodadas 30 e 31)
+
+> **Leia isto primeiro.** Vale por cima do que as seções abaixo dizem. A §0 anterior, de 29/10, vem logo depois e continua valendo no que não mudou.
+
+**Auditoria: nenhuma rota entra sem trilha.** A trilha é gravada dentro da mesma operação de quem age. Um teste no CI agora garante isso para toda rota:
+- **Escrita** (#117, fecha a issue #105, S6): as 99 rotas que gravam dado estão declaradas. 97 registram pelo código, e as 2 exceções têm prova no teste. O teste segue o código de cada rota até a gravação da trilha. Avisos de anomalia e negação de acesso não contam como trilha.
+- **Leitura** (#119 e #120): as 63 rotas de leitura estão declaradas. As 50 que mostram dado de paciente gravam a leitura, **conferido contra banco real**. As 13 restantes não mostram dado de paciente, cada uma com o motivo. Rotas de paciente, prontuário, financeiro e portal nunca podem ser exceção.
+- **Fora de controller** (#121): handler HTTP montado fora da estrutura normal só entra numa lista fechada. O login da D4 vai ter de ser declarado ali, com parecer.
+- **Portal do paciente:** o veto do Guardião no #119 achou uma falha real. Uma conta com um só vínculo abria o contexto do paciente sem registro. Corrigido: a escolha automática e a saudação agora gravam na trilha.
+
+**Acesso do suporte autorizado pela clínica** (#115, S9). O dono da clínica autoriza o acesso do suporte a um chamado por 1 a 72 h e pode revogar. O banco recusa qualquer registro de acesso do suporte sem autorização válida. O acesso de emergência fica desligado até a D4.
+
+**postgres.js v4** (#116, rascunho). CI 17/17 com a versão nova, e a reprodução do bug virou teste automático. Entra a partir de 12/11.
+
+**Decisões e PRs do @Lopesloro:**
+- **D4:** @Rocafa votou no Better Auth (03/11). Falta a confirmação do @Lopesloro no #36.
+- As duas correções obrigatórias do #103 estão no #118, um PR para o branch dele, com CI verde.
+- O #92, o #91 e o #104 estão aprovados. O merge é dele.
+
+**O que falta para o piloto, hoje:**
+1. **D4 confirmada**, seguida do login real (#107) e do MFA (#106). O PR do login precisa auditar login, logout e falhas.
+2. Conta AWS para as provas K-c3/K-c5 no staging e o R10 do importador.
+3. Front: merge do #118, do #103, do #92, do #91 e do #104, e a decisão do `fake.ts` (#86).
+4. Jurídico: D8 (advogado, com a pergunta 1.15), D7 e D13.
+
+Fontes: [rodada 30](2026-10-29-rodada-30.md), [rodada 31](2026-11-03-rodada-31.md).
+
+---
+
+## 0-a. Atualização de 29/10/2026 (rodadas 28 a 30)
 
 > **Leia isto primeiro.** As seções 1 a 11 descrevem 27/10, quando o GitHub Actions estava parado e a `main` ainda tinha o código de 12/10. **Isso mudou:** onde elas dizem "CI parado", "pronto em PR" ou "main em 0006", vale o que está aqui.
 

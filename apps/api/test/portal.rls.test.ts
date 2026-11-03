@@ -20,7 +20,7 @@ import {
 } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   adolescentConfidentialityRequests,
   appointments,
@@ -1435,6 +1435,46 @@ describe('auditoria e limite por conta', () => {
     }
     expect(linhas.map((l) => l.scope)).toEqual(expect.arrayContaining(['portal_links', 'appointments', 'patients']));
     expect(JSON.stringify(linhas)).not.toMatch(/Bruno|11900001111/);
+  });
+
+  it('R1 do parecer do #119: a escolha automática do vínculo e a saudação da sessão deixam registro', async () => {
+    // Conta com um só vínculo e sessão sem vínculo escolhido: o servidor escolhe sozinho.
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const daConta = () =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId))).orderBy(sql`seq`));
+    const antes = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    const novas = (await daConta()).slice(antes);
+    expect(novas.map((l) => [l.action, l.scope, (l.metadata as { op?: string }).op])).toEqual([
+      ['login', 'portal_session', 'select_link'],
+      ['read', 'portal_session', 'session_greeting'],
+    ]);
+    expect(novas[0]?.metadata).toMatchObject({ auto: true, patient_id: pacA1, via: 'portal' });
+    expect(novas[1]?.metadata).toMatchObject({ patient_id: pacA1, via: 'portal' });
+    // A sessão guardou o vínculo: a próxima leitura não repete a escolha.
+    const meio = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    expect((await daConta()).slice(meio).map((l) => (l.metadata as { op?: string }).op)).toEqual(['session_greeting']);
+  });
+
+  it('R7 do parecer do #119: falha ao guardar o vínculo na sessão não vira 500 depois da ação gravada', async () => {
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const espiao = vi.spyOn(api.portal, 'escolherVinculo').mockRejectedValueOnce(new Error('sessao_indisponivel'));
+    try {
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(1);
+      // Não guardou: a próxima requisição escolhe de novo (e grava a escolha de novo).
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(2);
+    } finally {
+      espiao.mockRestore();
+    }
+    const escolhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId), eq(auditLog.action, 'login'))),
+    );
+    expect(escolhas.filter((l) => (l.metadata as { auto?: boolean }).auto === true)).toHaveLength(2);
   });
 
   it('acima do limite por conta: 429 e um anomaly_alert na trilha da clínica do vínculo', async () => {

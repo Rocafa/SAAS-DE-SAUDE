@@ -9,7 +9,7 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 | D1 | **Nicho de entrada** — recomendação atual: fisio/TO + psico autônomo; TEA na onda 2 (ver relatorio-executivo-mercado.md) | (a) Psico + nutri + fisio + multiprofissionais — pesquisa geral; (b) TEA/ABA + fisio/TO — pesquisa de nichos. Ponto em comum: núcleo de sessões recorrentes, guias de convênio e repasse | `docs/01-mercado/mercado-geral-e-concorrentes.md` §5, `docs/01-mercado/nichos/` — **para decidir: `docs/01-mercado/kit-entrevistas/`** |
 | D2 | **Preço** | Preço único R$ 89–129 com WhatsApp, IA e Receita Saúde inclusos, sem fidelidade; TEA cobra por paciente | `docs/01-mercado/`, `docs/02-produto/PRD.md` |
 | D3 | **Provedor de LLM para dado sensível** | Gemini (Vertex, São Paulo) ou Maritaca/Sabiá no Brasil; Claude/GPT só pseudonimizado + cláusulas-padrão ANPD; psicologia nunca sai do país | `docs/05-ia-llm/README.md`, `arquitetura-ia.md` |
-| D4 | **Autenticação** — **a mais urgente** (trava login, RBAC, MFA, rotas de negócio e exportação real) | Zitadel v4 (OIDC completo, auto-hospedado) vs Better Auth (biblioteca no próprio app); medidos em 14 critérios na PoC #36 | `memos/D04-autenticacao.md`, **recomendação: `memos/D04-recomendacao.md` (Better Auth + 6 regras)**, PR #36 |
+| D4 | **Autenticação** — **a mais urgente** — ⏳ **voto de @Rocafa em 03/11/2026: Better Auth com as 6 regras do memo; falta a confirmação de @Lopesloro no #36** (trava login, RBAC, MFA, rotas de negócio e exportação real) | Zitadel v4 (OIDC completo, auto-hospedado) vs Better Auth (biblioteca no próprio app); medidos em 14 critérios na PoC #36 | `memos/D04-autenticacao.md`, **recomendação: `memos/D04-recomendacao.md` (Better Auth + 6 regras)**, PR #36 |
 | D5 | **Provedor Pix** | Asaas, Efí, Pagar.me, Stripe | `docs/04-arquitetura/integracoes.md` |
 | D6 | **Provedor de vídeo** | LiveKit (recomendado), Daily, Jitsi | `docs/04-arquitetura/integracoes.md` |
 | D7 | **Retenção da trilha de auditoria** | Proposta: 20 anos (auditoria de prontuário), 5 anos (administrativa), 12 meses (logs de acesso) | `docs/03-seguranca-lgpd/retencao-e-descarte.md`, `matriz-retencao.md` |
@@ -26,5 +26,6 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 
 | Data | Decisão | Por quem | Justificativa |
 |---|---|---|---|
+| 03/11/2026 | **#105 (S6):** aval ao desenho de @Lopesloro — teste que exige declaração (toda rota de escrita está na lista "auditada" ou na lista "sem auditoria, com motivo"; rota nova fora das duas falha o CI). Interceptor global descartado: a trilha tem de ficar na transação de quem age | Sócio @Rocafa | comentário de @Lopesloro no #105 |
 | 06/10/2026 | Hierarquia de agentes: Maestro + Guardião LGPD com veto + 4 frentes | Sócios | `hierarquia.md` |
 | 08/10/2026 | Não treinar LLM do zero; API + RAG na Fase 1, fine-tune só com dados anonimizados e opt-in | Recomendação IA + Guardião (aguarda ratificação N0) | `docs/05-ia-llm/README.md` |
