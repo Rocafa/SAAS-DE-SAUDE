@@ -45,6 +45,16 @@ export function recusaDeMfa(auth: AuthContext, janelaMs: number | null, agora: D
   return null;
 }
 
+/**
+ * MFA recente pelo REGISTRO (R3 do parecer do #123): o motivo da recusa, ou null. Contexto sem sessão (`mfaEm`
+ * ausente) conta como sem MFA: falha fechada.
+ */
+export function recusaDeMfaRecente(mfaEm: Date | null | undefined, janelaMs: number = MFA_RECENTE_MS, agora: Date = new Date()): RecusaDeMfa | null {
+  if (!mfaEm) return 'mfa_obrigatorio';
+  const idade = agora.getTime() - mfaEm.getTime();
+  return idade < 0 || idade > janelaMs ? 'mfa_recente_obrigatorio' : null;
+}
+
 /** Lança 403 com o código quando a sessão não cumpre a política. */
 export function conferirMfa(auth: AuthContext, janelaMs: number | null, agora: Date = new Date()): void {
   const recusa = recusaDeMfa(auth, janelaMs, agora);

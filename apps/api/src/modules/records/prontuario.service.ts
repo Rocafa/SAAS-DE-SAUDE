@@ -14,6 +14,7 @@ import {
   professionals,
   type AiConsentState,
   type PsychCompartmentMode,
+  type RecordCompartment,
   type RecordTemplate,
 } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
@@ -25,8 +26,9 @@ import { TenantDatabase } from '../tenancy/tenancy.module';
 import { comNegacaoAuditada } from './acesso-clinico';
 import { avisarPsicologosDoSigilo } from './avisos';
 import { faltasParaFinalizar, MODELOS, modeloPelaEspecialidade, validarConteudo, type ConteudoRegistro } from './modelos';
-import { hashDaFinalizacao, MODO_PSICOLOGIA_PADRAO, podeVerConteudo } from './prontuario-regras';
+import { hashDaFinalizacao, MODO_PSICOLOGIA_PADRAO, podeVerConteudo, exigeMfaRecente } from './prontuario-regras';
 import type { AberturaDeAtendimento, Paginacao, SalvamentoDeRegistro } from './prontuario.validation';
+import { recusaDeMfaRecente } from '../auth/mfa';
 import { CAMPO_ADENDO, CAMPO_VERSAO, cifrarCampoClinico, decifrarCampoClinico } from './record-fields';
 
 export interface AdendoDto {
@@ -63,7 +65,8 @@ export interface AtendimentoDto {
   readonly finalizadoPor: string | null;
   readonly hashFinalizacao: string | null;
   readonly conteudoOculto: boolean;
-  readonly motivoOculto?: 'sigilo_psicologia';
+  /** `mfa_recente_obrigatorio`: psicologia sem MFA recente (R3 do #123); pedir o código e ler de novo. */
+  readonly motivoOculto?: 'sigilo_psicologia' | 'mfa_recente_obrigatorio';
 }
 
 /** Pedido de troca do sigilo da psicologia (B1 do #63). */
@@ -206,6 +209,7 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'ler_atendimento', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
+        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         const dto = await this.montar(tx, ctx, e);
         await recordAudit(tx, ctx, {
@@ -223,6 +227,7 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'salvar_registro', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
+        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (e.authorUserId !== ctx.userId) throw new ProibidoError('somente_o_autor');
         if (e.status !== 'open') throw new ConflitoError('registro_finalizado');
@@ -261,6 +266,7 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'finalizar', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
+        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (e.authorUserId !== ctx.userId) throw new ProibidoError('somente_o_autor');
         if (e.status !== 'open') throw new ConflitoError('registro_finalizado');
@@ -302,6 +308,7 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'adendo', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
+        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
         if (e.status !== 'signed') throw new ConflitoError('registro_nao_finalizado');
@@ -323,6 +330,7 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'versoes', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
+        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
         const linhas = await tx
@@ -368,7 +376,8 @@ export class ProntuarioService {
           .limit(pag.limite + 1)
           .offset((pag.pagina - 1) * pag.limite);
         const pagina = linhas.slice(0, pag.limite);
-        const visiveis = pagina.filter((e) => podeVerConteudo(e, ctx.userId));
+        // R3 do #123: sem MFA recente, o conteúdo da psicologia vem oculto no histórico (o resto continua visível).
+        const visiveis = pagina.filter((e) => podeVerConteudo(e, ctx.userId) && (!exigeMfaRecente(e) || recusaDeMfaRecente(ctx.mfaEm) === null));
         const ids = visiveis.map((e) => e.id);
         const versoes = ids.length
           ? await tx
@@ -546,6 +555,9 @@ export class ProntuarioService {
     if (!visivel) {
       return { ...base, versaoModelo: null, conteudo: null, adendos: [], conteudoOculto: true, motivoOculto: 'sigilo_psicologia' };
     }
+    if (exigeMfaRecente(e) && recusaDeMfaRecente(ctx.mfaEm) !== null) {
+      return { ...base, versaoModelo: null, conteudo: null, adendos: [], conteudoOculto: true, motivoOculto: 'mfa_recente_obrigatorio' };
+    }
     const lista: AdendoDto[] = [];
     for (const a of adendos) {
       lista.push({
@@ -563,4 +575,14 @@ export class ProntuarioService {
       conteudoOculto: false,
     };
   }
+}
+
+/**
+ * R3 do parecer do #123: ver ou mexer num atendimento da psicologia exige MFA recente. A recusa é 403 com código e
+ * fica na trilha (comNegacaoAuditada audita os motivos `mfa_*`).
+ */
+function conferirMfaDoRegistro(ctx: RequestContext, e: { readonly compartment: RecordCompartment }): void {
+  if (!exigeMfaRecente(e)) return;
+  const recusa = recusaDeMfaRecente(ctx.mfaEm);
+  if (recusa) throw new ProibidoError(recusa);
 }

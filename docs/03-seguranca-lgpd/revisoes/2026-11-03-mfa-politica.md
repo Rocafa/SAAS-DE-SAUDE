@@ -103,3 +103,14 @@ Dois problemas impedem o merge: a lista de perfis contraria um requisito MUST, e
 **R9 conferida (03/11/2026, PR #124, commit `afc8eaa`): DE ACORDO.** Na janela de 60 s, cada usuário grava 1 linha por rota e motivo, o que dá no máximo cerca de 48 linhas/min por usuário. Acima de 20 recusas, a resposta vira 429 e sai 1 `anomaly_alert` por janela. A chave do contador vai em sha256 e é prefixada pela clínica. Se o store cair, a linha é gravada e o 429 não acontece: a trilha continua garantida, só o limite fica suspenso. Notas que não bloqueiam: (a) as repetições dentro da janela não deixam os `target_id` seguintes nem o contador `repeticoes` na trilha; o alerta cobre o volume, mas registrar a quantidade de alvos distintos fica para R5. (b) O teste R9 pode falhar de vez em quando: o `MemoryRateLimitStore` usa uma janela fixa compartilhada entre chaves, e o laço pode atravessar a virada da janela. Para estabilizar, injetar o relógio ou um store próprio no teste.
 
 _Nota do Maestro sobre o teste da R9: a janela do contador em memória começa na primeira recusa do arquivo (teste B2), e o R9 roda segundos depois. O vitest recarrega o módulo por arquivo, então o contador não é compartilhado. Cruzar a virada exigiria 60 s entre os dois testes. Aceito como está._
+
+### R3 (03/11/2026)
+
+**Feita em `eng/mfa-psicologia`.**
+
+- O `RequestContext` ganhou `mfaEm`, vindo da sessão. Nos jobs fica ausente e conta como sem MFA.
+- `exigeMfaRecente(registro)` vale para o compartimento de psicologia.
+- Em `obter`, `salvar`, `finalizar`, `adendo` e `versoes` de atendimento de psicologia, sem MFA recente a resposta é `403 mfa_recente_obrigatorio`. A recusa é auditada por `comNegacaoAuditada`, que passou a aceitar os motivos `mfa_*`.
+- No histórico, o atendimento de psicologia vem oculto (`motivoOculto: mfa_recente_obrigatorio`), sem 403, e o resto aparece.
+- Teste RLS em `test/mfa-psicologia.rls.test.ts`.
+- A área sensível do profissional (`sensitive_area`) fora da psicologia, se o Guardião quiser incluir, fica para uma ressalva nova.

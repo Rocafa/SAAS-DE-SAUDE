@@ -25,6 +25,14 @@ export function podeVerConteudo(
 }
 
 /**
+ * Registro que exige MFA recente para ver ou mexer no conteúdo (R3 do parecer do #123): o compartimento de
+ * psicologia. Nos demais, o MFA da sessão basta (o profissional não repete o código a cada 15 minutos).
+ */
+export function exigeMfaRecente(registro: { readonly compartment: RecordCompartment }): boolean {
+  return registro.compartment === 'psicologia';
+}
+
+/**
  * SHA-256 do registro canônico da finalização: amarra atendimento, versão, modelo e o conteúdo
  * CIFRADO daquela versão (nunca o texto em claro, que não deve virar hash consultável no banco) ao
  * instante e a quem finalizou. Recalculável: trocar a versão ou o conteúdo depois deixa de bater.
