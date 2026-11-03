@@ -658,7 +658,15 @@ export class PortalService {
         }
         return fn(tx, ctx);
       }));
-      if (automatico) await this.provider.escolherVinculo(req, vinculoId);
+      if (automatico) {
+        // Melhor esforço (R7 do parecer de 03/11 sobre o #119): a ação já foi gravada; falhar aqui daria 500 e o
+        // paciente repetiria (pedido do titular em dobro). Sem guardar, a próxima requisição escolhe e grava de novo.
+        try {
+          await this.provider.escolherVinculo(req, vinculoId);
+        } catch (err) {
+          this.logger.warn(`PORTAL_VINCULO_NAO_GUARDADO_NA_SESSAO (${err instanceof Error ? err.name : typeof err})`);
+        }
+      }
       return r;
     } catch (e) {
       if (!aberta && codigoPg(e) === PG_INSUFFICIENT_PRIVILEGE) throw new ProibidoError('vinculo_inativo');

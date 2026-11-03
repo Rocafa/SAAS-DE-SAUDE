@@ -117,3 +117,46 @@ R1 a R3 neste PR. Volto a revisar o diff das correções; R4 vai para a fila, R5
 - **R4:** está na fila.
 - **R5 (feita):** a doc e a fila passam a 50 rotas auditadas e 13 exceções.
 - **R6 (feita, em parte):** o tipo foi renomeado para `RotaAnalisada`. A passada única ficou para depois, porque o custo é baixo (cerca de 6 s).
+
+## Re-revisão (03/11/2026, commit `88f33e9`)
+
+**Veredito: VETO LEVANTADO — APROVADO COM RESSALVAS** (R4 segue na fila; R7 abaixo não bloqueia).
+**Condição:** o CI verde no PR, incluindo `portal.rls.test.ts`.
+
+Testes: `npx vitest run test/cobertura-auditoria` 16/16 verdes e `tsc --noEmit` limpo. O teste RLS novo não rodou
+aqui, porque não há Postgres local.
+
+- **R1 — resolvida.** Na escolha automática, `noVinculo` grava `login/portal_session/select_link` com `auto: true`
+  dentro da transação da ação, depois de `contexto()` e da conferência da janela de saída. Se a ação falhar, a linha
+  volta junto com o resto (rollback), e de fato nada foi lido ou feito. `sessaoAtual` grava
+  `read/portal_session/session_greeting`. O teste RLS confere as duas linhas na primeira chamada, com `patient_id` e
+  `via: 'portal'`, e só a leitura na segunda.
+- **Efeitos colaterais da nova ordem de `provider.escolherVinculo`:**
+  - *Ação que falha:* a sessão fica sem vínculo, e a próxima requisição escolhe de novo e grava de novo. Está
+    correto e é mais exato que antes, quando a sessão ficava presa a um vínculo cuja abertura falhou.
+  - *Requisições concorrentes sem vínculo:* cada uma grava o seu `select_link` com `auto: true`. As linhas repetidas
+    são verdadeiras: cada requisição abriu de fato o contexto do paciente. A trilha não perde integridade e não
+    acrescenta dado pessoal. Aceito.
+  - *Falha do provider DEPOIS do commit:* ver R7.
+- **R2 — resolvida.** `ehCaminhoClinico` funciona por prefixo, então rota nova sob `financeiro/`, `portal/` etc.
+  nasce protegida. `FORA_DO_CAMINHO_CLINICO` compara a rota exata e só tem rotas sem dado de paciente, que conferi.
+  O caso `GET /portalx` prova que o prefixo não casa por substring.
+- **R3 — resolvida.** Os motivos estão exatos e a lista foi renomeada. Sugestão opcional: acrescentar ao motivo de
+  `GET /avisos` que, se um tipo de aviso passar a levar nome, contato ou conteúdo clínico, a rota vai para
+  `AUDITADAS_LEITURA`.
+- **R5 — resolvida. R6 — aceita**: o tipo foi renomeado; a passada única fica para depois.
+
+**R7 (não bloqueante; fazer antes do provider real da D4) — `provider.escolherVinculo` depois do commit não pode
+transformar sucesso em erro.** `noVinculo` também abre as escritas do portal: `agirNaConsulta`, o registro de
+pedido do titular e `responderConsentimento`. Se o provider falhar depois do commit, o cliente recebe 500 com a
+escrita já gravada. Ao repetir, pode duplicar um pedido do titular. Com o provider fictício atual isso não acontece,
+porque ele só rejeita sessão inválida e o guard já barrou. Com o Better Auth, gravar a sessão pode falhar. Correção:
+tratar essa chamada como melhor esforço (`try/catch` + `logger.warn` sem dado pessoal, sem relançar), porque a
+próxima requisição escolhe o vínculo de novo e grava de novo. Incluir um teste unitário com provider que rejeita.
+
+### Nota do Maestro sobre a R7 (03/11/2026)
+
+**Feita.** Depois que a transação confirma, `provider.escolherVinculo` vira melhor esforço. Se falhar, o servidor registra o aviso `PORTAL_VINCULO_NAO_GUARDADO_NA_SESSAO`, só com o nome do erro, e não relança. O teste RLS novo usa um provider que rejeita uma vez e confere:
+- a resposta é 200, não 500;
+- a sessão não guardou o vínculo, então a próxima requisição escolhe de novo;
+- a trilha tem as duas escolhas automáticas.

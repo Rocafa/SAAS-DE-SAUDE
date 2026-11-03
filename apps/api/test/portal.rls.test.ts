@@ -20,7 +20,7 @@ import {
 } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   adolescentConfidentialityRequests,
   appointments,
@@ -1456,6 +1456,25 @@ describe('auditoria e limite por conta', () => {
     const meio = (await daConta()).length;
     await api.http().get('/portal/sessao').set(cab(p)).expect(200);
     expect((await daConta()).slice(meio).map((l) => (l.metadata as { op?: string }).op)).toEqual(['session_greeting']);
+  });
+
+  it('R7 do parecer do #119: falha ao guardar o vínculo na sessão não vira 500 depois da ação gravada', async () => {
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const espiao = vi.spyOn(api.portal, 'escolherVinculo').mockRejectedValueOnce(new Error('sessao_indisponivel'));
+    try {
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(1);
+      // Não guardou: a próxima requisição escolhe de novo (e grava a escolha de novo).
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(2);
+    } finally {
+      espiao.mockRestore();
+    }
+    const escolhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId), eq(auditLog.action, 'login'))),
+    );
+    expect(escolhas.filter((l) => (l.metadata as { auto?: boolean }).auto === true)).toHaveLength(2);
   });
 
   it('acima do limite por conta: 429 e um anomaly_alert na trilha da clínica do vínculo', async () => {
