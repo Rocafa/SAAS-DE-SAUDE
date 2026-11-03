@@ -129,9 +129,17 @@ A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `
 - **Prova pelo compilador** (`analise.ts`): para cada rota de `AUDITADAS`, o verificador de tipos do TypeScript segue as
   chamadas a partir do handler (serviços, funções importadas, callbacks como o de `escreverNaClinica`) e exige um
   caminho até `insertAudit` (`audit-log.ts`), por onde passam `recordAudit`, `recordSupportAudit` e o portal.
-- **Exceções conferidas:** `banco` exige `INSERT INTO audit_log` na última definição da função SQL citada;
-  `sem_efeito` é rota que não muda nada. Exceção que passa a gravar pelo código tem de ir para `AUDITADAS`.
-- **Limite:** a análise prova que EXISTE caminho até a trilha, não que todo ramo do handler grava. Os testes RLS de cada
+- **Gravadores incidentais não contam:** `comNegacaoAuditada` (grava só a negação de acesso clínico) e os `alertar` das
+  vigilâncias (gravam só a anomalia) não são atravessados; o callback da operação é. Gravador incidental novo entra na
+  lista `GRAVADORES_INCIDENTAIS` com parecer do Guardião.
+- **Decorators pelo símbolo:** `import { Post as P }` é visto; `@All` conta como escrita; `@Head`, `@Options`, `@Search`,
+  `@RequestMapping` e decorator composto (`applyDecorators`) fazem o teste falhar com o nome.
+- **Exceções provadas:** `banco` exige que o handler chame a função SQL citada e que a última definição dela (sem
+  `DROP` depois) tenha `INSERT INTO audit_log`; `sem_efeito` exige handler que só lança erro. Exceção que passa a gravar
+  pelo código tem de ir para `AUDITADAS`.
+- **Sanidade:** fixtures fictícios em `test/cobertura-auditoria/fixtures/` provam cada uma dessas regras.
+- **Limite:** a análise prova que EXISTE caminho até a trilha (sem contar gravador incidental), não que todo ramo do
+  handler grava. Rotas fora de controller do Nest (o login da D4) e rotas `GET` ainda não entram (fila). Os testes RLS de cada
   módulo conferem a linha gravada nos casos principais. Mudar uma rota de lista exige parecer do Guardião.
 
 Em 03/11/2026: 99 rotas de escrita, 97 auditadas pelo código, 2 exceções (resgate do convite do portal, gravado pela
