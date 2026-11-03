@@ -173,6 +173,7 @@ export class ConfiguracaoProntuarioController {
   }
 
   @Put('configuracao')
+  @ExigeMfaRecente()
   @Permissao('prontuario:configurar')
   definir(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<RespostaConfiguracao> {
     return this.service.definirConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
@@ -190,6 +191,7 @@ export class CicloNotasPrivadasController {
 
   /** Prazos de custódia e expurgo sob demanda (o job diário chama o mesmo serviço). Idempotente. */
   @Post('notas-privadas/ciclo')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ResultadoDoCiclo> {
@@ -199,6 +201,7 @@ export class CicloNotasPrivadasController {
 
   /** Desligamento do profissional: as notas dele ficam aguardando decisão por 30 dias (só a contagem). */
   @Post('profissionais/:id/desligamento')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   desligar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ notas: number; prazo: string }> {
@@ -227,6 +230,7 @@ export class RetencaoLegalController {
 
   /** 1ª etapa: pedido de retirada, com motivo. */
   @Post(':id/retencao-legal/retirada')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   pedirRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
@@ -236,6 +240,7 @@ export class RetencaoLegalController {
 
   /** 2ª etapa: aprovação por OUTRO admin. */
   @Post(':id/retencao-legal/retirada/aprovacao')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   aprovarRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
@@ -255,6 +260,7 @@ export class CustodiaController {
   constructor(@Inject(CustodiaService) private readonly custodia: CustodiaService) {}
 
   @Post('prontuario/custodias')
+  @ExigeMfaRecente()
   @Permissao('prontuario:configurar')
   designar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<CustodiaDto> {
     const d = validarDesignacaoDeCustodia(corpo);
@@ -262,6 +268,7 @@ export class CustodiaController {
   }
 
   @Post('custodias/:id/aceite')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:acessar')
   aceitar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<CustodiaDto> {

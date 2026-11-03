@@ -926,12 +926,13 @@ Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requi
 
 Testes: `test/autorizacao-suporte.rls.test.ts`.
 
-## 17. Política de MFA (issue #106, S3; regra 2 do memo da D4)
+## 17. Política de MFA (issue #106, S3; regra 2 do memo da D4; requisitos de segurança §4)
 
 O provedor de login (D4) só informa **quando** o usuário passou pelo segundo fator (`AuthContext.mfaEm`). A obrigatoriedade é decidida pela API (`src/modules/auth/mfa.ts`), no `SessaoGuard`, antes de qualquer leitura:
 
-- **Obrigatório por perfil:** `admin`, `profissional` e `financeiro` não usam a API sem MFA na sessão (`403 mfa_obrigatorio`). A `recepcao` não é obrigada, porque não vê conteúdo clínico nem dado financeiro.
-- **MFA recente** (até 15 min): rotas marcadas com `@ExigeMfaRecente()` respondem `403 mfa_recente_obrigatorio` fora da janela. MFA com data no futuro também não conta. O cliente pede o código de novo e repete. Hoje estão marcadas as notas privadas (todas as rotas) e a custódia (ler e decidir as notas lacradas). A rota HTTP da exportação total (G2) nasce marcada.
-- **`GET /sessao`** devolve `mfaEm` (ISO ou null), para o cliente saber se pede o código antes.
-- **Sessão fictícia** (dev/teste): nasce com MFA feito agora. `criarSessao({ ..., mfaEm })` simula MFA antigo ou ausente.
-- **Com o provedor real (D4):** os eventos do próprio MFA (verificar, falhar, resetar com justificativa) vão para a trilha pelos hooks da biblioteca.
+- **Obrigatório para todos os perfis** (B1 do [parecer](../03-seguranca-lgpd/revisoes/2026-11-03-mfa-politica.md)). Todos acessam dado C3/C4: a recepção vê CPF, agenda, menores e convênio, e opera o financeiro. Sem MFA a resposta é `403 mfa_obrigatorio`.
+- **MFA recente:** as rotas com `@ExigeMfaRecente(janela)` respondem `403 mfa_recente_obrigatorio` fora da janela da rota. O padrão é 15 min. A exportação total (G2) usa 5 min (`MFA_RECENTE_EXPORTACAO_MS`), como promete a cláusula 16.2 da minuta do DPA. MFA com data no futuro também é recusado. A lista fechada fica em `ROTAS_COM_MFA_RECENTE` (teste de cobertura): conteúdo clínico mais sensível e ações irreversíveis ou de alto impacto, 24 rotas hoje.
+- **A recusa numa rota sensível vai para a trilha** (B2), com escopo `mfa_denied` e só ids: o handler, o motivo e o id do alvo. É o caso típico de sessão roubada. A recusa em rota comum vai para a trilha com o provedor real.
+- **`GET /sessao`** devolve só `mfaRecenteAte` (R8, minimização), para o cliente saber se pede o código antes.
+- **Sessão fictícia** (dev/teste): nasce com MFA feito agora. Os testes de rota sensível passam `mfaEm` explícito. **Esse padrão não vale para o provedor real**: lá `mfaEm` vem só da sessão guardada no servidor, e sem informação vale `null` (R6, contrato da D4).
+- **Com o provedor real (D4, R5):** vão para a trilha os eventos do próprio fator (cadastro, verificação, falha, bloqueio após 5 falhas em 15 min, reset com justificativa e alerta ao admin) e as recusas em rotas comuns. Trocar de clínica, perfil ou senha reavalia o MFA.

@@ -234,3 +234,36 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
   'src/security/http-security.ts use(rateLimiter)': 'limite de requisições por chave com hash (sem IP em claro); não toca dado de paciente',
   'src/security/http-security.ts use(safeErrorHandler)': 'erro sem detalhe interno nem dado na resposta; não toca dado',
 };
+
+// ------------------------------------------------------------------ MFA recente (R4 do parecer de 03/11 sobre o #123)
+
+/**
+ * Rotas que exigem MFA recente (`@ExigeMfaRecente`). Tirar ou pôr o decorator sem atualizar esta lista falha o CI.
+ * Conteúdo clínico mais sensível (notas privadas, custódia) e ações irreversíveis ou de alto impacto (R2 do parecer).
+ */
+export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
+  'DELETE /clinica/membros/:usuarioId/:perfil',
+  'GET /custodias/:id/notas',
+  'GET /notas-privadas/:id',
+  'GET /pacientes/:id/notas-privadas',
+  'PATCH /notas-privadas/:id',
+  'POST /clinica/membros',
+  'POST /clinica/portal/solicitacoes/:id/situacao',
+  'POST /custodias/:id/aceite',
+  'POST /custodias/:id/notas/:notaId/decisao',
+  'POST /financeiro/receita-saude/lotes',
+  'POST /financeiro/recibos/:id/via-oficial',
+  'POST /importacoes/:id/aplicar',
+  'POST /importacoes/:id/desfazer',
+  'POST /notas-privadas/:id/descartar',
+  'POST /pacientes/:id/notas-privadas',
+  'POST /pacientes/:id/responsaveis/eliminacao',
+  'POST /prontuario/custodias',
+  'POST /prontuario/notas-privadas/ciclo',
+  'POST /prontuario/pacientes/:id/retencao-legal/retirada',
+  'POST /prontuario/pacientes/:id/retencao-legal/retirada/aprovacao',
+  'POST /prontuario/profissionais/:id/desligamento',
+  'POST /responsaveis/descarte',
+  'POST /suporte/autorizacoes',
+  'PUT /prontuario/configuracao',
+];

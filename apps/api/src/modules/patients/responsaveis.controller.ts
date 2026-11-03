@@ -4,6 +4,7 @@ import { exigirObjeto, exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { temPermissao } from '../auth/perfis';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import {
   ResponsaveisService,
@@ -119,6 +120,7 @@ export class ResponsaveisController {
 
   /** A4 do #67: eliminação dos responsáveis com o prontuário, vencida a guarda de 20 anos (dono da clínica). */
   @Post('eliminacao')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('cadastros:gerir')
   eliminacao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
@@ -171,6 +173,7 @@ export class DescarteDeResponsaveisController {
   constructor(@Inject(ResponsaveisService) private readonly service: ResponsaveisService) {}
 
   @Post()
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('cadastros:gerir')
   executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<{ readonly descartados: number }> {

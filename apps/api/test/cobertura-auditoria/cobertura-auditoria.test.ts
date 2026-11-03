@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { analisarRotasDeEscrita, analisarRotasDeLeitura, handlersForaDeController, type RotaAnalisada } from './analise';
-import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE } from './lista';
+import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE, ROTAS_COM_MFA_RECENTE } from './lista';
 
 let rotas: RotaAnalisada[];
 const porRota = new Map<string, RotaAnalisada>();
@@ -153,6 +153,16 @@ describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
       expect(ehCaminhoClinico(r), r).toBe(false);
     }
   });
+});
+
+describe('R4 do #123: inventário das rotas com MFA recente', () => {
+  it('as rotas com @ExigeMfaRecente são exatamente as de ROTAS_COM_MFA_RECENTE', () => {
+    const marcadas = [...analisarRotasDeEscrita(), ...analisarRotasDeLeitura()]
+      .filter((r) => r.marcas.includes('ExigeMfaRecente'))
+      .map((r) => r.rota)
+      .sort();
+    expect(marcadas, 'decorator @ExigeMfaRecente posto ou tirado sem atualizar ROTAS_COM_MFA_RECENTE (lista.ts)').toEqual([...ROTAS_COM_MFA_RECENTE].sort());
+  }, 240_000);
 });
 
 describe('R6 do #117: handlers HTTP fora de controller só da lista fechada', () => {
