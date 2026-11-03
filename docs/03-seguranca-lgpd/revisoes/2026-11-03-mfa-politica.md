@@ -95,3 +95,7 @@ Dois problemas impedem o merge: a lista de perfis contraria um requisito MUST, e
 | **R10** | **O cliente evita a recusa:** o front usa `mfaRecenteAte` para pedir o código **antes** de chamar a rota sensível. Assim, o uso legítimo não gera linhas `mfa_denied`, e a trilha fica com o sinal útil (sessão roubada) em vez de ruído. Atenção: `mfaRecenteAte` usa a janela padrão de 15 min, então a tela da exportação (5 min) precisa sempre pedir o código de novo. | Na ligação das telas com a API |
 
 **R3, R5 e R6** continuam como condição antes do Portão B e da integração da D4, sem mudança.
+
+### R9 (03/11/2026)
+
+**Feita.** O `SessaoGuard` conta as recusas no store do rate limit, com chave em hash e janela de 60 s. A primeira recusa por usuário, rota e motivo vai para a trilha. Acima de 20 recusas do usuário na janela, a resposta é `429 limite_de_recusas_mfa` e entra um único `anomaly_alert` (`mfa_recusas_por_usuario`). Se o store estiver indisponível, a linha é gravada. Teste RLS: 23 tentativas geram 20 respostas 403 e 3 respostas 429, uma linha de recusa e um alerta.
