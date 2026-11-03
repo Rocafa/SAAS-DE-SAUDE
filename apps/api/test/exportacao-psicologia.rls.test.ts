@@ -4,11 +4,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments } from '../src/db/schema';
+import { appointments, auditLog, tenants } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { MFA_RECENTE_MS } from '../src/modules/auth/mfa';
-import { ExportsService } from '../src/modules/exports/exports.module';
+import { ExitWindowClosedError } from '../src/modules/exports/access-policy';
+import { EXPORT_FAILED_AUDIT_SCOPE, ExportsService } from '../src/modules/exports/exports.module';
 import type { TenantExportPackage } from '../src/modules/exports/tenant-export';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
@@ -99,5 +101,20 @@ describe('R12 do #123: a exportação total leva a psicologia inteira e marcada'
 
   it('nada do conteúdo de psicologia vai para a trilha da exportação', () => {
     for (const proibido of [TEMA_PSI, ADENDO_PSI]) expect(pkg.auditJsonl).not.toContain(proibido);
+  });
+});
+
+describe('R2 do parecer do #126: exportação que cai deixa rastro', () => {
+  it('clínica cancelada fora da janela: a exportação é recusada e grava 1 linha só com o motivo genérico', async () => {
+    const outra = await api.novaClinica();
+    const admin = api.sessao(outra, 'admin');
+    await api.membro(outra, admin, 'admin');
+    await withTenant(api.db.db, outra, (tx) => tx.update(tenants).set({ subscriptionStatus: 'cancelled', cancelledAt: new Date(Date.now() - 200 * 86_400_000) }).where(eq(tenants.id, outra)), admin.userId);
+    const ctx = { tenantId: outra, userId: admin.userId as UserId, roles: ['admin'] };
+    await expect(api.app.get(ExportsService).exportTenantData(ctx)).rejects.toBeInstanceOf(ExitWindowClosedError);
+    const linhas = await withTenant(api.db.db, outra, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.tenantId, outra), eq(auditLog.scope, EXPORT_FAILED_AUDIT_SCOPE))));
+    expect(linhas).toHaveLength(1);
+    expect(linhas[0]).toMatchObject({ action: 'export', actorId: admin.userId, metadata: { reason: 'janela_de_saida_encerrada' } });
+    expect(Object.keys(linhas[0]?.metadata as object)).toEqual(['reason']);
   });
 });
