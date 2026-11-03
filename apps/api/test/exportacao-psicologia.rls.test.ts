@@ -63,7 +63,7 @@ beforeAll(async () => {
   const at = await api.http().post('/atendimentos').set(cab(sessaoPsi)).send({ agendamentoId: ag });
   expect(at.status, JSON.stringify(at.body)).toBe(200);
   atPsi = (at.body as { id: string }).id;
-  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi)).send({ versaoBase: 0, conteudo: { tema: TEMA_PSI } }).expect(200);
+  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi)).send({ versaoBase: 0, conteudo: { tema: TEMA_PSI, evolucao: 'Evolucao ficticia' } }).expect(200);
   await api.http().post(`/atendimentos/${atPsi}/finalizar`).set(cab(sessaoPsi)).send({}).expect(200);
   await api.http().post(`/atendimentos/${atPsi}/adendos`).set(cab(sessaoPsi)).send({ texto: ADENDO_PSI }).expect(201);
 
@@ -79,7 +79,7 @@ describe('R12 do #123: a exportação total leva a psicologia inteira e marcada'
   it('o atendimento, a versão e o adendo de psicologia saem decifrados, sem nada oculto', () => {
     const { encounters, clinicalRecordVersions, clinicalAddenda } = pkg.json.data;
     expect(encounters.find((e) => e.id === atPsi)).toMatchObject({ compartment: 'psicologia', status: 'signed', authorUserId: psiUserId });
-    expect(clinicalRecordVersions.filter((v) => v.encounterId === atPsi).map((v) => v.content)).toEqual([{ tema: TEMA_PSI }]);
+    expect(clinicalRecordVersions.filter((v) => v.encounterId === atPsi).map((v) => v.content)).toEqual([{ tema: TEMA_PSI, evolucao: 'Evolucao ficticia' }]);
     expect(clinicalAddenda.find((d) => d.encounterId === atPsi)).toMatchObject({ text: ADENDO_PSI });
   });
 
