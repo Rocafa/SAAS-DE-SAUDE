@@ -1,6 +1,8 @@
 /**
  * R2 do parecer do #126: a exportação que cai deixa rastro com motivo GENÉRICO (nunca a mensagem do erro).
  */
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { ExitWindowClosedError } from './access-policy';
@@ -48,5 +50,22 @@ describe('ExportsService: falha registrada fora da transação da exportação',
 
   it('o escopo da falha é próprio (não se confunde com a exportação bem-sucedida)', () => {
     expect(EXPORT_FAILED_AUDIT_SCOPE).toBe('tenant.full_export_failed');
+  });
+});
+
+describe('R1 do parecer do #127: a função avulsa (sem rastro de falha) não é usada pela aplicação', () => {
+  it('nenhum arquivo de src fora dos testes chama exportTenantData de tenant-export', () => {
+    const raiz = join(__dirname, '..', '..');
+    const arquivos: string[] = [];
+    const andar = (d: string): void => {
+      for (const n of readdirSync(d)) {
+        const p = join(d, n);
+        if (statSync(p).isDirectory()) andar(p);
+        else if (p.endsWith('.ts') && !p.endsWith('.test.ts')) arquivos.push(p);
+      }
+    };
+    andar(raiz);
+    const usam = arquivos.filter((p) => !p.endsWith('tenant-export.ts') && /import[^;]*exportTenantData[^;]*from '[^']*tenant-export'/.test(readFileSync(p, 'utf8')));
+    expect(usam).toEqual([]);
   });
 });

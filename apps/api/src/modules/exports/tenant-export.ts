@@ -1318,7 +1318,11 @@ export async function exportInTransaction(
   };
 }
 
-/** G2: exportação total, sem custo; inadimplente sempre, cancelado só dentro da janela de saída. */
+/**
+ * G2: exportação total, sem custo; inadimplente sempre, cancelado só dentro da janela de saída.
+ * Só para testes e scripts: NÃO registra a falha na trilha. A aplicação usa `ExportsService.exportTenantData`
+ * (R1 do parecer do #127; um teste reprova import desta função em `src`).
+ */
 export function exportTenantData(
   db: Database,
   ctx: RequestContext,

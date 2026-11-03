@@ -165,3 +165,27 @@ Ressalvas:
 - **R2:** fica com a rota da G2, como o parecer aceitou: o `export_failed` entra no mesmo PR da rota, com mensagem genérica e sem ids.
 
 **B1 re-conferido (03/11/2026, commit `7a83b4f`): APROVADO, veto do #126 levantado.** O `REPEATABLE READ` foi revertido por inteiro (`withTenant`, `runConsistente`, serviço e função avulsa), e a G3 volta a gravar na trilha em READ COMMITTED. A exportação lê versões e adendos antes dos atendimentos. Atendimento não pode ser apagado (trigger `encounters_no_delete` e `REVOKE DELETE` na 0012), então não sobra órfão e a falha fechada continua. O teste unitário reprova a inversão e a troca de isolamento: 5/5 aqui, `tsc` limpo. Os testes RLS dependem do CI. Pendem com a rota da G2: R2 (`export_failed`), R3 (manifesto só dentro do pacote cifrado) e o MFA de 5 min com o RT, da R12.
+
+#### Parecer do PR #127 (R2 do #126)
+
+**03/11/2026, branch `eng/exportacao-falha-auditada` (commit `17d6428`): APROVADO COM RESSALVAS.**
+
+- **Motivo sem dado (de acordo):** `motivoDaFalha` só devolve três valores fixos (`janela_de_saida_encerrada`, `cifra_ausente`, `erro_interno`). O texto do erro, ids e contagens nunca vão para o `metadata`. O teste unitário prova isso com uma mensagem que tem CPF fictício. O `metadata` ainda passa pelo `assertAuditMetadata` (contrato da 0005). O log da aplicação recebe só uma constante, sem a mensagem do erro.
+- **2ª transação (de acordo):** `registrarFalha` usa `tenantDb.run`, o mesmo caminho em READ COMMITTED da G3. A trigger da 0005 (`audit_log exige transação READ COMMITTED`) aceita a transação, e a policy `audit_log_insert` (0002) confere o `tenant_id` pelo contexto travado. Ela não depende do estado da assinatura, então a linha grava mesmo com a clínica cancelada.
+- **Clínica cancelada fora da janela (aceitável):** a linha não tem dado pessoal nem clínico. Ela registra uma tentativa de acesso que foi negada, o que é rastreabilidade de segurança (arts. 37 e 46 da LGPD). A janela de saída proíbe ler e exportar, mas não proíbe registrar a recusa. A minimização se cumpre porque a linha tem só o escopo, o ator e o motivo.
+- **Erro original preservado (de acordo):** o `throw e` vem depois do `await registrarFalha`, e `registrarFalha` engole a própria falha. Os testes cobrem os dois casos (`rejects.toBe(erro)`).
+- **Teste RLS:** nada bloqueia. `app_user` já faz `update(tenants)` em `exit-guarantee.rls.test.ts`. 200 dias fica acima do piso de 90, e o CI não define `EXIT_WINDOW_DAYS`. O select da trilha passa por `withTenant` da própria clínica. Não rodei aqui (não há Postgres local), então depende do CI. Unitários: 77/77 em `exports` e `audit`, e o `tsc` está limpo.
+
+Ressalvas:
+1. **Função avulsa (antes da rota da G2):** `exportTenantData(db, ctx)` em `tenant-export.ts:1322` exporta sem passar pelo `ExportsService` e, por isso, não grava a falha. Hoje só os testes a chamam. Restrinja a função aos testes (ou faça ela delegar ao serviço) e coloque um teste estático que impeça código de produção de importá-la.
+2. **Eliminação pós-janela (quando existir a rotina da G4):** depois de encerrada a janela, linhas `tenant.full_export_failed` continuam podendo ser gravadas. A rotina de eliminação/anonimização da clínica precisa cobrir também essas linhas, ou guardá-las pelo prazo de guarda de log que for definido para a trilha. Elas não podem ficar órfãs sem prazo.
+3. **Volume e alerta (com a rota da G2):** cada tentativa que falha gera 1 linha. Quando a rota existir, aplique rate limit por usuário e por clínica e mande o alerta aos admins que a nota do Maestro prometeu. O alerta leva só o motivo genérico, como a R3 exige para o manifesto.
+4. **Diagnóstico (não bloqueia):** `EXPORTACAO_FALHA_NAO_AUDITADA` sai sem correlação. Inclua o `tenantId` (UUID opaco da clínica, que não é dado do titular) ou o id da requisição, para o DPO conseguir cruzar o log com a falha de trilha. A mensagem do erro continua fora do log.
+
+R2 do #126: **atendida**. Continuam pendentes, junto com a rota da G2: R3 (manifesto só dentro do pacote cifrado) e o MFA de 5 min com o RT (R12).
+
+#### Nota do Maestro sobre o parecer do #127 (03/11/2026)
+
+- **R1 (feita):** a função avulsa `exportTenantData` de `tenant-export.ts` está documentada como só para testes e scripts. Um teste unitário reprova qualquer import dela em `src`, então a aplicação só exporta pelo `ExportsService`, que registra a falha.
+- **R4 (feita):** o log da falha da trilha leva só `tenant=<uuid>`, sem a mensagem do erro.
+- **R2 e R3 (fila):** a eliminação da G4 cobre as linhas gravadas depois da janela. O rate limit e o alerta aos admins entram com a rota da G2.

@@ -62,7 +62,8 @@ export class ExportsService {
         ctx.userId,
       );
     } catch {
-      this.logger.error('EXPORTACAO_FALHA_NAO_AUDITADA');
+      // Só o id da clínica (UUID opaco) para correlacionar; nada da mensagem do erro (R4 do parecer do #127).
+      this.logger.error(`EXPORTACAO_FALHA_NAO_AUDITADA tenant=${ctx.tenantId}`);
     }
   }
 }
