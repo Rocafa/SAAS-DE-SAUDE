@@ -7,6 +7,9 @@
  * - `EXCECOES`: sem gravação pelo código da API, com o motivo. `banco`: a trilha é gravada por função SQL (o teste
  *   confere o INSERT em audit_log na última definição da função). `sem_efeito`: a rota não muda nada.
  *
+ * Leitura (R5 do parecer de 03/11/2026): toda rota `GET` está em `AUDITADAS_LEITURA` (mesma prova de alcance) ou em
+ * `LEITURA_SEM_DADO_PESSOAL` (com o motivo); rota sob caminho clínico nunca é exceção.
+ *
  * Mudar uma rota de lista exige parecer do Guardião LGPD.
  */
 
@@ -126,4 +129,94 @@ export const EXCECOES: Readonly<Record<string, Excecao>> = {
     tipo: 'sem_efeito',
     motivo: 'modelo próprio da clínica desligado: a rota sempre responde 409 (modelo_da_clinica_desligado) sem tocar no banco',
   },
+};
+
+// ------------------------------------------------------------------ leitura (R5 do parecer de 03/11/2026)
+
+/** Rotas de leitura (`GET`) cuja trilha é gravada pelo código da API (o titular e a clínica veem quem leu). */
+export const AUDITADAS_LEITURA: readonly string[] = [
+  'GET /agendamentos',
+  'GET /atendimentos/:id',
+  'GET /atendimentos/:id/versoes',
+  'GET /clinica/portal/pacientes/:id/consentimentos',
+  'GET /clinica/portal/pacientes/:id/vinculos',
+  'GET /clinica/portal/solicitacoes',
+  'GET /clinica/portal/solicitacoes/:id',
+  'GET /convenios',
+  'GET /convenios/:id/relatorio',
+  'GET /custodias/:id/notas',
+  'GET /financeiro/caixas',
+  'GET /financeiro/caixas/:id',
+  'GET /financeiro/cobrancas/:id',
+  'GET /financeiro/configuracao',
+  'GET /financeiro/contas-a-receber',
+  'GET /financeiro/profissionais/:id/perfil-fiscal',
+  'GET /financeiro/recibos',
+  'GET /financeiro/recibos/:id',
+  'GET /guias',
+  'GET /guias/:id',
+  'GET /guias/:id/consumos',
+  'GET /guias/alertas',
+  'GET /importacoes',
+  'GET /importacoes/:id',
+  'GET /importacoes/:id/divergencias',
+  'GET /notas-privadas/:id',
+  'GET /pacientes',
+  'GET /pacientes/:id',
+  'GET /pacientes/:id/notas-privadas',
+  'GET /pacientes/:id/prontuario',
+  'GET /pacientes/:id/responsaveis',
+  'GET /pacientes/:id/responsaveis/:vinculoId/historico',
+  'GET /pacientes/:id/responsaveis/sigilo',
+  'GET /pacientes/:id/whatsapp/opt-in',
+  'GET /pacotes',
+  'GET /pacotes/:id',
+  'GET /pacotes/:id/historico',
+  'GET /portal/consultas',
+  'GET /portal/documentos',
+  'GET /portal/meus-dados',
+  'GET /portal/privacidade/consentimentos',
+  'GET /portal/privacidade/consentimentos/:finalidade/historico',
+  'GET /portal/recibos',
+  'GET /portal/recibos/:id',
+  'GET /portal/solicitacoes',
+  'GET /portal/vinculos',
+  'GET /prontuario/configuracao',
+  'GET /suporte/autorizacoes',
+  'GET /whatsapp/envios',
+];
+
+/**
+ * Rotas de leitura sem trilha, com o motivo: não devolvem dado pessoal de paciente nem conteúdo clínico. Rota sob
+ * caminho clínico (CAMINHOS_CLINICOS no teste) nunca entra aqui. Mudar exige parecer do Guardião.
+ */
+export const LEITURA_SEM_DADO_PESSOAL: Readonly<Record<string, string>> = {
+  'GET /avisos':
+    'avisos do próprio destinatário (usuário da sessão): só ids técnicos, tipo e datas, nada de conteúdo clínico nem nome',
+  'GET /clinica/membros':
+    'equipe da clínica: só id do usuário, perfil e data da concessão (sem nome, e-mail ou dado de paciente); mudanças de perfil são auditadas',
+  'GET /clinica/vinculo-de-cuidado':
+    'configuração da clínica (se o vínculo de cuidado vale); sem dado pessoal',
+  'GET /financeiro/retencao-fiscal':
+    'política de retenção fiscal da clínica (prazos); sem dado pessoal; a execução é auditada',
+  'GET /health':
+    'saúde do processo para o balanceador; sem sessão e sem dado',
+  'GET /health/ready':
+    'prontidão (banco e dependências) para o balanceador; sem sessão e sem dado',
+  'GET /importacoes/termo':
+    'texto e versão do termo de migração e limites do arquivo; constantes, sem dado',
+  'GET /portal/sessao':
+    'o próprio titular vê o nome da clínica e o próprio primeiro nome na saudação; a entrada e a escolha do vínculo são auditadas (POST /portal/sessao/vinculo)',
+  'GET /profissionais':
+    'cadastro da agenda: nome e especialidade dos profissionais da equipe (dado profissional exibido ao agendar), sem dado de paciente',
+  'GET /sessao':
+    'a própria sessão: id do usuário, id da clínica e perfis, todos já do contexto de quem pede',
+  'GET /tipos-atendimento':
+    'cadastro da agenda: tipos de atendimento e duração; sem dado pessoal',
+  'GET /whatsapp/configuracao':
+    'configuração do WhatsApp da clínica (ligado, antecedência dos lembretes); sem dado pessoal',
+  'GET /whatsapp/modelos':
+    'lista fechada de modelos neutros de mensagem; constantes, sem dado',
+  'GET /whatsapp/webhook':
+    'desafio de verificação do provedor (hub.challenge); sem sessão e sem dado',
 };

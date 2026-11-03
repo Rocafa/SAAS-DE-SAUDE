@@ -2,7 +2,7 @@
  * Controller FICTÍCIO, só para o teste de sanidade da análise de cobertura (não é registrado em módulo nenhum).
  * Cada rota exercita um caso do parecer de 03/11/2026 (R1 a R4).
  */
-import { Controller, Post, Post as Escrever } from '@nestjs/common';
+import { Controller, Get, Post, Post as Escrever } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { sql } from 'drizzle-orm';
 import type { TenantTx } from '../../../src/db/tenant-transaction';
@@ -50,6 +50,18 @@ export class RotasFicticiasController {
   @Escrever('apelido')
   async apelido(): Promise<void> {
     await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'ficticio' });
+  }
+
+  /** R5: leitura que só passa pela vigilância não conta como auditada. */
+  @Get('leitura-so-vigilancia')
+  async leituraSoVigilancia(): Promise<void> {
+    await portal.requisicao('conta-ficticia', null);
+  }
+
+  /** R5: leitura que grava a própria trilha. */
+  @Get('leitura-auditada')
+  async leituraAuditada(): Promise<void> {
+    await recordAudit(tx, ctx, { action: AuditAction.Read, scope: 'ficticio' });
   }
 
   /** R4: o SQL alcançado é coletado. */

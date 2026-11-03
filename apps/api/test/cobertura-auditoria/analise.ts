@@ -20,7 +20,9 @@ import ts from 'typescript';
 
 /** Decorators HTTP de `@nestjs/common` tratados como escrita. */
 export const METODOS_DE_ESCRITA = ['Post', 'Patch', 'Put', 'Delete', 'All'] as const;
-/** `@Get` é leitura (fora desta análise). Qualquer outro decorator de rota do Nest: a análise falha com o nome, até alguém decidir como tratá-lo. */
+/** Decorators HTTP de `@nestjs/common` tratados como leitura (R5 do parecer de 03/11). */
+export const METODOS_DE_LEITURA = ['Get'] as const;
+/** Qualquer outro decorator de rota do Nest: a análise falha com o nome, até alguém decidir como tratá-lo. */
 const METODOS_NAO_TRATADOS = ['Options', 'Head', 'Search', 'RequestMapping', 'applyDecorators'] as const;
 
 /** A função que grava a linha da trilha. Alcançá-la a partir do handler conta como auditado. */
@@ -103,12 +105,13 @@ function identidadeDoDecorator(cx: Contexto, dec: ts.Decorator): { nome: string;
 
 const RE_ROTA_COMPOSTA = /\bapplyDecorators\b|\bRequestMapping\b|\b(Get|Post|Put|Patch|Delete|All|Options|Head|Search)\s*\(/;
 
-/** Decorator de método de controller: o verbo HTTP de escrita, `null` (não é rota de escrita) ou falha alto. */
-function verboDeEscrita(cx: Contexto, dec: ts.Decorator): string | null {
+/** Decorator de método de controller: o verbo HTTP do tipo pedido, `null` (não é rota desse tipo) ou falha alto. */
+function verboDaRota(cx: Contexto, dec: ts.Decorator, tipo: TipoDeRota): string | null {
   const id = identidadeDoDecorator(cx, dec);
   if (!id) return null;
   if (id.doNest) {
-    if ((METODOS_DE_ESCRITA as readonly string[]).includes(id.nome)) return id.nome;
+    const metodos: readonly string[] = tipo === 'escrita' ? METODOS_DE_ESCRITA : METODOS_DE_LEITURA;
+    if (metodos.includes(id.nome)) return id.nome;
     if ((METODOS_NAO_TRATADOS as readonly string[]).includes(id.nome)) return falhar(dec, `decorator de rota não tratado pela análise de auditoria: @${id.nome}`);
     return null;
   }
@@ -207,11 +210,23 @@ function sqlAlcancado(cx: Contexto, inicio: ts.Node): string[] {
   return textos;
 }
 
-/**
- * Rotas de escrita da API (ordenadas pela rota), com a análise de alcance. `extras`: arquivos fora de `src/` tratados
- * como nosso código e cujas rotas são as ÚNICAS devolvidas (fixtures de sanidade do teste).
- */
+export type TipoDeRota = 'escrita' | 'leitura';
+
+/** Rotas de escrita (`POST/PATCH/PUT/DELETE/ALL`), com a análise de alcance. */
 export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaDeEscrita[] {
+  return analisarRotas('escrita', extras);
+}
+
+/** Rotas de leitura (`GET`), com a análise de alcance (R5 do parecer de 03/11). */
+export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaDeEscrita[] {
+  return analisarRotas('leitura', extras);
+}
+
+/**
+ * Rotas da API do tipo pedido (ordenadas pela rota), com a análise de alcance. `extras`: arquivos fora de `src/`
+ * tratados como nosso código e cujas rotas são as ÚNICAS devolvidas (fixtures de sanidade do teste).
+ */
+function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaDeEscrita[] {
   const absolutos = extras.map((f) => path.resolve(f));
   const programa = criarPrograma(absolutos);
   // Código com erro de sintaxe daria análise parcial (e falso "não audita"): melhor falhar com o motivo.
@@ -237,7 +252,7 @@ export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaDeEs
           for (const membro of n.members) {
             if (!ts.isMethodDeclaration(membro)) continue;
             for (const d of ts.getDecorators(membro) ?? []) {
-              const verbo = verboDeEscrita(cx, d);
+              const verbo = verboDaRota(cx, d, tipo);
               if (!verbo) continue;
               if (!membro.body) falhar(membro, 'rota sem corpo');
               const corpo = membro.body;

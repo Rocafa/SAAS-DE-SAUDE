@@ -6,8 +6,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analisarRotasDeEscrita, type RotaDeEscrita } from './analise';
-import { AUDITADAS, EXCECOES } from './lista';
+import { analisarRotasDeEscrita, analisarRotasDeLeitura, type RotaDeEscrita } from './analise';
+import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, LEITURA_SEM_DADO_PESSOAL } from './lista';
 
 let rotas: RotaDeEscrita[];
 const porRota = new Map<string, RotaDeEscrita>();
@@ -87,6 +87,56 @@ describe('#105: cobertura de auditoria das rotas de escrita', () => {
   });
 });
 
+/** Caminhos de dado clínico ou de paciente: rota de leitura sob eles nunca é exceção (tem de gravar a trilha). */
+const CAMINHOS_CLINICOS = /^GET \/(pacientes|prontuario|atendimentos|notas-privadas|custodias|guias|pacotes|convenios|financeiro\/(recibos|cobrancas|contas-a-receber|caixas)|clinica\/portal|portal\/(consultas|documentos|meus-dados|recibos|solicitacoes|privacidade))(\/|$)/;
+
+describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
+  let leituras: Map<string, RotaDeEscrita>;
+
+  beforeAll(() => {
+    leituras = new Map(analisarRotasDeLeitura().map((r) => [r.rota, r]));
+  }, 120_000);
+
+  it('a análise acha as rotas de leitura (sanidade)', () => {
+    expect(leituras.size).toBeGreaterThanOrEqual(55);
+    expect(leituras.get('GET /pacientes/:id')?.alcancaTrilha).toBe(true);
+  });
+
+  it('toda rota GET está declarada em exatamente uma lista, e nenhuma declaração sobra', () => {
+    const auditadas = new Set(AUDITADAS_LEITURA);
+    expect(auditadas.size, 'rota repetida em AUDITADAS_LEITURA').toBe(AUDITADAS_LEITURA.length);
+    const semDeclaracao = [...leituras.values()]
+      .filter((r) => !auditadas.has(r.rota) && !(r.rota in LEITURA_SEM_DADO_PESSOAL))
+      .map((r) => `${r.rota} (${r.handler}, ${r.arquivo})`);
+    expect(semDeclaracao, 'rota de leitura nova sem declaração: inclua em AUDITADAS_LEITURA ou em LEITURA_SEM_DADO_PESSOAL (lista.ts)').toEqual([]);
+    expect(AUDITADAS_LEITURA.filter((r) => r in LEITURA_SEM_DADO_PESSOAL), 'rota nas duas listas').toEqual([]);
+    const velhas = [...AUDITADAS_LEITURA, ...Object.keys(LEITURA_SEM_DADO_PESSOAL)].filter((r) => !leituras.has(r));
+    expect(velhas, 'rota de leitura declarada que não existe mais: atualize lista.ts').toEqual([]);
+  });
+
+  it('toda rota em AUDITADAS_LEITURA tem caminho de chamada até insertAudit', () => {
+    const semTrilha = AUDITADAS_LEITURA.filter((r) => leituras.get(r)?.alcancaTrilha === false);
+    expect(semTrilha, 'rota de leitura declarada como auditada não chega a insertAudit').toEqual([]);
+  });
+
+  it('exceção de leitura: tem motivo, não está sob caminho clínico e, se passou a gravar, vai para AUDITADAS_LEITURA', () => {
+    for (const [rota, motivo] of Object.entries(LEITURA_SEM_DADO_PESSOAL)) {
+      expect(motivo.trim().length, `${rota}: motivo vazio`).toBeGreaterThan(20);
+      expect(CAMINHOS_CLINICOS.test(rota), `${rota}: rota sob caminho clínico não pode ficar sem trilha`).toBe(false);
+      expect(leituras.get(rota)?.alcancaTrilha, `${rota}: já grava a trilha, mova para AUDITADAS_LEITURA`).toBe(false);
+    }
+  });
+
+  it('a trava de caminho clínico pega as rotas que importam (sanidade da expressão)', () => {
+    for (const r of ['GET /pacientes', 'GET /pacientes/:id/prontuario', 'GET /portal/meus-dados', 'GET /financeiro/recibos/:id', 'GET /clinica/portal/solicitacoes']) {
+      expect(CAMINHOS_CLINICOS.test(r), r).toBe(true);
+    }
+    for (const r of ['GET /health', 'GET /sessao', 'GET /portal/sessao', 'GET /financeiro/retencao-fiscal']) {
+      expect(CAMINHOS_CLINICOS.test(r), r).toBe(false);
+    }
+  });
+});
+
 describe('#105: sanidade da análise (fixtures fictícios, parecer de 03/11/2026)', () => {
   const fixture = (nome: string) => path.join(__dirname, 'fixtures', nome);
   let ficticias: Map<string, RotaDeEscrita>;
@@ -113,6 +163,13 @@ describe('#105: sanidade da análise (fixtures fictícios, parecer de 03/11/2026
     expect(ficticias.get('POST /ficticio/banco')?.soLanca).toBe(false);
     expect(ficticias.get('POST /ficticio/banco')?.sqlAlcancado.join(' ')).toMatch(/app_ficticia_grava_trilha\(/);
   });
+
+  it('leitura: vigilância não conta, a trilha da própria leitura conta (R5)', () => {
+    const l = new Map(analisarRotasDeLeitura([fixture('rotas-ficticias.ts')]).map((r) => [r.rota, r]));
+    expect([...l.keys()].sort()).toEqual(['GET /ficticio/leitura-auditada', 'GET /ficticio/leitura-so-vigilancia']);
+    expect(l.get('GET /ficticio/leitura-so-vigilancia')?.alcancaTrilha).toBe(false);
+    expect(l.get('GET /ficticio/leitura-auditada')?.alcancaTrilha).toBe(true);
+  }, 120_000);
 
   it('decorator de rota não tratado ou composto faz a análise falhar com o nome (R3)', () => {
     expect(() => analisarRotasDeEscrita([fixture('decorator-nao-tratado.ts')])).toThrow(/@Head/);
