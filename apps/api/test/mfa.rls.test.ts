@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { MFA_RECENTE_MS } from '../src/modules/auth/mfa';
-import { SCOPE_MFA_RECUSADO } from '../src/modules/auth/sessao.guard';
+import { SCOPE_MFA_RECUSADO, TETO_RECUSAS_MFA } from '../src/modules/auth/sessao.guard';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 let api: ApiDeTeste;
@@ -75,6 +75,21 @@ describe('issue #106: MFA obrigatório e recente nas rotas sensíveis', () => {
     const semMfa = randomUUID();
     await api.http().get('/pacientes').set(cab(sessao(['recepcao'], null, semMfa))).expect(403);
     expect(await recusasDe(semMfa)).toHaveLength(0);
+  });
+
+  it('R9: recusas repetidas não inundam a trilha; acima do teto, 429 e um único alerta', async () => {
+    const userId = randomUUID();
+    const antigo = sessao(['profissional'], new Date(Date.now() - MFA_RECENTE_MS - 60_000), userId);
+    const codigos: number[] = [];
+    for (let i = 0; i < TETO_RECUSAS_MFA + 3; i++) codigos.push((await api.http().get(`/notas-privadas/${randomUUID()}`).set(cab(antigo))).status);
+    expect(codigos.slice(0, TETO_RECUSAS_MFA)).toEqual(Array<number>(TETO_RECUSAS_MFA).fill(403));
+    expect(codigos.slice(TETO_RECUSAS_MFA)).toEqual([429, 429, 429]);
+    const linhas = await recusasDe(userId);
+    // 1 linha da recusa (mesma rota e motivo na janela) + 1 alerta de volume.
+    expect(linhas.filter((l) => l.action === 'read')).toHaveLength(1);
+    const alertas = linhas.filter((l) => l.action === 'anomaly_alert');
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]?.metadata).toEqual({ rule: 'mfa_recusas_por_usuario', window_s: 60, threshold: TETO_RECUSAS_MFA, count: TETO_RECUSAS_MFA + 1 });
   });
 
   it('R8: GET /sessao devolve só até quando o MFA conta como recente', async () => {
