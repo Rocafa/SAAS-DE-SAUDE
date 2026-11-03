@@ -29,8 +29,14 @@ export function podeVerConteudo(
  * psicologia. Nos demais, o MFA da sessão basta (o profissional não repete o código a cada 15 minutos).
  */
 export function exigeMfaRecente(registro: { readonly compartment: RecordCompartment }): boolean {
-  return registro.compartment === 'psicologia';
+  return MFA_RECENTE_POR_COMPARTIMENTO[registro.compartment];
 }
+
+/**
+ * Decisão de MFA recente por compartimento (R11 do parecer do #123). Tipado pelo enum: compartimento novo sem
+ * decisão não compila; o teste confere que a lista bate com o enum do schema.
+ */
+export const MFA_RECENTE_POR_COMPARTIMENTO: Readonly<Record<RecordCompartment, boolean>> = { geral: false, psicologia: true };
 
 /**
  * SHA-256 do registro canônico da finalização: amarra atendimento, versão, modelo e o conteúdo

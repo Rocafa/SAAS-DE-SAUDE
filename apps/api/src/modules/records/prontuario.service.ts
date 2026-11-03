@@ -209,8 +209,8 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'ler_atendimento', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
-        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
+        conferirMfaDoRegistro(ctx, e);
         const dto = await this.montar(tx, ctx, e);
         await recordAudit(tx, ctx, {
           action: AuditAction.Read,
@@ -227,9 +227,9 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'salvar_registro', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
-        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (e.authorUserId !== ctx.userId) throw new ProibidoError('somente_o_autor');
+        conferirMfaDoRegistro(ctx, e);
         if (e.status !== 'open') throw new ConflitoError('registro_finalizado');
         if (dados.versaoBase !== e.currentVersion) throw new ConflitoError('versao_desatualizada');
         const conteudo = validarConteudo(e.template, dados.conteudo);
@@ -266,9 +266,9 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'finalizar', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
-        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (e.authorUserId !== ctx.userId) throw new ProibidoError('somente_o_autor');
+        conferirMfaDoRegistro(ctx, e);
         if (e.status !== 'open') throw new ConflitoError('registro_finalizado');
         if (e.currentVersion === 0) throw new ConflitoError('registro_vazio');
         const v = await this.versaoAtual(tx, ctx, e);
@@ -308,9 +308,9 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'adendo', targetId: id }, () =>
       escreverNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, true);
-        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
+        conferirMfaDoRegistro(ctx, e);
         if (e.status !== 'signed') throw new ConflitoError('registro_nao_finalizado');
         const adendoId = randomUUID();
         const textEnc = await cifrarCampoClinico(this.cipher, tx, ctx, adendoId, CAMPO_ADENDO, texto);
@@ -330,9 +330,9 @@ export class ProntuarioService {
     return comNegacaoAuditada(this.db, ctx, { op: 'versoes', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
-        conferirMfaDoRegistro(ctx, e);
         const vinculo = await exigirConteudoClinico(tx, ctx, e.patientId);
         if (!podeVerConteudo(e, ctx.userId)) throw new ProibidoError('sigilo_psicologia');
+        conferirMfaDoRegistro(ctx, e);
         const linhas = await tx
           .select()
           .from(clinicalRecordVersions)
@@ -581,8 +581,12 @@ export class ProntuarioService {
  * R3 do parecer do #123: ver ou mexer num atendimento da psicologia exige MFA recente. A recusa é 403 com código e
  * fica na trilha (comNegacaoAuditada audita os motivos `mfa_*`).
  */
-function conferirMfaDoRegistro(ctx: RequestContext, e: { readonly compartment: RecordCompartment }): void {
-  if (!exigeMfaRecente(e)) return;
+function conferirMfaDoRegistro(
+  ctx: RequestContext,
+  e: { readonly compartment: RecordCompartment; readonly authorUserId: string; readonly confidentiality: PsychCompartmentMode },
+): void {
+  // Só depois do vínculo e do sigilo (B3): quem não pode ver o conteúdo nunca recebe um código que revele o compartimento.
+  if (!exigeMfaRecente(e) || !podeVerConteudo(e, ctx.userId)) return;
   const recusa = recusaDeMfaRecente(ctx.mfaEm);
   if (recusa) throw new ProibidoError(recusa);
 }

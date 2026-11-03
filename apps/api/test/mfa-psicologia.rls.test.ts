@@ -82,6 +82,20 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     expect(negadas.filter((l) => (l.metadata as { reason?: string }).reason === 'mfa_recente_obrigatorio').length).toBeGreaterThanOrEqual(3);
   });
 
+  it('B3: quem não pode ver o conteúdo nunca recebe código de MFA (não revela que o paciente faz psicoterapia)', async () => {
+    // Outro profissional, sem autoria nem vínculo com o paciente, e com MFA antigo.
+    const outro = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
+    const velho = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: antigo() })}` };
+    const recente = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: new Date() })}` };
+    for (const url of [`/atendimentos/${atPsi}`, `/atendimentos/${atPsi}/versoes`]) {
+      const comVelho = await api.http().get(url).set(cab(velho));
+      const comRecente = await api.http().get(url).set(cab(recente));
+      expect((comVelho.body as { codigo?: string }).codigo ?? '', url).not.toMatch(/^mfa_/);
+      // A resposta é a mesma com MFA antigo ou recente: o MFA não muda nada para quem não pode ver.
+      expect([comVelho.status, (comVelho.body as { codigo?: string }).codigo], url).toEqual([comRecente.status, (comRecente.body as { codigo?: string }).codigo]);
+    }
+  });
+
   it('com MFA recente, o autor vê o atendimento de psicologia', async () => {
     const r = await api.http().get(`/atendimentos/${atPsi}`).set(cab(sessaoPsi(new Date())));
     expect(r.status, JSON.stringify(r.body)).toBe(200);
