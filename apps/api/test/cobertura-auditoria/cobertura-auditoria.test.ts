@@ -6,8 +6,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analisarRotasDeEscrita, analisarRotasDeLeitura, type RotaAnalisada } from './analise';
-import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, LEITURA_SEM_DADO_DE_PACIENTE } from './lista';
+import { analisarRotasDeEscrita, analisarRotasDeLeitura, handlersForaDeController, type RotaAnalisada } from './analise';
+import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE } from './lista';
 
 let rotas: RotaAnalisada[];
 const porRota = new Map<string, RotaAnalisada>();
@@ -153,6 +153,26 @@ describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
       expect(ehCaminhoClinico(r), r).toBe(false);
     }
   });
+});
+
+describe('R6 do #117: handlers HTTP fora de controller só da lista fechada', () => {
+  it('todo handler fora de controller está em HANDLERS_FORA_DE_CONTROLLER, com motivo, e nenhum sobra', () => {
+    const achados = handlersForaDeController();
+    const declarados = Object.keys(HANDLERS_FORA_DE_CONTROLLER);
+    expect(
+      achados.filter((h) => !declarados.includes(h)),
+      'handler HTTP novo fora de controller (ex.: login da D4): declare em HANDLERS_FORA_DE_CONTROLLER com parecer do Guardião',
+    ).toEqual([]);
+    expect(declarados.filter((h) => !achados.includes(h)), 'declaração de handler que não existe mais').toEqual([]);
+    for (const [h, motivo] of Object.entries(HANDLERS_FORA_DE_CONTROLLER)) expect(motivo.trim().length, `${h}: motivo vazio`).toBeGreaterThan(20);
+  }, 120_000);
+
+  it('sanidade: enxerga app.use e rota no adaptador; app.get(Classe) do contêiner não conta', () => {
+    expect(handlersForaDeController([path.join(__dirname, 'fixtures', 'handler-fora.ts')])).toEqual([
+      'test/cobertura-auditoria/fixtures/handler-fora.ts post("/api/auth/entrar")',
+      'test/cobertura-auditoria/fixtures/handler-fora.ts use(loginDeTerceiro)',
+    ]);
+  }, 120_000);
 });
 
 describe('#105: sanidade da análise (fixtures fictícios, parecer de 03/11/2026)', () => {

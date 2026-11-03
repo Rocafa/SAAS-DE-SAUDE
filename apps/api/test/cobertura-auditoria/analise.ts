@@ -275,3 +275,46 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisa
   }
   return rotas.sort((a, b) => a.rota.localeCompare(b.rota));
 }
+
+/** Métodos que registram handler HTTP fora de controller (Nest `INestApplication`/adaptador, Express, MiddlewareConsumer). */
+const METODOS_DE_REGISTRO = new Set(['use', 'get', 'post', 'put', 'patch', 'delete', 'all', 'route', 'apply']);
+const RE_ORIGEM_HTTP = /\/node_modules\/(@nestjs\/(common|core|platform-express)|@types\/express(-serve-static-core)?|express)\//;
+
+function nomeDoArgumento(a: ts.Expression | undefined): string {
+  if (!a) return '';
+  if (ts.isCallExpression(a)) return nomeDoArgumento(a.expression);
+  if (ts.isIdentifier(a)) return a.text;
+  if (ts.isPropertyAccessExpression(a)) return a.name.text;
+  if (ts.isStringLiteralLike(a)) return JSON.stringify(a.text);
+  return a.kind === ts.SyntaxKind.ArrowFunction || a.kind === ts.SyntaxKind.FunctionExpression ? '<função anônima>' : a.getText().slice(0, 40);
+}
+
+/**
+ * Handlers HTTP registrados FORA de controller do Nest (R6 do parecer do #117, condição da D4): `app.use(x)`,
+ * `adaptador.get('/rota', h)`, `consumer.apply(m)`. O método é identificado pelo símbolo (declarado no Nest ou no
+ * Express). Devolve `"<arquivo> <método>(<1º argumento>)"`, ordenado. `extras`: como em `analisarRotas`.
+ */
+export function handlersForaDeController(extras: readonly string[] = []): string[] {
+  const absolutos = extras.map((f) => path.resolve(f));
+  const programa = criarPrograma(absolutos);
+  const checker = programa.getTypeChecker();
+  const doExtra = (f: string) => absolutos.includes(path.resolve(f));
+  const achados: string[] = [];
+  for (const sf of programa.getSourceFiles()) {
+    const f = path.resolve(sf.fileName);
+    if (absolutos.length > 0 ? !doExtra(f) : !f.startsWith(RAIZ_SRC)) continue;
+    const visitar = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && METODOS_DE_REGISTRO.has(n.expression.name.text)) {
+        const decl = checker.getResolvedSignature(n)?.getDeclaration() ?? checker.getSymbolAtLocation(n.expression.name)?.declarations?.[0];
+        const origem = decl?.getSourceFile().fileName.split(path.sep).join('/') ?? '';
+        // `get/post/...` só é rota com caminho em texto: `app.get(Classe)` é busca no contêiner do Nest, não rota.
+        const metodo = n.expression.name.text;
+        const ehRota = metodo === 'use' || metodo === 'apply' || (n.arguments[0] !== undefined && (ts.isStringLiteralLike(n.arguments[0]) || ts.isTemplateExpression(n.arguments[0])));
+        if (ehRota && RE_ORIGEM_HTTP.test(origem)) achados.push(`${relativo(sf)} ${n.expression.name.text}(${nomeDoArgumento(n.arguments[0])})`);
+      }
+      ts.forEachChild(n, visitar);
+    };
+    visitar(sf);
+  }
+  return achados.sort();
+}

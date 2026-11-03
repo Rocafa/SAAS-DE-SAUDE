@@ -139,7 +139,10 @@ A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `
   pelo código tem de ir para `AUDITADAS`.
 - **Sanidade:** fixtures fictícios em `test/cobertura-auditoria/fixtures/` provam cada uma dessas regras.
 - **Limite:** a análise prova que EXISTE caminho até a trilha (sem contar gravador incidental), não que todo ramo do
-  handler grava. Rotas fora de controller do Nest (o login da D4) ainda não entram (fila, condição da D4).
+  handler grava.
+- **Fora de controller (R6 do #117):** todo handler HTTP registrado fora de controller (`app.use`, rota no adaptador,
+  `MiddlewareConsumer`) tem de estar em `HANDLERS_FORA_DE_CONTROLLER`, com o motivo. Hoje são só os 4 middlewares de
+  segurança; o login da D4 entra aí com parecer e com a auditoria de login, logout, falha e troca de credencial.
 - **Leitura (R5):** o mesmo vale para toda rota `GET`: `AUDITADAS_LEITURA` (com a prova de alcance) ou
   `LEITURA_SEM_DADO_DE_PACIENTE` (com o motivo). Rota sob caminho clínico (por prefixo: pacientes, prontuário,
   atendimentos, agenda, guias, pacotes, convênios, o financeiro inteiro salvo as configurações, importações, o portal
