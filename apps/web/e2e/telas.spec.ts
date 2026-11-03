@@ -1,8 +1,7 @@
-import { fileURLToPath } from 'node:url';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
 import { coresNaoCinza } from '../lib/cores.mjs';
+import { capturar, exigirModoFake } from './captura';
 
 const TELAS: [string, string][] = [
   ['inicio', '/inicio'],
@@ -48,7 +47,6 @@ const TELAS: [string, string][] = [
   ['pagina-404', '/nao-existe-esta-pagina'],
 ];
 
-const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));
 
 /** Lê as cores CALCULADAS de todos os elementos da tela e devolve as que não são cinza. */
 async function coresRenderizadas(page: Page): Promise<string[]> {
@@ -70,25 +68,6 @@ async function coresRenderizadas(page: Page): Promise<string[]> {
 async function axe(page: Page) {
   const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
   return r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical').map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
-}
-
-/**
- * As capturas entram no repositório. Fotografar um build ligado à API real gravaria prontuário, CPF e
- * nome de paciente REAL no git, que é o que a regra do projeto proíbe acima de tudo — e `.env*` é
- * ignorado pelo git, então o modo não aparece na revisão. Confere o ambiente do processo e, porque o
- * build pode ter sido feito com outro ambiente, confere também a página servida: a faixa de
- * demonstração só existe no modo fake.
- */
-async function exigirModoFake(page: Page): Promise<void> {
-  for (const chave of ['NEXT_PUBLIC_API_MODO', 'NEXT_PUBLIC_PORTAL_MODO'] as const) {
-    const valor = process.env[chave]?.trim() || 'fake';
-    if (valor !== 'fake') throw new Error(`${chave}=${valor}: captura de tela só com dado fictício (${chave}=fake)`);
-  }
-  await page.goto('/inicio');
-  const faixa = page.getByText('Demonstração com pacientes fictícios', { exact: false });
-  if ((await faixa.count()) === 0) {
-    throw new Error('O build servido não está em modo de demonstração: captura abortada antes de gravar PNG no repositório');
-  }
 }
 
 test.describe('telas do PR 1', () => {
@@ -121,8 +100,7 @@ test.describe('telas do PR 1', () => {
       );
       expect(pequenos).toEqual([]);
 
-      mkdirSync(PASTA, { recursive: true });
-      await page.screenshot({ path: `${PASTA}${info.project.name}-${nome}.png`, fullPage: true });
+      await capturar(page, info, nome);
     });
   }
 
@@ -133,7 +111,7 @@ test.describe('telas do PR 1', () => {
     await page.waitForLoadState('networkidle');
     expect(await axe(page)).toEqual([]);
     expect(await coresRenderizadas(page)).toEqual([]);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-inicio-escuro.png`, fullPage: true });
+    await capturar(page, info, 'inicio-escuro');
   });
 
   test('Ajudante aberto: acessível e só cinza', async ({ page }, info) => {
@@ -143,7 +121,7 @@ test.describe('telas do PR 1', () => {
     await expect(page.getByRole('option').first()).toBeVisible();
     expect(await axe(page)).toEqual([]);
     expect(await coresRenderizadas(page)).toEqual([]);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-ajudante.png` });
+    await capturar(page, info, 'ajudante', { fullPage: false });
   });
 
   test('estado de erro tem "Tentar de novo"', async ({ page }) => {

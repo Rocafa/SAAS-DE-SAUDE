@@ -20,8 +20,13 @@ describe('ehAdmin', () => {
 describe('o adaptador falso recusa o que é só do administrador', () => {
   const comoRecepcao = () => criarApiFake({ agora, papel: 'recepcao' });
 
-  it('equipe, convite e acesso', async () => {
+  it('dados da clínica, equipe, convite e acesso (tirar e devolver)', async () => {
+    const admin = criarApiFake({ agora });
+    const clinica = await admin.obterClinica();
+    const [membro] = await admin.listarEquipe();
     const api = comoRecepcao();
+    await expect(api.salvarClinica({ ...clinica, nome: 'Outra Clínica Fictícia' })).rejects.toMatchObject({ status: 403 });
+    await expect(api.devolverAcesso(membro!)).rejects.toMatchObject({ status: 403 });
     await expect(api.listarEquipe()).rejects.toMatchObject({ status: 403 });
     await expect(api.convidar('alguem@exemplo.test', 'recepcao')).rejects.toMatchObject({ status: 403 });
     await expect(api.removerAcesso('m1')).rejects.toMatchObject({ status: 403 });
@@ -31,6 +36,7 @@ describe('o adaptador falso recusa o que é só do administrador', () => {
     const api = comoRecepcao();
     await expect(api.listarAuditoria()).rejects.toMatchObject({ status: 403 });
     await expect(api.cancelarAssinatura()).rejects.toMatchObject({ status: 403 });
+    await expect(api.reativarAssinatura()).rejects.toMatchObject({ status: 403 });
     await expect(api.pedirExportacao('123456')).rejects.toMatchObject({ status: 403 });
     await expect(api.aprovarExportacao('x1')).rejects.toMatchObject({ status: 403 });
   });

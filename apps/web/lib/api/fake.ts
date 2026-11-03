@@ -312,8 +312,8 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       ];
 
   /**
-   * Trava de papel do que é só do administrador: equipe, convite, acesso, trilha de acesso,
-   * assinatura e exportação total. Mesmo erro que a API responderá (403), para a tela nunca ser a
+   * Trava de papel do que é só do administrador: dados da clínica, equipe, convite, acesso (tirar e devolver),
+   * trilha de acesso, assinatura (cancelar e reativar) e exportação total. Mesmo erro que a API responderá (403), para a tela nunca ser a
    * única guardiã.
    */
   function exigirAdmin(): void {
@@ -639,6 +639,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
 
     obterClinica: () => resposta(clinica),
     async salvarClinica(d) {
+      exigirAdmin();
       if (!d.nome.trim()) throw new Error('Falta o nome da clínica.');
       clinica = { ...d, nome: d.nome.trim() };
       registrar('Alterou os dados da clínica');
@@ -666,6 +667,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       return resposta(m!);
     },
     async devolverAcesso(m) {
+      exigirAdmin();
       if (!equipe.some((x) => x.id === m.id)) equipe.push(m);
       registrar(`Devolveu o acesso de ${m.nome}`);
       await resposta(null);
@@ -684,6 +686,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       return resposta(assinatura);
     },
     async reativarAssinatura() {
+      exigirAdmin();
       assinatura = { plano: assinatura.plano, valorMensal: assinatura.valorMensal, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 30)) };
       registrar('Reativou a assinatura');
       return resposta(assinatura);
