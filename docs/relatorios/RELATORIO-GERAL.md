@@ -21,6 +21,10 @@
 
 **Acesso do suporte autorizado pela clínica** (#115, S9). O dono da clínica autoriza o acesso do suporte a um chamado por 1 a 72 h e pode revogar. O banco recusa qualquer registro de acesso do suporte sem autorização válida. O acesso de emergência fica desligado até a D4.
 
+**MFA, independente do provedor** (#123 a #125, parte do #106). O MFA é obrigatório para todos os perfis. 24 ações sensíveis exigem o código dos últimos 15 minutos, e a exportação total vai exigir 5. No prontuário, o código recente só é exigido na psicologia. A recusa vai para a trilha, no máximo uma linha por minuto. Acima de 20 recusas, a API bloqueia o usuário e gera um alerta. O Guardião vetou duas vezes: a recepção estava sem MFA, e o tipo de erro revelava que o paciente faz psicoterapia. As duas falhas foram corrigidas antes do merge. Falta o código de verdade, que chega com o provedor da D4.
+
+**Exportação total** (#126 e #127). O manifesto marca o prontuário por área, e um teste prova que a psicologia sai inteira mesmo sem o código recente. Se a exportação falha, a trilha registra o motivo, sem dado do paciente. A rota HTTP da exportação depende de e-mail, armazenamento (AWS) e da definição do responsável técnico.
+
 **postgres.js v4** (#116, rascunho). CI 17/17 com a versão nova, e a reprodução do bug virou teste automático. Entra a partir de 12/11.
 
 **Decisões e PRs do @Lopesloro:**
@@ -29,8 +33,8 @@
 - O #92, o #91 e o #104 estão aprovados. O merge é dele.
 
 **O que falta para o piloto, hoje:**
-1. **D4 confirmada**, seguida do login real (#107) e do MFA (#106). O PR do login precisa auditar login, logout e falhas.
-2. Conta AWS para as provas K-c3/K-c5 no staging e o R10 do importador.
+1. **D4 confirmada**, seguida do login real (#107) e do código de MFA de verdade (a política já está pronta, #123 a #125). O PR do login precisa auditar login, logout, falhas e os eventos do MFA.
+2. Conta AWS para as provas K-c3/K-c5 no staging, o R10 do importador e o armazenamento da exportação total. Provedor de e-mail e definição do responsável técnico (rota da exportação).
 3. Front: merge do #118, do #103, do #92, do #91 e do #104, e a decisão do `fake.ts` (#86).
 4. Jurídico: D8 (advogado, com a pergunta 1.15), D7 e D13.
 
