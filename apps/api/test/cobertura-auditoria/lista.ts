@@ -258,6 +258,8 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'POST /notas-privadas/:id/descartar',
   'POST /pacientes/:id/notas-privadas',
   'POST /pacientes/:id/responsaveis/eliminacao',
+  'POST /profissionais',
+  'POST /profissionais/:id/area-sensivel',
   'POST /prontuario/custodias',
   'POST /prontuario/notas-privadas/ciclo',
   'POST /prontuario/pacientes/:id/retencao-legal/retirada',
@@ -265,5 +267,9 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'POST /prontuario/profissionais/:id/desligamento',
   'POST /responsaveis/descarte',
   'POST /suporte/autorizacoes',
+  'PUT /clinica/vinculo-de-cuidado',
+  'PUT /financeiro/configuracao',
+  'PUT /financeiro/profissionais/:id/perfil-fiscal',
   'PUT /prontuario/configuracao',
+  'PUT /whatsapp/configuracao',
 ];

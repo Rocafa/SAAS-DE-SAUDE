@@ -53,6 +53,7 @@ export class FinanceiroController {
 
   @Put('configuracao')
   @Permissao('financeiro:configurar')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   alterarConfiguracao(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ConfiguracaoDto> {
     return this.financeiro.alterarConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
   }
@@ -67,6 +68,7 @@ export class FinanceiroController {
 
   @Put('profissionais/:id/perfil-fiscal')
   @Permissao('financeiro:fiscal')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   alterarPerfilFiscal(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
     const alvo = exigirUuid(id);
     return this.financeiro.alterarPerfilFiscal(paraRequestContext(auth), alvo, validarPerfilFiscal(corpo));

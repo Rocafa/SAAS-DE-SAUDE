@@ -2,7 +2,7 @@ import { Body, Controller, type DynamicModule, Get, Inject, Module, Put, UseGuar
 import { exigirObjeto, Validador } from '../../common/validacao';
 import { AUTH_PROVIDER, paraRequestContext, type AuthContext, type AuthProvider } from './auth-context';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
-import { mfaRecenteAte } from './mfa';
+import { ExigeMfaRecente, mfaRecenteAte } from './mfa';
 import { MembrosController, MembrosService } from './membros';
 import { VINCULO_ATENDIMENTO_DIAS_TETO, VinculoDeCuidadoService } from './vinculo-de-cuidado';
 
@@ -34,6 +34,7 @@ export class VinculoDeCuidadoController {
 
   @Put()
   @Permissao('cadastros:gerir')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   definir(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<{ dias: number; teto: number }> {
     const v = new Validador(exigirObjeto(corpo, ['dias']));
     const dias = v.inteiro('dias', { min: 1, max: VINCULO_ATENDIMENTO_DIAS_TETO, obrigatorio: true });
