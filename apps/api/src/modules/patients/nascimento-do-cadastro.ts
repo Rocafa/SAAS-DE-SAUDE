@@ -8,6 +8,7 @@ import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { patientFieldRef } from './patient-fields';
 import { aniversarioDe, menorEm, REGRA_INFORMACAO_CLINICA } from './responsaveis-regras';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 /**
  * Mudança da data de nascimento do cadastro, compartilhada pelo `PATCH /pacientes/:id` e pelo atendimento do
@@ -82,5 +83,8 @@ export async function recalcularSigiloDoPortal(
          where tenant_id = app_current_tenant() and action = 'anomaly_alert' and created_at = now()
            and metadata->>'rule' = 'portal_sigilo_transicao'`,
   );
-  for (const a of alertas) logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=${a.transicao}`);
+  for (const a of alertas) {
+    logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=${a.transicao}`);
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_sigilo_transicao', motivo: String(a.transicao) });
+  }
 }

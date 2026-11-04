@@ -82,6 +82,7 @@ import {
   vinculoParaPortal,
 } from './portal-respostas';
 import { PortalVigilanciaService } from './portal-vigilancia';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 /** Contexto do titular, resolvido NO SERVIDOR (sessão + banco). Nada daqui vem do cliente. */
 export interface ContextoPortal {
@@ -228,6 +229,7 @@ export class PortalService {
     });
     if (!telefone) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO');
       throw new ConflitoError('convite_invalido');
     }
     await this.otp.enviar({ canal: 'sms', valor: telefone }, codigo);
@@ -251,6 +253,7 @@ export class PortalService {
     });
     if (!vinculo) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO');
       throw new ConflitoError('convite_invalido');
     }
     await this.provider.escolherVinculo(req, vinculo);
@@ -471,6 +474,7 @@ export class PortalService {
       });
     } catch (err) {
       this.logger.error(`AVISO_PEDIDO_TITULAR_NAO_GRAVADO (${err instanceof Error ? err.name : typeof err})`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'aviso_pedido_titular' });
     }
     return dto;
   }

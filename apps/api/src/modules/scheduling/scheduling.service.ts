@@ -38,6 +38,7 @@ import {
   type NovoProfissional,
   type NovoTipoAtendimento,
 } from './scheduling.validation';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 export interface AgendamentoDto {
   readonly id: string;
@@ -494,6 +495,7 @@ export class SchedulingService {
     const limiar = this.janela.alertaAutoagendadosPorDia;
     if (contagem <= limiar) return;
     this.logger.warn('ALERTA_ANOMALIA regra=vinculo_autoagendado');
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'vinculo_autoagendado' });
     await recordAudit(tx, ctx, {
       action: AuditAction.AnomalyAlert,
       scope: SCOPE,
