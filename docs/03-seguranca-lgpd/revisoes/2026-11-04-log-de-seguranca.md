@@ -79,3 +79,12 @@ Mas a validação de formato e a trava estática prometem mais do que entregam. 
   - IP em claro por 6 meses nos logs do ALB: bloqueia produção e depende da AWS e da D8;
   - `origem` no portal e no webhook;
   - testes de emissão do rate limit e dos módulos.
+
+**Reconferência do guardião (04/11/2026, commit `699defb`): veto levantado, APROVADO.** Os 9 furos de R2 e os 3 casos de R1 agora são reprovados. A sonda também pegou `l[m](p.cpf)`. Os 36 testes de `src/security` passam e o `tsc` está limpo. R3, R4, R6 e R9 foram conferidas no código e no guia. R5, R7 e R8 seguem na fila, e R5 continua bloqueando produção.
+
+Resíduos de baixo risco, para a fila (hoje não ocorrem no `src`):
+- **Valor copiado para uma variável local antes de ir ao log:** `const x = p.nome; logger.warn(x)` passa.
+- **Leitores genéricos de objeto:** `util.inspect(p)` e `Object.values(p)` passam.
+- **Nome de campo composto:** `p.cpfDoPaciente` passa, porque `SENSIVEL` só casa o nome exato.
+- **Sanitizador liberado pelo nome:** `describe` vale em qualquer arquivo. O certo é amarrar ao arquivo de `graceful-shutdown.ts`.
+- **Rota com nome em minúsculas:** `ROTA` aceita um segmento como `joao-souza`. O risco é baixo, porque o valor vem do template do Express.
