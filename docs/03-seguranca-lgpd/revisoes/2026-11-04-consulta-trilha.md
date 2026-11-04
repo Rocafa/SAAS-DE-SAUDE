@@ -63,3 +63,16 @@ Sobre o sigilo: o admin ver **que** um psicólogo acessou o prontuário ou as no
 - **R4 (feita):** a metadata devolvida passa pela lista fechada `CHAVES_VISIVEIS` (ids e códigos), e `hidden`, `template`, `export_consent` e as contagens ficam de fora. Testes unitário e RLS conferem isso. O registro no RIPD e na pergunta 1.11 foi para a fila.
 - **Fila do parecer (feito):** teto de 366 dias no período, com teste de `de` e `ate`.
 - **Fila do parecer (documentado):** o filtro por paciente só pega linhas com `patient_id`. Listas e lotes não entram.
+
+## Reconferência do Guardião (04/11/2026, commit `dc882f8`)
+
+**APROVADO com ressalvas.** R1 a R3 foram resolvidas: o cursor usa o horário exato do banco, lido por subconsulta com `tenant_id`, e um id de outra clínica ou inexistente não devolve linha. O teste RLS agora confere completude e isolamento pelos ids. A 0061 cria os índices na ordem da paginação, e a consulta roda com `statement_timeout` de 5 s. O teto de 366 dias também está feito. O teste de unidade roda (6/6); o RLS não foi rodado aqui.
+Ficam três ressalvas:
+- (a) **antes do piloto:** `count` continua em `CHAVES_VISIVEIS`, então a quantidade de notas privadas (`private_notes`) e do compartimento de psicologia ainda sai, ao contrário do que diz a nota do Maestro. Tirar `count` desses escopos, com teste.
+- (b) **antes do piloto:** sem `de`/`ate` não há teto de período, só o timeout.
+- (c) **fila:** no teste de completude, garantir de propósito uma transação com 2+ linhas na trilha e remover o `toBeGreaterThanOrEqual`, que não testa nada. Em produção, a 0061 deve usar `CREATE INDEX CONCURRENTLY` se a tabela já tiver volume.
+
+**Nota do Maestro sobre a reconferência (04/11/2026):**
+- **(a) feita:** `count` saiu de `CHAVES_VISIVEIS`. Nenhuma contagem sai mais, e o teste unitário confere isso. A frase da nota anterior agora é verdadeira.
+- **(b) feita:** sem `de`, a consulta vai no máximo até 366 dias antes do fim (`ate`, ou hoje).
+- **(c) fila:** um teste com uma transação que grava 2 ou mais linhas, e `CREATE INDEX CONCURRENTLY` fora da migração transacional quando a tabela de produção tiver volume.

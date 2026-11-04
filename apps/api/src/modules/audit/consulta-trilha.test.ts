@@ -56,6 +56,6 @@ describe('período (fila do parecer do #135)', () => {
 
 describe('metadataVisivel (R4 do parecer do #135)', () => {
   it('só ids e códigos da lista fechada; detalhes que passam do necessário ficam fora', () => {
-    expect(metadataVisivel({ op: 'x', patient_id: ID, hidden: true, template: 'psicologia', export_consent: true, private_notes: 3 })).toEqual({ op: 'x', patient_id: ID });
+    expect(metadataVisivel({ op: 'x', patient_id: ID, hidden: true, template: 'psicologia', export_consent: true, private_notes: 3, count: 7 })).toEqual({ op: 'x', patient_id: ID });
   });
 });

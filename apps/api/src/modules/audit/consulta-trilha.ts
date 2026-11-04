@@ -73,7 +73,8 @@ export const PERIODO_MAXIMO_DIAS = 366;
 
 /**
  * Chaves da metadata que a clínica vê (R4 do parecer do #135): só ids e códigos necessários para investigar. Ficam de
- * fora detalhes que passam do necessário (`hidden`, `template`, `export_consent`, contagens de notas privadas etc.).
+ * fora detalhes que passam do necessário (`hidden`, `template`, `export_consent` e QUALQUER contagem, como `count`, que
+ * revelaria quantas notas privadas ou registros de psicologia existem; ressalva (a) da reconferência do #135).
  */
 export const CHAVES_VISIVEIS: ReadonlySet<string> = new Set([
   'op',
@@ -90,7 +91,6 @@ export const CHAVES_VISIVEIS: ReadonlySet<string> = new Set([
   'creator_id',
   'filter_user_id',
   'filter_action',
-  'count',
 ]);
 
 export function metadataVisivel(m: Record<string, unknown>): Record<string, unknown> {
@@ -145,8 +145,11 @@ export class ConsultaDaTrilhaService {
       const condicoes: SQL[] = [eq(auditLog.tenantId, ctx.tenantId)];
       if (f.usuarioId) condicoes.push(eq(auditLog.actorId, f.usuarioId));
       if (f.pacienteId) condicoes.push(sql`${auditLog.metadata}->>'patient_id' = ${f.pacienteId}`);
-      if (f.de) condicoes.push(gte(auditLog.createdAt, new Date(`${f.de}T00:00:00.000Z`)));
-      if (f.ate) condicoes.push(lt(auditLog.createdAt, diaSeguinte(f.ate)));
+      // Sem `de`, o período vai até 366 dias antes do fim (ressalva (b) da reconferência do #135): nunca a trilha inteira.
+      const fim = f.ate ? diaSeguinte(f.ate) : null;
+      const inicio = f.de ? new Date(`${f.de}T00:00:00.000Z`) : new Date((fim ?? new Date()).getTime() - PERIODO_MAXIMO_DIAS * 86_400_000);
+      condicoes.push(gte(auditLog.createdAt, inicio));
+      if (fim) condicoes.push(lt(auditLog.createdAt, fim));
       if (f.acao) condicoes.push(eq(auditLog.action, f.acao));
       if (f.cursor) {
         condicoes.push(
