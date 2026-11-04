@@ -189,3 +189,35 @@ R2 do #126: **atendida**. Continuam pendentes, junto com a rota da G2: R3 (manif
 - **R1 (feita):** a função avulsa `exportTenantData` de `tenant-export.ts` está documentada como só para testes e scripts. Um teste unitário reprova qualquer import dela em `src`, então a aplicação só exporta pelo `ExportsService`, que registra a falha.
 - **R4 (feita):** o log da falha da trilha leva só `tenant=<uuid>`, sem a mensagem do erro.
 - **R2 e R3 (fila):** a eliminação da G4 cobre as linhas gravadas depois da janela. O rate limit e o alerta aos admins entram com a rota da G2.
+
+#### Parecer do PR #128 (contrato do provedor, R6)
+
+**03/11/2026, branch `eng/contrato-provedor-sessao` (commit `d858922`): APROVADO COM RESSALVAS.**
+
+**Verificação:** `npx vitest run src/modules/auth` deu 23/23 verdes, e o `tsc --noEmit` está limpo. O PR não toca dado real, segredo, isolamento no banco nem trilha. Os testes usam UUIDs aleatórios.
+
+O que o contrato já cobre da R6:
+- **Sem fator, `mfaEm === null`** (a frase exata da R6), e com fator uma data válida que não está no futuro.
+- **Origem só do servidor:** clínica, usuário, perfis e `mfaEm` não mudam com cabeçalhos forjados (`x-tenant-id`, `x-perfis`, `x-mfa-em` etc.), e só cabeçalhos forjados, sem sessão, dão `null`. A porta `RequisicaoParaSessao` só expõe cabeçalhos, então o corpo nem chega ao provedor.
+- **Falha fechada:** credencial ausente, lixo, adulterada ou depois do logout dá `null`, e as sessões não se misturam.
+- **Trava de cobertura:** `BANCADAS` é tipado por `TIPOS_DE_PROVEDOR`, e há um teste que compara as chaves. Um tipo novo na fábrica sem bancada não compila.
+
+O que falta e só pode ser testado com o provedor real (fica para o PR de integração da D4, sem mudar o prazo da R6):
+- step-up atualizando `mfaEm` na sessão do servidor;
+- claim não verificado: token/JWT com `amr`/`mfa` assinado com outra chave ou sem assinatura tem de dar `null` ou `mfaEm: null`;
+- troca de clínica, de perfil e de senha zerando ou reavaliando o MFA;
+- expiração da sessão (tempo ocioso e absoluto) dando `null`.
+
+Ressalvas:
+1. **Deixar as lacunas visíveis no contrato agora (antes do merge, barato):** acrescente em `BancadaDoProvedor` os ganchos opcionais `trocarClinica`, `trocarPerfis`, `trocarSenha`, `stepUp` e `expirar`, e no `describe` os casos correspondentes, que rodam quando o gancho existe e viram `it.todo` quando não existe. A regra esperada: depois de trocar clínica, perfil ou senha, `mfaEm` é `null` (ou anterior ao momento da troca e, portanto, fora da janela recente); depois do `stepUp`, `mfaEm` é maior que o anterior; depois de `expirar`, o resultado é `null`. Assim a bancada real nasce sabendo o que precisa provar, e a sessão fictícia continua passando.
+2. **Obrigatoriedade dos ganchos para o provedor real (no PR da D4):** quando `TIPOS_DE_PROVEDOR` ganhar um tipo diferente de `dev`, um teste deve exigir que a bancada desse tipo implemente todos os ganchos da ressalva 1. Um `it.todo` não pode valer como aprovação da R6 para o provedor real.
+3. **Claim do cliente (no PR da D4):** a bancada real deve expor um `forjarCredencial` (token com claim de MFA, perfil ou clínica assinado com chave errada ou `alg: none`, ou cookie de outra sessão). O teste espera `null`. Os cabeçalhos `x-*` de hoje não exercitam esse vetor.
+4. **Fábrica (não bloqueia):** `createAuthProvider` ainda devolve `DevSessionProvider` para qualquer tipo da lista. Ao entrar o segundo tipo, troque por um mapa `Record<TipoDeProvedor, ...>` (como `BANCADAS`), para a fábrica não instanciar o provedor errado em silêncio. A guarda de `NODE_ENV` vale só para `dev`. O provedor real não pode herdar a lista `development`/`test`.
+
+R6: **adiantada em parte.** O contrato estático (null sem fator, origem só do servidor, falha fechada) está atendido. Step-up, claim não verificado, troca de clínica/perfil/senha e expiração continuam como condição do PR de integração da D4.
+
+#### Nota do Maestro sobre o parecer do #128 (03/11/2026)
+
+- **R1 (feita):** a bancada ganhou ganchos opcionais: `trocarClinica`, `trocarPerfis`, `trocarSenha`, `stepUp`, `expirar` e `forjarCredencial`. Cada caso roda quando o gancho existe. Quando falta, vira `it.todo`, e hoje aparecem 6 pendentes na sessão fictícia.
+- **R2 e R3 (feitas no contrato):** um teste reprova qualquer tipo diferente de `dev` que não implemente os 6 ganchos, inclusive o `forjarCredencial`. Um `it.todo` não aprova a R6.
+- **R4 (D4):** a fábrica vira um mapa por tipo quando entrar o segundo provedor, e a guarda de `NODE_ENV` passa a valer só para `dev`.
