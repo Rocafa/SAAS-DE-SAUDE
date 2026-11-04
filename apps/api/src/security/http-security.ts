@@ -10,7 +10,7 @@ import {
   registerRateLimitStore,
   type RateLimitStore,
 } from './rate-limit-store';
-import { origemDaRequisicao, registrarEventoDeSeguranca } from './log-de-seguranca';
+import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from './log-de-seguranca';
 
 type Next = (err?: unknown) => void;
 type Req = IncomingMessage & { ip?: string };
@@ -139,7 +139,7 @@ export function rateLimiter(
         failOpenCount++;
         const name = err instanceof Error ? err.name : typeof err;
         rateLimitLogger.error(`RATE_LIMIT_FAIL_OPEN: contador indisponível (${name}); requisição seguiu sem limite`);
-        registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'rate_limit_por_ip' });
+        registrarNoMaximoUmaVez('fail_open:rate_limit_por_ip', 60_000, 'RATE_LIMIT_FAIL_OPEN', { motivo: 'rate_limit_por_ip' });
         next();
       },
     );

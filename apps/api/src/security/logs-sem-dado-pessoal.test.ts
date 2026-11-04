@@ -26,6 +26,9 @@ const PERMITIDOS: Readonly<Record<string, string>> = {
   'tipos.texto()': 'contagem de tipos de falha do KMS (ex.: throttling:2), sem dado',
 };
 
+/** Funções que reduzem o erro a nome da classe e código, sem a mensagem (conferidas à mão; ver cada uma). */
+const SANITIZADORES: ReadonlySet<string> = new Set(['codigoDoErro', 'describe']);
+
 /** Liberações que só valem num arquivo (nome do job, motivo do desligamento), com o motivo. */
 const PERMITIDOS_POR_ARQUIVO: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   'modules/jobs/executor-de-jobs.ts': { nome: 'nome do job (constante do registro)', 'job.nome': 'nome do job (constante do registro)' },
@@ -45,14 +48,10 @@ export interface Violacao {
   readonly motivo: string;
 }
 
-function ehChamadaDeLog(chamada: ts.CallExpression): { console: boolean } | null {
-  const alvo = chamada.expression;
-  if (!ts.isPropertyAccessExpression(alvo) || !METODOS.has(alvo.name.text)) return null;
-  const receptor = alvo.expression;
-  if (ts.isIdentifier(receptor) && receptor.text === 'console') return { console: true };
-  const texto = receptor.getText();
-  if (/logger$/i.test(texto) || /^new Logger\(/.test(texto) || /Logger$/.test(texto)) return { console: false };
-  return null;
+/** O receptor é um logger? (`this.logger`, `deps.logger`, `new Logger(...)`, ou um apelido dele no arquivo.) */
+function ehReceptorDeLog(receptor: ts.Expression, apelidos: ReadonlySet<string>, sf: ts.SourceFile): boolean {
+  const texto = receptor.getText(sf);
+  return /logger$/i.test(texto) || /^new Logger\(/.test(texto) || /Logger$/.test(texto) || (ts.isIdentifier(receptor) && apelidos.has(receptor.text));
 }
 
 /** Analisa um arquivo-fonte (exportada para o teste de sanidade com código fictício). */
@@ -61,38 +60,81 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
   const saida: Violacao[] = [];
   const doArquivo = PERMITIDOS_POR_ARQUIVO[arquivo] ?? {};
   const seguras = new Set<string>();
+  const sensiveisRenomeadas = new Set<string>();
+  const apelidos = new Set<string>();
   const coletar = (n: ts.Node): void => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && INICIALIZACAO_SEGURA.test(n.initializer.getText(sf))) seguras.add(n.name.text);
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      const ini = n.initializer.getText(sf);
+      if (ts.isIdentifier(n.name) && INICIALIZACAO_SEGURA.test(ini)) seguras.add(n.name.text);
+      // Apelido do logger: `const log = this.logger` (R2 do parecer do #129).
+      if (ts.isIdentifier(n.name) && (/logger$/i.test(ini) || /^new Logger\(/.test(ini))) apelidos.add(n.name.text);
+      // Desestruturação renomeada: `const { cpf: x } = p` deixa `x` sensível.
+      if (ts.isObjectBindingPattern(n.name)) {
+        for (const el of n.name.elements) {
+          const original = el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName)) ? el.propertyName.text : undefined;
+          if (original && SENSIVEL.test(original) && ts.isIdentifier(el.name)) sensiveisRenomeadas.add(el.name.text);
+        }
+      }
+    }
     ts.forEachChild(n, coletar);
   };
   coletar(sf);
   const liberado = (texto: string): boolean => PERMITIDOS[texto] !== undefined || doArquivo[texto] !== undefined || seguras.has(texto);
   const linha = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const reprovar = (n: ts.Node, motivo: string): void => {
+    saida.push({ arquivo, linha: linha(n), motivo });
+  };
+
   const conferirArgumento = (arg: ts.Node): void => {
-    // Erro inteiro como argumento ou interpolação.
-    const direto = ts.isTemplateExpression(arg) ? arg.templateSpans.map((s) => s.expression) : [arg];
-    for (const d of direto) {
-      if (ts.isIdentifier(d) && ERRO.test(d.text) && !liberado(d.text)) saida.push({ arquivo, linha: linha(d), motivo: `erro inteiro no log (${d.text}); use ${d.text}.name` });
-    }
     const visitar = (n: ts.Node): void => {
       if (liberado(n.getText(sf))) return;
+      if (ts.isSpreadElement(n) || ts.isSpreadAssignment(n)) {
+        reprovar(n, `objeto espalhado no log: ${n.getText(sf)}`);
+        return;
+      }
+      if (ts.isCallExpression(n) && n.expression.getText(sf) === 'JSON.stringify') {
+        reprovar(n, 'JSON.stringify no log: serialize só campos fechados (log de segurança)');
+        return;
+      }
+      if (ts.isElementAccessExpression(n)) {
+        const chave = n.argumentExpression;
+        if (ts.isStringLiteral(chave) && SENSIVEL.test(chave.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
+      }
       if (ts.isPropertyAccessExpression(n)) {
-        const objeto = n.expression.getText(sf);
         // `err.name` (classe do erro) é seguro em qualquer forma: err instanceof Error ? err.name : typeof err
-        if (n.name.text === 'name' && ERRO.test(objeto)) return;
-        if (SENSIVEL.test(n.name.text)) saida.push({ arquivo, linha: linha(n), motivo: `campo sensível no log: ${n.getText(sf)}` });
-      } else if (ts.isIdentifier(n) && SENSIVEL.test(n.text) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
-        saida.push({ arquivo, linha: linha(n), motivo: `variável sensível no log: ${n.text}` });
+        if (n.name.text === 'name' && ERRO.test(n.expression.getText(sf))) return;
+        if (SENSIVEL.test(n.name.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
+      } else if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
+        if (SENSIVEL.test(n.text) || sensiveisRenomeadas.has(n.text)) reprovar(n, `variável sensível no log: ${n.text}`);
+        else if (ERRO.test(n.text) && !liberado(n.text)) {
+          // O erro inteiro em qualquer forma (`err`, `${err}`, String(err), 'x' + err). Liberado só como
+          // `err.name`, `err instanceof Error` e `typeof err`.
+          const pai = n.parent;
+          const seguro =
+            // `err.x`: o acesso a propriedade é conferido acima (`err.message`/`err.stack` reprovam, `err.name`/`err.code` passam).
+            (ts.isPropertyAccessExpression(pai) && pai.expression === n) ||
+            (ts.isCallExpression(pai) && SANITIZADORES.has(pai.expression.getText(sf))) ||
+            (ts.isBinaryExpression(pai) && pai.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && pai.left === n) ||
+            ts.isTypeOfExpression(pai);
+          if (!seguro) reprovar(n, `erro inteiro no log (${n.text}); use ${n.text}.name`);
+        }
       }
       ts.forEachChild(n, visitar);
     };
     visitar(arg);
   };
+
   const andar = (n: ts.Node): void => {
     if (ts.isCallExpression(n)) {
-      const log = ehChamadaDeLog(n);
-      if (log?.console) saida.push({ arquivo, linha: linha(n), motivo: 'console.* na API: use o Logger' });
-      else if (log) n.arguments.forEach(conferirArgumento);
+      const alvo = n.expression;
+      const texto = alvo.getText(sf);
+      if (/^process\.(stdout|stderr)\.write$/.test(texto)) reprovar(n, `${texto} na API: use o Logger`);
+      if (ts.isPropertyAccessExpression(alvo) && METODOS.has(alvo.name.text)) {
+        if (ts.isIdentifier(alvo.expression) && alvo.expression.text === 'console') reprovar(n, 'console.* na API: use o Logger');
+        else if (ehReceptorDeLog(alvo.expression, apelidos, sf)) n.arguments.forEach(conferirArgumento);
+      }
+      // `logger[metodo](...)`: não dá para conferir estaticamente.
+      if (ts.isElementAccessExpression(alvo) && ehReceptorDeLog(alvo.expression, apelidos, sf)) reprovar(n, `chamada dinâmica de log: ${texto}`);
     }
     ts.forEachChild(n, andar);
   };
@@ -149,5 +191,29 @@ describe('logs sem dado pessoal (trava de PR)', () => {
       '7:variável sensível no log: corpo',
       '8:console.* na API: use o Logger',
     ]);
+  });
+
+  it('R2 do parecer do #129: os 9 furos achados pelo Guardião são reprovados', () => {
+    const fonte = [
+      'class X {',
+      '  f(p: { cpf: string }, err: Error, metodo: string, o: object) {',
+      '    const log = this.logger;',
+      "    log.warn('x', p.cpf);",
+      '    this.logger[metodo]("x");',
+      '    this.logger.warn({ ...o });',
+      '    this.logger.warn(JSON.stringify(o));',
+      '    this.logger.error(String(err));',
+      "    this.logger.error('falhou ' + err);",
+      "    this.logger.warn(p['cpf']);",
+      '    const { cpf: doc } = p;',
+      '    this.logger.warn(doc);',
+      "    process.stderr.write('x');",
+      '  }',
+      '}',
+    ].join('\n');
+    const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
+    // 4 apelido, 5 dinâmica, 6 spread, 7 JSON.stringify, 8 String(err), 9 concatenação, 10 p['cpf'],
+    // 12 desestruturação renomeada, 13 process.stderr.write
+    for (const l of [4, 5, 6, 7, 8, 9, 10, 12, 13]) expect(linhas, `linha ${l}`).toContain(l);
   });
 });

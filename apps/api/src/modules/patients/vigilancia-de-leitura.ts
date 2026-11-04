@@ -25,7 +25,7 @@ import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-store';
-import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
 export interface VigilanciaConfig {
   readonly listaMax: number;
@@ -133,7 +133,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`RATE_LIMIT_FAIL_OPEN: contador por usuário indisponível (${name}); leitura seguiu sem limite`);
-      registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'vigilancia_de_leitura' });
+      registrarNoMaximoUmaVez('fail_open:vigilancia_de_leitura', 60_000, 'RATE_LIMIT_FAIL_OPEN', { motivo: 'vigilancia_de_leitura' });
       return undefined;
     }
   }

@@ -31,10 +31,48 @@ export type EventoDeSeguranca = keyof typeof EVENTOS_DE_SEGURANCA;
 export type Severidade = 'aviso' | 'alto' | 'critico';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CODIGO = /^[a-z][a-z0-9_]{0,63}$/;
-const ROTA = /^[A-Z]{3,7} \/[A-Za-z0-9/_:.-]{0,120}$/;
-const HANDLER = /^[A-Za-z][A-Za-z0-9]{0,63}\.[A-Za-z][A-Za-z0-9]{0,63}$/;
+/** Método + segmentos fixos (letras minúsculas e hífen, sem dígito nem ponto) ou `:param`. */
+const ROTA = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (\/(?:[a-z][a-z-]{0,40}|:[A-Za-z]{1,30}))*\/?$/;
+/** `PacientesController.listar`: só classes de controller (o nome vem do código, não do cliente). */
+const HANDLER = /^[A-Z][A-Za-z0-9]{0,60}Controller\.[a-z][A-Za-z0-9]{0,60}$/;
 const HEX = /^[0-9a-f]{16}$/;
+
+/**
+ * Listas FECHADAS de motivo e regra (R1 do parecer do #129): um formato de código deixava passar `maria_silva`.
+ * Valor novo entra aqui, no mesmo PR que o usa; um teste confere que todo literal usado em `src` está na lista.
+ */
+export const MOTIVOS_DE_SEGURANCA = [
+  'mfa_obrigatorio',
+  'mfa_recente_obrigatorio',
+  'mfa_alerta_de_volume',
+  'mfa_recusa',
+  'rate_limit_por_ip',
+  'vigilancia_de_leitura',
+  'portal',
+  'whatsapp',
+  'exportacao_falhou',
+  'janela_de_saida_encerrada',
+  'cifra_ausente',
+  'erro_interno',
+  'alerta_de_anomalia',
+  'aviso_pedido_titular',
+  'sigilo_desligado',
+  'representacao_estendida',
+  'titular_menor_revogado',
+] as const;
+export const REGRAS_DE_SEGURANCA = [
+  'paginas_de_pacientes',
+  'fichas_distintas',
+  'limite_por_usuario',
+  'portal_limite_por_conta',
+  'portal_teto_diario_pedidos',
+  'portal_resgate',
+  'portal_sigilo_transicao',
+  'vinculo_autoagendado',
+  'mfa_recusas_por_usuario',
+] as const;
+const MOTIVOS: ReadonlySet<string> = new Set(MOTIVOS_DE_SEGURANCA);
+const REGRAS: ReadonlySet<string> = new Set(REGRAS_DE_SEGURANCA);
 
 /** Campos permitidos e o formato de cada um. Nada além disto entra numa linha do log de segurança. */
 const FORMATOS = {
@@ -43,15 +81,15 @@ const FORMATOS = {
   /** Método + caminho do TEMPLATE da rota (`GET /pacientes/:id`), nunca a URL com ids ou query. */
   rota: (v: unknown) => typeof v === 'string' && ROTA.test(v),
   handler: (v: unknown) => typeof v === 'string' && HANDLER.test(v),
-  motivo: (v: unknown) => typeof v === 'string' && CODIGO.test(v),
-  regra: (v: unknown) => typeof v === 'string' && CODIGO.test(v),
+  motivo: (v: unknown) => typeof v === 'string' && MOTIVOS.has(v),
+  regra: (v: unknown) => typeof v === 'string' && REGRAS.has(v),
   status: (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 599,
   contagem: (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000_000,
   origem: (v: unknown) => typeof v === 'string' && HEX.test(v),
 } as const;
 
 export type CampoDeSeguranca = keyof typeof FORMATOS;
-export type CamposDeSeguranca = Partial<Record<CampoDeSeguranca, string | number>>;
+export type CamposDeSeguranca = Partial<Record<CampoDeSeguranca, string | number | undefined>>;
 
 export const VALOR_INVALIDO = '[invalido]';
 
@@ -66,12 +104,53 @@ export function linhaDeSeguranca(evento: EventoDeSeguranca, campos: CamposDeSegu
   return JSON.stringify(saida);
 }
 
-/** Correlaciona a mesma origem sem guardar o IP (HMAC truncado, mesmo segredo do rate limit). */
-export function origemDaRequisicao(ip: string | undefined, segredo: Uint8Array = loadRateLimitHashKey()): string {
-  return createHmac('sha256', segredo).update(`log:${ip ?? 'desconhecido'}`).digest('hex').slice(0, 16);
+let segredoDaOrigem: Uint8Array | null | undefined;
+
+/**
+ * Correlaciona a mesma origem sem guardar o IP (HMAC truncado, mesmo segredo do rate limit). O segredo é lido uma
+ * vez. Sem ele (produção mal configurada), devolve `undefined` e o campo some da linha: o log nunca derruba a
+ * requisição (R9 do parecer do #129). A falta do segredo já impede o boot do rate limit em produção.
+ */
+export function origemDaRequisicao(ip: string | undefined, segredo?: Uint8Array): string | undefined {
+  if (!segredo) {
+    if (segredoDaOrigem === undefined) {
+      try {
+        segredoDaOrigem = loadRateLimitHashKey();
+      } catch {
+        segredoDaOrigem = null;
+      }
+    }
+    if (!segredoDaOrigem) return undefined;
+  }
+  return createHmac('sha256', segredo ?? (segredoDaOrigem as Uint8Array)).update(`log:${ip ?? 'desconhecido'}`).digest('hex').slice(0, 16);
 }
 
 const logger = new Logger('seguranca');
+
+/** Últimas emissões por chave, para `registrarNoMaximoUmaVez`. Limitado: acima do teto, começa de novo. */
+const ultimas = new Map<string, number>();
+const TETO_DE_CHAVES = 10_000;
+
+/**
+ * Como `registrarEventoDeSeguranca`, mas no máximo uma linha por `chave` a cada `intervaloMs` (R3 e R6 do parecer
+ * do #129). Para eventos que se repetem a cada requisição (contador fora do ar, recusa de MFA insistente). A chave
+ * fica só em memória, nunca no log.
+ */
+export function registrarNoMaximoUmaVez(
+  chave: string,
+  intervaloMs: number,
+  evento: EventoDeSeguranca,
+  campos: CamposDeSeguranca = {},
+  saida: Pick<Logger, 'warn' | 'error'> = logger,
+  agora: number = Date.now(),
+): boolean {
+  const ultima = ultimas.get(chave);
+  if (ultima !== undefined && agora - ultima < intervaloMs) return false;
+  if (ultimas.size >= TETO_DE_CHAVES) ultimas.clear();
+  ultimas.set(chave, agora);
+  registrarEventoDeSeguranca(evento, campos, saida);
+  return true;
+}
 
 /** Escreve um evento de segurança. Severidade crítica/alta vai como erro (alarme), aviso como warn. */
 export function registrarEventoDeSeguranca(evento: EventoDeSeguranca, campos: CamposDeSeguranca = {}, saida: Pick<Logger, 'warn' | 'error'> = logger): void {

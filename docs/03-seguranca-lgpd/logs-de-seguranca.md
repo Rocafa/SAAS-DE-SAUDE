@@ -15,12 +15,22 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 ## 2. Regras (LGPD arts. 6 III, 46 e 48)
 
 1. **Catálogo fechado:** só eventos de `EVENTOS_DE_SEGURANCA`, cada um com severidade e tipo de alarme.
-2. **Campos fechados e validados:** `tenantId` e `userId` (UUID), `rota` (método + **template**, ex.: `GET /pacientes/:id`, nunca a URL real), `handler`, `motivo` e `regra` (códigos `a_z`), `status`, `contagem`, `origem`. Valor fora do formato vira `[invalido]`, e campo desconhecido é descartado. Nome, CPF, telefone, e-mail, conteúdo clínico e mensagem de erro **não conseguem** entrar.
-3. **IP nunca em claro:** `origem` é um HMAC de 16 hex com o segredo do rate limit (`RATE_LIMIT_HASH_KEY`). Serve para correlacionar a mesma origem, não para identificar.
-4. **Nenhum log da API carrega dado pessoal.** A trava de PR lê todo o `src` com o compilador do TypeScript e reprova:
+2. **Campos fechados e validados:**
+   - `tenantId` e `userId`: UUID.
+   - `rota`: método + **template** da rota, vindo do framework, com segmentos fixos sem dígito ou `:param`.
+   - `handler`: `XController.metodo`.
+   - `motivo` e `regra`: **listas fechadas** `MOTIVOS_DE_SEGURANCA` e `REGRAS_DE_SEGURANCA`. Um teste confere que todo literal usado no `src` está na lista.
+   - `status` e `contagem`: números em faixa.
+   - `origem`: HMAC.
+
+   Valor fora do formato vira `[invalido]`, e campo desconhecido é descartado. Nome, CPF, telefone, e-mail, conteúdo clínico e mensagem de erro não têm campo onde entrar.
+3. **Dado pseudonimizado, não anônimo (art. 13 §4):** `userId` e `origem` identificam uma pessoa para quem tem a tabela de usuários ou o segredo do HMAC. Por isso o log é dado pessoal e segue as regras dele: acesso restrito, retenção de 180 dias e registro no ROPA. As bases legais são o legítimo interesse e a segurança do titular (art. 7º IX, arts. 46 e 49) e o cumprimento de obrigação legal (art. 7º II) no que o Marco Civil exige.
+4. **IP nunca em claro:** `origem` é um HMAC de 16 hex com o segredo do rate limit (`RATE_LIMIT_HASH_KEY`). Serve para correlacionar a mesma origem, não para identificar.
+5. **Nenhum log da API carrega dado pessoal direto.** A trava de PR lê todo o `src` com o compilador do TypeScript e reprova:
    - `console.*`;
    - nomes sensíveis (`nome`, `cpf`, `telefone`, `email`, `conteudo`, `texto`, `corpo`, `message`, `stack`, `token`, `senha`…);
-   - o erro inteiro (`logger.error(err)` ou `${err}`; o certo é usar `err.name`).
+   - o erro inteiro, em qualquer forma: `err`, `${err}`, `String(err)` ou `'x' + err`. O certo é usar `err.name` ou `codigoDoErro(err)`;
+   - spread, `JSON.stringify`, `p['cpf']`, desestruturação renomeada de campo sensível, apelido do logger, chamada dinâmica `logger[metodo]` e `process.stdout/stderr.write`.
 
    Exceções só com motivo escrito, em `PERMITIDOS` ou `PERMITIDOS_POR_ARQUIVO`.
 
@@ -40,7 +50,7 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | `EXPORTACAO_FALHOU` | alto | imediato | exportação total (G2) |
 | `PORTAL_RESGATE_RECUSADO` | aviso | volume | resgate de convite do portal |
 
-Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`.
+Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`. `RATE_LIMIT_FAIL_OPEN` e `MFA_RECUSADO` saem no máximo uma vez por minuto por chave (`registrarNoMaximoUmaVez`), para não inundar o log enquanto o Redis está fora ou um usuário insiste.
 
 ## 4. Alarmes no CloudWatch (para o devops-ci configurar no staging)
 
@@ -53,5 +63,6 @@ Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`.
 
 - **Marco Civil (art. 15):** o provedor de aplicação guarda os registros de acesso (IP, data e hora) por 6 meses, sob sigilo. O log de segurança guarda só o HMAC do IP. A guarda do IP em claro fica nos access logs do balanceador (ALB), cifrados e com acesso restrito. Confirmar com o advogado (pergunta para a D8) e configurar com a conta AWS.
 - **Eventos do login e do MFA real** (login, falha, bloqueio, logout, troca de senha e de fator, reset): entram no PR da D4, com estes mesmos campos (R5 do parecer do #123; P4 e E11 das revisões internas de 04/11).
+- **`origem` nos eventos do portal e do webhook** e testes de que o rate limit e cada módulo emitem o evento certo (R7 e R8 do parecer do #129).
 - **Correlação por requisição:** um id de requisição em todas as linhas (E9 da revisão da equipe).
 - **Front (site e app):** o `no-console` do web e o envio de erros do navegador sem dado pessoal ficam com a frente de front (L6 da triagem de 04/11).

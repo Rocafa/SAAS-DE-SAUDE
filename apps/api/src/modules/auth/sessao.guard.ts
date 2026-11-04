@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto';
 import { MemoryRateLimitStore, rateLimitStoreAtivo, type RateLimitStore } from '../../security/rate-limit-store';
 import { MFA_RECENTE_KEY, recusaDeMfa } from './mfa';
 import { temPermissao, type Permissao as NomePermissao } from './perfis';
-import { origemDaRequisicao, registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
 const PERMISSAO_KEY = 'plataforma:permissao';
 
@@ -108,7 +108,7 @@ export class SessaoGuard implements CanActivate {
     const janela = this.reflector.getAllAndOverride<number | undefined>(MFA_RECENTE_KEY, [context.getHandler(), context.getClass()]) ?? null;
     const recusa = recusaDeMfa(auth, janela);
     if (recusa) {
-      registrarEventoDeSeguranca('MFA_RECUSADO', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), motivo: recusa });
+      registrarNoMaximoUmaVez(`mfa:${auth.tenantId}:${auth.userId}:${nomeDoHandler(context)}:${recusa}`, 60_000, 'MFA_RECUSADO', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), motivo: recusa });
       if (janela !== null) await this.registrarRecusa(auth, recusa, `${context.getClass().name}.${context.getHandler().name}`, req.params?.id);
       throw new ProibidoError(recusa);
     }

@@ -16,7 +16,7 @@ import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-sto
 import { insertAudit } from '../audit/audit-log';
 import { VIGILANCIA_OPCOES, VIGILANCIA_STORE, type VigilanciaOpcoes } from '../patients/vigilancia-de-leitura';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
 export interface PortalLimites {
   readonly contaMax: number;
@@ -125,7 +125,7 @@ export class PortalVigilanciaService {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`RATE_LIMIT_FAIL_OPEN: contador do portal indisponível (${name}); chamada seguiu sem limite`);
-      registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'portal' });
+      registrarNoMaximoUmaVez('fail_open:portal', 60_000, 'RATE_LIMIT_FAIL_OPEN', { motivo: 'portal' });
       return undefined;
     }
   }
