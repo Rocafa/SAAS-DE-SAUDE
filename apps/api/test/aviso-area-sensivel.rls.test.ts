@@ -65,7 +65,7 @@ describe('E8: aviso ao desmarcar a área sensível', () => {
         .from(auditLog)
         .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'professionals'), sql`${auditLog.metadata}->>'op' = 'sensitive_area'`)),
     );
-    expect(linhas.map((l) => (l.metadata as { notified?: number }).notified)).toEqual([0, 2, 0]);
+    expect(linhas.map((l) => (l.metadata as { notified?: number }).notified)).toEqual([0, 3, 0]); // desmarcar: o fundador, o outro admin e o profissional
   });
 
   it('o banco recusa o tipo novo sem o id do profissional ou com campos de outro tipo', async () => {
