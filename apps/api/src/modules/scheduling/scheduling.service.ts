@@ -39,6 +39,7 @@ import {
   type NovoTipoAtendimento,
 } from './scheduling.validation';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { avisarAreaSensivelDesmarcada } from '../records/avisos';
 
 export interface AgendamentoDto {
   readonly id: string;
@@ -380,13 +381,25 @@ export class SchedulingService {
    */
   marcarAreaSensivel(ctx: RequestContext, id: string, areaSensivel: boolean): Promise<ProfissionalDto> {
     return this.escrita(ctx, async (tx) => {
+      const [antes] = await tx
+        .select({ sensitiveArea: professionals.sensitiveArea })
+        .from(professionals)
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .for('update');
+      if (!antes) throw new NaoEncontradoError();
       const [p] = await tx
         .update(professionals)
         .set({ sensitiveArea: areaSensivel })
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
         .returning();
       if (!p) throw new NaoEncontradoError();
-      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'professionals', metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea } });
+      // E8 de 04/11 (0060): desmarcar tira o MFA recente e o sigilo do profissional; avisa ele e os outros admins.
+      const avisados = antes.sensitiveArea && !p.sensitiveArea ? await avisarAreaSensivelDesmarcada(tx, ctx, p.id, p.userId) : 0;
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: 'professionals',
+        metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea, notified: avisados },
+      });
       return this.profissionalDto(p);
     });
   }
