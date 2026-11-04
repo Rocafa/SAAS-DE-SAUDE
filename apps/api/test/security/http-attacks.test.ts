@@ -4,12 +4,12 @@
  * Não exige banco (roda também em `pnpm test`). Ver docs/04-arquitetura/testes-de-seguranca.md.
  */
 import 'reflect-metadata';
-import { Body, Controller, Delete, Get, type INestApplication, Patch, Post, Put, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, type INestApplication, Logger, Patch, Post, Put, Req } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { HealthModule } from '../../src/health/health.module';
 import { applyHttpSecurity } from '../../src/security/http-security';
 import {
@@ -253,7 +253,14 @@ describe('rate limit global', () => {
   it('rajada acima do limite → 429 com Retry-After', async () => {
     const http = app.getHttpServer() as Server;
     const status: number[] = [];
+    // R8 do parecer do #129: o primeiro estouro da janela vira UM evento RATE_LIMIT_EXCEDIDO, com a origem em HMAC.
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     for (let i = 0; i < 8; i += 1) status.push((await request(http).get('/qualquer-rota')).status);
+    const eventos = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"RATE_LIMIT_EXCEDIDO"'));
+    warn.mockRestore();
+    expect(eventos).toHaveLength(1);
+    expect(JSON.parse(eventos[0] ?? '{}')).toMatchObject({ tipo: 'seguranca', evento: 'RATE_LIMIT_EXCEDIDO', contagem: 6 });
+    expect(eventos[0]).toMatch(/"origem":"[0-9a-f]{16}"/);
     expect(status.slice(0, 5)).toEqual([404, 404, 404, 404, 404]);
     expect(status.slice(5)).toEqual([429, 429, 429]);
     const bloqueada = await request(http).get('/qualquer-rota').expect(429);
