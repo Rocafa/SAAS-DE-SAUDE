@@ -7,7 +7,6 @@ import {
   HttpStatus,
   Inject,
   Injectable,
-  Logger,
   Optional,
   SetMetadata,
   UnauthorizedException,
@@ -23,6 +22,7 @@ import { createHash } from 'node:crypto';
 import { MemoryRateLimitStore, rateLimitStoreAtivo, type RateLimitStore } from '../../security/rate-limit-store';
 import { MFA_RECENTE_KEY, recusaDeMfa } from './mfa';
 import { temPermissao, type Permissao as NomePermissao } from './perfis';
+import { origemDaRequisicao, registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 const PERMISSAO_KEY = 'plataforma:permissao';
 
@@ -33,6 +33,19 @@ export const Permissao = (permissao: NomePermissao): MethodDecorator & ClassDeco
 interface RequisicaoComSessao extends RequisicaoParaSessao {
   auth?: AuthContext;
   params?: Readonly<Record<string, string | undefined>>;
+  method?: string;
+  route?: { path?: unknown };
+  ip?: string;
+}
+
+/** Método + TEMPLATE da rota (`GET /pacientes/:id`): nunca a URL real, que pode ter ids ou query. */
+function rotaDoTemplate(req: RequisicaoComSessao): string {
+  const caminho = typeof req.route?.path === 'string' ? req.route.path : '';
+  return `${req.method ?? 'GET'} ${caminho.startsWith('/') ? caminho : '/' + caminho}`;
+}
+
+function nomeDoHandler(context: ExecutionContext): string {
+  return `${context.getClass().name}.${context.getHandler().name}`;
 }
 
 /** Escopo da linha da trilha de uma recusa por MFA em rota sensível (B2 do parecer de 03/11 sobre o #123). */
@@ -75,23 +88,27 @@ export class SessaoGuard implements CanActivate {
     @Optional() @Inject(TenantDatabase) private readonly db?: TenantDatabase,
   ) {}
 
-  private readonly logger = new Logger('sessao');
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequisicaoComSessao>();
     const auth = await this.provider.resolver(req);
-    if (!auth) throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });
+    if (!auth) {
+      registrarEventoDeSeguranca('SESSAO_INVALIDA', { rota: rotaDoTemplate(req), origem: origemDaRequisicao(req.ip) });
+      throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });
+    }
     const permissao = this.reflector.getAllAndOverride<NomePermissao | undefined>(PERMISSAO_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (!permissao || !temPermissao(auth.perfis, permissao)) {
+      registrarEventoDeSeguranca('ACESSO_NEGADO_PERFIL', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), rota: rotaDoTemplate(req) });
       throw new ForbiddenException({ statusCode: 403, message: 'Sem permissão' });
     }
     // (3) MFA (issue #106): obrigatório para todo perfil e recente nas rotas marcadas. Recusa antes de qualquer leitura.
     const janela = this.reflector.getAllAndOverride<number | undefined>(MFA_RECENTE_KEY, [context.getHandler(), context.getClass()]) ?? null;
     const recusa = recusaDeMfa(auth, janela);
     if (recusa) {
+      registrarEventoDeSeguranca('MFA_RECUSADO', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), motivo: recusa });
       if (janela !== null) await this.registrarRecusa(auth, recusa, `${context.getClass().name}.${context.getHandler().name}`, req.params?.id);
       throw new ProibidoError(recusa);
     }
@@ -112,7 +129,10 @@ export class SessaoGuard implements CanActivate {
     ]);
     if (!daRota || daRota.count === 1) await this.auditarRecusa(auth, motivo, handler, alvo);
     if (doUsuario && doUsuario.count > TETO_RECUSAS_MFA) {
-      if (doUsuario.count === TETO_RECUSAS_MFA + 1) await this.alertarVolume(auth, doUsuario.count);
+      if (doUsuario.count === TETO_RECUSAS_MFA + 1) {
+        registrarEventoDeSeguranca('MFA_LIMITE_DE_RECUSAS', { tenantId: auth.tenantId, userId: auth.userId, contagem: doUsuario.count });
+        await this.alertarVolume(auth, doUsuario.count);
+      }
       throw new LimiteDeRecusasMfaError();
     }
   }
@@ -132,8 +152,8 @@ export class SessaoGuard implements CanActivate {
           }),
         ctx.userId,
       );
-    } catch (err) {
-      this.logger.error(`MFA_ALERTA_NAO_AUDITADO (${err instanceof Error ? err.name : typeof err})`);
+    } catch {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId: auth.tenantId, motivo: 'mfa_alerta_de_volume' });
     }
   }
 
@@ -155,8 +175,8 @@ export class SessaoGuard implements CanActivate {
           }),
         ctx.userId,
       );
-    } catch (err) {
-      this.logger.error(`MFA_RECUSA_NAO_AUDITADA (${err instanceof Error ? err.name : typeof err})`);
+    } catch {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId: auth.tenantId, motivo: 'mfa_recusa' });
     }
   }
 }

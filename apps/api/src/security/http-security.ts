@@ -10,6 +10,7 @@ import {
   registerRateLimitStore,
   type RateLimitStore,
 } from './rate-limit-store';
+import { origemDaRequisicao, registrarEventoDeSeguranca } from './log-de-seguranca';
 
 type Next = (err?: unknown) => void;
 type Req = IncomingMessage & { ip?: string };
@@ -127,6 +128,8 @@ export function rateLimiter(
         res.setHeader('RateLimit-Reset', String(resetSeconds));
         if (count > max) {
           res.setHeader('Retry-After', String(resetSeconds));
+          // Só no primeiro estouro da janela (evita inundar o log com um robô insistente).
+          if (count === max + 1) registrarEventoDeSeguranca('RATE_LIMIT_EXCEDIDO', { origem: origemDaRequisicao(req.ip ?? req.socket.remoteAddress), contagem: count });
           sendJson(res, 429, 'Too Many Requests');
           return;
         }
@@ -136,6 +139,7 @@ export function rateLimiter(
         failOpenCount++;
         const name = err instanceof Error ? err.name : typeof err;
         rateLimitLogger.error(`RATE_LIMIT_FAIL_OPEN: contador indisponível (${name}); requisição seguiu sem limite`);
+        registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'rate_limit_por_ip' });
         next();
       },
     );

@@ -25,6 +25,7 @@ import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-store';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 export interface VigilanciaConfig {
   readonly listaMax: number;
@@ -132,6 +133,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`RATE_LIMIT_FAIL_OPEN: contador por usuário indisponível (${name}); leitura seguiu sem limite`);
+      registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'vigilancia_de_leitura' });
       return undefined;
     }
   }
@@ -142,6 +144,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
    */
   private async alertar(ctx: RequestContext, regra: RegraDeAnomalia, janelaMs: number, limiar: number, contagem: number): Promise<void> {
     this.logger.warn(`ALERTA_ANOMALIA regra=${regra}`);
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra });
     try {
       await this.db.run(ctx.tenantId, (tx) =>
         recordAudit(tx, ctx, {
@@ -154,6 +157,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`ALERTA_ANOMALIA_NAO_GRAVADO regra=${regra} (${name})`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { regra, motivo: 'alerta_de_anomalia' });
     }
   }
 }

@@ -7,6 +7,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { ExitWindowClosedError } from './access-policy';
 import { ExportCipherMissingError, exportInTransaction, type TenantExportPackage } from './tenant-export';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 export const EXIT_WINDOW_DAYS_TOKEN = Symbol('EXIT_WINDOW_DAYS');
 
@@ -44,6 +45,7 @@ export class ExportsService {
         ctx.userId,
       );
     } catch (e) {
+      registrarEventoDeSeguranca('EXPORTACAO_FALHOU', { tenantId: ctx.tenantId, userId: ctx.userId, motivo: motivoDaFalha(e) });
       await this.registrarFalha(ctx, motivoDaFalha(e));
       throw e;
     }
@@ -64,6 +66,7 @@ export class ExportsService {
     } catch {
       // Só o id da clínica (UUID opaco) para correlacionar; nada da mensagem do erro (R4 do parecer do #127).
       this.logger.error(`EXPORTACAO_FALHA_NAO_AUDITADA tenant=${ctx.tenantId}`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId: ctx.tenantId, motivo: 'exportacao_falhou' });
     }
   }
 }
