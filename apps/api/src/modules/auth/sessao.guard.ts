@@ -26,6 +26,7 @@ import { and, eq } from 'drizzle-orm';
 import { AMBIENTES_SESSAO_FICTICIA } from './auth-provider.factory';
 import { clinicMembers } from '../../db/schema';
 import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
+import { avisarAdminsDeAnomalia } from '../records/avisos';
 
 const PERMISSAO_KEY = 'plataforma:permissao';
 
@@ -197,12 +198,14 @@ export class SessaoGuard implements CanActivate {
     try {
       await this.db.run(
         ctx.tenantId,
-        (tx) =>
-          recordAudit(tx, ctx, {
+        async (tx) => {
+          await recordAudit(tx, ctx, {
             action: AuditAction.AnomalyAlert,
             scope: SCOPE_MFA_RECUSADO,
             metadata: { rule: 'mfa_recusas_por_usuario', window_s: JANELA_RECUSA_MFA_MS / 1000, threshold: TETO_RECUSAS_MFA, count: contagem },
-          }),
+          });
+          await avisarAdminsDeAnomalia(tx, ctx, 'mfa_recusas_por_usuario');
+        },
         ctx.userId,
       );
     } catch {

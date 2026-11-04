@@ -68,6 +68,12 @@ export type AvisoDto =
       readonly tipo: 'area_sensivel_desmarcada';
       readonly profissionalId: string;
       readonly criadoPor: string;
+    })
+  | (AvisoBase & {
+      /** 0063 (resto do E10 de 04/11): alerta de anomalia; `usuarioId` = quem disparou (o detalhe está na trilha). */
+      readonly tipo: 'alerta_anomalia';
+      readonly regra: string;
+      readonly usuarioId: string;
     });
 
 function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
@@ -91,6 +97,7 @@ function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
     return { ...base, tipo, pacienteId: n.patientId as string, transicao: n.portalTransition as PortalSigiloTransicao, criadoPor: n.createdBy };
   }
   if (tipo === 'area_sensivel_desmarcada') return { ...base, tipo, profissionalId: n.professionalId as string, criadoPor: n.createdBy };
+  if (tipo === 'alerta_anomalia') return { ...base, tipo, regra: n.anomalyRule as string, usuarioId: n.subjectUserId as string };
   return { ...base, tipo, retencaoId: n.legalHoldId as string, criadoPor: n.createdBy };
 }
 
@@ -250,4 +257,31 @@ export class AvisosService {
       return { id, lidoEm: agora.toISOString() };
     });
   }
+}
+
+/** Regras de anomalia que viram aviso (as mesmas do CHECK da 0063). */
+export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas' | 'limite_por_usuario' | 'vinculo_autoagendado' | 'vinculo_cruzado' | 'mfa_recusas_por_usuario';
+
+/**
+ * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
+ * disparou não recebe). Mesma transação do alerta. Só a regra e o id de quem disparou. Devolve quantos foram avisados.
+ */
+export async function avisarAdminsDeAnomalia(tx: TenantTx, ctx: RequestContext, regra: RegraDeAnomaliaAvisada): Promise<number> {
+  const admins = await tx
+    .select({ userId: clinicMembers.userId })
+    .from(clinicMembers)
+    .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt), ne(clinicMembers.userId, ctx.userId)));
+  const destinatarios = [...new Set(admins.map((a) => a.userId))];
+  if (destinatarios.length === 0) return 0;
+  await tx.insert(clinicalNotices).values(
+    destinatarios.map((u) => ({
+      tenantId: ctx.tenantId,
+      recipientUserId: u,
+      kind: 'alerta_anomalia' as const,
+      anomalyRule: regra,
+      subjectUserId: ctx.userId,
+      createdBy: ctx.userId,
+    })),
+  );
+  return destinatarios.length;
 }

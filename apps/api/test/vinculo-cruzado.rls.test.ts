@@ -6,7 +6,7 @@
 import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog } from '../src/db/schema';
+import { auditLog, clinicalNotices } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
 import { noFusoDaClinica } from '../src/modules/scheduling/agenda-regras';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
@@ -14,6 +14,7 @@ import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 type S = { Authorization: string; userId: string };
 let api: ApiDeTeste;
 let clinica: TenantId;
+let admin: S;
 let recep: S;
 let profA: S;
 let profB: S;
@@ -49,7 +50,7 @@ async function agendar(quem: S): Promise<string> {
 beforeAll(async () => {
   api = await subirApi();
   clinica = await api.novaClinica();
-  const admin = await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin');
+  admin = await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin');
   recep = await api.membro(clinica, api.sessao(clinica, 'recepcao'), 'recepcao');
   profA = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
   profB = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
@@ -133,5 +134,21 @@ describe('E12: alerta de vínculo cruzado', () => {
         actor_id: profB.userId,
       },
     ]);
+  });
+
+  it('resto do E10 (0063): o admin vê o alerta na caixa de avisos, com a regra e quem disparou; o banco recusa o aviso sem regra', async () => {
+    const avisos = ((await api.http().get('/avisos').set(cab(admin))).body as { tipo: string; regra?: string; usuarioId?: string }[]).filter((a) => a.tipo === 'alerta_anomalia');
+    expect(avisos.some((a) => a.regra === 'vinculo_cruzado' && a.usuarioId === profB.userId)).toBe(true);
+    for (const a of avisos) expect(Object.keys(a).sort()).toEqual(['criadoEm', 'id', 'lidoEm', 'regra', 'tipo', 'usuarioId']);
+    const semRegra = await withTenant(
+      api.db.db,
+      clinica,
+      (tx) => tx.insert(clinicalNotices).values({ tenantId: clinica, recipientUserId: admin.userId, kind: 'alerta_anomalia', subjectUserId: profB.userId, createdBy: admin.userId }),
+      admin.userId,
+    ).then(
+      () => 'ok',
+      (e: unknown) => String((e as { cause?: { code?: string } }).cause?.code ?? (e as { code?: string }).code),
+    );
+    expect(semRegra).toBe('23514');
   });
 });
