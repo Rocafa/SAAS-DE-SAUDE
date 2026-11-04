@@ -38,7 +38,8 @@ O que falta são peças que **ainda não existem**: o login real, a ligação do
 | L4 | E2E e scan de imagem (Trivy) obrigatórios para o merge | processo | OK dos sócios | aguardando OK |
 | E6 | CSRF: a API aceitava formulário e não conferia a origem | ambos | — | **feito** (#132: 415 para corpo não-JSON, 403 para origem fora da allowlist; cookie `__Host-`/`SameSite=Strict` vem com a D4) |
 | E8 | MFA recente nas rotas de poder | profissional | — | **feito** (#131, 33 rotas; #133, aviso ao desmarcar área sensível) |
-| E12 | Alerta de vínculo cruzado (conluio entre profissionais, R6 do #61) | profissional | — | **em PR** |
+| E12 | Alerta de vínculo cruzado (conluio entre profissionais, R6 do #61) | profissional | — | **feito** (#134) |
+| E10 | A clínica consulta a própria trilha | profissional | — | **em PR** (`GET /clinica/auditoria`; o alerta de anomalia como aviso aos admins fica na fila) |
 | L5 | Checagem automática de dado pessoal nos logs da API | processo | — | **feito em 04/11** |
 | — | Revisão EXTERNA (pentest e auditoria independentes) | ambos | staging (AWS) e D4 | [pacote pronto](revisao-externa.md) |
 | — | Parecer jurídico D8 (adolescentes, guarda do prontuário, Marco Civil art. 15) | ambos | advogado | parado |

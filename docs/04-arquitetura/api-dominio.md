@@ -942,3 +942,11 @@ O provedor de login (D4) só informa **quando** o usuário passou pelo segundo f
 - **Perfil revogado sai da sessão aberta** (E2 da revisão interna de 04/11): a cada requisição, o guard lê as linhas do usuário em `clinic_members` e aplica três regras. Se o usuário tem qualquer linha no banco, só ficam os perfis da sessão que estão ativos no banco. A qualificação `psicologo` não conta como perfil de sessão. Um desligado perde tudo. Usuário sem linha nenhuma fica como o provedor disse; essa transição acaba com o provedor real da D4, que lê os perfis só do banco. A negação sai no log de segurança com `motivo: perfil_revogado`.
 - **Contrato de todo provedor de sessão** (R6, `auth/contrato-provedor.test.ts`): sem credencial válida, adulterada ou depois do logout, o resultado é `null`. Clínica, usuário, perfis e `mfaEm` vêm só da sessão do servidor, e cabeçalhos forjados não mudam nada. Sem fator, `mfaEm === null`; com fator, uma data que não está no futuro. As sessões não se misturam. O registro de bancadas é tipado por `TIPOS_DE_PROVEDOR`, então um provedor novo na fábrica sem bancada não compila.
 - **Com o provedor real (D4, R5):** vão para a trilha os eventos do próprio fator (cadastro, verificação, falha, bloqueio após 5 falhas em 15 min, reset com justificativa e alerta ao admin) e as recusas em rotas comuns. Trocar de clínica, perfil ou senha reavalia o MFA.
+
+## 18. Consulta da trilha pela clínica (E10 da revisão interna de 04/11)
+
+- `GET /clinica/auditoria`: só admin (`auditoria:consultar`), com MFA recente.
+- Filtros: `pacienteId` (o `patient_id` gravado na linha), `usuarioId` (quem agiu), `de` e `ate` (`AAAA-MM-DD`, UTC, inclusivos) e `acao` (da lista de `AuditAction`).
+- Paginação: `limite` (1 a 100, padrão 50) e `cursor` (opaco, devolvido em `proximo`). A ordem é da mais nova para a mais antiga.
+- Devolve só o que a trilha já guarda: id, data, ação, escopo, ator, tipo de ator e metadata (o contrato da 0005 já limita a metadata a ids e códigos).
+- A própria consulta vai para a trilha (`read` `audit_trail`), com os filtros usados (só ids) e a contagem.
