@@ -55,3 +55,5 @@ ICP-Brasil.
 - **R3 (feita):** o profissional só é avisado se ainda tiver perfil ativo na clínica.
 - **R4 (feita):** o texto da exclusão em `tenant-export.ts` cita o tipo novo e a tabela `professionals`.
 - **R5 (aceita como está):** a desmarcação sem nenhum destinatário fica registrada na trilha (`notified: 0`), e a rota já exige MFA recente. Um evento no log de segurança para esse caso entra se a vigilância pedir.
+
+**Veredito final do Guardião (04/11/2026, commit 8bfb944): APROVADO.** R1 a R4 conferidas no diff. A shape_check da 0060 repete os ramos da 0039 sem mudança, os de retenção agora explícitos, e cobre as linhas que já existem (o kind_check limita aos 7 tipos). `patient_id`/`portal_transition` do tipo novo ficam travados pelo portal_check e pelo area_sensivel_check. R5 aceita. Ressalva: o teste RLS precisa passar na CI antes do merge (revisão estática, sem Postgres local).

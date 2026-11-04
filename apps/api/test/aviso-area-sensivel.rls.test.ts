@@ -38,13 +38,13 @@ afterAll(async () => {
 describe('E8: aviso ao desmarcar a área sensível', () => {
   it('marcar não avisa ninguém', async () => {
     const r = await marcar(true);
-    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(await avisos(prof)).toEqual([]);
     expect(await avisos(adminB)).toEqual([]);
   });
 
   it('desmarcar avisa o profissional e o outro admin, com só o id do profissional; quem desmarcou não recebe', async () => {
-    expect((await marcar(false)).status).toBe(200);
+    expect((await marcar(false)).status).toBe(201);
     for (const s of [prof, adminB]) {
       const [a, ...resto] = await avisos(s);
       expect(resto).toEqual([]);
@@ -55,7 +55,7 @@ describe('E8: aviso ao desmarcar a área sensível', () => {
   });
 
   it('desmarcar de novo (já desmarcada) não repete o aviso; a trilha registra quantos foram avisados', async () => {
-    expect((await marcar(false)).status).toBe(200);
+    expect((await marcar(false)).status).toBe(201);
     expect(await avisos(prof)).toHaveLength(1);
     const linhas = await withTenant(api.db.db, clinica, (tx) =>
       tx
