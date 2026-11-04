@@ -21,7 +21,9 @@ import { paraRequestContext } from './auth-context';
 import { createHash } from 'node:crypto';
 import { MemoryRateLimitStore, rateLimitStoreAtivo, type RateLimitStore } from '../../security/rate-limit-store';
 import { MFA_RECENTE_KEY, recusaDeMfa } from './mfa';
-import { temPermissao, type Permissao as NomePermissao } from './perfis';
+import { temPermissao, type Perfil, type Permissao as NomePermissao } from './perfis';
+import { and, eq } from 'drizzle-orm';
+import { clinicMembers } from '../../db/schema';
 import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
 const PERMISSAO_KEY = 'plataforma:permissao';
@@ -46,6 +48,23 @@ function rotaDoTemplate(req: RequisicaoComSessao): string {
 
 function nomeDoHandler(context: ExecutionContext): string {
   return `${context.getClass().name}.${context.getHandler().name}`;
+}
+
+/**
+ * E2 da revisão interna de 04/11: perfis da sessão MENOS os revogados no banco. Revogar um perfil (ou todos, para
+ * desligar alguém) vale na próxima requisição, sem esperar a sessão acabar.
+ * - Perfil com linha em `clinic_members` e nenhuma ativa: sai.
+ * - Usuário com linhas e nenhuma ativa (desligado): sai tudo.
+ * - Usuário sem linha nenhuma: fica como o provedor disse (transição; com o provedor real da D4, os perfis da
+ *   sessão passam a vir SÓ do banco, condição do contrato do provedor).
+ */
+export function perfisVigentes(perfis: readonly Perfil[], linhas: readonly { role: string; revokedAt: Date | null }[]): readonly Perfil[] {
+  if (linhas.length === 0) return perfis;
+  if (!linhas.some((l) => l.revokedAt === null)) return [];
+  return perfis.filter((p) => {
+    const doPerfil = linhas.filter((l) => l.role === p);
+    return doPerfil.length === 0 || doPerfil.some((l) => l.revokedAt === null);
+  });
 }
 
 /** Escopo da linha da trilha de uma recusa por MFA em rota sensível (B2 do parecer de 03/11 sobre o #123). */
@@ -91,17 +110,26 @@ export class SessaoGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequisicaoComSessao>();
-    const auth = await this.provider.resolver(req);
+    let auth = await this.provider.resolver(req);
     if (!auth) {
       registrarEventoDeSeguranca('SESSAO_INVALIDA', { rota: rotaDoTemplate(req), origem: origemDaRequisicao(req.ip) });
       throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });
     }
+    const perfis = await this.perfisDoBanco(auth);
+    const revogado = perfis.length < auth.perfis.length;
+    if (revogado) auth = { ...auth, perfis };
     const permissao = this.reflector.getAllAndOverride<NomePermissao | undefined>(PERMISSAO_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (!permissao || !temPermissao(auth.perfis, permissao)) {
-      registrarEventoDeSeguranca('ACESSO_NEGADO_PERFIL', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), rota: rotaDoTemplate(req) });
+      registrarEventoDeSeguranca('ACESSO_NEGADO_PERFIL', {
+        tenantId: auth.tenantId,
+        userId: auth.userId,
+        handler: nomeDoHandler(context),
+        rota: rotaDoTemplate(req),
+        ...(revogado ? { motivo: 'perfil_revogado' } : {}),
+      });
       throw new ForbiddenException({ statusCode: 403, message: 'Sem permissão' });
     }
     // (3) MFA (issue #106): obrigatório para todo perfil e recente nas rotas marcadas. Recusa antes de qualquer leitura.
@@ -114,6 +142,21 @@ export class SessaoGuard implements CanActivate {
     }
     req.auth = auth;
     return true;
+  }
+
+  /** E2: lê as linhas do usuário em `clinic_members` (RLS da clínica da sessão) e tira os perfis revogados. */
+  private async perfisDoBanco(auth: AuthContext): Promise<readonly Perfil[]> {
+    if (!this.db) return auth.perfis;
+    const linhas = await this.db.run(
+      auth.tenantId,
+      (tx) =>
+        tx
+          .select({ role: clinicMembers.role, revokedAt: clinicMembers.revokedAt })
+          .from(clinicMembers)
+          .where(and(eq(clinicMembers.tenantId, auth.tenantId), eq(clinicMembers.userId, auth.userId))),
+      auth.userId,
+    );
+    return perfisVigentes(auth.perfis, linhas);
   }
 
   /**
