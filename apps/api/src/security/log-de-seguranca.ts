@@ -24,6 +24,7 @@ export const EVENTOS_DE_SEGURANCA = {
   ALERTA_ANOMALIA: { severidade: 'alto', alarme: 'imediato', descricao: 'regra de vigilância disparou (detalhe na trilha)' },
   TRILHA_NAO_GRAVADA: { severidade: 'critico', alarme: 'imediato', descricao: 'evento que devia ir para a trilha de auditoria não gravou' },
   EXPORTACAO_FALHOU: { severidade: 'alto', alarme: 'imediato', descricao: 'exportação total falhou (motivo genérico)' },
+  CSRF_RECUSADO: { severidade: 'alto', alarme: 'volume', descricao: 'escrita vinda de origem fora da allowlist (403)' },
   PORTAL_RESGATE_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'resgate de convite do portal recusado' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 
@@ -60,6 +61,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'representacao_estendida',
   'titular_menor_revogado',
   'perfil_revogado',
+  'origem_nao_permitida',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

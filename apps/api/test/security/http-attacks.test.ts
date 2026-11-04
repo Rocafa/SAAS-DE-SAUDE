@@ -112,6 +112,44 @@ describe('borda HTTP endurecida', () => {
     semVazamento(res.text);
   });
 
+  // E6 da revisão interna de 04/11: CSRF na borda.
+  it('CSRF: formulário HTML (urlencoded) em rota de escrita → 415, e o controller não roda', async () => {
+    const res = await request(http).post('/teste-seguranca/eco').type('form').send('perfil=admin&usuarioId=x').expect(415);
+    semVazamento(JSON.stringify(res.body));
+  });
+
+  it('CSRF: text/plain (o "simple request" de formulário) → 415', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'text/plain').send('{"perfil":"admin"}').expect(415);
+  });
+
+  it('CSRF: escrita com Origin fora da allowlist → 403, mesmo com JSON', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Origin', ORIGEM_MA).send({ a: 1 }).expect(403);
+  });
+
+  it('CSRF: Sec-Fetch-Site cross-site sem origem permitida → 403', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Sec-Fetch-Site', 'cross-site').send({ a: 1 }).expect(403);
+  });
+
+  it('CSRF: origem da allowlist com JSON passa; sem Origin (servidor a servidor) também', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Origin', ORIGEM_OK).send({ a: 1 }).expect(201);
+    await request(http).post('/teste-seguranca/eco').send({ a: 1 }).expect(201);
+  });
+
+  it('CSRF: GET de outra origem não é barrado na borda (o CORS só não libera a leitura)', async () => {
+    await request(http).get('/health').set('Origin', ORIGEM_MA).expect(200);
+  });
+
+  it('CSRF: só o envio do CSV do importador aceita text/csv; em outra rota, 415', async () => {
+    const csv = await request(http).post('/importacoes?tipo=pacientes').set('Content-Type', 'text/csv').send('nome\nX');
+    expect(csv.status).not.toBe(415);
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'text/csv').send('nome\nX').expect(415);
+  });
+
+  it('CSRF: escrita sem corpo (ex.: POST de ação) não exige Content-Type', async () => {
+    const res = await request(http).post('/teste-seguranca/eco');
+    expect(res.status).not.toBe(415);
+  });
+
   it('corpo dentro do limite é aceito', async () => {
     const res = await request(http).post('/teste-seguranca/eco').send({ nome: 'Paciente Ficticio' }).expect(201);
     expect(res.body).toEqual({ recebido: true, tipo: 'object' });

@@ -48,6 +48,7 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | `ALERTA_ANOMALIA` | alto | imediato | vigilância de leitura, portal, agenda, cadastro |
 | `TRILHA_NAO_GRAVADA` | **crítico** | imediato | qualquer evento que devia ir para a trilha e não gravou |
 | `EXPORTACAO_FALHOU` | alto | imediato | exportação total (G2) |
+| `CSRF_RECUSADO` | alto | volume | borda HTTP (escrita de origem fora da allowlist, 403) |
 | `PORTAL_RESGATE_RECUSADO` | aviso | volume | resgate de convite do portal |
 
 Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`. `RATE_LIMIT_FAIL_OPEN` e `MFA_RECUSADO` saem no máximo uma vez por minuto por chave (`registrarNoMaximoUmaVez`), para não inundar o log enquanto o Redis está fora ou um usuário insiste.
