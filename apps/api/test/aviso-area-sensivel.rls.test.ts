@@ -3,7 +3,7 @@
  * os DEMAIS admins ativos, nunca quem desmarcou. Marcar não avisa. O aviso leva só o id do profissional. Fictício.
  */
 import type { TenantId } from '@plataforma/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog, clinicalNotices } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
@@ -63,7 +63,8 @@ describe('E8: aviso ao desmarcar a área sensível', () => {
       tx
         .select({ metadata: auditLog.metadata })
         .from(auditLog)
-        .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'professionals'), sql`${auditLog.metadata}->>'op' = 'sensitive_area'`)),
+        .where(and(eq(auditLog.tenantId, clinica), eq(auditLog.scope, 'professionals'), sql`${auditLog.metadata}->>'op' = 'sensitive_area'`))
+        .orderBy(asc(auditLog.id)),
     );
     expect(linhas.map((l) => (l.metadata as { notified?: number }).notified)).toEqual([0, 3, 0]); // desmarcar: o fundador, o outro admin e o profissional
   });
