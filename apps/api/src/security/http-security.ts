@@ -66,7 +66,8 @@ export function applyHttpSecurity(
   registerRateLimitStore(store);
   app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs, store, RATE_LIMIT_EXEMPT_PATHS, hashKey));
 
-  // E6: antes dos parsers. Sem parser urlencoded: a API é só JSON (o CSV do importador lê o corpo cru).
+  // E6: antes dos parsers. Só o parser JSON: a API é só JSON (o CSV do importador lê o corpo cru). A app precisa ser
+  // criada com `bodyParser: false` (main.ts), senão o Nest registra urlencoded de novo no init (R2 do parecer do #132).
   app.use(protecaoCsrf(allowed));
   expressApp.useBodyParser('json', { limit: config.bodyLimit });
   app.use(safeErrorHandler);

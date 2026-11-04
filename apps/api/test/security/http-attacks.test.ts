@@ -4,7 +4,7 @@
  * Não exige banco (roda também em `pnpm test`). Ver docs/04-arquitetura/testes-de-seguranca.md.
  */
 import 'reflect-metadata';
-import { Body, Controller, Get, type INestApplication, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, type INestApplication, Patch, Post, Put, Req } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import type { Server } from 'node:http';
@@ -33,6 +33,27 @@ class AlvoController {
   eco(@Body() body: unknown): { recebido: boolean; tipo: string } {
     return { recebido: true, tipo: typeof body };
   }
+
+  @Put('eco')
+  ecoPut(@Body() body: unknown): { recebido: boolean } {
+    return { recebido: typeof body === 'object' };
+  }
+
+  @Patch('eco')
+  ecoPatch(@Body() body: unknown): { recebido: boolean } {
+    return { recebido: typeof body === 'object' };
+  }
+
+  @Delete('eco')
+  ecoDelete(): { recebido: boolean } {
+    return { recebido: true };
+  }
+
+  /** O webhook do WhatsApp confere o HMAC sobre o corpo bruto: ele precisa chegar mesmo com bodyParser: false. */
+  @Post('cru')
+  cru(@Req() req: { rawBody?: unknown }): { bruto: boolean } {
+    return { bruto: Buffer.isBuffer(req.rawBody) };
+  }
 }
 
 async function criarApp(config: Partial<HttpSecurityConfig> = {}): Promise<INestApplication> {
@@ -40,7 +61,7 @@ async function criarApp(config: Partial<HttpSecurityConfig> = {}): Promise<INest
     imports: [HealthModule],
     controllers: [AlvoController],
   }).compile();
-  const app = moduleRef.createNestApplication<NestExpressApplication>({ logger: false });
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ logger: false, rawBody: true, bodyParser: false });
   applyHttpSecurity(app, {
     ...HTTP_SECURITY_DEFAULTS,
     corsAllowedOrigins: [ORIGEM_OK],
@@ -140,9 +161,28 @@ describe('borda HTTP endurecida', () => {
   });
 
   it('CSRF: só o envio do CSV do importador aceita text/csv; em outra rota, 415', async () => {
-    const csv = await request(http).post('/importacoes?tipo=pacientes').set('Content-Type', 'text/csv').send('nome\nX');
-    expect(csv.status).not.toBe(415);
+    // A app de teste não tem a rota do importador: passar da trava aqui é chegar ao 404 do roteador (R3 do #132).
+    await request(http).post('/importacoes?tipo=pacientes').set('Content-Type', 'text/csv').send('nome\nX').expect(404);
+    for (const torto of ['/importacoes/', '/IMPORTACOES', '/%69mportacoes']) {
+      await request(http).post(torto).set('Content-Type', 'text/csv').send('nome\nX').expect(415);
+    }
     await request(http).post('/teste-seguranca/eco').set('Content-Type', 'text/csv').send('nome\nX').expect(415);
+  });
+
+  it('CSRF (R4 do parecer do #132): PUT, PATCH e DELETE com origem ruim → 403; PUT/PATCH com formulário → 415', async () => {
+    for (const m of ['put', 'patch', 'delete'] as const) await request(http)[m]('/teste-seguranca/eco').set('Origin', ORIGEM_MA).send({ a: 1 }).expect(403);
+    for (const m of ['put', 'patch'] as const) await request(http)[m]('/teste-seguranca/eco').type('form').send('a=1').expect(415);
+  });
+
+  it('CSRF (R4): Origin null e variações da origem permitida → 403; +json → 415; JSON em maiúsculas com charset passa', async () => {
+    for (const o of ['null', ORIGEM_OK.toUpperCase(), ORIGEM_OK + '/']) await request(http).post('/teste-seguranca/eco').set('Origin', o).send({ a: 1 }).expect(403);
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'application/vnd.x+json').send('{"a":1}').expect(415);
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'Application/JSON; charset=utf-8').send('{"a":1}').expect(201);
+  });
+
+  it('corpo bruto continua disponível com bodyParser: false (HMAC do webhook)', async () => {
+    const res = await request(http).post('/teste-seguranca/cru').send({ a: 1 }).expect(201);
+    expect(res.body).toEqual({ bruto: true });
   });
 
   it('CSRF: escrita sem corpo (ex.: POST de ação) não exige Content-Type', async () => {
