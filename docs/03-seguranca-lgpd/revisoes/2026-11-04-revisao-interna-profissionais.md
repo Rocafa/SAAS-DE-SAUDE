@@ -117,3 +117,33 @@ A revisão externa entra **depois da D4**, contra o staging com dado fictício, 
 ## Veredito
 
 **NÃO PRONTO para produção.** Bloqueiam: **E1** (sem login real, D4), **E2** (revogar perfil não corta a sessão), **E3** (sem desligamento de usuário e logout global), **E4** (site com prontuário, financeiro e documentos ainda no adaptador falso) e **E5** (sem expiração por inatividade). Depois disso, E6 a E14 precisam estar fechados antes do primeiro dado real (piloto). E15 a E17 podem ir para a fila.
+<<<<<<< Updated upstream
+=======
+
+## Parecer do PR #131 (E8)
+
+**Veredito: APROVADO com ressalvas.** Revisado o `git diff main...eng/mfa-rotas-de-poder` (8 arquivos). Sem dado real, segredo ou certificado no diff. O RLS não foi rodado (sem Postgres local). O teste de inventário (`test/cobertura-auditoria`) foi rodado e passou (19/19).
+
+**O que está certo**
+- As 6 rotas do E8 estão cobertas, com a permissão de antes: `PUT /clinica/vinculo-de-cuidado`, `PUT /whatsapp/configuracao`, `POST /profissionais`, `POST /profissionais/:id/area-sensivel`, `PUT /financeiro/configuracao` e `PUT /financeiro/profissionais/:id/perfil-fiscal`. A janela é a padrão de 15 min (`MFA_RECENTE_MS`).
+- `ROTAS_COM_MFA_RECENTE` passou a ter 30 rotas, em ordem. O teste de inventário trava se alguém puser ou tirar o decorator sem mexer na lista.
+- O teste RLS prova o que diz. Com MFA de 15 min + 1 min, as 6 rotas dão 403 `mfa_recente_obrigatorio`. Os corpos são inválidos ou os ids não existem (`{}` no WhatsApp e no perfil fiscal, `randomUUID()`), então o 403 só pode vir do guard, antes da validação. Com MFA recente, nenhuma recusa tem código `mfa_*`. A sessão é `admin+financeiro`, então o 403 não vem de falta de perfil (o `toMatchObject` pegaria isso).
+
+**Ressalvas (não travam o merge; entram na fila antes do piloto)**
+1. **Aviso na área sensível (2ª metade do E8): não foi feito.** Quando a área sensível for desmarcada, avisar o profissional afetado e os outros admins (`clinical_notices`), com teste. O E8 fica **parcial** até isso entrar.
+2. **Recusa na trilha (B2 e item 10 da revisão externa):** o teste não confere a linha de recusa por MFA no `audit_log` dessas 6 rotas. Acrescentar ao teste RLS: uma linha por recusa, só com ids e código.
+3. **Rotas de poder que ficaram de fora** (varredura de todos os `@Post/@Put/@Patch/@Delete` dos controllers):
+   - `POST /pacientes/:id/responsaveis/sigilo/:pedidoId/revogar` (`responsaveis:liberar_informacao_clinica`): revogar o sigilo do adolescente volta a liberar informação clínica aos responsáveis (ECA/CFM; art. 11 e 14). **Precisa de MFA recente.** O `POST .../sigilo` não precisa, porque restringe.
+   - `POST /financeiro/retencao-fiscal/execucao` (`financeiro:configurar`): apaga recibos, cobranças e pagadores de vez. É do mesmo tipo que `responsaveis/eliminacao`, que já tem MFA. **Precisa de MFA recente.**
+   - `POST /clinica/portal/convites` (`portal:convidar`): a resposta traz o `token` do convite, que dá acesso de titular ou responsável no portal. O resgate pede um código a mais, o que reduz o risco. **Recomendo MFA recente**, ou confirmar e documentar que o código só chega ao contato do paciente e nunca à sessão da clínica.
+   - `POST /whatsapp/retencao/execucao`: apaga conforme a política e já roda por job. Não precisa de MFA. O mesmo vale para `POST /whatsapp/modelos` (desligado, sempre 409).
+4. Com as ressalvas 1 e 3, atualizar `ROTAS_COM_MFA_RECENTE` e pôr as rotas novas no teste RLS de rotas de poder (ou em um teste irmão).
+
+### Nota do Maestro sobre o parecer do #131 (04/11/2026)
+
+- **R3 e R4 (feitas):** passam a exigir MFA recente a revogação do sigilo do adolescente, a execução da retenção fiscal e o convite do portal. O inventário vai a 33 rotas, e o teste RLS cobre as 9.
+- **R2 (feita):** o teste RLS confere que cada recusa gerou uma linha `mfa_denied` na trilha.
+- **R1 (fila):** o aviso ao profissional e aos admins quando a área sensível for desmarcada.
+
+**Veredito final do Guardião sobre o #131 (reconferido no `e508b6b`): APROVADO.** As ressalvas R2, R3 e R4 foram atendidas. São 33 rotas com MFA recente, e o inventário bate com os decorators (19/19 testes passaram e o `tsc` não deu erro). O teste RLS cobre as 9 rotas e confere que cada recusa gerou uma linha `mfa_denied` com `reason`. Esse teste ainda não rodou, porque não há Postgres local: tem que passar no job `test:rls` do CI antes do merge. A R1 (aviso quando a área sensível é desmarcada) fica na fila, e o E8 só fecha quando ela entrar.
+>>>>>>> Stashed changes
