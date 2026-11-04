@@ -103,7 +103,15 @@ export async function avisarAreaSensivelDesmarcada(tx: TenantTx, ctx: RequestCon
     .select({ userId: clinicMembers.userId })
     .from(clinicMembers)
     .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt)));
-  const destinatarios = [...new Set([...admins.map((a) => a.userId), ...(usuarioDoProfissional ? [usuarioDoProfissional] : [])])].filter((u) => u !== ctx.userId);
+  // R3 do parecer do #133: o profissional só recebe se ainda tiver perfil ativo na clínica (desligado não recebe).
+  const profissionalAtivo = usuarioDoProfissional
+    ? (await tx
+        .select({ userId: clinicMembers.userId })
+        .from(clinicMembers)
+        .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.userId, usuarioDoProfissional), isNull(clinicMembers.revokedAt)))
+        .limit(1)).length > 0
+    : false;
+  const destinatarios = [...new Set([...admins.map((a) => a.userId), ...(profissionalAtivo && usuarioDoProfissional ? [usuarioDoProfissional] : [])])].filter((u) => u !== ctx.userId);
   if (destinatarios.length === 0) return 0;
   await tx.insert(clinicalNotices).values(
     destinatarios.map((u) => ({

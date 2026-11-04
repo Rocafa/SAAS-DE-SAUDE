@@ -25,3 +25,40 @@ ALTER TABLE clinical_notices ADD CONSTRAINT clinical_notices_area_sensivel_check
     from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
     AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
     AND rights_request_id IS NULL AND patient_id IS NULL AND portal_transition IS NULL)));
+
+-- B1/R1 do parecer do #133: a shape_check da 0039 tem ELSE (tipos de retenção, que exigem legal_hold_id). Sem um
+-- ramo próprio, o tipo novo cairia no ELSE e NENHUM aviso seria gravado. Recriada igual à da 0039, com o ramo novo
+-- antes do ELSE e o ELSE restrito explicitamente aos dois tipos de retenção.
+ALTER TABLE clinical_notices DROP CONSTRAINT clinical_notices_shape_check;
+ALTER TABLE clinical_notices ADD CONSTRAINT clinical_notices_shape_check CHECK (
+  CASE kind
+    WHEN 'sigilo_psicologia_alterado' THEN
+      from_mode IS NOT NULL AND to_mode IS NOT NULL
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+      AND rights_request_id IS NULL
+    WHEN 'perfil_alterado' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NOT NULL AND subject_role IS NOT NULL AND change IS NOT NULL AND legal_hold_id IS NULL
+      AND rights_request_id IS NULL
+    WHEN 'pedido_titular_aberto' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+      AND rights_request_id IS NOT NULL
+    WHEN 'portal_sigilo_transicao' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+      AND rights_request_id IS NULL
+    WHEN 'area_sensivel_desmarcada' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NULL
+      AND rights_request_id IS NULL AND professional_id IS NOT NULL
+    WHEN 'retencao_retirada_pedida' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NOT NULL
+      AND rights_request_id IS NULL
+    WHEN 'retencao_retirada_aprovada' THEN
+      from_mode IS NULL AND to_mode IS NULL AND restricted_existing = 0
+      AND subject_user_id IS NULL AND subject_role IS NULL AND change IS NULL AND legal_hold_id IS NOT NULL
+      AND rights_request_id IS NULL
+    ELSE false
+  END);

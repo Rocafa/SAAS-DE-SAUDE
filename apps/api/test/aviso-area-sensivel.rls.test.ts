@@ -77,6 +77,8 @@ describe('E8: aviso ao desmarcar a área sensível', () => {
         () => 'ok',
         (e: unknown) => String((e as { cause?: { code?: string } }).cause?.code ?? (e as { code?: string }).code),
       );
+    // R2 do parecer do #133: a forma certa passa direto no banco (o ELSE antigo da shape_check barrava tudo).
+    expect(await tentar({ professionalId: profissionalId })).toBe('ok');
     expect(await tentar({})).toBe('23514');
     expect(await tentar({ professionalId: profissionalId, patientId: profissionalId })).not.toBe('ok');
     expect(await tentar({ kind: 'perfil_alterado', professionalId: profissionalId, subjectUserId: prof.userId, subjectRole: 'admin', change: 'concedido' })).toBe('23514');
