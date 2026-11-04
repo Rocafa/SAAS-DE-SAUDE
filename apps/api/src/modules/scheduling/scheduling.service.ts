@@ -209,6 +209,7 @@ export class SchedulingService {
         ...(importBatchId ? { import_batch_id: importBatchId } : {}),
       },
     });
+    if (!importBatchId) await this.alertarVinculoCruzado(tx, ctx, linha.id, profissional, 'create');
     return paraDto(linha);
   }
 
@@ -248,7 +249,7 @@ export class SchedulingService {
         .set({ startsAt: inicio, endsAt: fim, rescheduledBy: ctx.userId, updatedAt: new Date() })
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
       const [profissional] = await tx
-        .select({ userId: professionals.userId })
+        .select({ id: professionals.id, userId: professionals.userId })
         .from(professionals)
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, atual.professionalId)));
       await recordAudit(tx, ctx, {
@@ -256,6 +257,8 @@ export class SchedulingService {
         scope: SCOPE,
         metadata: { appointment_id: id, op: 'reschedule', self_rescheduled: profissional?.userId === ctx.userId },
       });
+      // R4 do parecer do #134: remarcar para hoje também reabre a leitura do colega.
+      if (profissional) await this.alertarVinculoCruzado(tx, ctx, id, profissional, 'reschedule');
       return noFusoDaClinica(atual.startsAt);
     });
   }
@@ -433,6 +436,29 @@ export class SchedulingService {
     });
   }
 
+  /**
+   * E12 de 04/11 (R6 do #61, parecer do #134): quem não cuida da agenda (sem recepção nem admin na sessão, que o guard
+   * já filtrou pelo banco) cria ou remarca agendamento de OUTRO profissional: o colega ganha leitura do prontuário do
+   * paciente (`agenda_do_dia`) na hora. Alerta na trilha (mesma transação) e no log de segurança, decidido pelos perfis
+   * de AGORA. Não bloqueia (pode ser encaminhamento legítimo). Profissional sem usuário não ganha acesso: não alerta.
+   */
+  private async alertarVinculoCruzado(
+    tx: TenantTx,
+    ctx: RequestContext,
+    agendamentoId: string,
+    profissional: { readonly id: string; readonly userId: string | null },
+    op: 'create' | 'reschedule',
+  ): Promise<void> {
+    if (!profissional.userId || profissional.userId === ctx.userId) return;
+    if (ctx.roles.includes('recepcao') || ctx.roles.includes('admin')) return;
+    await recordAudit(tx, ctx, {
+      action: AuditAction.AnomalyAlert,
+      scope: SCOPE,
+      metadata: { rule: 'vinculo_cruzado', op, appointment_id: agendamentoId, professional_id: profissional.id, actor_id: ctx.userId },
+    });
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { tenantId: ctx.tenantId, regra: 'vinculo_cruzado' });
+  }
+
   private async profissionalAtivo(tx: TenantTx, ctx: RequestContext, id: string) {
     const [p] = await tx
       .select()
@@ -537,6 +563,7 @@ export class SchedulingService {
 
 /** Perfil que resume quem criou o agendamento (R6 do #61): quem cuida da agenda vem antes de quem atende. */
 export function papelDoCriador(perfis: readonly string[]): string {
-  for (const p of ['recepcao', 'admin', 'financeiro', 'profissional']) if (perfis.includes(p)) return p;
+  // R3 do parecer do #134: profissional antes de financeiro (quem também é financeiro não escapa do critério).
+  for (const p of ['recepcao', 'admin', 'profissional', 'financeiro']) if (perfis.includes(p)) return p;
   return 'outro';
 }
