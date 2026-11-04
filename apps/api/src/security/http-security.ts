@@ -66,8 +66,10 @@ export function applyHttpSecurity(
   registerRateLimitStore(store);
   app.use(rateLimiter(config.rateLimitMax, config.rateLimitWindowMs, store, RATE_LIMIT_EXEMPT_PATHS, hashKey));
 
+  // E6: antes dos parsers. Só o parser JSON: a API é só JSON (o CSV do importador lê o corpo cru). A app precisa ser
+  // criada com `bodyParser: false` (main.ts), senão o Nest registra urlencoded de novo no init (R2 do parecer do #132).
+  app.use(protecaoCsrf(allowed));
   expressApp.useBodyParser('json', { limit: config.bodyLimit });
-  expressApp.useBodyParser('urlencoded', { limit: config.bodyLimit, extended: false });
   app.use(safeErrorHandler);
 }
 
@@ -166,4 +168,51 @@ function safeErrorHandler(err: unknown, _req: Req, res: ServerResponse, next: Ne
   const status = Number(raw.status ?? raw.statusCode);
   const safe = Number.isInteger(status) && SAFE_MESSAGES[status] ? status : 500;
   sendJson(res, safe, SAFE_MESSAGES[safe] ?? 'Internal Server Error');
+}
+
+const METODOS_DE_ESCRITA: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Corpos não-JSON aceitos, por rota exata (método + caminho sem query). Hoje só o envio do CSV do importador, que lê
+ * o corpo cru com teto e confere o próprio Content-Type (importacao.validation.ts).
+ */
+export const CORPOS_NAO_JSON: ReadonlyMap<string, string> = new Map([['POST /importacoes', 'text/csv']]);
+
+/**
+ * E6 da revisão interna de 04/11 (CSRF, ASVS 4.2.2 e 13.2.3). Em método de escrita:
+ * - `Origin` fora da allowlist, ou `Sec-Fetch-Site: cross-site` sem origem permitida: 403 (navegador de outro site
+ *   não escreve, nem com cookie). Sem `Origin` (cliente servidor-a-servidor, webhook): segue; a sessão é Bearer/
+ *   cookie `__Host-` e o CORS já barra a leitura da resposta.
+ * - Corpo que não é `application/json` (fora de `CORPOS_NAO_JSON`): 415. Formulário HTML não chega aos controllers.
+ */
+export function protecaoCsrf(allowedOrigins: ReadonlySet<string>) {
+  return (req: Req, res: ServerResponse, next: Next): void => {
+    const metodo = (req.method ?? 'GET').toUpperCase();
+    if (!METODOS_DE_ESCRITA.has(metodo)) {
+      next();
+      return;
+    }
+    const origem = req.headers.origin;
+    const site = String(req.headers['sec-fetch-site'] ?? '').toLowerCase();
+    const origemPermitida = typeof origem === 'string' && allowedOrigins.has(origem);
+    if ((typeof origem === 'string' && !origemPermitida) || (site === 'cross-site' && !origemPermitida)) {
+      registrarNoMaximoUmaVez(`csrf:${origemDaRequisicao(req.ip ?? req.socket.remoteAddress) ?? 'sem'}`, 60_000, 'CSRF_RECUSADO', {
+        origem: origemDaRequisicao(req.ip ?? req.socket.remoteAddress),
+        motivo: 'origem_nao_permitida',
+      });
+      sendJson(res, 403, 'Forbidden');
+      return;
+    }
+    const temCorpo = Number(req.headers['content-length'] ?? '0') > 0 || req.headers['transfer-encoding'] !== undefined;
+    if (temCorpo) {
+      const tipo = String(req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+      const caminho = (req.url ?? '').split('?')[0] ?? '';
+      const aceitoAqui = CORPOS_NAO_JSON.get(`${metodo} ${caminho}`);
+      if (tipo !== 'application/json' && tipo !== aceitoAqui) {
+        sendJson(res, 415, 'Unsupported Media Type');
+        return;
+      }
+    }
+    next();
+  };
 }
