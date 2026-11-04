@@ -21,7 +21,29 @@ interface BancadaDoProvedor {
   readonly provider: AuthProvider;
   sessao(d: { tenantId: string; userId: string; perfis: readonly Perfil[]; comFator: boolean }): Promise<Cabecalhos>;
   encerrar(c: Cabecalhos): Promise<void>;
+  /**
+   * Ganchos que só o provedor real tem (parecer do #128). Opcionais na sessão fictícia: ausentes viram it.todo,
+   * para a lacuna ficar visível. Para qualquer tipo que não seja `dev`, são OBRIGATÓRIOS (R2 do parecer do #128).
+   */
+  readonly ganchos?: Partial<GanchosDoProvedorReal>;
 }
+
+interface GanchosDoProvedorReal {
+  /** Troca a clínica ativa da sessão; devolve a credencial depois da troca. */
+  trocarClinica(c: Cabecalhos, tenantId: string): Promise<Cabecalhos>;
+  /** Troca os perfis do usuário na sessão; devolve a credencial depois da troca. */
+  trocarPerfis(c: Cabecalhos, perfis: readonly Perfil[]): Promise<Cabecalhos>;
+  /** Troca a senha; devolve a credencial em uso depois da troca (ou a mesma, se o provedor a invalida). */
+  trocarSenha(c: Cabecalhos): Promise<Cabecalhos>;
+  /** Passa pelo segundo fator de novo (step-up); devolve a credencial. */
+  stepUp(c: Cabecalhos): Promise<Cabecalhos>;
+  /** Faz a sessão expirar (relógio do provedor). */
+  expirar(c: Cabecalhos): Promise<void>;
+  /** Monta uma credencial como um atacante faria (claim não verificado, chave errada, alg none). */
+  forjarCredencial(d: { tenantId: string; userId: string; perfis: readonly Perfil[] }): Promise<Cabecalhos>;
+}
+
+const GANCHOS: readonly (keyof GanchosDoProvedorReal)[] = ['trocarClinica', 'trocarPerfis', 'trocarSenha', 'stepUp', 'expirar', 'forjarCredencial'];
 
 function bancadaDev(): BancadaDoProvedor {
   const provider = new DevSessionProvider('test');
@@ -58,6 +80,15 @@ const FORJADOS = (outro: string): Cabecalhos => ({
 
 it('todo tipo aceito pela fábrica tem bancada no contrato', () => {
   expect(Object.keys(BANCADAS).sort()).toEqual([...TIPOS_DE_PROVEDOR].sort());
+});
+
+it('R2 do parecer do #128: provedor que não é a sessão fictícia implementa todos os ganchos (it.todo não aprova a R6)', () => {
+  const bancadas: Readonly<Record<string, () => BancadaDoProvedor>> = BANCADAS;
+  for (const tipo of TIPOS_DE_PROVEDOR as readonly string[]) {
+    if (tipo === 'dev') continue;
+    const ganchos = bancadas[tipo]?.().ganchos ?? {};
+    expect(GANCHOS.filter((g) => typeof ganchos[g] !== 'function'), tipo).toEqual([]);
+  }
 });
 
 for (const tipo of TIPOS_DE_PROVEDOR) {
@@ -123,6 +154,44 @@ for (const tipo of TIPOS_DE_PROVEDOR) {
       const c2 = await b.sessao({ ...d2, perfis: ['recepcao'], comFator: false });
       expect(await b.provider.resolver({ headers: c1 })).toMatchObject({ tenantId: d1.tenantId, userId: d1.userId, perfis: ['admin'] });
       expect(await b.provider.resolver({ headers: c2 })).toMatchObject({ tenantId: d2.tenantId, userId: d2.userId, mfaEm: null });
+    });
+
+    // Casos que dependem dos ganchos do provedor real (R6): sem o gancho, ficam visíveis como pendentes.
+    const ganchos = BANCADAS[tipo]().ganchos ?? {};
+    const comGancho = (g: keyof GanchosDoProvedorReal, nome: string, fn: (b: BancadaDoProvedor, h: GanchosDoProvedorReal) => Promise<void>): void => {
+      if (typeof ganchos[g] === 'function') {
+        it(nome, async () => {
+          const b = BANCADAS[tipo]();
+          await fn(b, b.ganchos as GanchosDoProvedorReal);
+        });
+      } else it.todo(`${nome} (gancho ${g} só no provedor real, D4)`);
+    };
+    comGancho('trocarClinica', 'trocar de clínica zera o MFA', async (b, h) => {
+      const c = await b.sessao({ ...nova(), perfis: ['admin'], comFator: true });
+      expect((await b.provider.resolver({ headers: await h.trocarClinica(c, randomUUID()) }))?.mfaEm ?? null).toBeNull();
+    });
+    comGancho('trocarPerfis', 'trocar de perfil zera o MFA', async (b, h) => {
+      const c = await b.sessao({ ...nova(), perfis: ['recepcao'], comFator: true });
+      expect((await b.provider.resolver({ headers: await h.trocarPerfis(c, ['admin']) }))?.mfaEm ?? null).toBeNull();
+    });
+    comGancho('trocarSenha', 'trocar a senha zera o MFA (ou derruba a sessão)', async (b, h) => {
+      const c = await b.sessao({ ...nova(), perfis: ['admin'], comFator: true });
+      expect((await b.provider.resolver({ headers: await h.trocarSenha(c) }))?.mfaEm ?? null).toBeNull();
+    });
+    comGancho('stepUp', 'step-up atualiza o mfaEm para agora', async (b, h) => {
+      const c = await b.sessao({ ...nova(), perfis: ['admin'], comFator: false });
+      const antes = Date.now();
+      const auth = await b.provider.resolver({ headers: await h.stepUp(c) });
+      expect(auth?.mfaEm?.getTime() ?? 0).toBeGreaterThanOrEqual(antes - 1000);
+      expect(auth?.mfaEm?.getTime() ?? Infinity).toBeLessThanOrEqual(Date.now());
+    });
+    comGancho('expirar', 'sessão expirada: null', async (b, h) => {
+      const c = await b.sessao({ ...nova(), perfis: ['admin'], comFator: true });
+      await h.expirar(c);
+      expect(await b.provider.resolver({ headers: c })).toBeNull();
+    });
+    comGancho('forjarCredencial', 'credencial forjada (claim não verificado): null', async (b, h) => {
+      expect(await b.provider.resolver({ headers: await h.forjarCredencial({ ...nova(), perfis: ['admin'] }) })).toBeNull();
     });
   });
 }
