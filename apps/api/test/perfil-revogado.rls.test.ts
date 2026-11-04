@@ -32,12 +32,24 @@ describe('E2: perfil revogado no banco sai da sessão aberta', () => {
     expect((await listar(recep)).status).toBe(200);
   });
 
-  it('desligado (nenhuma linha ativa): perde tudo, inclusive o perfil que a sessão diz ter e nunca foi para o banco', async () => {
-    const ex = await api.membro(clinica, api.sessao(clinica, 'admin', 'financeiro'), 'recepcao');
+  it('R1 do parecer do #130: com linha no banco, perfil que só a sessão diz ter não vale (admin pela palavra do provedor)', async () => {
+    const s = await api.membro(clinica, api.sessao(clinica, 'admin', 'recepcao'), 'recepcao');
+    expect((await listar(s)).status).toBe(200);
+    expect((await api.http().get('/clinica/membros').set(cab(s))).status).toBe(403);
+  });
+
+  it('desligado (nenhum perfil de sessão ativo): perde tudo', async () => {
+    const ex = await api.membro(clinica, api.sessao(clinica, 'recepcao'), 'recepcao');
     expect((await listar(ex)).status).toBe(200);
     await api.http().delete(`/clinica/membros/${ex.userId}/recepcao`).set(cab(admin)).expect(204);
     expect((await listar(ex)).status).toBe(403);
-    expect((await api.http().get('/clinica/membros').set(cab(ex))).status).toBe(403);
+  });
+
+  it('R2 do parecer do #130: a qualificação psicologo ativa não segura quem teve o perfil revogado', async () => {
+    const psi = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
+    expect((await listar(psi)).status).toBe(200);
+    await api.http().delete(`/clinica/membros/${psi.userId}/profissional`).set(cab(admin)).expect(204);
+    expect((await listar(psi)).status).toBe(403);
   });
 
   it('sem linha no banco: a sessão vale como o provedor disse (transição até a D4)', async () => {
@@ -47,7 +59,8 @@ describe('E2: perfil revogado no banco sai da sessão aberta', () => {
   it('o perfil revogado de uma clínica não afeta o mesmo usuário em outra', async () => {
     const outra = await api.novaClinica();
     const recep = await api.membro(clinica, api.sessao(clinica, 'recepcao'), 'recepcao');
-    const naOutra = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: outra, userId: recep.userId, perfis: ['recepcao'] })}` };
+    // Registrado também na outra clínica: lá a decisão passa pela leitura do banco, não pela regra de transição.
+    const naOutra = await api.membro(outra, { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: outra, userId: recep.userId, perfis: ['recepcao'] })}`, userId: recep.userId }, 'recepcao');
     await api.http().delete(`/clinica/membros/${recep.userId}/recepcao`).set(cab(admin)).expect(204);
     expect((await listar(recep)).status).toBe(403);
     expect((await listar(naOutra)).status).toBe(200);

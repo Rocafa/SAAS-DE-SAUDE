@@ -1,4 +1,4 @@
-/** E2 da revisão interna de 04/11: perfil revogado no banco sai da sessão na próxima requisição. */
+/** E2 da revisão interna de 04/11 e parecer do #130: perfil revogado no banco sai da sessão na próxima requisição. */
 import { describe, expect, it } from 'vitest';
 import { perfisVigentes } from './sessao.guard';
 
@@ -18,15 +18,17 @@ describe('perfisVigentes', () => {
     expect(perfisVigentes(['admin'], [revogado('admin'), ativo('admin')])).toEqual(['admin']);
   });
 
-  it('desligado (tem histórico e nenhuma linha ativa): sai tudo, inclusive perfil que nunca foi para o banco', () => {
+  it('R1: com qualquer linha no banco, perfil que só a sessão diz ter não vale', () => {
+    expect(perfisVigentes(['financeiro', 'recepcao'], [ativo('recepcao')])).toEqual(['recepcao']);
+    expect(perfisVigentes(['admin'], [ativo('recepcao')])).toEqual([]);
+  });
+
+  it('desligado (tem histórico e nenhuma linha ativa): sai tudo', () => {
     expect(perfisVigentes(['admin', 'financeiro'], [revogado('recepcao')])).toEqual([]);
   });
 
-  it('perfil sem linha própria, com outro perfil ativo: fica (transição)', () => {
-    expect(perfisVigentes(['financeiro', 'recepcao'], [ativo('recepcao')])).toEqual(['financeiro', 'recepcao']);
-  });
-
-  it('qualificação do banco (psicologo) não vira perfil de sessão', () => {
+  it('R2: a qualificação psicologo ativa não segura quem teve o perfil revogado', () => {
+    expect(perfisVigentes(['profissional'], [ativo('psicologo'), revogado('profissional')])).toEqual([]);
     expect(perfisVigentes(['profissional'], [ativo('psicologo'), ativo('profissional')])).toEqual(['profissional']);
   });
 });

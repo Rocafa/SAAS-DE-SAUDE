@@ -23,6 +23,7 @@ import { MemoryRateLimitStore, rateLimitStoreAtivo, type RateLimitStore } from '
 import { MFA_RECENTE_KEY, recusaDeMfa } from './mfa';
 import { temPermissao, type Perfil, type Permissao as NomePermissao } from './perfis';
 import { and, eq } from 'drizzle-orm';
+import { AMBIENTES_SESSAO_FICTICIA } from './auth-provider.factory';
 import { clinicMembers } from '../../db/schema';
 import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
@@ -53,18 +54,16 @@ function nomeDoHandler(context: ExecutionContext): string {
 /**
  * E2 da revisão interna de 04/11: perfis da sessão MENOS os revogados no banco. Revogar um perfil (ou todos, para
  * desligar alguém) vale na próxima requisição, sem esperar a sessão acabar.
- * - Perfil com linha em `clinic_members` e nenhuma ativa: sai.
- * - Usuário com linhas e nenhuma ativa (desligado): sai tudo.
+ * - Usuário com QUALQUER linha em `clinic_members`: só ficam os perfis da sessão que estão ATIVOS no banco (R1 do
+ *   parecer do #130: perfil que só o provedor diz não vale). A qualificação `psicologo` não é perfil de sessão, então
+ *   não segura ninguém (R2): desligado é quem não tem perfil de sessão ativo.
  * - Usuário sem linha nenhuma: fica como o provedor disse (transição; com o provedor real da D4, os perfis da
  *   sessão passam a vir SÓ do banco, condição do contrato do provedor).
  */
 export function perfisVigentes(perfis: readonly Perfil[], linhas: readonly { role: string; revokedAt: Date | null }[]): readonly Perfil[] {
   if (linhas.length === 0) return perfis;
-  if (!linhas.some((l) => l.revokedAt === null)) return [];
-  return perfis.filter((p) => {
-    const doPerfil = linhas.filter((l) => l.role === p);
-    return doPerfil.length === 0 || doPerfil.some((l) => l.revokedAt === null);
-  });
+  const ativos = new Set(linhas.filter((l) => l.revokedAt === null).map((l) => l.role));
+  return perfis.filter((p) => ativos.has(p));
 }
 
 /** Escopo da linha da trilha de uma recusa por MFA em rota sensível (B2 do parecer de 03/11 sobre o #123). */
@@ -146,7 +145,11 @@ export class SessaoGuard implements CanActivate {
 
   /** E2: lê as linhas do usuário em `clinic_members` (RLS da clínica da sessão) e tira os perfis revogados. */
   private async perfisDoBanco(auth: AuthContext): Promise<readonly Perfil[]> {
-    if (!this.db) return auth.perfis;
+    if (!this.db) {
+      // R3 do parecer do #130: sem banco, só em dev/test (módulos de teste sem banco). Fora disso, nega.
+      if (!AMBIENTES_SESSAO_FICTICIA.has(process.env.NODE_ENV ?? '')) throw new Error('SessaoGuard sem banco fora de dev/test: perfis não conferidos');
+      return auth.perfis;
+    }
     const linhas = await this.db.run(
       auth.tenantId,
       (tx) =>

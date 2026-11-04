@@ -313,7 +313,7 @@ beforeAll(async () => {
 
   // Retenção legal (0017): marcada, pedida a retirada por um admin e aprovada por OUTRO.
   const admin2 = api.sessao(clinicaA, 'admin');
-  await api.membro(clinicaA, admin, 'admin');
+  await api.membro(clinicaA, admin, 'admin', 'profissional');
   await api.membro(clinicaA, admin2, 'admin');
   await api.http().put('/prontuario/pacientes/' + pacienteId + '/retencao-legal').set(cab(admin)).send({ referencia: REFERENCIA_RETENCAO }).expect(200);
   await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada').set(cab(admin)).send({ motivo: MOTIVO_RETIRADA }).expect(200);
@@ -321,8 +321,8 @@ beforeAll(async () => {
   // Custódia (0017): psicólogo autor e substituto; designada e aceita.
   const psiAutor = api.sessao(clinicaA, 'profissional');
   const psiSubst = api.sessao(clinicaA, 'profissional');
-  await api.membro(clinicaA, psiAutor, 'psicologo');
-  await api.membro(clinicaA, psiSubst, 'psicologo');
+  await api.membro(clinicaA, psiAutor, 'profissional', 'psicologo');
+  await api.membro(clinicaA, psiSubst, 'profissional', 'psicologo');
   const autorId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Autor Ficticio', especialidade: 'Psicologia', usuarioId: psiAutor.userId })).body as { id: string };
   const substId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Subst Ficticio', especialidade: 'Psicologia', usuarioId: psiSubst.userId })).body as { id: string };
   const cust = await api.http().post('/prontuario/custodias').set(cab(admin)).send({ autorProfissionalId: autorId.id, substitutoProfissionalId: substId.id });
