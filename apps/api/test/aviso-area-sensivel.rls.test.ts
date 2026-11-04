@@ -25,8 +25,8 @@ beforeAll(async () => {
   clinica = await api.novaClinica();
   adminA = await api.membro(clinica, api.sessao(clinica, 'admin', 'profissional'), 'admin', 'profissional');
   adminB = await api.membro(clinica, api.sessao(clinica, 'admin', 'profissional'), 'admin', 'profissional');
-  prof = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
-  const p = await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Psi Ficticia Area', especialidade: 'Psicologia', usuarioId: prof.userId });
+  prof = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
+  const p = await api.http().post('/profissionais').set(cab(adminA)).send({ nome: 'Prof Ficticio Area', especialidade: 'Fisioterapia', usuarioId: prof.userId });
   expect(p.status, JSON.stringify(p.body)).toBe(201);
   profissionalId = (p.body as { id: string }).id;
 });
@@ -36,6 +36,8 @@ afterAll(async () => {
 });
 
 describe('E8: aviso ao desmarcar a área sensível', () => {
+  // Especialidade comum: o banco força a área sensível de especialidade sensível (Psicologia etc., 0033), e ali
+  // desmarcar não muda nada (e não avisa). O risco do E8 é a área sensível marcada à mão.
   it('marcar não avisa ninguém', async () => {
     const r = await marcar(true);
     expect(r.status, JSON.stringify(r.body)).toBe(201);
