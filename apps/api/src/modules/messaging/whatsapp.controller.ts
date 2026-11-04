@@ -7,6 +7,7 @@ import { CABECALHO_ASSINATURA, lerEventosDoWebhook, WebhookInvalidoError } from 
 import { WhatsappService } from './whatsapp.service';
 import { validarConfiguracao, validarFiltroEnvios, validarNovoOptIn, validarRevogacao } from './whatsapp.validation';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { ExigeMfaRecente } from '../auth/mfa';
 
 /** Rotas da clínica (com sessão). Na URL só ids, datas e enums. */
 @Controller()
@@ -22,6 +23,7 @@ export class WhatsappController {
 
   @Put('whatsapp/configuracao')
   @Permissao('comunicacao:configurar')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   salvar(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
     return this.service.salvarConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
   }

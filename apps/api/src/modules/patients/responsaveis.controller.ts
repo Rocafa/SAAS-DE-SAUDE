@@ -148,6 +148,7 @@ export class ResponsaveisController {
   @Post('sigilo/:pedidoId/revogar')
   @HttpCode(200)
   @Permissao('responsaveis:liberar_informacao_clinica')
+  @ExigeMfaRecente() // E8 (parecer do #131): rota de poder
   revogarSigilo(
     @Sessao() auth: AuthContext,
     @Param('id') id: string,
