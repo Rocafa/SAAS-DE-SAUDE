@@ -136,6 +136,7 @@ export const EXCECOES: Readonly<Record<string, Excecao>> = {
 /** Rotas de leitura (`GET`) cuja trilha é gravada pelo código da API (o titular e a clínica veem quem leu). */
 export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /agendamentos',
+  'GET /clinica/auditoria',
   'GET /atendimentos/:id',
   'GET /atendimentos/:id/versoes',
   'GET /clinica/portal/pacientes/:id/consentimentos',
@@ -244,6 +245,7 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
  */
 export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'DELETE /clinica/membros/:usuarioId/:perfil',
+  'GET /clinica/auditoria',
   'GET /custodias/:id/notas',
   'GET /notas-privadas/:id',
   'GET /pacientes/:id/notas-privadas',

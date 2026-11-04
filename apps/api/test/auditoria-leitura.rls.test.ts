@@ -175,6 +175,7 @@ beforeAll(async () => {
   const p = (url: string): Plano => ({ s: portal, url, ator: contaPortal });
   const planosDaClinica: Record<string, Plano> = {
     'GET /agendamentos': c('/agendamentos?de=2030-05-05&ate=2030-05-11'),
+    'GET /clinica/auditoria': c('/clinica/auditoria?limite=5'),
     'GET /atendimentos/:id': c(`/atendimentos/${atId}`),
     'GET /atendimentos/:id/versoes': c(`/atendimentos/${atId}/versoes`),
     'GET /clinica/portal/pacientes/:id/consentimentos': c(`/clinica/portal/pacientes/${pacienteId}/consentimentos`),

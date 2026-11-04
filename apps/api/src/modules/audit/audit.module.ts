@@ -1,6 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { PSEUDONYM_SIGNER, type PseudonymSigner } from './ator-suporte';
 import { AutorizacaoDeSuporteController, AutorizacaoDeSuporteService } from './autorizacao-suporte';
+import { ConsultaDaTrilhaController, ConsultaDaTrilhaService } from './consulta-trilha';
 
 /**
  * Auditoria: a porta do pseudônimo do suporte (N1) e a autorização de acesso do suporte pela clínica (0059). O signer é escolhido no boot por
@@ -13,8 +14,8 @@ export class AuditModule {
     return {
       module: AuditModule,
       global: true,
-      controllers: [AutorizacaoDeSuporteController],
-      providers: [{ provide: PSEUDONYM_SIGNER, useValue: signer }, AutorizacaoDeSuporteService],
+      controllers: [AutorizacaoDeSuporteController, ConsultaDaTrilhaController],
+      providers: [{ provide: PSEUDONYM_SIGNER, useValue: signer }, AutorizacaoDeSuporteService, ConsultaDaTrilhaService],
       exports: [PSEUDONYM_SIGNER, AutorizacaoDeSuporteService],
     };
   }
