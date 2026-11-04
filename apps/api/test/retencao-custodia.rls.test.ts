@@ -402,7 +402,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
       tx.insert(noteCustodies).values({ tenantId: clinica, authorUserId: autor.userId, substituteUserId: subst.userId, designatedBy: admin.userId }), admin.userId);
     expect(await sqlstates(direto)).toContain('42501');
     // Designador que não é admin no banco (ex.: profissional injetando SQL): 42501.
-    await api.membro(clinica, subst, 'psicologo');
+    await api.membro(clinica, subst, 'profissional', 'psicologo');
     const naoAdmin = withTenant(api.db.db, clinica, (tx) =>
       tx.insert(noteCustodies).values({ tenantId: clinica, authorUserId: autor.userId, substituteUserId: subst.userId, designatedBy: autor.userId }), autor.userId);
     expect(await sqlstates(naoAdmin)).toContain('42501');

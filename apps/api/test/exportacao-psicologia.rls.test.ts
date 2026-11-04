@@ -31,7 +31,7 @@ beforeAll(async () => {
   await api.membro(clinica, admin, 'admin');
   adminUserId = admin.userId;
   const psiSessao = api.sessao(clinica, 'profissional');
-  const psi = await api.membro(clinica, psiSessao, 'psicologo');
+  const psi = await api.membro(clinica, psiSessao, 'profissional', 'psicologo');
   psiUserId = psi.userId;
   // Sigilo máximo: só o autor vê. Mesmo assim o pacote da clínica leva tudo (G2).
   await api.http().put('/prontuario/configuracao').set(cab(admin)).send({ psicologia: 'restrito_ao_autor' }).expect(200);

@@ -26,7 +26,7 @@ beforeAll(async () => {
   api = await subirApi();
   clinica = await api.novaClinica();
   const admin = await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin');
-  const psi = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'psicologo');
+  const psi = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
   psiUserId = psi.userId;
   const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Ficticia MFA', especialidade: 'Psicologia', usuarioId: psiUserId });
   expect(prof.status, JSON.stringify(prof.body)).toBe(201);
