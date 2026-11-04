@@ -30,12 +30,13 @@ O que falta são peças que **ainda não existem**: o login real, a ligação do
 | P3 | "Sair" no portal (rota e botão) | paciente | D4 (sessão real) | parado |
 | P4 / E11 | Eventos de login, falha, bloqueio, logout e troca de credencial no log e na trilha | ambos | D4 (o formato já está pronto: `log-de-seguranca.ts`) | parcial |
 | P5 | Testes RLS do portal verdes no CI do commit do deploy | paciente | CI | conferir no deploy |
-| E2 | Revogar perfil não corta a sessão aberta: o guard confia nos perfis do provedor | profissional | — | **em PR** (perfil revogado no banco sai da sessão; conferência total com a D4) |
+| E2 | Revogar perfil não corta a sessão aberta: o guard confia nos perfis do provedor | profissional | — | **feito** (#130; conferência total com a D4) |
 | E3 | Desligar funcionário (tirar todos os perfis e encerrar todas as sessões) | profissional | D4 para o logout global | parcial: com o E2, revogar todos os perfis já tira todo o acesso |
 | E4 | Site ligado à API em todas as telas (hoje só pacientes e agenda) | profissional | front (@Lopesloro, #86) | parado |
 | E5 | Expiração por inatividade (15 min) no servidor e no cliente | ambos | D4 (servidor) e front | parado |
 | L1 / L2 | Proteção da main: exigir aprovação, revisão do CODEOWNERS e `enforce_admins` | processo | **OK dos sócios** (configuração do GitHub) | aguardando OK |
 | L4 | E2E e scan de imagem (Trivy) obrigatórios para o merge | processo | OK dos sócios | aguardando OK |
+| E8 | MFA recente nas rotas de poder | profissional | — | **feito** (#131, 33 rotas; falta o aviso ao desmarcar área sensível) |
 | L5 | Checagem automática de dado pessoal nos logs da API | processo | — | **feito em 04/11** |
 | — | Revisão EXTERNA (pentest e auditoria independentes) | ambos | staging (AWS) e D4 | [pacote pronto](revisao-externa.md) |
 | — | Parecer jurídico D8 (adolescentes, guarda do prontuário, Marco Civil art. 15) | ambos | advogado | parado |

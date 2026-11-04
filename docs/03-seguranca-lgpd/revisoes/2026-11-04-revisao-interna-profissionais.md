@@ -142,3 +142,5 @@ A revisão externa entra **depois da D4**, contra o staging com dado fictício, 
 - **R3 e R4 (feitas):** passam a exigir MFA recente a revogação do sigilo do adolescente, a execução da retenção fiscal e o convite do portal. O inventário vai a 33 rotas, e o teste RLS cobre as 9.
 - **R2 (feita):** o teste RLS confere que cada recusa gerou uma linha `mfa_denied` na trilha.
 - **R1 (fila):** o aviso ao profissional e aos admins quando a área sensível for desmarcada.
+
+**Veredito final do Guardião sobre o #131 (reconferido no `e508b6b`): APROVADO.** As ressalvas R2, R3 e R4 foram atendidas. São 33 rotas com MFA recente, e o inventário bate com os decorators (19/19 testes passaram e o `tsc` não deu erro). O teste RLS cobre as 9 rotas e confere que cada recusa gerou uma linha `mfa_denied` com `reason`. Esse teste ainda não rodou, porque não há Postgres local: tem que passar no job `test:rls` do CI antes do merge. A R1 (aviso quando a área sensível é desmarcada) fica na fila, e o E8 só fecha quando ela entrar.
