@@ -150,15 +150,22 @@ export class SessaoGuard implements CanActivate {
       if (!AMBIENTES_SESSAO_FICTICIA.has(process.env.NODE_ENV ?? '')) throw new Error('SessaoGuard sem banco fora de dev/test: perfis não conferidos');
       return auth.perfis;
     }
-    const linhas = await this.db.run(
-      auth.tenantId,
-      (tx) =>
-        tx
-          .select({ role: clinicMembers.role, revokedAt: clinicMembers.revokedAt })
-          .from(clinicMembers)
-          .where(and(eq(clinicMembers.tenantId, auth.tenantId), eq(clinicMembers.userId, auth.userId))),
-      auth.userId,
-    );
+    // R4 do parecer do #130: falha ao conferir os perfis nega (o erro sobe; banco fora vira 503 no filtro) e alarma, no
+    // máximo uma vez por clínica a cada 60 s (R2 do parecer do #136).
+    const linhas = await this.db
+      .run(
+        auth.tenantId,
+        (tx) =>
+          tx
+            .select({ role: clinicMembers.role, revokedAt: clinicMembers.revokedAt })
+            .from(clinicMembers)
+            .where(and(eq(clinicMembers.tenantId, auth.tenantId), eq(clinicMembers.userId, auth.userId))),
+        auth.userId,
+      )
+      .catch((err: unknown) => {
+        registrarNoMaximoUmaVez(`perfis:${auth.tenantId}`, 60_000, 'PERFIS_NAO_CONFERIDOS', { tenantId: auth.tenantId, userId: auth.userId });
+        throw err;
+      });
     return perfisVigentes(auth.perfis, linhas);
   }
 

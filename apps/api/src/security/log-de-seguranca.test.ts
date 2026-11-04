@@ -135,6 +135,15 @@ describe('guard de sessão gera os eventos de segurança', () => {
     expect(linhas(warn)[0]).toMatchObject({ evento: 'ACESSO_NEGADO_PERFIL', tenantId: TENANT, userId: USER, handler: 'PacientesController.listar', rota: 'GET /financeiro' });
   });
 
+  it('R4 do parecer do #130: falha ao ler os perfis no banco nega e gera PERFIS_NAO_CONFERIDOS', async () => {
+    const erro = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { ctx, reflector } = contexto({ headers: {}, method: 'GET', route: { path: '/pacientes' } }, 'pacientes:ler');
+    const auth: AuthContext = { tenantId: TENANT as never, userId: USER as never, perfis: ['admin'], mfaEm: new Date() };
+    const dbFora = { run: () => Promise.reject(new Error('banco fora')) };
+    await expect(new SessaoGuard(provider(auth), reflector, dbFora as never).canActivate(ctx)).rejects.toThrow('banco fora');
+    expect(linhas(erro)[0]).toMatchObject({ evento: 'PERFIS_NAO_CONFERIDOS', tenantId: TENANT, userId: USER });
+  });
+
   it('recusa por MFA: MFA_RECUSADO com o motivo', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const { ctx, reflector } = contexto({ headers: {}, method: 'GET', route: { path: '/pacientes' } }, 'pacientes:ler');

@@ -48,6 +48,7 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | `ALERTA_ANOMALIA` | alto | imediato | vigilância de leitura, portal, agenda, cadastro, vínculo cruzado no prontuário |
 | `TRILHA_NAO_GRAVADA` | **crítico** | imediato | qualquer evento que devia ir para a trilha e não gravou |
 | `EXPORTACAO_FALHOU` | alto | imediato | exportação total (G2) |
+| `PERFIS_NAO_CONFERIDOS` | alto | imediato | guard de sessão (leitura de `clinic_members` falhou; requisição negada) |
 | `CSRF_RECUSADO` | alto | volume | borda HTTP (escrita de origem fora da allowlist, 403) |
 | `PORTAL_RESGATE_RECUSADO` | aviso | volume | resgate de convite do portal |
 
@@ -64,6 +65,6 @@ Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`. `RATE
 
 - **Marco Civil (art. 15):** o provedor de aplicação guarda os registros de acesso (IP, data e hora) por 6 meses, sob sigilo. O log de segurança guarda só o HMAC do IP. A guarda do IP em claro fica nos access logs do balanceador (ALB), cifrados e com acesso restrito. Confirmar com o advogado (pergunta para a D8) e configurar com a conta AWS.
 - **Eventos do login e do MFA real** (login, falha, bloqueio, logout, troca de senha e de fator, reset): entram no PR da D4, com estes mesmos campos (R5 do parecer do #123; P4 e E11 das revisões internas de 04/11).
-- **`origem` nos eventos do portal e do webhook** e testes de que o rate limit e cada módulo emitem o evento certo (R7 e R8 do parecer do #129).
+- **`origem` nos eventos do portal** (o do webhook já sai com `origem`) e testes de emissão nos módulos que ainda não têm (webhook, vigilâncias, exportação). O rate limit e o guard já têm teste.
 - **Correlação por requisição:** um id de requisição em todas as linhas (E9 da revisão da equipe).
 - **Front (site e app):** o `no-console` do web e o envio de erros do navegador sem dado pessoal ficam com a frente de front (L6 da triagem de 04/11).
