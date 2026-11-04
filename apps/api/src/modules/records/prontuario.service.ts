@@ -1,12 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { randomUUID } from 'node:crypto';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import {
   appointments,
   clinicalAddenda,
+  clinicMembers,
   clinicalRecordVersions,
   clinicalSettings,
   encounters,
@@ -200,6 +202,7 @@ export class ProntuarioService {
             care_basis: vinculo.base,
           },
         });
+        await alertarVinculoCruzado(tx, ctx, ag, e.id);
         return this.montar(tx, ctx, e);
       }),
     );
@@ -589,4 +592,32 @@ function conferirMfaDoRegistro(
   if (!exigeMfaRecente(e) || !podeVerConteudo(e, ctx.userId)) return;
   const recusa = recusaDeMfaRecente(ctx.mfaEm);
   if (recusa) throw new ProibidoError(recusa);
+}
+
+/**
+ * E12 de 04/11 (R6 do parecer do #61): conluio entre profissionais. Quem SÓ é profissional (sem recepção nem admin no
+ * banco) criou o agendamento para OUTRO profissional, e ele virou atendimento: o colega ganhou acesso ao prontuário
+ * do paciente sem passar por quem cuida da agenda. Alerta na trilha (na mesma transação) e no log de segurança; não
+ * bloqueia (pode ser legítimo, como um encaminhamento interno). Lote de importação não conta.
+ */
+export async function alertarVinculoCruzado(
+  tx: TenantTx,
+  ctx: RequestContext,
+  ag: { readonly id: string; readonly createdBy: string | null; readonly importBatchId: string | null; readonly professionalId: string },
+  encontroId: string,
+): Promise<boolean> {
+  if (!ag.createdBy || ag.createdBy === ctx.userId || ag.importBatchId) return false;
+  const papeis = await tx
+    .select({ role: clinicMembers.role })
+    .from(clinicMembers)
+    .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.userId, ag.createdBy), isNull(clinicMembers.revokedAt)));
+  const ativos = new Set(papeis.map((r) => r.role));
+  if (ativos.size === 0 || ![...ativos].every((r) => r === 'profissional' || r === 'psicologo')) return false;
+  await recordAudit(tx, ctx, {
+    action: AuditAction.AnomalyAlert,
+    scope: SCOPE_ATENDIMENTOS,
+    metadata: { rule: 'vinculo_cruzado', appointment_id: ag.id, encounter_id: encontroId, professional_id: ag.professionalId, creator_id: ag.createdBy },
+  });
+  registrarEventoDeSeguranca('ALERTA_ANOMALIA', { tenantId: ctx.tenantId, regra: 'vinculo_cruzado' });
+  return true;
 }

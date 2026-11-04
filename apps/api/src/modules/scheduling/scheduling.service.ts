@@ -204,6 +204,8 @@ export class SchedulingService {
         patient_id: linha.patientId,
         walk_in: linha.isWalkIn,
         self_scheduled: profissional.userId === ctx.userId,
+        // R6 do parecer do #61 / E12 de 04/11: o perfil de quem criou (o alerta de vínculo cruzado olha isto).
+        creator_role: papelDoCriador(ctx.roles),
         ...(importBatchId ? { import_batch_id: importBatchId } : {}),
       },
     });
@@ -531,4 +533,10 @@ export class SchedulingService {
   private escrita<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
     return escreverNaClinica(this.db, ctx, fn);
   }
+}
+
+/** Perfil que resume quem criou o agendamento (R6 do #61): quem cuida da agenda vem antes de quem atende. */
+export function papelDoCriador(perfis: readonly string[]): string {
+  for (const p of ['recepcao', 'admin', 'financeiro', 'profissional']) if (perfis.includes(p)) return p;
+  return 'outro';
 }
