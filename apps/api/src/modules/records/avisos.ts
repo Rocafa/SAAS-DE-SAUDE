@@ -62,6 +62,12 @@ export type AvisoDto =
       readonly pacienteId: string;
       readonly transicao: PortalSigiloTransicao;
       readonly criadoPor: string;
+    })
+  | (AvisoBase & {
+      /** 0060 (E8 de 04/11): a área sensível do profissional foi desmarcada; `criadoPor` = admin que desmarcou. */
+      readonly tipo: 'area_sensivel_desmarcada';
+      readonly profissionalId: string;
+      readonly criadoPor: string;
     });
 
 function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
@@ -84,7 +90,31 @@ function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
   if (tipo === 'portal_sigilo_transicao') {
     return { ...base, tipo, pacienteId: n.patientId as string, transicao: n.portalTransition as PortalSigiloTransicao, criadoPor: n.createdBy };
   }
+  if (tipo === 'area_sensivel_desmarcada') return { ...base, tipo, profissionalId: n.professionalId as string, criadoPor: n.createdBy };
   return { ...base, tipo, retencaoId: n.legalHoldId as string, criadoPor: n.createdBy };
+}
+
+/**
+ * E8 de 04/11 (0060): a área sensível de um profissional foi desmarcada. Avisa o próprio profissional (se tiver
+ * usuário) e os DEMAIS admins ativos; nunca quem desmarcou. Só o id do profissional. Devolve quantos foram avisados.
+ */
+export async function avisarAreaSensivelDesmarcada(tx: TenantTx, ctx: RequestContext, profissionalId: string, usuarioDoProfissional: string | null): Promise<number> {
+  const admins = await tx
+    .select({ userId: clinicMembers.userId })
+    .from(clinicMembers)
+    .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt)));
+  const destinatarios = [...new Set([...admins.map((a) => a.userId), ...(usuarioDoProfissional ? [usuarioDoProfissional] : [])])].filter((u) => u !== ctx.userId);
+  if (destinatarios.length === 0) return 0;
+  await tx.insert(clinicalNotices).values(
+    destinatarios.map((u) => ({
+      tenantId: ctx.tenantId,
+      recipientUserId: u,
+      kind: 'area_sensivel_desmarcada' as const,
+      professionalId: profissionalId,
+      createdBy: ctx.userId,
+    })),
+  );
+  return destinatarios.length;
 }
 
 const USUARIO_SISTEMA_AVISO = '00000000-0000-0000-0000-000000000000';
