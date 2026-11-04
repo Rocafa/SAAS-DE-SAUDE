@@ -8,7 +8,7 @@
  */
 import { Controller, Get, Inject, Injectable, Query, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { lerNaClinica } from '../../common/transacao-clinica';
 import { ehDataValida, exigirObjeto, Validador } from '../../common/validacao';
 import { auditLog } from '../../db/schema';
@@ -32,7 +32,8 @@ export interface FiltroDaTrilha {
   readonly ate?: string;
   readonly acao?: string;
   readonly limite: number;
-  readonly cursor?: { readonly em: Date; readonly id: string };
+  /** Id da última linha da página anterior. */
+  readonly cursor?: string;
 }
 
 export interface LinhaDaTrilhaDto {
@@ -51,20 +52,52 @@ export interface PaginaDaTrilha {
   readonly proximo: string | null;
 }
 
-const CURSOR_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\|([0-9a-f-]{36})$/;
+/**
+ * Cursor = id (UUID) da última linha da página. A comparação usa o horário EXATO dela no banco (microssegundos), lido
+ * por subconsulta: com o horário arredondado para ms, linhas da mesma transação (mesmo `now()`) sumiam entre páginas
+ * (R1 do parecer do #135).
+ */
+const UUID_CURSOR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export function codificarCursor(em: Date, id: string): string {
-  return Buffer.from(`${em.toISOString()}|${id}`, 'utf8').toString('base64url');
+export function codificarCursor(id: string): string {
+  return Buffer.from(id, 'utf8').toString('base64url');
 }
 
-export function decodificarCursor(valor: string): { em: Date; id: string } | null {
-  const m = CURSOR_RE.exec(Buffer.from(valor, 'base64url').toString('utf8'));
-  if (!m?.[1] || !m[2]) return null;
-  const em = new Date(m[1]);
-  return Number.isNaN(em.getTime()) ? null : { em, id: m[2] };
+export function decodificarCursor(valor: string): string | null {
+  const id = Buffer.from(valor, 'base64url').toString('utf8');
+  return UUID_CURSOR.test(id) ? id : null;
 }
 
-/** Valida a query (campos desconhecidos, datas, ação fora da lista, limite e cursor): 400 com os nomes dos campos. */
+/** Teto do período pedido (fila do parecer do #135): evita varrer anos de trilha numa consulta. */
+export const PERIODO_MAXIMO_DIAS = 366;
+
+/**
+ * Chaves da metadata que a clínica vê (R4 do parecer do #135): só ids e códigos necessários para investigar. Ficam de
+ * fora detalhes que passam do necessário (`hidden`, `template`, `export_consent`, contagens de notas privadas etc.).
+ */
+export const CHAVES_VISIVEIS: ReadonlySet<string> = new Set([
+  'op',
+  'rule',
+  'reason',
+  'patient_id',
+  'encounter_id',
+  'appointment_id',
+  'professional_id',
+  'target_id',
+  'care_basis',
+  'ticket',
+  'actor_id',
+  'creator_id',
+  'filter_user_id',
+  'filter_action',
+  'count',
+]);
+
+export function metadataVisivel(m: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(m).filter(([k]) => CHAVES_VISIVEIS.has(k)));
+}
+
+/** Valida a query (campos desconhecidos, datas, período, ação fora da lista, limite e cursor): 400 com os campos. */
 export function validarFiltro(query: unknown): FiltroDaTrilha {
   const v = new Validador(exigirObjeto(query ?? {}, ['pacienteId', 'usuarioId', 'de', 'ate', 'acao', 'limite', 'cursor']));
   const pacienteId = v.uuid('pacienteId', false);
@@ -76,7 +109,10 @@ export function validarFiltro(query: unknown): FiltroDaTrilha {
   const cursorTexto = v.texto('cursor', { max: 200 });
   if (de !== undefined && !ehDataValida(de)) v.falhar('de');
   if (ate !== undefined && !ehDataValida(ate)) v.falhar('ate');
-  if (de !== undefined && ate !== undefined && de > ate) v.falhar('ate');
+  if (de !== undefined && ate !== undefined && ehDataValida(de) && ehDataValida(ate)) {
+    if (de > ate) v.falhar('ate');
+    else if ((Date.parse(`${ate}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`)) / 86_400_000 >= PERIODO_MAXIMO_DIAS) v.falhar('ate');
+  }
   if (acao !== undefined && !ACOES.includes(acao)) v.falhar('acao');
   const cursor = cursorTexto === undefined ? undefined : decodificarCursor(cursorTexto);
   if (cursor === null) v.falhar('cursor');
@@ -104,15 +140,18 @@ export class ConsultaDaTrilhaService {
 
   consultar(ctx: RequestContext, f: FiltroDaTrilha): Promise<PaginaDaTrilha> {
     return lerNaClinica(this.db, ctx, async (tx) => {
+      // R3 do parecer do #135: consulta pesada não segura a conexão (índices na 0061).
+      await tx.execute(sql`set local statement_timeout = '5s'`);
       const condicoes: SQL[] = [eq(auditLog.tenantId, ctx.tenantId)];
       if (f.usuarioId) condicoes.push(eq(auditLog.actorId, f.usuarioId));
       if (f.pacienteId) condicoes.push(sql`${auditLog.metadata}->>'patient_id' = ${f.pacienteId}`);
       if (f.de) condicoes.push(gte(auditLog.createdAt, new Date(`${f.de}T00:00:00.000Z`)));
       if (f.ate) condicoes.push(lt(auditLog.createdAt, diaSeguinte(f.ate)));
-      if (f.acao) condicoes.push(inArray(auditLog.action, [f.acao]));
+      if (f.acao) condicoes.push(eq(auditLog.action, f.acao));
       if (f.cursor) {
-        const anterior = or(lt(auditLog.createdAt, f.cursor.em), and(eq(auditLog.createdAt, f.cursor.em), lt(auditLog.id, f.cursor.id)));
-        if (anterior) condicoes.push(anterior);
+        condicoes.push(
+          sql`(${auditLog.createdAt}, ${auditLog.id}) < (select a.created_at, a.id from audit_log a where a.tenant_id = ${ctx.tenantId} and a.id = ${f.cursor})`,
+        );
       }
       const linhas = await tx
         .select()
@@ -142,9 +181,9 @@ export class ConsultaDaTrilhaService {
           escopo: l.scope,
           atorId: l.actorId,
           tipoDeAtor: l.actorKind ?? null,
-          metadata: l.metadata,
+          metadata: metadataVisivel(l.metadata as Record<string, unknown>),
         })),
-        proximo: linhas.length > f.limite && ultima ? codificarCursor(ultima.createdAt, ultima.id) : null,
+        proximo: linhas.length > f.limite && ultima ? codificarCursor(ultima.id) : null,
       };
     });
   }

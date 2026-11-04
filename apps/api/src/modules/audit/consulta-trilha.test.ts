@@ -1,6 +1,6 @@
 /** E10 de 04/11: validação dos filtros e do cursor da consulta da trilha. */
 import { describe, expect, it } from 'vitest';
-import { codificarCursor, decodificarCursor, LIMITE_PADRAO, validarFiltro } from './consulta-trilha';
+import { codificarCursor, decodificarCursor, LIMITE_PADRAO, metadataVisivel, validarFiltro } from './consulta-trilha';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 
@@ -38,11 +38,24 @@ describe('validarFiltro', () => {
 });
 
 describe('cursor', () => {
-  it('ida e volta; cursor adulterado vira null', () => {
-    const em = new Date('2026-11-04T10:00:00.123Z');
-    const c = codificarCursor(em, ID);
-    expect(decodificarCursor(c)).toEqual({ em, id: ID });
-    expect(decodificarCursor(Buffer.from(`x|${ID}`).toString('base64url'))).toBeNull();
-    expect(validarFiltro({ cursor: c }).cursor).toEqual({ em, id: ID });
+  it('é o id da última linha; ida e volta; adulterado vira null', () => {
+    const c = codificarCursor(ID);
+    expect(decodificarCursor(c)).toBe(ID);
+    expect(decodificarCursor(Buffer.from('2026-11-04T10:00:00.123Z|x').toString('base64url'))).toBeNull();
+    expect(validarFiltro({ cursor: c }).cursor).toBe(ID);
+  });
+});
+
+describe('período (fila do parecer do #135)', () => {
+  it('até 366 dias passa; mais que isso, 400', () => {
+    expect(validarFiltro({ de: '2025-11-05', ate: '2026-11-04' })).toMatchObject({ de: '2025-11-05', ate: '2026-11-04' });
+    expect(() => validarFiltro({ de: '2025-01-01', ate: '2026-11-04' })).toThrow();
+    expect(validarFiltro({ de: '2026-11-04', ate: '2026-11-04' })).toMatchObject({ de: '2026-11-04' });
+  });
+});
+
+describe('metadataVisivel (R4 do parecer do #135)', () => {
+  it('só ids e códigos da lista fechada; detalhes que passam do necessário ficam fora', () => {
+    expect(metadataVisivel({ op: 'x', patient_id: ID, hidden: true, template: 'psicologia', export_consent: true, private_notes: 3 })).toEqual({ op: 'x', patient_id: ID });
   });
 });

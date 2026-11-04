@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { CHAVES_VISIVEIS } from '../src/modules/audit/consulta-trilha';
 import { MFA_RECENTE_MS } from '../src/modules/auth/mfa';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
@@ -85,6 +86,33 @@ describe('E10: consulta da trilha pela clínica', () => {
       paginas++;
     } while (cursor && paginas < 50);
     expect(paginas).toBeGreaterThan(1);
+    // R2 do parecer do #135: nada falta entre as páginas (mesmo conjunto de uma página única).
+    const inteira = (await consultar(admin, '?limite=100')).body as Pagina;
+    expect(inteira.proximo).toBeNull();
+    const deUmaVez = new Set(inteira.itens.map((i) => i.id));
+    for (const id of vistos) deUmaVez.add(id);
+    expect(deUmaVez.size).toBeGreaterThanOrEqual(vistos.size);
+    for (const i of inteira.itens.filter((x) => !(x.escopo === 'audit_trail'))) expect(vistos.has(i.id), i.id).toBe(true);
+  });
+
+  it('R2: nenhuma linha da outra clínica aparece (conferido pelos ids da trilha dela)', async () => {
+    const daOutra = await withTenant(api.db.db, outra, (tx) => tx.select({ id: auditLog.id }).from(auditLog).where(eq(auditLog.tenantId, outra)));
+    expect(daOutra.length).toBeGreaterThan(0);
+    const { itens } = (await consultar(admin, '?limite=100')).body as Pagina;
+    const ids = new Set(itens.map((i) => i.id));
+    for (const l of daOutra) expect(ids.has(l.id)).toBe(false);
+  });
+
+  it('R4: a metadata só traz chaves da lista fechada', async () => {
+    const { itens } = (await consultar(admin, '?limite=100')).body as Pagina;
+    for (const i of itens) for (const k of Object.keys(i.metadata)) expect(CHAVES_VISIVEIS.has(k), k).toBe(true);
+  });
+
+  it('período: hoje traz linhas; um período futuro não traz nenhuma; mais de 366 dias é 400', async () => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    expect(((await consultar(admin, `?de=${hoje}&ate=${hoje}`)).body as Pagina).itens.length).toBeGreaterThan(0);
+    expect(((await consultar(admin, '?de=2099-01-01&ate=2099-01-31')).body as Pagina).itens).toEqual([]);
+    expect((await consultar(admin, '?de=2024-01-01&ate=2026-01-01')).status).toBe(400);
   });
 
   it('a consulta vai para a trilha (read audit_trail) com os filtros, só ids', async () => {
