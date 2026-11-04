@@ -46,3 +46,5 @@ O E2 está resolvido do jeito certo: a cada requisição o guard lê as linhas d
 - **R6 (feita):** no teste "outra clínica", o usuário também está registrado na outra clínica, então a decisão passa pela leitura do banco.
 - **Fixtures:** 7 sessões de teste que diziam `profissional` e só tinham `psicologo` (ou só `admin`) no banco ganharam o perfil registrado. É o efeito esperado da R1.
 - **R4, R5, R7 e R8 (fila):** 503 com evento quando o banco falha, nova checagem em operação longa, testes mais fortes e índice em `(tenant_id, user_id)`.
+
+**Veredito final (guardiao-lgpd, 04/11/2026, após `ad7f9cb`): APROVADO.** Conferi R1, R2, R3 e R6 no diff: estão corretas e testadas, e as mudanças nos fixtures são efeito esperado da R1. A R8 (CI verde, inclusive RLS) ficou cumprida segundo o coordenador. Não verifiquei pessoalmente. R4, R5 e R7 seguem na fila, junto com o resto da R6: teste unitário do guard com o banco falhando e conferência de `motivo: 'perfil_revogado'` no log.
