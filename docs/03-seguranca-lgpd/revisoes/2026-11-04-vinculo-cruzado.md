@@ -50,3 +50,5 @@ R1, R3, R4 e R6 feitos, com o teste RLS **rodado no CI** (Postgres) e o resultad
 - **R4 (feita):** a remarcação feita por outro profissional também alerta (`op: reschedule`). A da recepção não.
 - **R6 (feita):** o teste compara a metadata **exata** (`toEqual`), só com ids, e cobre R1, R3 e R4.
 - **Não alerta:** importador, autoagendamento e profissional sem usuário (sem usuário, ninguém ganha acesso).
+
+## Veredito final (04/11/2026, commit 30dee3f): **APROVADO COM RESSALVAS**. R1–R4 e R6 conferidas no diff (alerta na criação e na remarcação, na mesma transação, por `ctx.roles`; prontuário sem o alerta antigo; metadata exata, só ids). Condições: (R8) o teste RLS precisa **passar no CI** com Postgres antes do merge, porque não foi executado nesta revisão; (R9) o evento `ALERTA_ANOMALIA`/`vinculo_cruzado` no log de segurança ainda não é conferido em teste: acrescentar no próximo PR da agenda; (R7) E12 vira "feito" em `prontidao-producao.md` só depois do merge. Risco aceito: `admin + profissional` não alerta (quem é admin já cuida da agenda, como definido na R6).
