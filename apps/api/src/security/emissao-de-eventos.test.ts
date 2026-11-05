@@ -168,6 +168,8 @@ describe('portal: resgate de convite leva a origem (R7 do parecer do #129)', () 
     const sessao = { contaId: '66666666-6666-4666-8666-666666666666' } as never;
     await c.iniciarResgate(sessao, { ip: '198.51.100.7' }, {}, { token: 'x' });
     await c.resgatar(sessao, { headers: {} }, { ip: '198.51.100.7' }, {}, { token: 'x', codigo: '123456' });
+    // R4 do parecer do #139: o valor existe e tem o formato do HMAC (sem chave, seriam dois undefined iguais).
+    expect(chamadas[0]?.at(-1)).toMatch(/^[0-9a-f]{16}$/);
     expect(chamadas[0]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
     expect(chamadas[1]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
     expect(JSON.stringify(chamadas)).not.toContain('198.51.100.7');
