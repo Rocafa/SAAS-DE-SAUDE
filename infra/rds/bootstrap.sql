@@ -59,10 +59,6 @@ SET LOCAL pgaudit.log TO DEFAULT;
 
 -- 2. Acesso ao banco e ao schema (GRANT é idempotente).
 SELECT format('GRANT CONNECT ON DATABASE %I TO app_migrator, app_user, app_auth', :'dbname') \gexec
--- Schema da identidade (D4): dono é o app_migrator (as migrações criam as tabelas); só o app_auth usa.
-CREATE SCHEMA IF NOT EXISTS identidade AUTHORIZATION app_migrator;
-REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
-GRANT USAGE ON SCHEMA identidade TO app_auth;
 -- USAGE em public para o EXECUTE da função de clínicas do usuário (o GRANT da função vem da migração 0064).
 GRANT USAGE ON SCHEMA public TO app_auth;
 GRANT ALL ON SCHEMA public TO app_migrator;
@@ -81,6 +77,11 @@ SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM app_user, app_migrator, app_
 -- sobre o que criou (PG16), então se concede SET e executa como app_migrator.
 SELECT format('GRANT app_migrator TO %I WITH INHERIT FALSE, SET TRUE', current_user)
  WHERE NOT pg_has_role(current_user, 'app_migrator', 'SET') \gexec
+-- Schema da identidade (D4): dono é o app_migrator (as migrações criam as tabelas); só o app_auth usa. Fica aqui,
+-- depois do GRANT ... SET acima: AUTHORIZATION app_migrator exige poder agir como ele.
+CREATE SCHEMA IF NOT EXISTS identidade AUTHORIZATION app_migrator;
+REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
+GRANT USAGE ON SCHEMA identidade TO app_auth;
 SET LOCAL ROLE app_migrator;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
