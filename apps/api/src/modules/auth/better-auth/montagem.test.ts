@@ -1,0 +1,78 @@
+/**
+ * Montagem HTTP do Better Auth (D4): lista fechada de endpoints (R4 do parecer do desenho), 403 para escrita sem
+ * Origin (R1 do #132), cabeçalho de origem trocado pelo nosso HMAC (R10) e o resto passando adiante. Sem banco: a
+ * biblioteca é substituída por um dublê.
+ */
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { describe, expect, it, vi } from 'vitest';
+import { origemDaRequisicao } from '../../../security/log-de-seguranca';
+import { CABECALHO_ORIGEM } from './instancia';
+import { ENDPOINTS_PERMITIDOS, montarAutenticacao } from './montagem';
+
+type Fake = { statusCode: number; corpo: string; ouvintes: Record<string, () => void> };
+
+function resposta(): ServerResponse & Fake {
+  const r: Fake & Record<string, unknown> = { statusCode: 200, corpo: '', ouvintes: {} };
+  r['setHeader'] = () => undefined;
+  r['end'] = (c: string) => {
+    r.corpo = c;
+  };
+  r['on'] = (ev: string, fn: () => void) => {
+    r.ouvintes[ev] = fn;
+  };
+  return r as unknown as ServerResponse & Fake;
+}
+
+function montar() {
+  const handlerDaBiblioteca = vi.fn(() => Promise.resolve());
+  const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(null) }, options: {} } as never;
+  const mw = montarAutenticacao(auth, { encerrar: vi.fn() } as never);
+  return { mw, handlerDaBiblioteca };
+}
+
+const req = (method: string, url: string, headers: Record<string, string> = {}): IncomingMessage =>
+  ({ method, url, headers: { ...headers }, ip: '203.0.113.50', socket: {} }) as never;
+
+describe('montagem do Better Auth', () => {
+  it('fora do prefixo /api/auth: passa adiante sem tocar em nada', () => {
+    const { mw } = montar();
+    const next = vi.fn();
+    mw(req('GET', '/pacientes'), resposta(), next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('R4: endpoint fora da lista fechada dá 404 (cadastro, troca de e-mail, exclusão, atualização de usuário)', () => {
+    const { mw, handlerDaBiblioteca } = montar();
+    for (const [m, u] of [
+      ['POST', '/api/auth/sign-up/email'],
+      ['POST', '/api/auth/change-email'],
+      ['POST', '/api/auth/delete-user'],
+      ['POST', '/api/auth/update-user'],
+      ['POST', '/api/auth/request-password-reset'],
+      ['GET', '/api/auth/list-sessions'],
+    ] as const) {
+      const r = resposta();
+      mw(req(m, u, { origin: 'https://app.exemplo.test' }), r, vi.fn());
+      expect(r.statusCode, `${m} ${u}`).toBe(404);
+    }
+    expect(handlerDaBiblioteca).not.toHaveBeenCalled();
+    expect([...ENDPOINTS_PERMITIDOS].sort()).toEqual(['GET /get-session', 'POST /sign-in/email', 'POST /sign-out']);
+  });
+
+  it('R1 do #132: escrita sem Origin dá 403 e não chega à biblioteca', () => {
+    const { mw, handlerDaBiblioteca } = montar();
+    const r = resposta();
+    mw(req('POST', '/api/auth/sign-in/email'), r, vi.fn());
+    expect(r.statusCode).toBe(403);
+    expect(handlerDaBiblioteca).not.toHaveBeenCalled();
+  });
+
+  it('R10: o cabeçalho de origem do cliente é trocado pelo nosso HMAC do IP antes da biblioteca', async () => {
+    const { mw, handlerDaBiblioteca } = montar();
+    const r = req('POST', '/api/auth/sign-in/email', { origin: 'https://app.exemplo.test', [CABECALHO_ORIGEM]: 'ffffffffffffffff' });
+    mw(r, resposta(), vi.fn());
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    expect(r.headers[CABECALHO_ORIGEM]).toBe(origemDaRequisicao('203.0.113.50'));
+    expect(r.headers[CABECALHO_ORIGEM]).not.toBe('ffffffffffffffff');
+  });
+});
