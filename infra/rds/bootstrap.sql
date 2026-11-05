@@ -10,7 +10,7 @@
 \set ON_ERROR_STOP on
 \getenv app_migrator_password APP_MIGRATOR_PASSWORD
 \getenv app_user_password APP_USER_PASSWORD
-getenv app_auth_password APP_AUTH_PASSWORD
+\getenv app_auth_password APP_AUTH_PASSWORD
 \getenv dbname PGDATABASE
 
 SELECT :'app_migrator_password' = '' OR :'app_user_password' = '' OR :'app_auth_password' = '' AS senha_vazia \gset

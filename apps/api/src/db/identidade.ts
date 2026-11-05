@@ -64,3 +64,10 @@ export const verificacao = identidade.table('verificacao', {
   createdAt: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Espelho dos vínculos ATIVOS (só ids e papel de sessão), mantido por trigger em clinic_members (R7). Só leitura. */
+export const vinculo = identidade.table('vinculo', {
+  usuarioId: uuid('usuario_id').notNull(),
+  clinicaId: uuid('clinica_id').notNull(),
+  papel: text('papel').notNull(),
+});

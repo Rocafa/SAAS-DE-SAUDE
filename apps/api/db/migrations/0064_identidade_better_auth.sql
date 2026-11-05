@@ -6,10 +6,8 @@
 --   (R1 do parecer). O `app_user` das rotas de negócio NÃO tem GRANT aqui: o token da sessão fica em claro na tabela.
 -- * IP e user-agent da sessão só em HMAC (R10). Campos NOSSOS na sessão: `clinica_ativa`, `mfa_em` e
 --   `perfis_no_mfa` (gravados só pelas nossas funções; a biblioteca recebe `input: false`, R5).
--- * `app_clinicas_do_usuario(usuario)`: as clínicas com vínculo ATIVO da pessoa (só ids), para a escolha da clínica
---   (R7). `clinic_members` tem RLS forçado por clínica; a leitura cruzada vale SÓ dentro desta função, por uma
---   política que exige o DONO da tabela E a GUC que a própria função liga e desliga. Outras funções SECURITY DEFINER
---   do mesmo dono não ligam a GUC e seguem vendo só a clínica da transação; o app_user não é dono.
+-- * `identidade.vinculo`: espelho (só ids e papel) dos vínculos ATIVOS, mantido por trigger em clinic_members, para a
+--   escolha da clínica (R7). Nenhuma política nova em clinic_members.
 
 CREATE TABLE identidade.usuario (
   id               uuid PRIMARY KEY,
@@ -75,24 +73,49 @@ REVOKE ALL ON ALL TABLES IN SCHEMA identidade FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON identidade.usuario, identidade.conta TO app_auth;
 GRANT SELECT, INSERT, UPDATE, DELETE ON identidade.sessao, identidade.verificacao TO app_auth;
 
--- R7: clínicas com vínculo ativo da pessoa (só ids). Perfis de sessão apenas (a qualificação psicologo não conta).
-CREATE POLICY clinicas_do_usuario_leitura ON clinic_members FOR SELECT
-  USING (current_setting('app.clinicas_do_usuario', true) = 'on' AND (SELECT app_running_as_owner('public.clinic_members'::regclass)));
+-- R7: clínicas com vínculo ATIVO da pessoa, só ids e papel de sessão (a qualificação psicologo não conta).
+-- Espelho mantido por trigger em clinic_members (mesmo padrão do portal_link_index da 0027): a autenticação lê o
+-- espelho no schema identidade e NENHUMA política nova é criada em clinic_members (a guarda de schema recusa política
+-- com current_setting, alterável por SQL injetado). O app_user não lê o espelho; o app_auth só lê.
+CREATE TABLE identidade.vinculo (
+  usuario_id uuid NOT NULL,
+  clinica_id uuid NOT NULL,
+  papel      text NOT NULL CONSTRAINT vinculo_papel_check CHECK (papel IN ('admin', 'profissional', 'recepcao', 'financeiro')),
+  PRIMARY KEY (usuario_id, clinica_id, papel)
+);
+REVOKE ALL ON identidade.vinculo FROM PUBLIC;
+GRANT SELECT ON identidade.vinculo TO app_auth;
 
-CREATE FUNCTION app_clinicas_do_usuario(p_usuario uuid) RETURNS SETOF uuid
-  LANGUAGE plpgsql STABLE SECURITY DEFINER
+CREATE FUNCTION app_espelhar_vinculo() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
 AS $$
 BEGIN
-  -- A GUC liga a política de leitura SÓ durante esta consulta e é desligada antes de sair (não vaza para o resto
-  -- da transação). Ligar a GUC por fora não basta: a política também exige o dono da tabela.
-  PERFORM set_config('app.clinicas_do_usuario', 'on', true);
-  RETURN QUERY
-    SELECT DISTINCT m.tenant_id FROM public.clinic_members m
-     WHERE m.user_id = p_usuario AND m.revoked_at IS NULL AND m.role IN ('admin', 'profissional', 'recepcao', 'financeiro')
-     ORDER BY m.tenant_id;
-  PERFORM set_config('app.clinicas_do_usuario', 'off', true);
+  IF NEW.role NOT IN ('admin', 'profissional', 'recepcao', 'financeiro') THEN
+    RETURN NULL;
+  END IF;
+  IF NEW.revoked_at IS NULL THEN
+    INSERT INTO identidade.vinculo (usuario_id, clinica_id, papel) VALUES (NEW.user_id, NEW.tenant_id, NEW.role)
+      ON CONFLICT DO NOTHING;
+  ELSE
+    -- Só some do espelho se não houver OUTRA linha ativa do mesmo papel (revogado e concedido de novo).
+    DELETE FROM identidade.vinculo v
+     WHERE v.usuario_id = NEW.user_id AND v.clinica_id = NEW.tenant_id AND v.papel = NEW.role
+       AND NOT EXISTS (SELECT 1 FROM public.clinic_members m
+                        WHERE m.tenant_id = NEW.tenant_id AND m.user_id = NEW.user_id AND m.role = NEW.role
+                          AND m.revoked_at IS NULL AND m.id <> NEW.id);
+  END IF;
+  RETURN NULL;
 END;
 $$;
-REVOKE ALL ON FUNCTION app_clinicas_do_usuario(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_clinicas_do_usuario(uuid) TO app_auth;
+REVOKE ALL ON FUNCTION app_espelhar_vinculo() FROM PUBLIC;
+CREATE TRIGGER zz_espelhar_vinculo AFTER INSERT OR UPDATE OF revoked_at ON clinic_members
+  FOR EACH ROW EXECUTE FUNCTION app_espelhar_vinculo();
+
+-- Carga inicial: o dono só enxerga todas as clínicas com o RLS forçado desligado, e só nesta transação.
+ALTER TABLE clinic_members NO FORCE ROW LEVEL SECURITY;
+INSERT INTO identidade.vinculo (usuario_id, clinica_id, papel)
+  SELECT DISTINCT m.user_id, m.tenant_id, m.role FROM clinic_members m
+   WHERE m.revoked_at IS NULL AND m.role IN ('admin', 'profissional', 'recepcao', 'financeiro')
+  ON CONFLICT DO NOTHING;
+ALTER TABLE clinic_members FORCE ROW LEVEL SECURITY;

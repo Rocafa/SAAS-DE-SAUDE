@@ -173,13 +173,17 @@ describe('Better Auth: o que o desenho promete (R1, R3, R5, R7, R8 do parecer)',
     await expect(api.db.db.execute(sql`select token from identidade.sessao limit 1`)).rejects.toThrow();
   });
 
-  it('R7: a função de clínicas devolve só as clínicas com vínculo ativo; o app_user não pode chamá-la', async () => {
+  it('R7: o espelho de vínculos devolve só as clínicas com vínculo ativo de sessão; o app_user não lê o espelho', async () => {
     const t1 = await api.novaClinica();
     const t2 = await api.novaClinica();
     const { userId } = await novaPessoa(t1, ['recepcao']);
     await api.membro(t2, { userId }, 'psicologo');
     expect(await provedor.clinicasDoUsuario(userId)).toEqual([t1]);
-    await expect(api.db.db.execute(sql`select app_clinicas_do_usuario(${userId}::uuid)`)).rejects.toThrow();
+    await expect(api.db.db.execute(sql`select clinica_id from identidade.vinculo limit 1`)).rejects.toThrow();
+    // Revogado: some do espelho (o trigger acompanha a revogação).
+    const adm = await api.membro(t1, api.sessao(t1, 'admin'), 'admin');
+    await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: adm.Authorization }).expect(204);
+    expect(await provedor.clinicasDoUsuario(userId)).toEqual([]);
   });
 
   it('R6: sem vínculo ativo, a sessão vale null e perde a clínica', async () => {

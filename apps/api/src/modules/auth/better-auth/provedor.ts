@@ -9,11 +9,11 @@
 import { createHash } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers } from '../../../db/schema';
-import { sessao, usuario } from '../../../db/identidade';
+import { sessao, usuario, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
@@ -89,10 +89,10 @@ export class BetterAuthProvider implements AuthProvider {
     return { tenantId: tenantId as TenantId, userId: userId as UserId, perfis, mfaEm: mfaVale ? linha.mfaEm : null };
   }
 
-  /** Clínicas com vínculo ativo (função SECURITY DEFINER da 0064, só ids). */
+  /** Clínicas com vínculo ativo, pelo espelho `identidade.vinculo` (0064, só ids). */
   async clinicasDoUsuario(userId: string): Promise<string[]> {
-    const linhas = await this.d.dbAuth.execute<{ app_clinicas_do_usuario: string }>(sql`select app_clinicas_do_usuario(${userId}::uuid)`);
-    return [...linhas].map((l) => l.app_clinicas_do_usuario);
+    const linhas = await this.d.dbAuth.selectDistinct({ clinicaId: vinculo.clinicaId }).from(vinculo).where(eq(vinculo.usuarioId, userId)).orderBy(vinculo.clinicaId);
+    return linhas.map((l) => l.clinicaId);
   }
 
   /** Perfis de sessão ATIVOS na clínica (RLS da clínica, usuário travado na transação). */
