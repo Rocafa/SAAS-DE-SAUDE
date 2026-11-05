@@ -65,3 +65,17 @@ A R4 está atendida no store: `MemoryRateLimitStore` aceita `agora` injetado, co
 - **R6 vai para a fila:**
   - relógio injetado nos testes de rate limit por rota e na R9 do `mfa.rls.test.ts`;
   - `peek`/`release` do #152 com `this.agora` quando os dois PRs se encontrarem.
+
+## Reconferência do Guardião (05/11/2026, commit `791a61f`)
+
+Rodei a versão do `791a61f` da trava: 14/14, inclusive a varredura de todo o `src`. Rodei também uma sonda descartável, já removida.
+
+### Veredito final: **APROVADO.**
+
+- **R1:** resolvida. A chave é o escopo da declaração (variável, parâmetro, elemento desestruturado ou variável do `catch`). A atribuição dentro de uma callback marca a variável da função de fora. Um parâmetro que sombreia a variável externa não herda a marca (conferido: sem falso positivo).
+- **R2:** resolvida. As liberações usam a mesma chave por escopo.
+- **R3:** feita para o `catch` e o `.catch(...)`. Falta o segundo argumento de `.then(ok, falhou)`, que a sonda confirma passar. Fica na fila, sem ocorrência hoje.
+- **R4, R5 e R7:** feitas. A trava lança erro se não convergir em 50 passadas, e o cabeçalho lista o que ela não cobre.
+- **R6:** na fila.
+
+**Resíduo para a fila:** no **mesmo** método, `const erro = codigoDoErro(e)` e um `catch (erro)` cru compartilham a chave. A liberação vence, e o `${erro}` do `catch` passa. É raro e não ocorre hoje. A correção é dar precedência à marca de erro sobre a liberação quando as duas existirem na mesma chave, ou tratar o `catch` como um escopo próprio.
