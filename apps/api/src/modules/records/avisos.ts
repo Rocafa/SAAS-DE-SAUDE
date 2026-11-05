@@ -15,12 +15,13 @@
  */
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, desc, eq, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PortalSigiloTransicao, type PsychCompartmentMode } from '../../db/schema';
+import { auditLog, clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PortalSigiloTransicao, type PsychCompartmentMode } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { modeloPelaEspecialidade } from './modelos';
 
@@ -68,6 +69,12 @@ export type AvisoDto =
       readonly tipo: 'area_sensivel_desmarcada';
       readonly profissionalId: string;
       readonly criadoPor: string;
+    })
+  | (AvisoBase & {
+      /** 0063 (resto do E10 de 04/11): alerta de anomalia; `usuarioId` = quem disparou (o detalhe está na trilha). */
+      readonly tipo: 'alerta_anomalia';
+      readonly regra: string;
+      readonly usuarioId: string;
     });
 
 function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
@@ -91,6 +98,7 @@ function paraAvisoDto(n: typeof clinicalNotices.$inferSelect): AvisoDto {
     return { ...base, tipo, pacienteId: n.patientId as string, transicao: n.portalTransition as PortalSigiloTransicao, criadoPor: n.createdBy };
   }
   if (tipo === 'area_sensivel_desmarcada') return { ...base, tipo, profissionalId: n.professionalId as string, criadoPor: n.createdBy };
+  if (tipo === 'alerta_anomalia') return { ...base, tipo, regra: n.anomalyRule as string, usuarioId: n.subjectUserId as string };
   return { ...base, tipo, retencaoId: n.legalHoldId as string, criadoPor: n.createdBy };
 }
 
@@ -249,5 +257,60 @@ export class AvisosService {
       await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'clinical_notices', metadata: { op: 'notice_read', notice_id: id } });
       return { id, lidoEm: agora.toISOString() };
     });
+  }
+}
+
+/** Regras de anomalia que viram aviso (as mesmas do CHECK da 0063). */
+export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas' | 'limite_por_usuario' | 'vinculo_autoagendado' | 'vinculo_cruzado' | 'mfa_recusas_por_usuario';
+
+/**
+ * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
+ * disparou não recebe). Só a regra e o id de quem disparou. Devolve quantos foram avisados.
+ * - R2 e R7 do parecer do #137: no máximo um aviso por pessoa e regra por DIA no fuso da clínica (a trilha continua com
+ *   TODOS os alertas):
+ *   se já há outro `anomaly_alert` da mesma regra e do mesmo ator hoje, não avisa de novo.
+ * - R1 do parecer do #137: best-effort num SAVEPOINT. Se o aviso falhar, o alerta na trilha e a operação do usuário
+ *   continuam; a falha vai para o log de segurança.
+ */
+export async function avisarAdminsDeAnomalia(tx: TenantTx, ctx: RequestContext, regra: RegraDeAnomaliaAvisada): Promise<number> {
+  try {
+    return await tx.transaction(async (sp) => {
+      const [anteriores] = await sp
+        .select({ n: sql<number>`count(*)::int` })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.tenantId, ctx.tenantId),
+            eq(auditLog.actorId, ctx.userId),
+            eq(auditLog.action, AuditAction.AnomalyAlert),
+            sql`${auditLog.metadata}->>'rule' = ${regra}`,
+            // R7 do parecer do #137: período FIXO (o dia no fuso da clínica, -03:00), não 24 h corridas a partir do
+            // último alerta: um padrão que se repete todo dia gera um aviso por dia, e não um só enquanto durar.
+            sql`${auditLog.createdAt} >= date_trunc('day', now() AT TIME ZONE INTERVAL '-03:00') AT TIME ZONE INTERVAL '-03:00'`,
+          ),
+        );
+      // O alerta atual já está na trilha (mesma transação): mais de um hoje = o primeiro do dia já avisou.
+      if ((anteriores?.n ?? 0) > 1) return 0;
+      const admins = await sp
+        .select({ userId: clinicMembers.userId })
+        .from(clinicMembers)
+        .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt), ne(clinicMembers.userId, ctx.userId)));
+      const destinatarios = [...new Set(admins.map((a) => a.userId))];
+      if (destinatarios.length === 0) return 0;
+      await sp.insert(clinicalNotices).values(
+        destinatarios.map((u) => ({
+          tenantId: ctx.tenantId,
+          recipientUserId: u,
+          kind: 'alerta_anomalia' as const,
+          anomalyRule: regra,
+          subjectUserId: ctx.userId,
+          createdBy: ctx.userId,
+        })),
+      );
+      return destinatarios.length;
+    });
+  } catch {
+    registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId: ctx.tenantId, regra, motivo: 'aviso_de_anomalia' });
+    return 0;
   }
 }
