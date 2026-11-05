@@ -24,6 +24,9 @@ function primarioFalso(): RateLimitStore & { fora: boolean; chamadas: number } {
       p.chamadas++;
       return p.fora ? Promise.reject(new Error('redis fora')) : memoria.hit(key, windowMs);
     },
+    peek(key: string, windowMs: number) {
+      return p.fora ? Promise.reject(new Error('redis fora')) : memoria.peek(key, windowMs);
+    },
     mode: () => 'compartilhado' as const,
     close: () => Promise.resolve(),
   };
@@ -116,6 +119,7 @@ describe('rateLimiter', () => {
         vistas.push(key);
         return memoria.hit(key, windowMs);
       },
+      peek: (key, windowMs) => memoria.peek(key, windowMs),
       mode: () => 'memoria',
       close: () => Promise.resolve(),
     };
@@ -132,6 +136,7 @@ describe('rateLimiter', () => {
   it('R4: store quebrado deixa passar, mas conta e registra erro com marcador fixo', async () => {
     const quebrado: RateLimitStore = {
       hit: () => Promise.reject(new Error('caiu')),
+      peek: () => Promise.reject(new Error('caiu')),
       mode: () => 'compartilhado',
       close: () => Promise.resolve(),
     };
@@ -208,5 +213,32 @@ describe('createRateLimitStore', () => {
     const s = createRateLimitStore({ REDIS_URL: 'redis://127.0.0.1:1' });
     expect(s).toBeInstanceOf(FallbackRateLimitStore);
     await s.close();
+  });
+});
+
+describe('peek (consulta do bloqueio de login, D4 PR 2)', () => {
+  it('lê a contagem da janela sem contar uma batida nova; janela vencida volta a zero', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = new MemoryRateLimitStore();
+      expect(await s.peek('k', 60_000)).toBe(0);
+      await s.hit('k', 60_000);
+      await s.hit('k', 60_000);
+      expect(await s.peek('k', 60_000)).toBe(2);
+      expect(await s.peek('k', 60_000)).toBe(2);
+      vi.advanceTimersByTime(60_001);
+      expect(await s.peek('k', 60_000)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('com o primário fora, consulta o fallback (o bloqueio continua valendo por instância)', async () => {
+    const primario = primarioFalso();
+    const fallback = new MemoryRateLimitStore();
+    const s = new FallbackRateLimitStore(primario, fallback, { logger: silencioso });
+    primario.fora = true;
+    await s.hit('k', 60_000);
+    expect(await s.peek('k', 60_000)).toBe(1);
   });
 });

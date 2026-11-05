@@ -24,6 +24,8 @@ export type RateLimitMode = 'compartilhado' | 'fallback' | 'memoria' | 'instanci
  */
 export interface RateLimitStore {
   hit(key: string, windowMs: number): Promise<RateLimitHit>;
+  /** Quantas batidas a chave já tem na janela atual, SEM contar uma nova (consulta do bloqueio de login). */
+  peek(key: string, windowMs: number): Promise<number>;
   mode(): RateLimitMode;
   /** Espera a conexão ficar pronta (best-effort). true = pronta; false = seguiu sem ela. */
   ready?(timeoutMs?: number): Promise<boolean>;
@@ -54,6 +56,12 @@ export class MemoryRateLimitStore implements RateLimitStore {
     const count = (w.hits.get(key) ?? 0) + 1;
     w.hits.set(key, count);
     return Promise.resolve({ count, resetMs: w.start + windowMs - now });
+  }
+
+  peek(key: string, windowMs: number): Promise<number> {
+    const w = this.windows.get(windowMs);
+    if (!w || Date.now() - w.start >= windowMs) return Promise.resolve(0);
+    return Promise.resolve(w.hits.get(key) ?? 0);
   }
 
   close(): Promise<void> {
@@ -156,6 +164,11 @@ export class RedisRateLimitStore implements RateLimitStore {
     return { count: Number(result[0]), resetMs: Number(result[1]) };
   }
 
+  async peek(key: string): Promise<number> {
+    const v = await this.client.get(key);
+    return v === null ? 0 : Number(v) || 0;
+  }
+
   close(): Promise<void> {
     this.client.disconnect();
     return Promise.resolve();
@@ -214,6 +227,17 @@ export class FallbackRateLimitStore implements RateLimitStore {
       }
     }
     return this.fallback.hit(key, windowMs);
+  }
+
+  async peek(key: string, windowMs: number): Promise<number> {
+    if (!this.usingFallback) {
+      try {
+        return await this.primary.peek(key, windowMs);
+      } catch {
+        this.primaryDownUntil = Date.now() + this.cooldownMs;
+      }
+    }
+    return this.fallback.peek(key, windowMs);
   }
 
   ready(timeoutMs?: number): Promise<boolean> {

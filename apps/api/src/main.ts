@@ -19,7 +19,7 @@ async function bootstrap(): Promise<void> {
   // D4: com AUTH_PROVIDER=better-auth, o boot monta a instância, o provedor e o handler HTTP; a fábrica decide
   // em quais ambientes o tipo sobe (só dev/test até o PR 3 da autenticação).
   const httpConfig = loadHttpSecurityConfig();
-  const betterAuth = process.env.AUTH_PROVIDER === 'better-auth' ? bootDoBetterAuth(process.env, httpConfig.corsAllowedOrigins) : null;
+  const betterAuth = process.env.AUTH_PROVIDER === 'better-auth' ? bootDoBetterAuth(process.env, httpConfig.corsAllowedOrigins, rateLimitStore) : null;
   const authProvider = createAuthProvider(process.env, betterAuth ? { betterAuth: () => betterAuth.provider } : {});
   const app = await NestFactory.create(AppModule.forRoot(config, { rateLimitStore, authProvider }), {
     rawBody: true,
