@@ -4,11 +4,14 @@
  */
 import { Logger } from '@nestjs/common';
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WhatsappWebhookController } from '../modules/messaging/whatsapp.controller';
 import { VIGILANCIA_PADRAO, VigilanciaDeLeituraService } from '../modules/patients/vigilancia-de-leitura';
 import { PortalVigilanciaService } from '../modules/portal/portal-vigilancia';
 import { ExportsService } from '../modules/exports/exports.module';
+import { protecaoCsrf, rateLimiter } from './http-security';
+import { origemDaRequisicao, zerarJanelasDoLog } from './log-de-seguranca';
 import { MemoryRateLimitStore, type RateLimitStore } from './rate-limit-store';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -29,15 +32,17 @@ function capturar(): { eventos: () => Record<string, unknown>[]; tudo: () => str
 }
 
 afterEach(() => vi.restoreAllMocks());
+beforeEach(() => zerarJanelasDoLog()); // R3 do parecer do #138: sem depender da ordem dos testes
 
 describe('webhook do WhatsApp', () => {
   it('assinatura inválida: WEBHOOK_ASSINATURA_INVALIDA com a origem em HMAC, nunca o IP', async () => {
     const log = capturar();
     const controller = new WhatsappWebhookController({ adaptador: { assinaturaValida: () => false } } as never);
-    await expect(controller.receber({ rawBody: Buffer.from('{}'), ip: '203.0.113.9', headers: {} } as never, 'sha256=forjada')).rejects.toBeDefined();
+    // R4 do parecer do #138: 401, e a origem é a do IP da requisição.
+    await expect(controller.receber({ rawBody: Buffer.from('{}'), ip: '203.0.113.9', headers: {} } as never, 'sha256=forjada')).rejects.toMatchObject({ status: 401 });
     const [e] = log.eventos().filter((x) => x['evento'] === 'WEBHOOK_ASSINATURA_INVALIDA');
     expect(e).toMatchObject({ motivo: 'whatsapp', severidade: 'alto' });
-    expect(String(e?.['origem'])).toMatch(/^[0-9a-f]{16}$/);
+    expect(e?.['origem']).toBe(origemDaRequisicao('203.0.113.9'));
     expect(log.tudo()).not.toContain('203.0.113.9');
   });
 });
@@ -79,6 +84,75 @@ describe('vigilância do portal', () => {
     await expect(v.resgate(conta)).rejects.toMatchObject({ status: 429 });
     expect(log.eventos().filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_resgate' })]);
     expect(log.tudo()).not.toContain(conta);
+  });
+});
+
+describe('borda HTTP (R1 do parecer do #138)', () => {
+  const resposta = (): ServerResponse & { statusCode: number } => ({ statusCode: 200, setHeader: () => undefined, end: () => undefined }) as never;
+
+  it('contador do rate limit fora: a requisição segue e sai UM RATE_LIMIT_FAIL_OPEN', async () => {
+    const log = capturar();
+    const quebrado: RateLimitStore = { hit: () => Promise.reject(new Error('redis fora')) } as never;
+    const mw = rateLimiter(10, 60_000, quebrado, new Set(), segredo);
+    for (let i = 0; i < 3; i++) {
+      const next = vi.fn();
+      mw({ url: '/pacientes', ip: '203.0.113.9', headers: {}, socket: {} } as never, resposta(), next);
+      await vi.waitFor(() => expect(next).toHaveBeenCalled());
+    }
+    expect(log.eventos().filter((e) => e['evento'] === 'RATE_LIMIT_FAIL_OPEN' && e['motivo'] === 'rate_limit_por_ip')).toHaveLength(1);
+    expect(log.tudo()).not.toContain('203.0.113.9');
+  });
+
+  it('escrita de origem fora da allowlist: 403 e UM CSRF_RECUSADO com a origem em HMAC (nunca o Origin nem o IP)', () => {
+    const log = capturar();
+    const mw = protecaoCsrf(new Set(['https://app.exemplo.test']));
+    const r = resposta();
+    const next = vi.fn();
+    mw({ method: 'POST', url: '/x', ip: '203.0.113.9', headers: { origin: 'https://atacante.example' }, socket: {} } as unknown as IncomingMessage, r, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(r.statusCode).toBe(403);
+    expect(log.eventos().filter((e) => e['evento'] === 'CSRF_RECUSADO')).toEqual([expect.objectContaining({ motivo: 'origem_nao_permitida', origem: origemDaRequisicao('203.0.113.9') })]);
+    expect(log.tudo()).not.toContain('atacante.example');
+  });
+});
+
+describe('vigilância do portal (R2 do parecer do #138)', () => {
+  const vig = () =>
+    new PortalVigilanciaService(bancoFora as never, new MemoryRateLimitStore(), { config: VIGILANCIA_PADRAO, hashKey: segredo, fecharStore: false }, {
+      contaMax: 2,
+      contaJanelaMs: 60_000,
+      resgateMax: 1000,
+      resgateJanelaMs: 60_000,
+    });
+  const conta = '44444444-4444-4444-8444-444444444444';
+  const vinculo = '55555555-5555-4555-8555-555555555555';
+
+  it('limite por conta: um ALERTA_ANOMALIA e, com o banco fora, TRILHA_NAO_GRAVADA; 429', async () => {
+    const log = capturar();
+    const v = vig();
+    await v.requisicao(conta, vinculo);
+    await v.requisicao(conta, vinculo);
+    await expect(v.requisicao(conta, vinculo)).rejects.toMatchObject({ status: 429 });
+    const eventos = log.eventos();
+    expect(eventos.filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_limite_por_conta' })]);
+    expect(eventos.some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['regra'] === 'portal_limite_por_conta')).toBe(true);
+    expect(log.tudo()).not.toContain(conta);
+  });
+
+  it('teto diário de pedidos: ALERTA_ANOMALIA na primeira vez do dia e 429 sempre', async () => {
+    const log = capturar();
+    const v = vig();
+    await expect(v.tetoDePedidos(conta, vinculo, 5)).rejects.toMatchObject({ status: 429 });
+    await expect(v.tetoDePedidos(conta, vinculo, 5)).rejects.toMatchObject({ status: 429 });
+    expect(log.eventos().filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_teto_diario_pedidos' })]);
+  });
+
+  it('contador do portal fora: RATE_LIMIT_FAIL_OPEN uma vez, e a chamada segue', async () => {
+    const log = capturar();
+    const quebrado: RateLimitStore = { hit: () => Promise.reject(new Error('redis fora')) } as never;
+    const v = new PortalVigilanciaService(bancoFora as never, quebrado, { config: VIGILANCIA_PADRAO, hashKey: segredo, fecharStore: false }, { contaMax: 1, contaJanelaMs: 60_000, resgateMax: 1, resgateJanelaMs: 60_000 });
+    for (let i = 0; i < 3; i++) await v.requisicao(conta, vinculo);
+    expect(log.eventos().filter((e) => e['evento'] === 'RATE_LIMIT_FAIL_OPEN' && e['motivo'] === 'portal')).toHaveLength(1);
   });
 });
 

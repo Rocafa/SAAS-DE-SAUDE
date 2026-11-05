@@ -136,6 +136,11 @@ const logger = new Logger('seguranca');
 const ultimas = new Map<string, number>();
 const TETO_DE_CHAVES = 10_000;
 
+/** Só para teste: zera as janelas de `registrarNoMaximoUmaVez` (o estado é do processo). */
+export function zerarJanelasDoLog(): void {
+  ultimas.clear();
+}
+
 /**
  * Como `registrarEventoDeSeguranca`, mas no máximo uma linha por `chave` a cada `intervaloMs` (R3 e R6 do parecer
  * do #129). Para eventos que se repetem a cada requisição (contador fora do ar, recusa de MFA insistente). A chave
