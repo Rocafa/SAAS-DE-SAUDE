@@ -79,3 +79,25 @@ Fora deste desenho. Terá instância, cookie e sessão separados, com login por 
 | **3. Clínica e equipe** | `POST /sessao/clinica`, perfis só do banco, convite, logout global e desligamento | Gancho `trocarClinica`; `trocarPerfis`; desligado perde todas as sessões |
 
 O dev provider continua para dev e testes. Produção sobe só com `AUTH_PROVIDER=better-auth`, e a trava de produção da fábrica segue valendo.
+
+## 12. Decisões depois do parecer do Guardião (05/11, `revisoes/2026-11-05-desenho-better-auth.md`)
+
+O Guardião aprovou com ressalvas e **deu o aval para substituir o refresh rotativo**, com a condição de reescrever o §2 de `seguranca-na-arquitetura.md` no PR 1. As ressalvas R1 a R13 valem para o PR 1:
+
+| R | Decisão |
+|---|---|
+| 1 | O papel de banco **`app_auth`** é o único com GRANT no schema `identidade`, e a biblioteca usa um pool próprio com ele. O `app_user` não tem nenhum GRANT ali, e um teste confere o erro de permissão. |
+| 2 | **`BETTER_AUTH_SECRET`** vem do Secrets Manager, com 32 bytes ou mais, sem valor padrão. A API não sobe sem ele fora de dev/test. O `baseURL` vem da configuração, nunca do `Host`. Plano de rotação: trocar o segredo derruba todas as sessões, o que é aceitável. |
+| 3 | O **prazo absoluto de 12 h** vale em todo caminho: um middleware antes do handler da biblioteca e o provedor **apagam** a sessão vencida e respondem 401, com teste nos dois caminhos. |
+| 4 | **Lista fechada de endpoints** da biblioteca na montagem (sessão, e-mail e senha para entrar, sair e, no PR 2, o TOTP). O resto dá 404, com teste para cadastro, troca de e-mail, exclusão e atualização de usuário. |
+| 5 | `clinica_ativa`, `mfa_em` e `perfis_no_mfa` com `input: false`, fora das respostas da biblioteca, com teste. |
+| 6 | O provedor confere o **vínculo ativo em `clinic_members` a cada requisição**. Sem vínculo, devolve `null` (401) e zera `clinica_ativa`. |
+| 7 | A função `app_clinicas_do_usuario` é `SECURITY DEFINER`, com `search_path` fixo, sem acesso público (`EXECUTE` só para o `app_auth`), e devolve só ids de vínculos ativos. Tem teste RLS. |
+| 8 | Teste de todos os `Set-Cookie`. `useSecureCookies: true` explícito fora de dev/test. `freshAge` de 15 min. `trustedOrigins` vem da mesma allowlist do CORS, sem curinga. |
+| 9 | **Hash de senha:** scrypt nativo do Node com **N=2^16, r=8, p=2** (64 MiB, um dos mínimos da OWASP), por `password.hash/verify` nossos. O padrão da biblioteca (N=2^14, r=16, p=1) fica cerca de 4 vezes abaixo do mínimo. Argon2id exigiria uma dependência nativa a mais. O §2 de `seguranca-na-arquitetura.md` passa a dizer scrypt com esses parâmetros. |
+| 10 | O IP e o user-agent da sessão são gravados em **HMAC** (chave secreta) por gancho de banco antes da inserção, com teste. `advanced.ipAddress` usa os proxies confiáveis (`HTTP_TRUST_PROXY_HOPS`). **O rate limit da biblioteca fica desligado:** o nosso, no Redis, cuida do bloqueio no PR 2. |
+| 11 | **Retenção:** sessão vencida e `verificacao` usada ou vencida são apagadas por rotina diária (a rotina entra no PR 3, mas o prazo já vale). O log de segurança fica 180 dias (Marco Civil, mínimo de 6 meses). Tudo entra no ROPA. |
+| 12 | Teste da R6(b) do #117. O login com clínica automática grava `session_tenant_selected`. O **logger da biblioteca** vai para o nosso log só em nível de erro, com uma mensagem fixa e sem o corpo da requisição, para o e-mail nunca sair por ele. |
+| 13 | **Os 6 ganchos entram no PR 1**, pelas nossas funções internas: `trocarClinica` grava a clínica e zera `mfa_em`; `stepUp` marca `mfa_em` (o PR 2 só liga a verificação TOTP a essa função); `trocarSenha` usa a troca da biblioteca com revogação e zera `mfa_em`; `expirar`; `forjarCredencial`. Para `trocarPerfis`, a sessão guarda a **impressão dos perfis no momento do MFA** (`perfis_no_mfa`, hash). Se os perfis mudam no banco, o provedor devolve `mfaEm = null`, sem as rotas de negócio escreverem na sessão (o que a R1 proíbe). **`AUTH_PROVIDER=better-auth` só sobe em dev e teste até o PR 3:** a fábrica recusa esse provedor em produção até lá. |
+
+As ressalvas R14 a R20 ficam para os PRs 2 e 3, como o parecer separa. A R18 (o autor do prontuário identificado por 20 anos depois do desligamento) é decidida no PR 3: a identificação do profissional (nome e registro) fica na tabela `professionals` da clínica, que já existe e já vai no pacote da G2. Assim, apagar `identidade.usuario` não apaga a autoria.
