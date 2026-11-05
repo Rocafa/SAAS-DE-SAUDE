@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { origemDaRequisicao } from '../../security/log-de-seguranca';
 import type { CorpoPortal, PortalTipoDePedidoAceito, RespostaPortal } from '@plataforma/shared';
 import { EntradaInvalidaError, exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
 import { PORTAL_CONSENT_PURPOSES, PORTAL_LINK_REVOKE_REASONS, PORTAL_ACTING_AS, type PortalConsentPurpose } from '../../db/schema';
@@ -60,25 +61,36 @@ export class PortalController {
    */
   @Post('convites/resgate')
   @HttpCode(200)
-  iniciarResgate(@SessaoPortal() s: SessaoDoPortal, @Query() q: unknown, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
+  iniciarResgate(
+    @SessaoPortal() s: SessaoDoPortal,
+    @Req() http: { ip?: string },
+    @Query() q: unknown,
+    @Body() corpo: unknown,
+  ): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
     semQuery(q);
     const v = new Validador(exigirObjeto(corpo, ['token']));
     const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
     v.concluir();
     const pedido: CorpoPortal<'POST /portal/convites/resgate'> = { token };
-    return this.service.iniciarResgate(s, pedido.token);
+    return this.service.iniciarResgate(s, pedido.token, origemDaRequisicao(http.ip));
   }
 
   @Post('convites/resgate/confirmar')
   @HttpCode(200)
-  resgatar(@SessaoPortal() s: SessaoDoPortal, @RequisicaoPortal() req: RequisicaoParaSessao, @Query() q: unknown, @Body() corpo: unknown): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
+  resgatar(
+    @SessaoPortal() s: SessaoDoPortal,
+    @RequisicaoPortal() req: RequisicaoParaSessao,
+    @Req() http: { ip?: string },
+    @Query() q: unknown,
+    @Body() corpo: unknown,
+  ): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
     semQuery(q);
     const v = new Validador(exigirObjeto(corpo, ['token', 'codigo']));
     const token = v.texto('token', { min: 1, max: 128, obrigatorio: true });
     const codigo = v.texto('codigo', { min: 1, max: 16, obrigatorio: true });
     v.concluir();
     const pedido: CorpoPortal<'POST /portal/convites/resgate/confirmar'> = { token, codigo };
-    return this.service.resgatar(s, req, pedido.token, pedido.codigo);
+    return this.service.resgatar(s, req, pedido.token, pedido.codigo, origemDaRequisicao(http.ip));
   }
 
   @Get('consultas')

@@ -27,7 +27,29 @@ const PERMITIDOS: Readonly<Record<string, string>> = {
 };
 
 /** Funções que reduzem o erro a nome da classe e código, sem a mensagem (conferidas à mão; ver cada uma). */
-const SANITIZADORES: ReadonlySet<string> = new Set(['codigoDoErro', 'describe']);
+const SANITIZADORES: ReadonlySet<string> = new Set(['codigoDoErro']);
+/** Sanitizadores locais, só no arquivo onde foram conferidos (resíduo do parecer do #129). */
+const SANITIZADORES_POR_ARQUIVO: Readonly<Record<string, ReadonlySet<string>>> = { 'lifecycle/graceful-shutdown.ts': new Set(['describe']) };
+
+/**
+ * Palavras que, dentro de um nome composto (`cpfDoPaciente`, `telefone_responsavel`), tornam o nome sensível. Mais
+ * curta que SENSIVEL de propósito: 'name' e 'texto' sozinhos aparecem em nomes seguros (`err.name`, `tipos.texto()`).
+ */
+const PALAVRAS_SENSIVEIS: ReadonlySet<string> = new Set(['cpf', 'cns', 'rg', 'telefone', 'celular', 'phone', 'email', 'senha', 'password', 'token', 'segredo', 'secret', 'nascimento', 'endereco', 'queixa', 'evolucao', 'diagnostico', 'conteudo', 'nome', 'mensagem', 'message', 'stack', 'body', 'corpo', 'payload']);
+
+function nomeComposto(nome: string): boolean {
+  return nome
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_]+/)
+    .some((p) => PALAVRAS_SENSIVEIS.has(p.toLowerCase()));
+}
+
+function sensivel(nome: string): boolean {
+  return SENSIVEL.test(nome) || nomeComposto(nome);
+}
+
+/** Funções que despejam um objeto inteiro (com o que tiver dentro) no log. */
+const DESPEJOS: ReadonlySet<string> = new Set(['util.inspect', 'inspect', 'Object.values', 'Object.entries', 'Object.keys', 'String', 'JSON.stringify']);
 
 /** Liberações que só valem num arquivo (nome do job, motivo do desligamento), com o motivo. */
 const PERMITIDOS_POR_ARQUIVO: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -66,13 +88,17 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
     if (ts.isVariableDeclaration(n) && n.initializer) {
       const ini = n.initializer.getText(sf);
       if (ts.isIdentifier(n.name) && INICIALIZACAO_SEGURA.test(ini)) seguras.add(n.name.text);
+      // Valor sensível copiado para variável local antes do log: `const x = p.nome` deixa `x` sensível.
+      const fonte = n.initializer;
+      const nomeDaFonte = ts.isPropertyAccessExpression(fonte) ? fonte.name.text : ts.isIdentifier(fonte) ? fonte.text : undefined;
+      if (ts.isIdentifier(n.name) && nomeDaFonte && sensivel(nomeDaFonte)) sensiveisRenomeadas.add(n.name.text);
       // Apelido do logger: `const log = this.logger` (R2 do parecer do #129).
       if (ts.isIdentifier(n.name) && (/logger$/i.test(ini) || /^new Logger\(/.test(ini))) apelidos.add(n.name.text);
       // Desestruturação renomeada: `const { cpf: x } = p` deixa `x` sensível.
       if (ts.isObjectBindingPattern(n.name)) {
         for (const el of n.name.elements) {
           const original = el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName)) ? el.propertyName.text : undefined;
-          if (original && SENSIVEL.test(original) && ts.isIdentifier(el.name)) sensiveisRenomeadas.add(el.name.text);
+          if (original && sensivel(original) && ts.isIdentifier(el.name)) sensiveisRenomeadas.add(el.name.text);
         }
       }
     }
@@ -92,20 +118,29 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
         reprovar(n, `objeto espalhado no log: ${n.getText(sf)}`);
         return;
       }
-      if (ts.isCallExpression(n) && n.expression.getText(sf) === 'JSON.stringify') {
-        reprovar(n, 'JSON.stringify no log: serialize só campos fechados (log de segurança)');
-        return;
+      if (ts.isCallExpression(n) && DESPEJOS.has(n.expression.getText(sf))) {
+        // String(err) segue reprovado pela regra do erro inteiro; String de um valor seguro é inofensivo, mas a regra é
+        // fechada: serialize só campos conferidos (log de segurança).
+        const alvo = n.arguments[0];
+        const seguro = n.expression.getText(sf) === 'String' && alvo !== undefined && (liberado(alvo.getText(sf)) || ts.isStringLiteral(alvo) || ts.isNumericLiteral(alvo));
+        if (!seguro) {
+          reprovar(n, `${n.expression.getText(sf)} no log: serialize só campos fechados (log de segurança)`);
+          return;
+        }
       }
       if (ts.isElementAccessExpression(n)) {
         const chave = n.argumentExpression;
-        if (ts.isStringLiteral(chave) && SENSIVEL.test(chave.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
+        if (ts.isStringLiteral(chave) && sensivel(chave.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
       }
       if (ts.isPropertyAccessExpression(n)) {
         // `err.name` (classe do erro) é seguro em qualquer forma: err instanceof Error ? err.name : typeof err
         if (n.name.text === 'name' && ERRO.test(n.expression.getText(sf))) return;
-        if (SENSIVEL.test(n.name.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
+        // Chamada de método (`tipos.texto()`) é conferida pela lista de permitidos; nome de método não é dado.
+        const ehMetodo = ts.isCallExpression(n.parent) && n.parent.expression === n;
+        if (!ehMetodo && sensivel(n.name.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
       } else if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
-        if (SENSIVEL.test(n.text) || sensiveisRenomeadas.has(n.text)) reprovar(n, `variável sensível no log: ${n.text}`);
+        const ehChamada = ts.isCallExpression(n.parent) && n.parent.expression === n;
+        if (!ehChamada && (sensivel(n.text) || sensiveisRenomeadas.has(n.text))) reprovar(n, `variável sensível no log: ${n.text}`);
         else if (ERRO.test(n.text) && !liberado(n.text)) {
           // O erro inteiro em qualquer forma (`err`, `${err}`, String(err), 'x' + err). Liberado só como
           // `err.name`, `err instanceof Error` e `typeof err`.
@@ -113,7 +148,7 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
           const seguro =
             // `err.x`: o acesso a propriedade é conferido acima (`err.message`/`err.stack` reprovam, `err.name`/`err.code` passam).
             (ts.isPropertyAccessExpression(pai) && pai.expression === n) ||
-            (ts.isCallExpression(pai) && SANITIZADORES.has(pai.expression.getText(sf))) ||
+            (ts.isCallExpression(pai) && (SANITIZADORES.has(pai.expression.getText(sf)) || (SANITIZADORES_POR_ARQUIVO[arquivo]?.has(pai.expression.getText(sf)) ?? false))) ||
             (ts.isBinaryExpression(pai) && pai.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && pai.left === n) ||
             ts.isTypeOfExpression(pai);
           if (!seguro) reprovar(n, `erro inteiro no log (${n.text}); use ${n.text}.name`);
@@ -215,5 +250,29 @@ describe('logs sem dado pessoal (trava de PR)', () => {
     // 4 apelido, 5 dinâmica, 6 spread, 7 JSON.stringify, 8 String(err), 9 concatenação, 10 p['cpf'],
     // 12 desestruturação renomeada, 13 process.stderr.write
     for (const l of [4, 5, 6, 7, 8, 9, 10, 12, 13]) expect(linhas, `linha ${l}`).toContain(l);
+  });
+
+  it('resíduos do parecer do #129: cópia para variável local, despejo de objeto, nome composto e describe fora do arquivo', () => {
+    const fonte = [
+      'class X {',
+      '  f(p: { nome: string; cpfDoPaciente: string; nomeDoPaciente: string }, err: Error, o: object) {',
+      '    const x = p.nome;',
+      '    this.logger.warn(x);',
+      '    this.logger.warn(util.inspect(o));',
+      '    this.logger.warn(Object.values(o).join());',
+      '    this.logger.warn(p.cpfDoPaciente);',
+      '    this.logger.warn(p.nomeDoPaciente);',
+      '    this.logger.error(describe(err));',
+      "    this.logger.warn(String('ok'));",
+      '  }',
+      '}',
+    ].join('\n');
+    const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
+    // 4 cópia local, 5 util.inspect, 6 Object.values, 7 e 8 nome composto (R1 do parecer do #141), 9 describe fora do
+    // graceful-shutdown
+    for (const l of [4, 5, 6, 7, 8, 9]) expect(linhas, `linha ${l}`).toContain(l);
+    expect(linhas).not.toContain(10);
+    // describe continua liberado só no arquivo onde foi conferido.
+    expect(violacoesNoFonte('lifecycle/graceful-shutdown.ts', 'const f = (err: Error) => logger.error(describe(err));')).toEqual([]);
   });
 });
