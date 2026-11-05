@@ -17,6 +17,13 @@ export const EVENTOS_DE_SEGURANCA = {
   LOGIN_OK: { severidade: 'aviso', alarme: 'volume', descricao: 'login com senha aceito (D4)' },
   LOGIN_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'login recusado (sem dizer se a conta existe)' },
   LOGOUT: { severidade: 'aviso', alarme: 'volume', descricao: 'sessão encerrada no servidor (logout, prazo absoluto ou conta inativa)' },
+  LOGIN_BLOQUEADO: { severidade: 'alto', alarme: 'imediato', descricao: 'login recusado pelo bloqueio de 5 falhas em 15 min (resposta igual à senha errada)' },
+  MFA_CADASTRADO: { severidade: 'aviso', alarme: 'volume', descricao: 'cadastro do TOTP concluído (primeira verificação do código)' },
+  MFA_VERIFICADO: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP aceito (login em duas etapas ou reverificação)' },
+  MFA_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP ou senha do cadastro recusados' },
+  SENHA_VAZADA_RECUSADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha nova recusada por aparecer na base de senhas vazadas (k-anonimato)' },
+  CONFERENCIA_DE_SENHA_INDISPONIVEL: { severidade: 'alto', alarme: 'volume', descricao: 'base de senhas vazadas fora do ar; a troca seguiu sem a conferência' },
+  MFA_BLOQUEADO: { severidade: 'alto', alarme: 'imediato', descricao: 'segundo fator bloqueado por 5 falhas em 15 min' },
   SESSAO_INVALIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'requisição sem sessão válida (401)' },
   ACESSO_NEGADO_PERFIL: { severidade: 'aviso', alarme: 'volume', descricao: 'perfil sem permissão para a rota (403)' },
   MFA_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'rota recusada por falta de MFA ou MFA antigo' },
@@ -72,6 +79,15 @@ export const MOTIVOS_DE_SEGURANCA = [
   'prazo_absoluto',
   'conta_inativa',
   'senha_errada',
+  'bloqueio_de_login',
+  'bloqueio_do_fator',
+  'codigo_errado',
+  'codigo_reutilizado',
+  'cadastro_do_fator',
+  'login_em_duas_etapas',
+  'reverificacao',
+  'senha_vazada',
+  'conferencia_indisponivel',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
@@ -84,6 +100,10 @@ export const REGRAS_DE_SEGURANCA = [
   'vinculo_autoagendado',
   'mfa_recusas_por_usuario',
   'vinculo_cruzado',
+  'login_por_email',
+  'login_por_origem',
+  'fator_por_pessoa',
+  'fator_por_origem',
 ] as const;
 const MOTIVOS: ReadonlySet<string> = new Set(MOTIVOS_DE_SEGURANCA);
 const REGRAS: ReadonlySet<string> = new Set(REGRAS_DE_SEGURANCA);

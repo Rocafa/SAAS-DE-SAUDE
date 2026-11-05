@@ -1,0 +1,109 @@
+# Parecer do Guardião LGPD: código do PR 2 da autenticação real (D4, Better Auth, PR #152)
+
+> Data: 05/11/2026. Branch: `eng/better-auth-mfa` (até `f245e7b`), empilhada sobre `eng/better-auth-base` (#149). Base: parecer do desenho (`2026-11-05-desenho-better-auth.md`, R14 e R15), parecer do código do PR 1 (`2026-11-05-codigo-better-auth-pr1.md`), R5 e R6 do `2026-11-03-mfa-politica.md` e a §13 de `docs/04-arquitetura/autenticacao-better-auth.md`. Revisão estática do diff `eng/better-auth-base...eng/better-auth-mfa` e do plugin instalado (`better-auth@1.7.12`, `dist/plugins/two-factor/{index,verify-two-factor,totp/index}.mjs`, `dist/crypto/index.mjs`). Sem Postgres local: a bancada RLS não rodou aqui.
+
+## Veredito: **VETADO até corrigir a ressalva 1. Depois disso, APROVADO COM RESSALVAS.**
+
+O desenho do PR está certo. `mfa_em` só é gravado pelo nosso gancho depois que a biblioteca aceitou o código. Nada vem do cliente (R6 do #123). O segredo do TOTP fica cifrado com XChaCha20-Poly1305. A allowlist continua fechada e agora inclui desligar o fator, os códigos de reserva, o OTP e o URI. "Lembrar este aparelho" é recusado nas duas pontas. O bloqueio responde igual à senha errada, com o mesmo custo de hash, e há teste de tempo. O reuso de código tem registro atômico. A senha vazada sai só como prefixo de 5 hex. A trilha leva só o `op`.
+
+O veto vem de um ponto só. O bloqueio de 5 falhas em 15 min, que é a entrega central da R5, **não vale para requisições em paralelo**. O `antes` só consulta o contador (`peek`) e o `depois` só conta a falha (`hit`) depois que a biblioteca já conferiu o código. Na reverificação com sessão aberta, a biblioteca não tem bloqueio próprio (`beginAttempt` não faz nada e `recordTwoFactorFailure` só roda no login). Com isso, quem tem um cookie de sessão roubado (exatamente a ameaça que a reverificação cobre) manda N códigos ao mesmo tempo, e todos passam pelo `peek` antes da primeira falha ser contada. Com N = 10.000 por rajada e 3 códigos válidos na janela de ±1, cada rajada acerta com chance de cerca de 3%. Repetindo a cada 15 min, o fator cai em menos de um dia. Hoje não há exposição, porque `better-auth` só sobe em dev/test (R13). Mas a R5 era condição do PR 2, a correção é curta, e do jeito que está o teste dá uma garantia falsa (ele só cobre tentativas em sequência).
+
+## Ressalvas
+
+### Bloqueia (corrigir neste PR)
+
+1. **Bloqueio atômico: reservar a tentativa antes de conferir.**
+   - (a) No `antes`, trocar o `peek` por um `hit` atômico nos contadores do fator (`fator:<userId>` e `fator-origem`). A requisição é recusada (429 `ACCOUNT_TEMPORARILY_LOCKED`) quando a contagem **passa** do teto. No `depois`, se o código foi aceito, devolver a reserva. Para isso, acrescentar ao `RateLimitStore` um `release(key)`: `DECR` em Lua com piso 0 no Redis, decremento no store em memória e repasse no fallback. A outra saída é manter um contador de tentativas que inclua os acertos, com teto maior (ex.: 10). Se for por essa, justificar o número no §13.
+   - (b) Fazer o mesmo no login (`login:<email>` e `login-origem`). Ali o risco é menor, porque o scrypt limita a vazão e o MFA vem depois, mas a garantia prometida é a mesma.
+   - (c) Teste na bancada: 20 códigos errados **simultâneos** (`Promise.all`) na reverificação. No máximo 5 chegam à conferência (os demais recebem 429), e o código certo enviado logo depois também recebe 429. Fazer o equivalente para o login, com 20 senhas erradas simultâneas, e conferir que a senha certa recebe a resposta da senha errada.
+   - (d) No store fora do ar, manter o comportamento atual: segue e alarma `RATE_LIMIT_FAIL_OPEN`. O fallback em memória continua contando por instância.
+
+### Antes do PR 3 (antes de abrir produção ou de entrar dado real)
+
+2. **Alarme no início do bloqueio do login.** No `depois` do login, o retorno de `contarFalha` é descartado. A quinta falha tranca a conta e não gera evento nenhum. `LOGIN_BLOQUEADO` só aparece se alguém tentar de novo, e aí aparece uma vez por tentativa, com alarme imediato, o que vira ruído. O do fator está certo (`MFA_BLOQUEADO` no momento em que tranca). Para corrigir: emitir o evento quando o teto for atingido. Depois disso, as tentativas que forem barradas saem em `aviso`/`volume`. O `motivo` deve dizer qual contador travou (`bloqueio_por_email` ou `bloqueio_por_origem`), para a operação separar um ataque dirigido a uma conta de um *spray* ou NAT. Corrigir também a descrição do evento em `log-de-seguranca.ts`: hoje diz só "5 falhas".
+3. **`LOGIN_OK` (sua pergunta 5): aceito com ajuste.** Com TOTP, o evento sai **duas vezes**: na sessão provisória, que a biblioteca cria e apaga, e de novo na sessão que o `verify-totp` cria. Ele sai também no fim do cadastro, quando a sessão é trocada. Na prática, `LOGIN_OK` passou a significar "sessão criada", o que dobra a contagem do alarme de volume. Pior: o sinal mais valioso para a detecção fica escondido, que é **senha certa sem fator concluído** (credencial vazada). Separar em `LOGIN_SENHA_OK` com `motivo: 'aguardando_fator'` (no gancho, `newSession.user.twoFactorEnabled === true`) e `LOGIN_OK` só para a sessão definitiva, com `motivo` `sem_fator` ou `login_em_duas_etapas`. O gancho da sessão provisória não pode ganhar nenhum outro efeito colateral (trilha, `session_tenant_selected`). Hoje não ganha, porque só o `resolver` e o `aposMfaVerificado` escolhem a clínica. Manter assim, com um comentário no código.
+4. **Teto de 30 por origem (sua pergunta 1): aceito, com condições.**
+   - Com 5 por origem, uma clínica atrás de NAT trava toda a equipe por erros de pessoas diferentes. Isso é um risco de disponibilidade e um risco assistencial, e a disponibilidade também é dever do art. 46 da LGPD. 30 falhas em 15 min por origem limita o *spray* a cerca de 2.900 tentativas por dia por IP. A senha passa pela conferência de vazadas e todo perfil exige MFA. O risco residual é aceitável.
+   - **Condição 1:** o contador depende de o IP ser o real. Com `HTTP_TRUST_PROXY_HOPS` errado (R3 do #139), todo login sai pela "origem" do ALB, e 30 falhas em qualquer lugar trancam a plataforma inteira. Conferir no staging antes do PR 3 e incluir isso no checklist de produção.
+   - **Condição 2:** o bloqueio por e-mail permite que qualquer pessoa que saiba o e-mail de um profissional o tranque, 5 tentativas a cada 15 min, de qualquer lugar. O risco fica aceito com o alarme da R2 e com o **desbloqueio pelo admin, com justificativa e trilha**, no PR 3 (junto da R17). Se o incômodo aparecer em produção, a alternativa é contar por e-mail×origem com teto 5 e por e-mail global com teto maior (ex.: 20).
+5. **Senha vazada (sua pergunta 2): falha aberta aceita; saída do prefixo aceita.**
+   - O prefixo de 5 hex do SHA-1 de uma senha não identifica ninguém. Ele sai do servidor (não do aparelho da pessoa), sem e-mail nem id. Não é dado pessoal e não configura transferência internacional de dado pessoal (art. 33). `Add-Padding`, `redirect: 'error'` e o prazo de 2 s estão corretos. Falhar fechado deixaria a troca de senha (inclusive a do admin) dependente de um terceiro. A falha aberta com `CONFERENCIA_DE_SENHA_INDISPONIVEL` é a escolha certa.
+   - **Condições:** (a) a saída permitida no egresso é **só** `api.pwnedpasswords.com:443`; (b) registrar no RIPD que a conferência usa esse serviço e qual a natureza do que sai (prefixo de hash, sem dado pessoal); (c) **todo** caminho nosso que defina senha no PR 3 (convite, recuperação pela R17, troca forçada) precisa chamar `conferirSenhaVazada` explicitamente. Os ganchos `before` só pegam rotas da biblioteca, e uma gravação direta pelo `internalAdapter` ou pelo `gerarHashDeSenha` escapa deles. Recomendado, sem obrigar: marcar "conferência pendente" quando a base estiver fora e conferir de novo no próximo login, quando a senha em claro está disponível, exigindo troca se ela tiver vazado.
+6. **Escopo (sua pergunta 3): aceito, com prazo.** A R14 pedia os alvos distintos da recusa em rota comum no PR 2. Movê-los para um PR à parte no guard é aceitável, porque é outro módulo e não depende do Better Auth. **Prazo:** o merge desse PR acontece antes do PR 3, ou seja, antes de `better-auth` subir em produção. Já está na fila. Reset e remoção do fator com justificativa e alerta ao admin ficam no PR 3 (R17), como o parecer do desenho previa. Fica acrescentada uma pendência da R16(d): no login em duas etapas, a pessoa **está identificada** e a senha estava certa, então `MFA_BLOQUEADO` ali é forte indício de credencial comprometida. Esse evento precisa virar aviso ou `anomaly_alert` nas clínicas de vínculo ativo, e não ficar só no log de segurança.
+7. **Multi-clínica (sua pergunta 4): aceito para o PR 2.** Sem clínica escolhida, `mfa_em` não é marcado. Isso falha fechado (403 nas rotas, porque todo perfil exige MFA), e o provedor não sobe em produção. Para o PR 3, decidir e escrever no §13:
+   - (a) Ou a escolha de clínica vem antes do desafio do TOTP, ou o MFA do login vale para a **primeira** escolha de clínica feita logo depois (prazo curto, ex.: 5 min). Nesse caso, `perfis_no_mfa` é calculado no momento da escolha, e trocas posteriores continuam zerando o MFA, como manda a R6 do #123. O MFA autentica a pessoa, não a clínica.
+   - (b) A trilha `mfa_verified`/`mfa_enrolled` precisa chegar à clínica escolhida. Hoje, para quem tem várias clínicas, ela não chega a nenhuma (lacuna da R5).
+   - (c) `MFA_VERIFICADO` sem clínica deve levar um marcador (ex.: `motivo` com `sem_clinica`), para o log não dizer que o MFA foi marcado quando não foi.
+8. **Sequestro do primeiro cadastro do fator.** Todo perfil exige MFA, e o cadastro pede só a senha. Quem conseguir a senha por phishing antes do primeiro login da pessoa cadastra o **próprio** autenticador. A biblioteca recusa um segundo cadastro (`TOTP_ALREADY_ENABLED`), e o titular fica de fora. No PR 3, o primeiro cadastro fica preso ao convite (token de uso único e curto, R17), e `MFA_CADASTRADO` vira aviso ao admin da clínica e notificação à pessoa.
+9. **Rotação do `BETTER_AUTH_SECRET` agora apaga o TOTP.** Com `secret` em string, a biblioteca cifra o segredo do TOTP com SHA-256(secret), sem versão (o formato antigo, só hex). A rotação descrita na §12 ("derruba as sessões, aceitável") passa a invalidar **todos** os fatores, e todo mundo precisa refazer o cadastro com o admin. Antes do PR 3, usar a configuração de segredos versionados da biblioteca (envelope `$ba$<versão>$`, `secretConfig.keys`) ou escrever na §12 que a rotação exige recadastro e o procedimento para fazê-lo. Teste: um fator cifrado com a versão 1 continua sendo conferido depois que a versão 2 vira a atual.
+
+### Fila
+
+10. **Semântica da janela.** No Redis, a chave vence 15 min depois da **primeira** falha, e não 15 min depois da quinta. Quem distribui as falhas pela janela pode ter um bloqueio de segundos. No store em memória (fallback), a janela fixa é compartilhada por todas as chaves, e tanto o bloqueio quanto a marca de reuso de 90 s podem vencer antes do prazo. Como teto de vazão continua dentro do NIST 800-63B §5.2.2. Corrigir o texto do §13 ("no máximo 5 falhas por janela de 15 min") ou gravar uma chave de bloqueio própria (`SET ... PX 900000`) ao atingir o teto.
+11. Se `aoVerificarMfa` falhar no login em duas etapas, a sessão nova já foi criada e fica viva sem `mfa_em`. Isso falha fechado, mas por higiene essa sessão deve ser apagada no mesmo `catch`.
+12. Em `POST /two-factor/enable`, apagar `issuer` e forçar `method: 'totp'` no `antes`. Hoje o cliente escolhe o emissor que aparece no próprio autenticador. O efeito é baixo (só atinge a própria pessoa), mas o campo não precisa ser aceito.
+
+## Conferido sem achado
+
+| Item | Situação |
+|---|---|
+| Base legal | Identidade e fator da equipe: execução do contrato e segurança (art. 7º V e IX, art. 46). Não é dado sensível do art. 11. O segredo do TOTP entra no RIPD junto do schema `identidade` (pendência 4 do parecer do PR 1). ✅ |
+| Minimização | Chaves dos contadores em HMAC (`bl:v1:`), separadas do `rl:v2:` do rate limit. Eventos com `userId` e `origem` em HMAC, nunca o e-mail. A trilha leva só o `op`. Os códigos de reserva saem da resposta do cadastro. ✅ |
+| Cifra em repouso | O segredo e os códigos de reserva são cifrados pela biblioteca (XChaCha20-Poly1305) antes do banco. O teste confere que a coluna não contém o segredo. Há CHECK de tamanho. ✅ (rotação na ressalva 9) |
+| Isolamento | `identidade.dois_fatores` com `REVOKE ALL FROM PUBLIC` e GRANT só ao `app_auth`. A trilha é gravada com `withTenant` na clínica que vem da sessão do servidor, nunca do cliente. ✅ |
+| R6 do #123 (`mfa_em`) | Só `aposMfaVerificado`, depois de `ctx.context.returned` sem erro, grava `mfa_em`. A biblioteca não recebe `mfa_em` do corpo (`input: false`, PR 1). Cadastro iniciado e não concluído não marca MFA (teste). ✅ |
+| Allowlist | Abertos só `enable` e `verify-totp`. `disable`, `get-totp-uri`, códigos de reserva e OTP dão 404 (teste). `enable` recusa um segundo cadastro de fator já verificado (`TOTP_ALREADY_ENABLED`). ✅ |
+| Lembrar aparelho | `trustDevice` recusado (400) e `trustDeviceMaxAge: 1`. O teste confere que não sai `trust_device`. ✅ |
+| Reuso (RFC 6238 §5.2) | `hit` atômico em `userId:código` antes da conferência, por 90 s. Duas requisições com o mesmo código não passam juntas (teste). ✅ |
+| Login em duas etapas na biblioteca | Desafio de uso único (`consumeVerificationValue`), 5 tentativas por desafio e bloqueio da conta no banco com incremento atômico, como segunda camada. Cookie do desafio de 5 min. ✅ |
+| Enumeração (R15) | A resposta do bloqueio é idêntica à da senha errada e gasta o mesmo custo de scrypt. Conta inexistente idem. Teste de tempo com tolerância de 3x. ✅ |
+| Segredos e dados no git | Só senhas e segredos fictícios na bancada e no teste do k-anonimato. Nenhum dado real. ✅ |
+| Retenção | Contadores no Redis com TTL ≤ 15 min. A linha do fator vive com o usuário (`ON DELETE CASCADE`). O log de segurança segue o prazo já definido (180 dias). ✅ |
+| CFM, ANS e ICP-Brasil | Não toca prontuário, TISS nem assinatura. O MFA real é pré-requisito do NGS2 (CFM 1.821/2007) e fica mais perto com este PR. ✅ |
+
+## Nota do Maestro (05/11/2026)
+
+Correções feitas neste PR, sobre o veto:
+
+- **R1 (veto) corrigida.** A tentativa é **reservada** com `hit` atômico no gancho `before`, antes de a biblioteca conferir o código ou a senha, e é **devolvida** (`release` novo no store, DECR com piso 0 no Redis) quando dá certo ou quando o erro não é de credencial. Bloqueado é quando alguma reserva passa do teto. Isso vale para o login e para o fator. Testes novos na bancada:
+  - 20 códigos errados ao mesmo tempo: no máximo 5 respostas 401, ao menos 15 respostas 429, e o código certo depois recebe 429;
+  - 4 erros e 1 acerto não travam a tentativa seguinte.
+  - A chamada interna do servidor (`auth.api.*`, sem requisição HTTP para casar o `before` com o `after`) usa a consulta e conta a falha depois. Esse caminho não fica exposto: a montagem só entrega HTTP.
+- **R2 corrigida.** `LOGIN_BLOQUEADO` e `MFA_BLOQUEADO` saem quando a falha **atinge** o teto, com `regra` dizendo qual contador travou: `login_por_email`, `login_por_origem`, `fator_por_pessoa` ou `fator_por_origem` (lista fechada). As tentativas já bloqueadas geram no máximo um evento por contador a cada 60 s.
+- **R11 corrigida.** Se a gravação do `mfa_em` falhar, a sessão nova é apagada antes de o erro subir.
+- **R12 corrigida.** `enable` recusa `method` diferente de `totp` e qualquer `issuer` (400 `TOTP_ONLY`), com teste.
+- **R10.** O texto do §13 do desenho foi ajustado para a semântica real da janela fixa.
+- **R9.** Documentada no §13: rotação do `BETTER_AUTH_SECRET` exige o recadastro do TOTP até migrarmos para os segredos versionados (fila do PR 3).
+
+Itens que vão para a fila do PR 3, com o prazo do parecer: R3 (`LOGIN_SENHA_OK`), R4 (`HTTP_TRUST_PROXY_HOPS` no staging e desbloqueio pelo admin), R5 (egresso e RIPD, conferência explícita nos caminhos nossos de senha), R6 (o #153 já está aberto com os alvos distintos; `MFA_BLOQUEADO` do login em duas etapas vira aviso nas clínicas), R7, R8 e R9.
+
+## Reconferência do Guardião (05/11/2026, commit `6f8b619`)
+
+Diff conferido: `f245e7b..6f8b619` (`protecao.ts`, `rate-limit-store.ts`, `log-de-seguranca.ts`, bancada e §13).
+
+### Veredito final: **APROVADO COM RESSALVAS. O veto da R1 está retirado. A R13 abaixo entra antes do merge, neste PR.**
+
+- **R1 (veto): resolvida.** O `hit` atômico reserva a tentativa no `before`, antes de a biblioteca conferir, e o `release` (DECR com piso 0 em Lua, sem criar a chave nem mexer no prazo) devolve a reserva no acerto ou no erro que não é de credencial. Uma requisição só chega à conferência se a contagem **dela** ficou ≤ teto. Com isso, N requisições em paralelo deixam passar no máximo `teto`, mesmo com acertos devolvendo reservas no meio. O teste da rajada de 20 (≤ 5 respostas 401, ≥ 15 respostas 429, e o código certo depois recebe 429) e o de "4 erros + 1 acerto" cobrem o que foi pedido. A consulta sem reserva vale só para a chamada interna `auth.api.*`, que a montagem não expõe. Aceito.
+- **R2: resolvida.** O evento sai quando a falha **atinge** o teto, com a `regra` em lista fechada. As tentativas já bloqueadas geram no máximo 1 evento por contador a cada 60 s. A chave dessa contenção é o HMAC e fica só em memória.
+- **R11: resolvida.** A sessão nova é apagada antes de o erro subir.
+- **R12: resolvida.** `method` diferente de `totp` ou `issuer` presente dão 400 `TOTP_ONLY`, com teste.
+- **R9 e R10:** documentadas no §13. A migração para os segredos versionados fica na fila do PR 3. Aceito.
+- **R3 a R8:** estão na fila do PR 3 com os prazos do parecer. Aceito. O #153 cobre a parte dos alvos distintos da R6 e tem parecer próprio (`2026-11-05-recusa-mfa-rota-comum.md`).
+
+### Achado novo
+
+13. **(Antes do merge) A tentativa barrada não devolve as reservas: um contador tranca o outro.** Em `reservar`, todos os contadores levam `hit` antes de se ver qual travou. Quando um deles trava, o `antes` lança o erro sem `devolver`, e o `depois` não roda. Consequências:
+    - (a) Uma pessoa já bloqueada por e-mail que continua tentando de dentro da clínica (comportamento comum) soma no contador **da origem**. Mais 25 tentativas e a **clínica inteira** fica sem login por 15 min. Vale o mesmo para o fator: as tentativas barradas por `fator_por_pessoa` somam em `fator_por_origem`, e a reverificação e o login em duas etapas de toda a clínica caem.
+    - (b) Na direção contrária, enquanto a origem estiver bloqueada, cada login da clínica, **inclusive com a senha certa**, soma no contador por e-mail da pessoa. Quando a origem destrava, essas pessoas continuam trancadas.
+    - O resultado é o que a R4 queria evitar com o teto de 30. Hoje não há exposição, porque o provedor não sobe em produção, mas a correção é curta.
+    - **Correção:** quando qualquer contador travar, `devolver` a reserva de **todos** os contadores daquela requisição antes do `throw`. A invariante da R1 se mantém: a requisição barrada desfaz só a própria batida, então a contagem de quem já está na conferência não muda.
+    - **Teste:** com a origem X, travar o e-mail A (5 erros) e fazer mais 30 tentativas com A. Em seguida, B (outro e-mail, mesma origem X) entra com a senha certa. Fazer o equivalente no fator, entre pessoa e origem.
+14. **(Fila)** Se a biblioteca lançar um erro que não é `APIError` (500), o `depois` pode não rodar, e a reserva fica contada como falha. Isso falha fechado e é raro, mas vale um `finally` ou, ao menos, registrar no §13. Outro ponto: o código reutilizado conta como falha (decisão aceita), mas a reserva que atinge o teto por esse caminho não emite `MFA_BLOQUEADO` nem vai para a trilha. Aplicar `atingidos` também ali.
+
+### Nota do Maestro sobre a reconferência (05/11/2026)
+
+**R13 corrigida.** Quando alguma reserva passa do teto, a tentativa barrada devolve a reserva de **todos** os contadores antes de recusar. A garantia da R1 continua: a vaga só fica ocupada pelas tentativas que chegam à conferência. Teste novo na bancada, com os dois casos:
+- um e-mail travado com mais 30 tentativas não tranca a origem para o colega;
+- a origem travada recusa a senha certa sem somar no e-mail da pessoa, que entra por outra origem.
+
+**R14** vai para a fila do PR 3.

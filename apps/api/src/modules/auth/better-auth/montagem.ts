@@ -19,8 +19,17 @@ export const PREFIXO = '/api/auth';
 /** Login é e-mail e senha: 4 KiB bastam. Corpo maior ou sem tamanho declarado (chunked) dá 413. */
 export const TETO_DO_CORPO = 4 * 1024;
 
-/** Endpoints da biblioteca expostos (método + caminho depois do prefixo). O PR 2 acrescenta o TOTP. */
-export const ENDPOINTS_PERMITIDOS: ReadonlySet<string> = new Set(['POST /sign-in/email', 'POST /sign-out', 'GET /get-session']);
+/**
+ * Endpoints da biblioteca expostos (método + caminho depois do prefixo). PR 2: cadastro e verificação do TOTP. Ficam
+ * FECHADOS: desligar o fator, rever o URI, códigos de reserva e OTP por e-mail/SMS (recuperação pelo admin, R17).
+ */
+export const ENDPOINTS_PERMITIDOS: ReadonlySet<string> = new Set([
+  'POST /sign-in/email',
+  'POST /sign-out',
+  'GET /get-session',
+  'POST /two-factor/enable',
+  'POST /two-factor/verify-totp',
+]);
 
 type Req = IncomingMessage & { ip?: string };
 type Next = (err?: unknown) => void;

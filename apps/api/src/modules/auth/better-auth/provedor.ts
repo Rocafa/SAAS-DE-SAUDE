@@ -145,6 +145,46 @@ export class BetterAuthProvider implements AuthProvider {
     return true;
   }
 
+  /**
+   * Código do TOTP aceito pela biblioteca (gancho `after` da proteção). Com uma clínica só, a escolha é feita ANTES
+   * (trocar de clínica zera o MFA); então `mfa_em` e a trilha da clínica (R5 do #123: cadastro e verificação). Com
+   * várias clínicas e nenhuma escolhida, o MFA não é marcado: a escolha (PR 3) vem antes da reverificação.
+   */
+  async aposMfaVerificado(sessaoId: string, userId: string, motivo: 'login_em_duas_etapas' | 'reverificacao' | 'cadastro_do_fator'): Promise<void> {
+    const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    if (!s) return;
+    let tenantId = s.clinicaAtiva;
+    if (!tenantId) {
+      const clinicas = await this.clinicasDoUsuario(userId);
+      if (clinicas.length !== 1 || !clinicas[0]) return;
+      tenantId = clinicas[0];
+      await this.definirClinica(sessaoId, userId, tenantId);
+    }
+    if (!(await this.marcarMfa(sessaoId))) return;
+    const ops = motivo === 'cadastro_do_fator' ? ['mfa_enrolled', 'mfa_verified'] : ['mfa_verified'];
+    await this.trilhaDoFator(tenantId, userId, ops, AuditAction.Login);
+  }
+
+  /** Código ou senha do cadastro recusados com sessão aberta: trilha da clínica ativa (falha e, se for o caso, bloqueio). */
+  async aposMfaRecusado(sessaoId: string, userId: string, bloqueou: boolean): Promise<void> {
+    const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    if (!s?.clinicaAtiva) return;
+    await this.trilhaDoFator(s.clinicaAtiva, userId, bloqueou ? ['mfa_failed', 'mfa_locked'] : ['mfa_failed'], AuditAction.LoginFailed);
+  }
+
+  private async trilhaDoFator(tenantId: string, userId: string, ops: readonly string[], action: AuditAction): Promise<void> {
+    await withTenant(
+      this.d.dbClinica,
+      tenantId as TenantId,
+      async (tx) => {
+        for (const op of ops) {
+          await recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action, scope: 'mfa', metadata: { op } });
+        }
+      },
+      userId,
+    );
+  }
+
   /** Apaga a sessão no servidor (logout, prazo absoluto, conta desligada). */
   async encerrar(sessaoId: string, motivo: 'logout' | 'prazo_absoluto' | 'conta_inativa' = 'logout', userId?: string): Promise<void> {
     await this.d.dbAuth.delete(sessao).where(eq(sessao.id, sessaoId));
