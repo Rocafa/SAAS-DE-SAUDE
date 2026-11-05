@@ -14,6 +14,9 @@ import { loadRateLimitHashKey } from './rate-limit-store';
  *   detectar e alarmar em tempo real, inclusive quando a trilha não pôde gravar.
  */
 export const EVENTOS_DE_SEGURANCA = {
+  LOGIN_OK: { severidade: 'aviso', alarme: 'volume', descricao: 'login com senha aceito (D4)' },
+  LOGIN_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'login recusado (sem dizer se a conta existe)' },
+  LOGOUT: { severidade: 'aviso', alarme: 'volume', descricao: 'sessão encerrada no servidor (logout, prazo absoluto ou conta inativa)' },
   SESSAO_INVALIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'requisição sem sessão válida (401)' },
   ACESSO_NEGADO_PERFIL: { severidade: 'aviso', alarme: 'volume', descricao: 'perfil sem permissão para a rota (403)' },
   MFA_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'rota recusada por falta de MFA ou MFA antigo' },
@@ -64,6 +67,11 @@ export const MOTIVOS_DE_SEGURANCA = [
   'perfil_revogado',
   'origem_nao_permitida',
   'aviso_de_anomalia',
+  'erro_na_autenticacao',
+  'logout',
+  'prazo_absoluto',
+  'conta_inativa',
+  'senha_errada',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
