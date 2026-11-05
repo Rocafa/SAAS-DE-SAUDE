@@ -11,6 +11,7 @@ import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TenantId, UserId } from '@plataforma/shared';
 import {
+  adolescentConfidentialityRequests,
   auditLog,
   patients,
   professionals,
@@ -41,6 +42,7 @@ import {
   receipts,
   receiptCancellations,
   clinicMembers,
+  supportAccessGrants,
   portalConsents,
   portalInvites,
   portalLinks,
@@ -114,6 +116,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipts: 'finance.receipts',
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
+  support_access_grants: 'supportAccessGrants',
   portal_invites: 'portal.invites',
   portal_links: 'portal.links',
   portal_consents: 'portal.consents',
@@ -121,6 +124,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   guardians: 'guardians.guardians',
   patient_guardians: 'guardians.patientGuardians',
   patient_guardian_history: 'guardians.patientGuardianHistory',
+  adolescent_confidentiality_requests: 'guardians.adolescentConfidentialityRequests',
   import_batches: 'imports.batches',
   import_batch_records: 'imports.batchRecords',
   whatsapp_settings: 'whatsapp.whatsappSettings',
@@ -246,6 +250,15 @@ beforeAll(async () => {
   await api.http().post('/profissionais').set(cab(adminB)).send({ nome: 'Prof B', especialidade: 'Psico' }).expect(201);
 
   // Acesso de suporte (fictício) nas duas clínicas, pelo mesmo atendente: pseudônimos diferentes.
+  // 0059: cada clínica autoriza o chamado antes (a trilha recusa suporte `pedido_da_clinica` sem autorização).
+  for (const [tenantId, chamado] of [
+    [clinicaA, 'SUP-1234'],
+    [clinicaB, 'SUP-5678'],
+  ] as const) {
+    const dono = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const aut = await api.http().post('/suporte/autorizacoes').set(cab(dono)).send({ chamado, horas: 2 });
+    expect(aut.status, JSON.stringify(aut.body)).toBe(201);
+  }
   for (const [tenantId, chamado] of [
     [clinicaA, 'SUP-1234'],
     [clinicaB, 'SUP-5678'],
@@ -300,7 +313,7 @@ beforeAll(async () => {
 
   // Retenção legal (0017): marcada, pedida a retirada por um admin e aprovada por OUTRO.
   const admin2 = api.sessao(clinicaA, 'admin');
-  await api.membro(clinicaA, admin, 'admin');
+  await api.membro(clinicaA, admin, 'admin', 'profissional');
   await api.membro(clinicaA, admin2, 'admin');
   await api.http().put('/prontuario/pacientes/' + pacienteId + '/retencao-legal').set(cab(admin)).send({ referencia: REFERENCIA_RETENCAO }).expect(200);
   await api.http().post('/prontuario/pacientes/' + pacienteId + '/retencao-legal/retirada').set(cab(admin)).send({ motivo: MOTIVO_RETIRADA }).expect(200);
@@ -308,8 +321,8 @@ beforeAll(async () => {
   // Custódia (0017): psicólogo autor e substituto; designada e aceita.
   const psiAutor = api.sessao(clinicaA, 'profissional');
   const psiSubst = api.sessao(clinicaA, 'profissional');
-  await api.membro(clinicaA, psiAutor, 'psicologo');
-  await api.membro(clinicaA, psiSubst, 'psicologo');
+  await api.membro(clinicaA, psiAutor, 'profissional', 'psicologo');
+  await api.membro(clinicaA, psiSubst, 'profissional', 'psicologo');
   const autorId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Autor Ficticio', especialidade: 'Psicologia', usuarioId: psiAutor.userId })).body as { id: string };
   const substId = (await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Subst Ficticio', especialidade: 'Psicologia', usuarioId: psiSubst.userId })).body as { id: string };
   const cust = await api.http().post('/prontuario/custodias').set(cab(admin)).send({ autorProfissionalId: autorId.id, substitutoProfissionalId: substId.id });
@@ -410,11 +423,18 @@ beforeAll(async () => {
     .http()
     .post(`/pacientes/${pacienteId}/responsaveis`)
     .set(cab(admin))
-    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true });
+    .send({ nome: RESP_NOME, cpf: cpfFicticio(10), telefone: '11900000010', tipo: 'pai_mae', pagador: true, cienciaDoPaciente: true, confirmaPacienteMaior: true });
   expect(resp.status, JSON.stringify(resp.body)).toBe(201);
   const vinculoId = (resp.body as { id: string }).id;
   await api.http().patch(`/pacientes/${pacienteId}/responsaveis/${vinculoId}`).set(cab(admin)).send({ telefone: '11900000011' }).expect(200);
   await api.http().post(`/pacientes/${pacienteId}/responsaveis/${vinculoId}/encerrar`).set(cab(admin)).send({ motivo: 'maioridade' }).expect(200);
+  // 0056: um pedido de sigilo do adolescente, gravado direto pelo profissional (o banco não lê a idade), e revogado.
+  const profSigilo = api.sessao(clinicaA, 'profissional');
+  await api.membro(clinicaA, profSigilo, 'profissional');
+  await withTenant(api.db.db, clinicaA, async (tx) => {
+    const [p] = await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacienteId, guardianLinkId: vinculoId, guardianId: (resp.body as { responsavelId: string }).responsavelId, requestedBy: profSigilo.userId }).returning();
+    await tx.update(adolescentConfidentialityRequests).set({ revokedBy: profSigilo.userId, revokedAt: new Date() }).where(eq(adolescentConfidentialityRequests.id, (p as { id: string }).id));
+  }, profSigilo.userId);
 
   // Importador (0024): um lote de pacientes aplicado (1 paciente criado), com o aceite do termo.
   const lote = await api
@@ -533,6 +553,7 @@ describe('G2 — conteúdo do pacote', () => {
       const n = async (
         t:
           | typeof patients
+          | typeof adolescentConfidentialityRequests
           | typeof professionals
           | typeof appointmentTypes
           | typeof appointments
@@ -560,6 +581,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof receipts
           | typeof receiptCancellations
           | typeof clinicMembers
+          | typeof supportAccessGrants
           | typeof portalInvites
           | typeof portalLinks
           | typeof portalConsents
@@ -612,6 +634,7 @@ describe('G2 — conteúdo do pacote', () => {
           guardians: await n(guardians),
           patientGuardians: await n(patientGuardians),
           patientGuardianHistory: await n(patientGuardianHistory),
+          adolescentConfidentialityRequests: await n(adolescentConfidentialityRequests),
         },
         whatsapp: {
           whatsappSettings: await n(whatsappSettings),
@@ -620,6 +643,7 @@ describe('G2 — conteúdo do pacote', () => {
           whatsappInbound: await n(whatsappInbound),
         },
         clinicMembers: await n(clinicMembers),
+        supportAccessGrants: await n(supportAccessGrants),
         portal: {
           invites: await n(portalInvites),
           links: await n(portalLinks),
@@ -658,6 +682,8 @@ describe('G2 — conteúdo do pacote', () => {
       privateNotesWithheld: 1,
       legalHolds: 1,
       noteCustodies: 1,
+      // 0059: a autorização do chamado do suporte (a linha de suporte da trilha exige uma vigente).
+      supportAccessGrants: 1,
       portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
       finance: {
         financeSettings: 1,
@@ -675,6 +701,7 @@ describe('G2 — conteúdo do pacote', () => {
         guardians: 1,
         patientGuardians: 1,
         patientGuardianHistory: 4,
+        adolescentConfidentialityRequests: 1,
       },
       whatsapp: { whatsappSettings: 1, whatsappOptIns: 1, whatsappOutbox: 1, whatsappInbound: 1 },
     });
