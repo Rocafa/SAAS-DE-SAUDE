@@ -24,8 +24,11 @@ export class DevSessionProvider implements AuthProvider {
     }
   }
 
-  /** Cria uma sessão e devolve o token (vai no cabeçalho `Authorization: Bearer <token>`). */
-  criarSessao(dados: { tenantId: string; userId: string; perfis: readonly string[] }): string {
+  /**
+   * Cria uma sessão e devolve o token (vai no cabeçalho `Authorization: Bearer <token>`). A sessão fictícia nasce
+   * com MFA feito agora; `mfaEm` permite simular MFA antigo ou ausente (null).
+   */
+  criarSessao(dados: { tenantId: string; userId: string; perfis: readonly string[]; mfaEm?: Date | null }): string {
     if (!UUID_RE.test(dados.tenantId) || !UUID_RE.test(dados.userId)) throw new Error('sessão fictícia inválida');
     if (dados.perfis.length === 0 || !dados.perfis.every(ehPerfil)) throw new Error('perfil inválido');
     const token = randomBytes(32).toString('base64url');
@@ -35,6 +38,7 @@ export class DevSessionProvider implements AuthProvider {
         tenantId: dados.tenantId.toLowerCase() as TenantId,
         userId: dados.userId.toLowerCase() as UserId,
         perfis: Object.freeze([...new Set(dados.perfis as Perfil[])]),
+        mfaEm: dados.mfaEm === undefined ? new Date() : dados.mfaEm,
       }),
     );
     return token;

@@ -6,6 +6,8 @@ import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { CABECALHO_ASSINATURA, lerEventosDoWebhook, WebhookInvalidoError } from './mensageiro-whatsapp';
 import { WhatsappService } from './whatsapp.service';
 import { validarConfiguracao, validarFiltroEnvios, validarNovoOptIn, validarRevogacao } from './whatsapp.validation';
+import { origemDaRequisicao, registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { ExigeMfaRecente } from '../auth/mfa';
 
 /** Rotas da clínica (com sessão). Na URL só ids, datas e enums. */
 @Controller()
@@ -21,6 +23,7 @@ export class WhatsappController {
 
   @Put('whatsapp/configuracao')
   @Permissao('comunicacao:configurar')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   salvar(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
     return this.service.salvarConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
   }
@@ -119,6 +122,7 @@ export class WhatsappWebhookController {
     if (!mensageiro) throw new HttpException({ statusCode: 404, message: 'Não encontrado' }, 404);
     if (!req.rawBody || !mensageiro.assinaturaValida(req.rawBody, assinatura)) {
       this.logger.warn('WHATSAPP_WEBHOOK_ASSINATURA_INVALIDA');
+      registrarEventoDeSeguranca('WEBHOOK_ASSINATURA_INVALIDA', { motivo: 'whatsapp', origem: origemDaRequisicao((req as { ip?: string }).ip) });
       throw new HttpException({ statusCode: 401, message: 'Não autenticado' }, 401);
     }
     let eventos;

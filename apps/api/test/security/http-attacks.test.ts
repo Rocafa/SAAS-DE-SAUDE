@@ -4,12 +4,12 @@
  * Não exige banco (roda também em `pnpm test`). Ver docs/04-arquitetura/testes-de-seguranca.md.
  */
 import 'reflect-metadata';
-import { Body, Controller, Get, type INestApplication, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, type INestApplication, Logger, Patch, Post, Put, Req } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { HealthModule } from '../../src/health/health.module';
 import { applyHttpSecurity } from '../../src/security/http-security';
 import {
@@ -33,6 +33,27 @@ class AlvoController {
   eco(@Body() body: unknown): { recebido: boolean; tipo: string } {
     return { recebido: true, tipo: typeof body };
   }
+
+  @Put('eco')
+  ecoPut(@Body() body: unknown): { recebido: boolean } {
+    return { recebido: typeof body === 'object' };
+  }
+
+  @Patch('eco')
+  ecoPatch(@Body() body: unknown): { recebido: boolean } {
+    return { recebido: typeof body === 'object' };
+  }
+
+  @Delete('eco')
+  ecoDelete(): { recebido: boolean } {
+    return { recebido: true };
+  }
+
+  /** O webhook do WhatsApp confere o HMAC sobre o corpo bruto: ele precisa chegar mesmo com bodyParser: false. */
+  @Post('cru')
+  cru(@Req() req: { rawBody?: unknown }): { bruto: boolean } {
+    return { bruto: Buffer.isBuffer(req.rawBody) };
+  }
 }
 
 async function criarApp(config: Partial<HttpSecurityConfig> = {}): Promise<INestApplication> {
@@ -40,7 +61,7 @@ async function criarApp(config: Partial<HttpSecurityConfig> = {}): Promise<INest
     imports: [HealthModule],
     controllers: [AlvoController],
   }).compile();
-  const app = moduleRef.createNestApplication<NestExpressApplication>({ logger: false });
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ logger: false, rawBody: true, bodyParser: false });
   applyHttpSecurity(app, {
     ...HTTP_SECURITY_DEFAULTS,
     corsAllowedOrigins: [ORIGEM_OK],
@@ -112,6 +133,63 @@ describe('borda HTTP endurecida', () => {
     semVazamento(res.text);
   });
 
+  // E6 da revisão interna de 04/11: CSRF na borda.
+  it('CSRF: formulário HTML (urlencoded) em rota de escrita → 415, e o controller não roda', async () => {
+    const res = await request(http).post('/teste-seguranca/eco').type('form').send('perfil=admin&usuarioId=x').expect(415);
+    semVazamento(JSON.stringify(res.body));
+  });
+
+  it('CSRF: text/plain (o "simple request" de formulário) → 415', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'text/plain').send('{"perfil":"admin"}').expect(415);
+  });
+
+  it('CSRF: escrita com Origin fora da allowlist → 403, mesmo com JSON', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Origin', ORIGEM_MA).send({ a: 1 }).expect(403);
+  });
+
+  it('CSRF: Sec-Fetch-Site cross-site sem origem permitida → 403', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Sec-Fetch-Site', 'cross-site').send({ a: 1 }).expect(403);
+  });
+
+  it('CSRF: origem da allowlist com JSON passa; sem Origin (servidor a servidor) também', async () => {
+    await request(http).post('/teste-seguranca/eco').set('Origin', ORIGEM_OK).send({ a: 1 }).expect(201);
+    await request(http).post('/teste-seguranca/eco').send({ a: 1 }).expect(201);
+  });
+
+  it('CSRF: GET de outra origem não é barrado na borda (o CORS só não libera a leitura)', async () => {
+    await request(http).get('/health').set('Origin', ORIGEM_MA).expect(200);
+  });
+
+  it('CSRF: só o envio do CSV do importador aceita text/csv; em outra rota, 415', async () => {
+    // A app de teste não tem a rota do importador: passar da trava aqui é chegar ao 404 do roteador (R3 do #132).
+    await request(http).post('/importacoes?tipo=pacientes').set('Content-Type', 'text/csv').send('nome\nX').expect(404);
+    for (const torto of ['/importacoes/', '/IMPORTACOES', '/%69mportacoes']) {
+      await request(http).post(torto).set('Content-Type', 'text/csv').send('nome\nX').expect(415);
+    }
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'text/csv').send('nome\nX').expect(415);
+  });
+
+  it('CSRF (R4 do parecer do #132): PUT, PATCH e DELETE com origem ruim → 403; PUT/PATCH com formulário → 415', async () => {
+    for (const m of ['put', 'patch', 'delete'] as const) await request(http)[m]('/teste-seguranca/eco').set('Origin', ORIGEM_MA).send({ a: 1 }).expect(403);
+    for (const m of ['put', 'patch'] as const) await request(http)[m]('/teste-seguranca/eco').type('form').send('a=1').expect(415);
+  });
+
+  it('CSRF (R4): Origin null e variações da origem permitida → 403; +json → 415; JSON em maiúsculas com charset passa', async () => {
+    for (const o of ['null', ORIGEM_OK.toUpperCase(), ORIGEM_OK + '/']) await request(http).post('/teste-seguranca/eco').set('Origin', o).send({ a: 1 }).expect(403);
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'application/vnd.x+json').send('{"a":1}').expect(415);
+    await request(http).post('/teste-seguranca/eco').set('Content-Type', 'Application/JSON; charset=utf-8').send('{"a":1}').expect(201);
+  });
+
+  it('corpo bruto continua disponível com bodyParser: false (HMAC do webhook)', async () => {
+    const res = await request(http).post('/teste-seguranca/cru').send({ a: 1 }).expect(201);
+    expect(res.body).toEqual({ bruto: true });
+  });
+
+  it('CSRF: escrita sem corpo (ex.: POST de ação) não exige Content-Type', async () => {
+    const res = await request(http).post('/teste-seguranca/eco');
+    expect(res.status).not.toBe(415);
+  });
+
   it('corpo dentro do limite é aceito', async () => {
     const res = await request(http).post('/teste-seguranca/eco').send({ nome: 'Paciente Ficticio' }).expect(201);
     expect(res.body).toEqual({ recebido: true, tipo: 'object' });
@@ -175,7 +253,14 @@ describe('rate limit global', () => {
   it('rajada acima do limite → 429 com Retry-After', async () => {
     const http = app.getHttpServer() as Server;
     const status: number[] = [];
+    // R8 do parecer do #129: o primeiro estouro da janela vira UM evento RATE_LIMIT_EXCEDIDO, com a origem em HMAC.
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     for (let i = 0; i < 8; i += 1) status.push((await request(http).get('/qualquer-rota')).status);
+    const eventos = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"RATE_LIMIT_EXCEDIDO"'));
+    warn.mockRestore();
+    expect(eventos).toHaveLength(1);
+    expect(JSON.parse(eventos[0] ?? '{}')).toMatchObject({ tipo: 'seguranca', evento: 'RATE_LIMIT_EXCEDIDO', contagem: 6 });
+    expect(eventos[0]).toMatch(/"origem":"[0-9a-f]{16}"/);
     expect(status.slice(0, 5)).toEqual([404, 404, 404, 404, 404]);
     expect(status.slice(5)).toEqual([429, 429, 429]);
     const bloqueada = await request(http).get('/qualquer-rota').expect(429);

@@ -20,8 +20,9 @@ import {
 } from '@plataforma/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  adolescentConfidentialityRequests,
   appointments,
   auditLog,
   clinicalNotices,
@@ -716,7 +717,7 @@ describe('V2 do #68: SQL arbitrário na sessão do portal não lê a trilha nem 
 
 describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao responsável da 0028', () => {
   it('convite: adulto, sem responsável, criança/adolescente como titular e emancipado são recusados (API e banco)', async () => {
-    const respAdulto = await responsavelDe(pacA1, 'Hugo Ficticio Parente', { cienciaDoPaciente: true });
+    const respAdulto = await responsavelDe(pacA1, 'Hugo Ficticio Parente', { cienciaDoPaciente: true, confirmaPacienteMaior: true });
     expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacA1, agindoComo: 'responsavel_legal', responsavelId: respAdulto })).body)
       .toMatchObject({ statusCode: 409, codigo: 'responsavel_so_para_menor' });
     await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: pacMenor, agindoComo: 'responsavel_legal' }).expect(400);
@@ -740,6 +741,52 @@ describe('V1 do #68: responsável legal só para menor (ou curatela), ligado ao 
     await expect(withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
       ...base, patientId: eman, tokenHash: 'f'.repeat(64), guardianLinkId: respEman, guardianId: g?.guardianId as string, representUntil: nascidoHa(-1),
     }), adminA.userId)).rejects.toThrow();
+  });
+
+  it('0056 (R4 do parecer de 29/10): a sessão do portal, do responsável ou do titular, não lê nem grava pedido de sigilo', async () => {
+    const prof = await api.membro(clinicaA, api.sessao(clinicaA, 'profissional'), 'profissional');
+    const teen = await criarPaciente(adminA, 'Gabi Ficticia Sigilo Portal', { nascimento: nascidoHa(14) });
+    const resp = await responsavelDe(teen, 'Heitor Ficticio Pai Sigilo Portal');
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, resp)), adminA.userId);
+    const contaResp = await contaDe(adminA, teen, { agindoComo: 'responsavel_legal', responsavelId: resp });
+    const contaTitular = await contaDe(adminA, pacA1);
+    await withTenant(api.db.db, clinicaA, async (tx) => {
+      await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: teen, guardianLinkId: resp, guardianId: g?.guardianId as string, requestedBy: prof.userId });
+      await tx.insert(adolescentConfidentialityRequests).values({ tenantId: clinicaA, patientId: pacA1, requestedBy: prof.userId });
+    }, prof.userId);
+    for (const c of [contaResp, contaTitular]) {
+      const vistos = await api.db.db.transaction(async (tx) => {
+        await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+        return tx.execute<{ n: number }>(sql`select count(*)::int as n from adolescent_confidentiality_requests`);
+      });
+      expect(vistos[0]?.n).toBe(0);
+      await expect(
+        api.db.db.transaction(async (tx) => {
+          await tx.execute(sql`select app_set_portal_session(${c.contaId}::uuid, ${c.vinculoId}::uuid)`);
+          await tx.execute(sql`insert into adolescent_confidentiality_requests (tenant_id, patient_id, requested_by) values (${clinicaA}, ${teen}, ${prof.userId})`);
+        }),
+      ).rejects.toThrow();
+    }
+  });
+
+  it('0055 (A3 do #67): apoiador de decisão apoiada não representa no portal (API 409 e banco recusa)', async () => {
+    const adulto = await criarPaciente(adminA, 'Rita Ficticia Apoiada', { nascimento: nascidoHa(35) });
+    const apoiador = await responsavelDe(adulto, 'Davi Ficticio Apoiador', {
+      tipo: 'apoiador',
+      apoioReferencia: 'Termo ficticio de decisao apoiada QZA0068',
+      apoioEscopo: 'Apoio em decisoes de saude e contratos (ficticio)',
+    });
+    expect((await api.http().post('/clinica/portal/convites').set(cab(adminA)).send({ pacienteId: adulto, agindoComo: 'responsavel_legal', responsavelId: apoiador })).body)
+      .toMatchObject({ statusCode: 409, codigo: 'apoiador_nao_representa' });
+    // Direto no banco, até com uma data de representação coerente: o gatilho da 0055 recusa pelo tipo do vínculo.
+    const [g] = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(patientGuardians).where(eq(patientGuardians.id, apoiador)), adminA.userId);
+    const erro = await withTenant(api.db.db, clinicaA, (tx) => tx.insert(portalInvites).values({
+      tenantId: clinicaA, patientId: adulto, actingAs: 'responsavel_legal', expiresAt: sql`now() + interval '1 day'`, createdBy: adminA.userId,
+      tokenHash: 'a5'.repeat(32), guardianLinkId: apoiador, guardianId: g?.guardianId as string, confidentialFrom: hojeNaClinica(), representUntil: nascidoHa(-1),
+    }), adminA.userId).then(() => null, (e: unknown) => e);
+    const e = erro as { message?: string; cause?: { message?: string } } | null;
+    expect(e, 'o banco aceitou convite de apoiador').not.toBeNull();
+    expect(`${e?.message ?? ''} ${e?.cause?.message ?? ''}`).toMatch(/apoiador/);
   });
 
   it('o código vai ao telefone DO RESPONSÁVEL; vínculo, consentimento, pedido e trilha registram qual responsável agiu', async () => {
@@ -1388,6 +1435,46 @@ describe('auditoria e limite por conta', () => {
     }
     expect(linhas.map((l) => l.scope)).toEqual(expect.arrayContaining(['portal_links', 'appointments', 'patients']));
     expect(JSON.stringify(linhas)).not.toMatch(/Bruno|11900001111/);
+  });
+
+  it('R1 do parecer do #119: a escolha automática do vínculo e a saudação da sessão deixam registro', async () => {
+    // Conta com um só vínculo e sessão sem vínculo escolhido: o servidor escolhe sozinho.
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const daConta = () =>
+      withTenant(api.db.db, clinicaA, (tx) => tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId))).orderBy(sql`seq`));
+    const antes = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    const novas = (await daConta()).slice(antes);
+    expect(novas.map((l) => [l.action, l.scope, (l.metadata as { op?: string }).op])).toEqual([
+      ['login', 'portal_session', 'select_link'],
+      ['read', 'portal_session', 'session_greeting'],
+    ]);
+    expect(novas[0]?.metadata).toMatchObject({ auto: true, patient_id: pacA1, via: 'portal' });
+    expect(novas[1]?.metadata).toMatchObject({ patient_id: pacA1, via: 'portal' });
+    // A sessão guardou o vínculo: a próxima leitura não repete a escolha.
+    const meio = (await daConta()).length;
+    await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+    expect((await daConta()).slice(meio).map((l) => (l.metadata as { op?: string }).op)).toEqual(['session_greeting']);
+  });
+
+  it('R7 do parecer do #119: falha ao guardar o vínculo na sessão não vira 500 depois da ação gravada', async () => {
+    const vinculada = await contaDe(adminA, pacA1);
+    const p = api.sessaoPortal(vinculada.contaId);
+    const espiao = vi.spyOn(api.portal, 'escolherVinculo').mockRejectedValueOnce(new Error('sessao_indisponivel'));
+    try {
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(1);
+      // Não guardou: a próxima requisição escolhe de novo (e grava a escolha de novo).
+      await api.http().get('/portal/sessao').set(cab(p)).expect(200);
+      expect(espiao).toHaveBeenCalledTimes(2);
+    } finally {
+      espiao.mockRestore();
+    }
+    const escolhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinicaA), eq(auditLog.actorId, vinculada.contaId), eq(auditLog.action, 'login'))),
+    );
+    expect(escolhas.filter((l) => (l.metadata as { auto?: boolean }).auto === true)).toHaveLength(2);
   });
 
   it('acima do limite por conta: 429 e um anomaly_alert na trilha da clínica do vínculo', async () => {

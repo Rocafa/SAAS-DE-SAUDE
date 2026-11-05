@@ -4,11 +4,13 @@ import { exigirObjeto, exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { temPermissao } from '../auth/perfis';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 import {
   ResponsaveisService,
   type EventoDoHistoricoDto,
   type ListaDeResponsaveis,
+  type PedidoDeSigiloDto,
   type ResponsavelDto,
 } from './responsaveis.service';
 import {
@@ -19,6 +21,7 @@ import {
   validarFiltroResponsaveis,
   validarNovoVinculo,
   validarPagador,
+  validarPedidoDeSigilo,
 } from './responsaveis.validation';
 
 /**
@@ -117,12 +120,43 @@ export class ResponsaveisController {
 
   /** A4 do #67: eliminação dos responsáveis com o prontuário, vencida a guarda de 20 anos (dono da clínica). */
   @Post('eliminacao')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('cadastros:gerir')
   eliminacao(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
     const pacienteId = exigirUuid(id);
     exigirObjeto(corpo ?? {}, []);
     return this.service.eliminarComOProntuario(paraRequestContext(auth), pacienteId);
+  }
+
+  /**
+   * Pedido de sigilo do adolescente (0056, A1 c do #67): só o profissional (com vínculo de cuidado, conferido no
+   * serviço). Corpo `{}` = todos os responsáveis; `{ vinculoId }` = um responsável.
+   */
+  @Post('sigilo')
+  @Permissao('responsaveis:liberar_informacao_clinica')
+  registrarSigilo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<PedidoDeSigiloDto> {
+    return this.service.registrarPedidoDeSigilo(paraRequestContext(auth), exigirUuid(id), validarPedidoDeSigilo(corpo));
+  }
+
+  @Get('sigilo')
+  @Permissao('responsaveis:liberar_informacao_clinica')
+  listarSigilo(@Sessao() auth: AuthContext, @Param('id') id: string): Promise<readonly PedidoDeSigiloDto[]> {
+    return this.service.listarPedidosDeSigilo(paraRequestContext(auth), exigirUuid(id));
+  }
+
+  @Post('sigilo/:pedidoId/revogar')
+  @HttpCode(200)
+  @Permissao('responsaveis:liberar_informacao_clinica')
+  @ExigeMfaRecente() // E8 (parecer do #131): rota de poder
+  revogarSigilo(
+    @Sessao() auth: AuthContext,
+    @Param('id') id: string,
+    @Param('pedidoId') pedidoId: string,
+    @Body() corpo: unknown,
+  ): Promise<PedidoDeSigiloDto> {
+    exigirObjeto(corpo ?? {}, []);
+    return this.service.revogarPedidoDeSigilo(paraRequestContext(auth), exigirUuid(id), exigirUuid(pedidoId, 'pedidoId'));
   }
 
   @Get(':vinculoId/historico')
@@ -140,6 +174,7 @@ export class DescarteDeResponsaveisController {
   constructor(@Inject(ResponsaveisService) private readonly service: ResponsaveisService) {}
 
   @Post()
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('cadastros:gerir')
   executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<{ readonly descartados: number }> {

@@ -26,6 +26,8 @@ com tudo verde, por merge commit. Nenhum push em branch do @Lopesloro.
 | #83 | trava API × Terraform passa a falhar (em vez de pular) se o `app.tf` sumir | item Livre da fila |
 | #84 | Dependabot não sobe versão maior da imagem `node` | o #80 queria build em Node 26 com runtime distroless nodejs22 (fechado) |
 | #81, #82 | setup-node e upload-artifact nos workflows novos do #59 | Dependabot |
+| #49 | ioredis 6 | Redis real no CI (88/88) |
+| #85 | client-kms 3.1156.0, bullmq 6.4.2 (versões exatas mantidas) | Dependabot, 28/10 |
 
 **Fechados sem merge:** #74 (substituído pelo #77), #72 (o Dependabot fechou e abriu o #78), #70/#71 (pelo #79), #80 (§1),
 #66–#69 (já contidos no #73).
@@ -51,10 +53,53 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 
 - **Pilha do front do @Lopesloro (#44 → #45 → #46 → #47) e #75 em cima dela:** cada branch precisa receber a main. O #44
   pede decisão dele no `fake.ts`. Passo a passo comentado no #44.
+  **28/10:** proposta montada no **#86** (rascunho, branch minha). As resoluções do ensaio foram reaproveitadas depois de conferir que as entradas de cada conflito eram idênticas. Resultado: web 349/349, api 995/995 e CI todo verde, incluindo Playwright e RLS. Falta o aval dele no `fake.ts`.
 - **#49 (ioredis 6): entrou.** No CI de Segurança, com Redis real (`JOBS_REDIS_TESTE=1`), `agendador-redis` e `rate-limit-redis` rodaram e passaram (88/88, nenhum pulado).
 - **#54:** fora da fila. O motivo (billing) sumiu e ele reduziria a cobertura.
 - **#55 e #36 (@Lopesloro):** antigos, sem relação com a fila. Ficam com ele.
-- **Recomendação aos sócios:** ligar a proteção da `main` (PR obrigatório e checks verdes). Agora é grátis, e com o
-  repositório público isso conta mais. Não liguei porque muda configuração do repositório.
+- **Proteção da `main`: ligada em 28/10/2026** com o OK do sócio. Configuração: PR obrigatório, branch atualizada, 10 checks
+  obrigatórios, sem force push nem exclusão. Aprovação obrigatória e `CODEOWNERS` ficaram para depois. Detalhes em
+  [ambientes-e-devops](../04-arquitetura/ambientes-e-devops.md).
 - **Staging e piloto:** continuam dependendo da D4 (login real) e de rodar as provas K-c3/K-c5 na AWS
   ([runbook](../04-arquitetura/runbook-primeiro-dia-staging.md)).
+
+## 4. 28/10: proteção da main e índice cego
+
+- **#87, proteção da `main`:** ligada com o OK do sócio. PR obrigatório, branch atualizada, 10 checks obrigatórios, sem force push nem exclusão. O próprio #87 serviu de teste.
+- **#54 fechado.** Pular o CI em PRs só de documentação travaria esses PRs, porque os checks obrigatórios nunca chegariam.
+- **#88, job `cpf-indice-reindexacao` (diário, 05:30):** fecha a observação "antes do GA" do parecer do importador. Os pacientes anteriores à 0046 só ganhavam índice cego por um passo de runbook que não tinha script. O job faz até 20 lotes de 500 por clínica e por dia. Sem pendente, não decifra nada nem cria chave. Quando zera, destrói as versões aposentadas.
+  - **Guardião: APROVADO COM RESSALVAS, depois APROVADO.** A C1 apontava que uma clínica eliminada (G3) faria o job falhar todo dia, e esse alarme eterno esconderia as falhas reais. Agora o job devolve `chaveDestruida = 1` sem falhar. A C2 pediu que o teste prove que nenhuma chave é criada.
+  - CI todo verde, com RLS.
+- **Fila:** o item "#66 R3/R9" estava velho, porque os dois já tinham entrado pelo #73. Foi trocado pelas pendências reais de antes do GA:
+  - índice cego dos responsáveis;
+  - conferir `pending = 0` em produção.
+
+## 5. 29/10: índice cego nos responsáveis (#89)
+
+- **O que entrou:**
+  - migração 0054, que leva o índice cego do CPF aos responsáveis com a mesma chave da clínica e o domínio `guardians.cpf:v1:`;
+  - a deduplicação do importador passa a usar o índice;
+  - o job `cpf-indice-reindexacao` cobre as duas tabelas;
+  - uma versão de chave só é destruída sem paciente nem responsável indexado nela.
+- **Execução:** feito por um agente de engenharia num worktree próprio e conferido pelo Maestro. O Maestro corrigiu:
+  - os testes do agente: um comparava `updated_at` e outro mudava um telefone que a pessoa não tinha;
+  - um defeito: reenviar o mesmo CPF zerava o índice a cada edição;
+  - o teste do adaptador web, que agendava "hoje às 23:00" e falhava quando o CI rodava depois das 23h.
+- **Guardião: APROVADO COM RESSALVAS, depois APROVADO.**
+  - **C1:** decidir "mesmo CPF" pelo índice, que pode ser trocado sem usuário, deixaria um índice forjado descartar em silêncio uma alteração legítima. Agora a decisão é tomada decifrando o CPF atual, como nos pacientes.
+  - **Defeito revelado pelo teste da C1:** com o índice forjado igual ao novo, o gatilho de índice ausente zerava o índice gravado. Corrigido.
+- **Situação:** CI todo verde com RLS. Fica no checklist do GA conferir `pending = 0` também com `table: guardians`.
+
+## 6. 29/10: CodeQL na aba Security (#90)
+
+- **Antes:** o CodeQL rodava com `upload: never`, herança do repositório privado. Os achados de nível warning nunca eram vistos.
+- **Agora:** os resultados vão para a aba Security e para as anotações do PR. O artefato SARIF e a trava de achado grave continuam.
+- **1ª análise na `main`:** 103 regras do conjunto `security-extended`, **0 alertas**.
+- **Configuração do repositório, sem mudança:** varredura de segredos e proteção de push já estavam ligadas. Os alertas do Dependabot estavam desligados; **ligados em 29/10 com o OK do sócio** (§7).
+- **Verificado:** a O-R17d do #63 (lista branca no registro do fundador) já tinha sido fechada na 0047. Não sobra item de código "antes do GA" nos pareceres. O que falta depende de infraestrutura e dos sócios.
+
+## 7. 29/10: alertas do Dependabot ligados (#108)
+
+- **Configuração:** alertas de vulnerabilidade do Dependabot ligados com o OK do sócio. Agora o GitHub avisa quando uma dependência já instalada ganha falha conhecida, e não só quando sai versão nova.
+- **1ª varredura:** 1 alerta, médio. O `qs` 6.16.0 (GHSA-6pq8-jhm2-2vcw, DoS no `stringify` com `arrayFormat: 'comma'`) chegava pelo `superagent` do `supertest`, que só roda em teste.
+- **Correção (#108):** override `qs@>=6.7.0 <6.16.1 → ^6.16.1`, no mesmo padrão de multer e body-parser. O lockfile ficou só com o `qs` 6.17.0. `pnpm audit --prod` limpo e api 996/996.
