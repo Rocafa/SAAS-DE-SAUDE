@@ -87,8 +87,8 @@ beforeAll(async () => {
   const notaId = id(nota);
 
   // Custódia: autor e substituto psicólogos; designada pelo admin e aceita pelo substituto.
-  const psiAutor = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'psicologo');
-  const psiSubst = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'psicologo');
+  const psiAutor = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
+  const psiSubst = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
   const autorId = id(await post('/profissionais', { nome: 'Psi Autor Ficticio', especialidade: 'Psicologia', usuarioId: psiAutor.userId }));
   const substId = id(await post('/profissionais', { nome: 'Psi Subst Ficticio', especialidade: 'Psicologia', usuarioId: psiSubst.userId }));
   const cust = await post('/prontuario/custodias', { autorProfissionalId: autorId, substitutoProfissionalId: substId });
@@ -175,6 +175,7 @@ beforeAll(async () => {
   const p = (url: string): Plano => ({ s: portal, url, ator: contaPortal });
   const planosDaClinica: Record<string, Plano> = {
     'GET /agendamentos': c('/agendamentos?de=2030-05-05&ate=2030-05-11'),
+    'GET /clinica/auditoria': c('/clinica/auditoria?limite=5'),
     'GET /atendimentos/:id': c(`/atendimentos/${atId}`),
     'GET /atendimentos/:id/versoes': c(`/atendimentos/${atId}/versoes`),
     'GET /clinica/portal/pacientes/:id/consentimentos': c(`/clinica/portal/pacientes/${pacienteId}/consentimentos`),

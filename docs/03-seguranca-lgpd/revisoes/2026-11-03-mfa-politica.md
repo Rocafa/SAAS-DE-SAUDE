@@ -165,3 +165,59 @@ Ressalvas:
 - **R2:** fica com a rota da G2, como o parecer aceitou: o `export_failed` entra no mesmo PR da rota, com mensagem genérica e sem ids.
 
 **B1 re-conferido (03/11/2026, commit `7a83b4f`): APROVADO, veto do #126 levantado.** O `REPEATABLE READ` foi revertido por inteiro (`withTenant`, `runConsistente`, serviço e função avulsa), e a G3 volta a gravar na trilha em READ COMMITTED. A exportação lê versões e adendos antes dos atendimentos. Atendimento não pode ser apagado (trigger `encounters_no_delete` e `REVOKE DELETE` na 0012), então não sobra órfão e a falha fechada continua. O teste unitário reprova a inversão e a troca de isolamento: 5/5 aqui, `tsc` limpo. Os testes RLS dependem do CI. Pendem com a rota da G2: R2 (`export_failed`), R3 (manifesto só dentro do pacote cifrado) e o MFA de 5 min com o RT, da R12.
+
+#### Parecer do PR #127 (R2 do #126)
+
+**03/11/2026, branch `eng/exportacao-falha-auditada` (commit `17d6428`): APROVADO COM RESSALVAS.**
+
+- **Motivo sem dado (de acordo):** `motivoDaFalha` só devolve três valores fixos (`janela_de_saida_encerrada`, `cifra_ausente`, `erro_interno`). O texto do erro, ids e contagens nunca vão para o `metadata`. O teste unitário prova isso com uma mensagem que tem CPF fictício. O `metadata` ainda passa pelo `assertAuditMetadata` (contrato da 0005). O log da aplicação recebe só uma constante, sem a mensagem do erro.
+- **2ª transação (de acordo):** `registrarFalha` usa `tenantDb.run`, o mesmo caminho em READ COMMITTED da G3. A trigger da 0005 (`audit_log exige transação READ COMMITTED`) aceita a transação, e a policy `audit_log_insert` (0002) confere o `tenant_id` pelo contexto travado. Ela não depende do estado da assinatura, então a linha grava mesmo com a clínica cancelada.
+- **Clínica cancelada fora da janela (aceitável):** a linha não tem dado pessoal nem clínico. Ela registra uma tentativa de acesso que foi negada, o que é rastreabilidade de segurança (arts. 37 e 46 da LGPD). A janela de saída proíbe ler e exportar, mas não proíbe registrar a recusa. A minimização se cumpre porque a linha tem só o escopo, o ator e o motivo.
+- **Erro original preservado (de acordo):** o `throw e` vem depois do `await registrarFalha`, e `registrarFalha` engole a própria falha. Os testes cobrem os dois casos (`rejects.toBe(erro)`).
+- **Teste RLS:** nada bloqueia. `app_user` já faz `update(tenants)` em `exit-guarantee.rls.test.ts`. 200 dias fica acima do piso de 90, e o CI não define `EXIT_WINDOW_DAYS`. O select da trilha passa por `withTenant` da própria clínica. Não rodei aqui (não há Postgres local), então depende do CI. Unitários: 77/77 em `exports` e `audit`, e o `tsc` está limpo.
+
+Ressalvas:
+1. **Função avulsa (antes da rota da G2):** `exportTenantData(db, ctx)` em `tenant-export.ts:1322` exporta sem passar pelo `ExportsService` e, por isso, não grava a falha. Hoje só os testes a chamam. Restrinja a função aos testes (ou faça ela delegar ao serviço) e coloque um teste estático que impeça código de produção de importá-la.
+2. **Eliminação pós-janela (quando existir a rotina da G4):** depois de encerrada a janela, linhas `tenant.full_export_failed` continuam podendo ser gravadas. A rotina de eliminação/anonimização da clínica precisa cobrir também essas linhas, ou guardá-las pelo prazo de guarda de log que for definido para a trilha. Elas não podem ficar órfãs sem prazo.
+3. **Volume e alerta (com a rota da G2):** cada tentativa que falha gera 1 linha. Quando a rota existir, aplique rate limit por usuário e por clínica e mande o alerta aos admins que a nota do Maestro prometeu. O alerta leva só o motivo genérico, como a R3 exige para o manifesto.
+4. **Diagnóstico (não bloqueia):** `EXPORTACAO_FALHA_NAO_AUDITADA` sai sem correlação. Inclua o `tenantId` (UUID opaco da clínica, que não é dado do titular) ou o id da requisição, para o DPO conseguir cruzar o log com a falha de trilha. A mensagem do erro continua fora do log.
+
+R2 do #126: **atendida**. Continuam pendentes, junto com a rota da G2: R3 (manifesto só dentro do pacote cifrado) e o MFA de 5 min com o RT (R12).
+
+#### Nota do Maestro sobre o parecer do #127 (03/11/2026)
+
+- **R1 (feita):** a função avulsa `exportTenantData` de `tenant-export.ts` está documentada como só para testes e scripts. Um teste unitário reprova qualquer import dela em `src`, então a aplicação só exporta pelo `ExportsService`, que registra a falha.
+- **R4 (feita):** o log da falha da trilha leva só `tenant=<uuid>`, sem a mensagem do erro.
+- **R2 e R3 (fila):** a eliminação da G4 cobre as linhas gravadas depois da janela. O rate limit e o alerta aos admins entram com a rota da G2.
+
+#### Parecer do PR #128 (contrato do provedor, R6)
+
+**03/11/2026, branch `eng/contrato-provedor-sessao` (commit `d858922`): APROVADO COM RESSALVAS.**
+
+**Verificação:** `npx vitest run src/modules/auth` deu 23/23 verdes, e o `tsc --noEmit` está limpo. O PR não toca dado real, segredo, isolamento no banco nem trilha. Os testes usam UUIDs aleatórios.
+
+O que o contrato já cobre da R6:
+- **Sem fator, `mfaEm === null`** (a frase exata da R6), e com fator uma data válida que não está no futuro.
+- **Origem só do servidor:** clínica, usuário, perfis e `mfaEm` não mudam com cabeçalhos forjados (`x-tenant-id`, `x-perfis`, `x-mfa-em` etc.), e só cabeçalhos forjados, sem sessão, dão `null`. A porta `RequisicaoParaSessao` só expõe cabeçalhos, então o corpo nem chega ao provedor.
+- **Falha fechada:** credencial ausente, lixo, adulterada ou depois do logout dá `null`, e as sessões não se misturam.
+- **Trava de cobertura:** `BANCADAS` é tipado por `TIPOS_DE_PROVEDOR`, e há um teste que compara as chaves. Um tipo novo na fábrica sem bancada não compila.
+
+O que falta e só pode ser testado com o provedor real (fica para o PR de integração da D4, sem mudar o prazo da R6):
+- step-up atualizando `mfaEm` na sessão do servidor;
+- claim não verificado: token/JWT com `amr`/`mfa` assinado com outra chave ou sem assinatura tem de dar `null` ou `mfaEm: null`;
+- troca de clínica, de perfil e de senha zerando ou reavaliando o MFA;
+- expiração da sessão (tempo ocioso e absoluto) dando `null`.
+
+Ressalvas:
+1. **Deixar as lacunas visíveis no contrato agora (antes do merge, barato):** acrescente em `BancadaDoProvedor` os ganchos opcionais `trocarClinica`, `trocarPerfis`, `trocarSenha`, `stepUp` e `expirar`, e no `describe` os casos correspondentes, que rodam quando o gancho existe e viram `it.todo` quando não existe. A regra esperada: depois de trocar clínica, perfil ou senha, `mfaEm` é `null` (ou anterior ao momento da troca e, portanto, fora da janela recente); depois do `stepUp`, `mfaEm` é maior que o anterior; depois de `expirar`, o resultado é `null`. Assim a bancada real nasce sabendo o que precisa provar, e a sessão fictícia continua passando.
+2. **Obrigatoriedade dos ganchos para o provedor real (no PR da D4):** quando `TIPOS_DE_PROVEDOR` ganhar um tipo diferente de `dev`, um teste deve exigir que a bancada desse tipo implemente todos os ganchos da ressalva 1. Um `it.todo` não pode valer como aprovação da R6 para o provedor real.
+3. **Claim do cliente (no PR da D4):** a bancada real deve expor um `forjarCredencial` (token com claim de MFA, perfil ou clínica assinado com chave errada ou `alg: none`, ou cookie de outra sessão). O teste espera `null`. Os cabeçalhos `x-*` de hoje não exercitam esse vetor.
+4. **Fábrica (não bloqueia):** `createAuthProvider` ainda devolve `DevSessionProvider` para qualquer tipo da lista. Ao entrar o segundo tipo, troque por um mapa `Record<TipoDeProvedor, ...>` (como `BANCADAS`), para a fábrica não instanciar o provedor errado em silêncio. A guarda de `NODE_ENV` vale só para `dev`. O provedor real não pode herdar a lista `development`/`test`.
+
+R6: **adiantada em parte.** O contrato estático (null sem fator, origem só do servidor, falha fechada) está atendido. Step-up, claim não verificado, troca de clínica/perfil/senha e expiração continuam como condição do PR de integração da D4.
+
+#### Nota do Maestro sobre o parecer do #128 (03/11/2026)
+
+- **R1 (feita):** a bancada ganhou ganchos opcionais: `trocarClinica`, `trocarPerfis`, `trocarSenha`, `stepUp`, `expirar` e `forjarCredencial`. Cada caso roda quando o gancho existe. Quando falta, vira `it.todo`, e hoje aparecem 6 pendentes na sessão fictícia.
+- **R2 e R3 (feitas no contrato):** um teste reprova qualquer tipo diferente de `dev` que não implemente os 6 ganchos, inclusive o `forjarCredencial`. Um `it.todo` não aprova a R6.
+- **R4 (D4):** a fábrica vira um mapa por tipo quando entrar o segundo provedor, e a guarda de `NODE_ENV` passa a valer só para `dev`.

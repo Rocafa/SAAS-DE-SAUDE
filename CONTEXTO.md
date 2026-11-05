@@ -7,7 +7,7 @@
 > 🧭 **O que ainda falta (12/10/2026, depois da rodada 8):** [visão consolidada](docs/relatorios/2026-10-12-o-que-falta.md) · **Quem está fazendo o quê agora:** [fila.md](docs/00-governanca/fila.md).
 >
 > Resumo para o sócio (e para qualquer agente de IA) entender o projeto em 5 minutos.
-> Atualizado em 03/11/2026 (rodadas 30–31: autorização do suporte pela clínica, **nenhuma rota entra sem trilha de auditoria** (escrita, leitura e fora de controller, conferido no CI), falha de registro no portal corrigida, postgres.js v4 testado, voto de @Rocafa na D4). Último relatório: [rodada 31](docs/relatorios/2026-11-03-rodada-31.md). Detalhes e fontes estão nos links de cada seção.
+> Atualizado em 03/11/2026 (rodadas 30–31: autorização do suporte pela clínica, **nenhuma rota entra sem trilha de auditoria** (escrita, leitura e fora de controller, conferido no CI), falha de registro no portal corrigida, postgres.js v4 testado, voto de @Rocafa na D4, **política de MFA** para todos os perfis com código recente nas ações sensíveis e na psicologia, exportação total com a psicologia marcada no manifesto e falha auditada). Último relatório: [rodada 31](docs/relatorios/2026-11-03-rodada-31.md). Detalhes e fontes estão nos links de cada seção.
 
 ## 1. O que estamos construindo
 SaaS brasileiro de gestão para clínicas e consultórios de **todos os nichos da saúde**, concorrente do iClinic,

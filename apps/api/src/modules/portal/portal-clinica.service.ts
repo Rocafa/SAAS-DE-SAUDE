@@ -42,6 +42,7 @@ import {
   novoTokenDeConvite,
   type RespostaConsentimento,
 } from './portal-regras';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 export interface PedidoDoTitularDto {
   readonly id: string;
@@ -316,7 +317,10 @@ export class PortalClinicaService {
         convitesEncerrados += i;
         if (v + i > 0) pacientes += 1;
       }
-      if (pacientes > 0) this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=titular_menor_revogado pacientes=${pacientes}`);
+      if (pacientes > 0) {
+        this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=titular_menor_revogado pacientes=${pacientes}`);
+        registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_sigilo_transicao', motivo: 'titular_menor_revogado', contagem: pacientes });
+      }
       // Data que não se decifra não decide nada: fica visível como `alarme` (JOB_ALARME) e na contagem.
       return { verificados: candidatos.length, titularesRevogados, convitesEncerrados, pacientes, ilegiveis, alarme: ilegiveis > 0 };
     });

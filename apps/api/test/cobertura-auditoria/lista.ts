@@ -136,6 +136,7 @@ export const EXCECOES: Readonly<Record<string, Excecao>> = {
 /** Rotas de leitura (`GET`) cuja trilha é gravada pelo código da API (o titular e a clínica veem quem leu). */
 export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /agendamentos',
+  'GET /clinica/auditoria',
   'GET /atendimentos/:id',
   'GET /atendimentos/:id/versoes',
   'GET /clinica/portal/pacientes/:id/consentimentos',
@@ -232,6 +233,7 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
   'src/security/http-security.ts use(helmet)': 'cabeçalhos de segurança (CSP, HSTS, frame); não toca dado',
   'src/security/http-security.ts use(noStore)': 'Cache-Control: no-store em toda resposta; não toca dado',
   'src/security/http-security.ts use(rateLimiter)': 'limite de requisições por chave com hash (sem IP em claro); não toca dado de paciente',
+  'src/security/http-security.ts use(protecaoCsrf)': 'CSRF (E6 de 04/11): recusa escrita de origem fora da allowlist e corpo que não é JSON; não lê o corpo nem toca dado',
   'src/security/http-security.ts use(safeErrorHandler)': 'erro sem detalhe interno nem dado na resposta; não toca dado',
 };
 
@@ -243,21 +245,27 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
  */
 export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'DELETE /clinica/membros/:usuarioId/:perfil',
+  'GET /clinica/auditoria',
   'GET /custodias/:id/notas',
   'GET /notas-privadas/:id',
   'GET /pacientes/:id/notas-privadas',
   'PATCH /notas-privadas/:id',
   'POST /clinica/membros',
+  'POST /clinica/portal/convites',
   'POST /clinica/portal/solicitacoes/:id/situacao',
   'POST /custodias/:id/aceite',
   'POST /custodias/:id/notas/:notaId/decisao',
   'POST /financeiro/receita-saude/lotes',
   'POST /financeiro/recibos/:id/via-oficial',
+  'POST /financeiro/retencao-fiscal/execucao',
   'POST /importacoes/:id/aplicar',
   'POST /importacoes/:id/desfazer',
   'POST /notas-privadas/:id/descartar',
   'POST /pacientes/:id/notas-privadas',
   'POST /pacientes/:id/responsaveis/eliminacao',
+  'POST /pacientes/:id/responsaveis/sigilo/:pedidoId/revogar',
+  'POST /profissionais',
+  'POST /profissionais/:id/area-sensivel',
   'POST /prontuario/custodias',
   'POST /prontuario/notas-privadas/ciclo',
   'POST /prontuario/pacientes/:id/retencao-legal/retirada',
@@ -265,5 +273,9 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'POST /prontuario/profissionais/:id/desligamento',
   'POST /responsaveis/descarte',
   'POST /suporte/autorizacoes',
+  'PUT /clinica/vinculo-de-cuidado',
+  'PUT /financeiro/configuracao',
+  'PUT /financeiro/profissionais/:id/perfil-fiscal',
   'PUT /prontuario/configuracao',
+  'PUT /whatsapp/configuracao',
 ];

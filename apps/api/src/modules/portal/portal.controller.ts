@@ -214,6 +214,7 @@ export class PortalClinicaController {
 
   @Post('convites')
   @Permissao('portal:convidar')
+  @ExigeMfaRecente() // E8 (parecer do #131): rota de poder
   convidar(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
     const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'agindoComo', 'validadeHoras', 'responsavelId']));
     const pacienteId = v.uuid('pacienteId', true);
