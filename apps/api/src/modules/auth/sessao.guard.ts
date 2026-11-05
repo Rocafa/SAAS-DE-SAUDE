@@ -22,9 +22,9 @@ import { createHash } from 'node:crypto';
 import { MemoryRateLimitStore, rateLimitStoreAtivo, type RateLimitStore } from '../../security/rate-limit-store';
 import { MFA_RECENTE_KEY, recusaDeMfa } from './mfa';
 import { temPermissao, type Perfil, type Permissao as NomePermissao } from './perfis';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import { AMBIENTES_SESSAO_FICTICIA } from './auth-provider.factory';
-import { clinicMembers } from '../../db/schema';
+import { auditLog, clinicMembers } from '../../db/schema';
 import { origemDaRequisicao, registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 import { avisarAdminsDeAnomalia } from '../records/avisos';
 
@@ -137,7 +137,9 @@ export class SessaoGuard implements CanActivate {
     const recusa = recusaDeMfa(auth, janela);
     if (recusa) {
       registrarNoMaximoUmaVez(`mfa:${auth.tenantId}:${auth.userId}:${nomeDoHandler(context)}:${recusa}`, 60_000, 'MFA_RECUSADO', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), motivo: recusa });
-      if (janela !== null) await this.registrarRecusa(auth, recusa, `${context.getClass().name}.${context.getHandler().name}`, req.params?.id);
+      const handler = `${context.getClass().name}.${context.getHandler().name}`;
+      if (janela !== null) await this.registrarRecusa(auth, recusa, handler, req.params?.id);
+      else await this.registrarRecusaComum(auth, recusa, handler);
       throw new ProibidoError(recusa);
     }
     req.auth = auth;
@@ -171,17 +173,19 @@ export class SessaoGuard implements CanActivate {
   }
 
   /**
-   * B2 + R9: conta a recusa; a primeira da janela (por usuário, rota e motivo) vai para a trilha; acima do teto por
-   * usuário, um alerta de anomalia (uma vez) e 429. Store indisponível: grava a linha (melhor registrar a mais).
+   * B2 + R9 + R5 do #123: conta a recusa numa rota SENSÍVEL. Na janela, 1 linha por usuário, rota, motivo e ALVO
+   * distinto (nota (a) da R9: cada registro diferente que a pessoa tentou abrir fica na trilha; a mesma tentativa
+   * repetida, não). Acima do teto por usuário: um alerta de anomalia (uma vez, com a quantidade de alvos distintos) e
+   * 429, sem gravar mais linhas. Store indisponível: grava a linha (melhor registrar a mais).
    */
   private async registrarRecusa(auth: AuthContext, motivo: string, handler: string, alvo: string | undefined): Promise<void> {
     const store: RateLimitStore = rateLimitStoreAtivo() ?? STORE_LOCAL;
     const contar = (chave: string) => store.hit(chave, JANELA_RECUSA_MFA_MS).catch(() => null);
-    const [daRota, doUsuario] = await Promise.all([
-      contar(chaveDeRecusa('rota', auth.tenantId, auth.userId, handler, motivo)),
+    const alvoValido = alvo && UUID_RE.test(alvo) ? alvo : undefined;
+    const [doAlvo, doUsuario] = await Promise.all([
+      contar(chaveDeRecusa('alvo', auth.tenantId, auth.userId, handler, motivo, alvoValido ?? '-')),
       contar(chaveDeRecusa('usuario', auth.tenantId, auth.userId)),
     ]);
-    if (!daRota || daRota.count === 1) await this.auditarRecusa(auth, motivo, handler, alvo);
     if (doUsuario && doUsuario.count > TETO_RECUSAS_MFA) {
       if (doUsuario.count === TETO_RECUSAS_MFA + 1) {
         registrarEventoDeSeguranca('MFA_LIMITE_DE_RECUSAS', { tenantId: auth.tenantId, userId: auth.userId, contagem: doUsuario.count });
@@ -189,9 +193,25 @@ export class SessaoGuard implements CanActivate {
       }
       throw new LimiteDeRecusasMfaError();
     }
+    if (!doAlvo || doAlvo.count === 1) await this.auditarRecusa(auth, motivo, handler, alvoValido);
   }
 
-  /** Alerta de volume anômalo de recusas por MFA (R9), no formato dos outros alertas da vigilância. */
+  /**
+   * R5 do #123: recusa `mfa_obrigatorio` numa rota COMUM (sessão sem MFA nenhum). Agregada por sessão: no máximo 1
+   * linha por usuário e motivo a cada 60 s, com o handler da primeira recusa da janela, para a trilha mostrar que a
+   * sessão sem fator tentou usar a API sem inundar a trilha. Não conta para o 429 (que é das rotas sensíveis).
+   */
+  private async registrarRecusaComum(auth: AuthContext, motivo: string, handler: string): Promise<void> {
+    const store: RateLimitStore = rateLimitStoreAtivo() ?? STORE_LOCAL;
+    const r = await store.hit(chaveDeRecusa('comum', auth.tenantId, auth.userId, motivo), JANELA_RECUSA_MFA_MS).catch(() => null);
+    if (!r || r.count === 1) await this.auditarRecusa(auth, motivo, handler, undefined);
+  }
+
+  /**
+   * Alerta de volume anômalo de recusas por MFA (R9), no formato dos outros alertas da vigilância. Leva a quantidade
+   * de alvos distintos que a pessoa tentou na janela (nota (a) da R9), contada nas linhas que a própria janela gravou.
+   * A contagem fica na trilha para investigação e fora da consulta da clínica (`CHAVES_VISIVEIS` não mostra contagens).
+   */
   private async alertarVolume(auth: AuthContext, contagem: number): Promise<void> {
     if (!this.db) return;
     const ctx = paraRequestContext(auth);
@@ -199,10 +219,28 @@ export class SessaoGuard implements CanActivate {
       await this.db.run(
         ctx.tenantId,
         async (tx) => {
+          const [distintos] = await tx
+            .select({ n: sql<number>`count(distinct ${auditLog.metadata}->>'target_id')::int` })
+            .from(auditLog)
+            .where(
+              and(
+                eq(auditLog.tenantId, ctx.tenantId),
+                eq(auditLog.actorId, ctx.userId),
+                eq(auditLog.scope, SCOPE_MFA_RECUSADO),
+                eq(auditLog.action, AuditAction.Read),
+                gt(auditLog.createdAt, sql`now() - make_interval(secs => ${JANELA_RECUSA_MFA_MS / 1000})`),
+              ),
+            );
           await recordAudit(tx, ctx, {
             action: AuditAction.AnomalyAlert,
             scope: SCOPE_MFA_RECUSADO,
-            metadata: { rule: 'mfa_recusas_por_usuario', window_s: JANELA_RECUSA_MFA_MS / 1000, threshold: TETO_RECUSAS_MFA, count: contagem },
+            metadata: {
+              rule: 'mfa_recusas_por_usuario',
+              window_s: JANELA_RECUSA_MFA_MS / 1000,
+              threshold: TETO_RECUSAS_MFA,
+              count: contagem,
+              distinct_targets: distintos?.n ?? 0,
+            },
           });
           await avisarAdminsDeAnomalia(tx, ctx, 'mfa_recusas_por_usuario');
         },
@@ -214,8 +252,7 @@ export class SessaoGuard implements CanActivate {
   }
 
   /**
-   * B2: a recusa por MFA numa rota sensível vai para a trilha da clínica da sessão, só com ids (o handler e o id do
-   * alvo, se for UUID). Se a gravação falhar, a recusa continua (falha fechada) e o erro vai para o log sem dado.
+   * B2: a recusa por MFA vai para a trilha da clínica da sessão, só com ids (o handler e o id do alvo, se for UUID). Se a gravação falhar, a recusa continua (falha fechada) e o erro vai para o log sem dado.
    */
   private async auditarRecusa(auth: AuthContext, motivo: string, handler: string, alvo: string | undefined): Promise<void> {
     if (!this.db) return;
@@ -227,7 +264,7 @@ export class SessaoGuard implements CanActivate {
           recordAudit(tx, ctx, {
             action: AuditAction.Read,
             scope: SCOPE_MFA_RECUSADO,
-            metadata: { op: handler.slice(0, 64), reason: motivo, ...(alvo && UUID_RE.test(alvo) ? { target_id: alvo } : {}) },
+            metadata: { op: handler.slice(0, 64), reason: motivo, ...(alvo ? { target_id: alvo } : {}) },
           }),
         ctx.userId,
       );
