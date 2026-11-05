@@ -596,6 +596,39 @@ describe('PR 3a: sessão da pessoa sem clínica (desenho §14.1; R3 a R6 do pare
   });
 });
 
+describe('PR 3a: cookie renovado e polling sem renovar (pendência do #149; R19; R5 do desenho do PR 3)', () => {
+  async function sessaoParaRenovar() {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    const id = await sessaoId(c);
+    // 13 min de inatividade restantes: passou do updateAge (60 s), então a próxima leitura estende.
+    const antes = new Date(Date.now() + 13 * 60_000);
+    await dbAuth.db.update(sessao).set({ expiresAt: antes }).where(eq(sessao.id, id));
+    return { c, id, antes };
+  }
+
+  it('rota de polling: 20 leituras não estendem a sessão e nenhum Set-Cookie sai', async () => {
+    const { c, id, antes } = await sessaoParaRenovar();
+    const cookies: string[] = [];
+    for (let i = 0; i < 20; i++) await provedor.resolver({ headers: c, semRenovar: true, aoRenovarCookie: (x) => cookies.push(...x) });
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBe(antes.getTime());
+    expect(cookies).toEqual([]);
+  });
+
+  it('rota comum: a sessão estendida devolve SÓ o Set-Cookie da sessão, com o prazo novo', async () => {
+    const { c, id, antes } = await sessaoParaRenovar();
+    const cookies: string[] = [];
+    expect(await provedor.resolver({ headers: c, aoRenovarCookie: (x) => cookies.push(...x) })).not.toBeNull();
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBeGreaterThan(antes.getTime());
+    expect(cookies.length).toBeGreaterThan(0);
+    expect(cookies.every((x) => x.startsWith(`${nomeDoCookie(false)}=`))).toBe(true);
+  });
+});
+
 async function sequencial<T>(tarefas: (() => Promise<T>)[]): Promise<T[]> {
   const saida: T[] = [];
   for (const t of tarefas) saida.push(await t());

@@ -20,6 +20,10 @@ export interface AuthContext {
 /** Só o que o provedor pode ler da requisição: cabeçalhos (cookie/Authorization). */
 export interface RequisicaoParaSessao {
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+  /** Rota de polling (`@SemRenovarSessao`, R19): a leitura não estende a sessão nem devolve cookie (R5 do desenho do PR 3). */
+  readonly semRenovar?: boolean;
+  /** Recebe o `Set-Cookie` da SESSÃO quando o provedor a estende (só o cookie de sessão, nada mais da biblioteca). */
+  readonly aoRenovarCookie?: (cookies: string[]) => void;
 }
 
 /**

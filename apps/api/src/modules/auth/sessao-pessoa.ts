@@ -46,7 +46,8 @@ export class SessaoDePessoaGuard implements CanActivate {
     // Só o provedor real tem sessão sem clínica; o dev provider não expõe estas rotas.
     if (!ehProvedorDePessoa(this.provider)) throw new NotFoundException({ statusCode: 404, message: 'Not Found' });
     const req = context.switchToHttp().getRequest<RequisicaoComPessoa>();
-    const pessoa = await this.provider.sessaoDePessoa(req);
+    const res = context.switchToHttp().getResponse<{ append?: (nome: string, valor: string[]) => void }>();
+    const pessoa = await this.provider.sessaoDePessoa({ headers: req.headers, aoRenovarCookie: (cookies) => res.append?.('Set-Cookie', cookies) });
     if (!pessoa) {
       registrarEventoDeSeguranca('SESSAO_INVALIDA', { origem: origemDaRequisicao(req.ip) });
       throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });

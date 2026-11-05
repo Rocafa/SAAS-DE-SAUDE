@@ -26,6 +26,9 @@ export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
   return createHash('sha256').update([...perfis].sort().join(',')).digest('hex').slice(0, 16);
 }
 
+/** Só o cookie de sessão (`sessao` em dev/test, `__Host-sessao` fora) volta ao navegador pelo provedor. */
+const COOKIE_DE_SESSAO = /^(__Host-)?sessao=/;
+
 /** Prazo para a primeira escolha de clínica aproveitar o TOTP feito sem clínica (R7 do #152, R4 do desenho do PR 3). */
 export const PRAZO_MFA_SEM_CLINICA_MS = 5 * 60 * 1000;
 
@@ -49,8 +52,25 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
     this.agora = d.agora ?? (() => new Date());
   }
 
+  /**
+   * Lê a sessão na biblioteca. Na rota de polling, sem estender (R19). Fora dela, quando a biblioteca estende a sessão,
+   * só o `Set-Cookie` da SESSÃO volta ao navegador (pendência do #149; R5 do desenho do PR 3): sem isso, o cookie
+   * morreria em 15 min com a sessão em uso.
+   */
+  private async lerSessao(req: RequisicaoParaSessao) {
+    const r = await this.d.auth.api
+      .getSession({ headers: fromNodeHeaders(req.headers), query: req.semRenovar ? { disableRefresh: true } : {}, returnHeaders: true })
+      .catch(() => null);
+    if (!r) return null;
+    if (!req.semRenovar && req.aoRenovarCookie) {
+      const daSessao = r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+      if (daSessao.length > 0) req.aoRenovarCookie(daSessao);
+    }
+    return r.response;
+  }
+
   async resolver(req: RequisicaoParaSessao): Promise<AuthContext | null> {
-    const lida = await this.d.auth.api.getSession({ headers: fromNodeHeaders(req.headers) }).catch(() => null);
+    const lida = await this.lerSessao(req);
     if (!lida) return null;
     const sessaoId = lida.session.id;
     const [linha] = await this.d.dbAuth
@@ -100,7 +120,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
    * biblioteca, prazo absoluto de 12 h que APAGA a sessão, conta ativa), sem ler clínica nem perfis.
    */
   async sessaoDePessoa(req: RequisicaoParaSessao): Promise<SessaoDePessoa | null> {
-    const lida = await this.d.auth.api.getSession({ headers: fromNodeHeaders(req.headers) }).catch(() => null);
+    const lida = await this.lerSessao(req);
     if (!lida) return null;
     const [linha] = await this.d.dbAuth
       .select({ criadaEm: sessao.createdAt, usuarioId: sessao.userId, ativo: usuario.ativo })
