@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, eq, gt, isNull, sql } from 'drizzle-orm';
-import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
+import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
 import { teamInvites, type ClinicMemberRole } from '../../db/schema';
@@ -148,6 +148,10 @@ export class ConvitesService {
     // Tudo dentro da transação da clínica: convite travado, admin conferido, conta criada e vínculo gravado. Qualquer
     // falha desfaz o vínculo e o convite; a conta só é criada depois do convite travado, e a criação falha antes do
     // vínculo (o app_auth não apaga identidade.usuario, R18).
+    // Quem convidou deixou de ser admin: o mesmo 404 de convite inválido (quem tem o token não aprende nada).
+    const naoAdmin = (err: unknown): never => {
+      throw err instanceof ProibidoError ? new NaoEncontradoError() : err;
+    };
     await escreverNaClinica(this.db, ctx, async (tx) => {
       // Quem convidou precisa continuar admin ativo; o convite é travado e conferido de novo (aceite em paralelo).
       await exigirPerfilNoBanco(tx, ctx, 'admin');
@@ -162,7 +166,7 @@ export class ConvitesService {
       if (conta === 'conta_existente') throw new ConflitoError('conta_existente_exige_login');
       if (conta === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senha']);
       await gravarConcessao(tx, ctx, userId, perfil, 'member_grant', { via: 'convite', invite_id: convite.id });
-    });
+    }).catch(naoAdmin);
     return provedor.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
   }
 }
