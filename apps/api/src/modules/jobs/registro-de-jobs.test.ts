@@ -22,6 +22,7 @@ function servicos(chamadas: string[]): ServicosDosJobs {
     retencaoFiscal: { executarComoSistema: marca('fiscal', { recibosEliminados: 0, cobrancasEliminadas: 0, pagadoresEliminados: 0, politica: { anos: 5 } }) } as unknown as ServicosDosJobs['retencaoFiscal'],
     responsaveis: { descartarAnuladosComoSistema: marca('responsaveis', { descartados: 0 }) },
     pacientes: { reindexarIndiceCpfComoSistema: marca('cpf-indice', { reindexados: 0, pendentes: 0, chavesDescartadas: 0, chaveDestruida: 0 }) },
+    identidade: { expurgarComoSistema: marca('identidade', { sessoes: 0, verificacoes: 0, cadastrosNaoConcluidos: 0 }) },
   };
 }
 
@@ -30,10 +31,10 @@ describe('registro central dos jobs', () => {
     const chamadas: string[] = [];
     const jobs = criarRegistroDeJobs(servicos(chamadas));
     for (const j of jobs) {
-      const r = await j.porClinica(T);
+      const r = j.porClinica ? await j.porClinica(T) : await j.daPlataforma();
       for (const v of Object.values(r)) expect(['number', 'boolean']).toContain(typeof v);
     }
-    expect(chamadas).toEqual(['lembretes', 'retencao', 'portal', 'titular-menor', 'importador', 'notas', 'fiscal', 'responsaveis', 'cpf-indice'].map((n) => `${n}:${T}`));
+    expect(chamadas).toEqual(['lembretes', 'retencao', 'portal', 'titular-menor', 'importador', 'notas', 'fiscal', 'responsaveis', 'cpf-indice'].map((n) => `${n}:${T}`).concat(['identidade:undefined']));
   });
 
   it('a tabela do api-dominio §14 lista exatamente os jobs do registro, com a mesma periodicidade', () => {

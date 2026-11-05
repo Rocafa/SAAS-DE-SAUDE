@@ -52,7 +52,7 @@ export interface DependenciasDaProtecao {
   /** Conferência de senha vazada por k-anonimato (R15). */
   readonly conferirSenhaVazada: ConferirSenhaVazada;
   /** Código aceito pela biblioteca: grava `mfa_em` e a trilha (provedor). Erro aqui derruba a resposta (falha fechada). */
-  readonly aoVerificarMfa: (e: { sessaoId: string; userId: string; motivo: MotivoDaVerificacao }) => Promise<void>;
+  readonly aoVerificarMfa: (e: { sessaoId: string; userId: string; motivo: MotivoDaVerificacao }) => Promise<unknown>;
   /** Código ou senha do cadastro recusados, com sessão aberta: trilha da clínica (provedor). */
   readonly aoFalharMfa: (e: { sessaoId: string; userId: string; bloqueou: boolean }) => Promise<void>;
 }
@@ -324,15 +324,17 @@ export function criarProtecao(d: DependenciasDaProtecao) {
     const userId = nova?.user.id ?? situacao.userId;
     if (!sessaoId || !userId) throw new APIError('UNAUTHORIZED', { message: 'Unauthorized', code: 'UNAUTHORIZED' });
     const motivo: MotivoDaVerificacao = situacao.sessaoId ? (situacao.cadastro ? 'cadastro_do_fator' : 'reverificacao') : 'login_em_duas_etapas';
+    let resultado: unknown;
     try {
-      await d.aoVerificarMfa({ sessaoId, userId, motivo });
+      resultado = await d.aoVerificarMfa({ sessaoId, userId, motivo });
     } catch (err) {
       // R11 do parecer: sem `mfa_em` gravado, a sessão nova não fica viva (falha fechada).
       if (nova) await ctx.context.internalAdapter.deleteSession(nova.session.token).catch(() => undefined);
       throw err;
     }
     if (motivo === 'cadastro_do_fator') registrarEventoDeSeguranca('MFA_CADASTRADO', { motivo, userId, ...(origem ? { origem } : {}) });
-    registrarEventoDeSeguranca('MFA_VERIFICADO', { motivo, userId, ...(origem ? { origem } : {}) });
+    // R7 do #152: sem clínica escolhida o MFA ainda não foi marcado; o log não diz que foi.
+    registrarEventoDeSeguranca('MFA_VERIFICADO', { motivo: resultado === 'sem_clinica' ? 'login_em_duas_etapas_sem_clinica' : motivo, userId, ...(origem ? { origem } : {}) });
     return;
   });
 

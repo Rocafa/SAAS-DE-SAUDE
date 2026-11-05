@@ -21,7 +21,7 @@ export interface Periodicidade {
   readonly descricao: string;
 }
 
-export interface DefinicaoDeJob {
+interface BaseDoJob {
   /** Código fixo (kebab-case, até 40 caracteres): chave no BullMQ, na trava e na trilha. */
   readonly nome: string;
   readonly periodicidade: Periodicidade;
@@ -39,9 +39,24 @@ export interface DefinicaoDeJob {
    * houve erro; para jobs de minutos, que já auditam o que fazem e encheriam a trilha de zeros).
    */
   readonly trilha: 'sempre' | 'com_efeito';
-  /** O trabalho numa clínica. Abre a própria transação da clínica (withTenant, sem usuário: sentinela). */
-  readonly porClinica: (tenantId: TenantId) => Promise<ResultadoDeJob>;
 }
+
+/** Job que roda em cada clínica: abre a própria transação da clínica (withTenant, sem usuário: sentinela). */
+export interface JobPorClinica extends BaseDoJob {
+  readonly porClinica: (tenantId: TenantId) => Promise<ResultadoDeJob>;
+  readonly daPlataforma?: never;
+}
+
+/**
+ * Job da PLATAFORMA (D4, PR 3a): roda UMA vez, fora de qualquer clínica (ex.: expurgo do schema `identidade`, que não
+ * é de clínica). Sem trilha de clínica: o resultado (só contagens) vai para o log do job.
+ */
+export interface JobDaPlataforma extends BaseDoJob {
+  readonly daPlataforma: () => Promise<ResultadoDeJob>;
+  readonly porClinica?: never;
+}
+
+export type DefinicaoDeJob = JobPorClinica | JobDaPlataforma;
 
 /**
  * Job aposentado (R5 do parecer dos jobs): a ÚNICA forma de um agendamento sair do BullMQ. Fica na lista
@@ -98,6 +113,7 @@ export function validarDefinicoes(jobs: readonly DefinicaoDeJob[]): void {
   for (const j of jobs) {
     if (!NOME_RE.test(j.nome)) throw new Error(`job com nome inválido: ${j.nome}`);
     if (vistos.has(j.nome)) throw new Error(`job duplicado: ${j.nome}`);
+    if ((j.porClinica === undefined) === (j.daPlataforma === undefined)) throw new Error(`job ${j.nome}: use porClinica OU daPlataforma`);
     vistos.add(j.nome);
     const { cron, aCadaMs } = j.periodicidade;
     if ((cron === undefined) === (aCadaMs === undefined)) throw new Error(`job ${j.nome}: use cron OU aCadaMs`);

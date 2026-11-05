@@ -91,6 +91,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
         clinicaAtiva: { type: 'string', input: false, required: false, returned: false },
         mfaEm: { type: 'date', input: false, required: false, returned: false },
         perfisNoMfa: { type: 'string', input: false, required: false, returned: false },
+        mfaSemClinicaEm: { type: 'date', input: false, required: false, returned: false },
       },
     },
     account: { modelName: 'conta' },
@@ -153,13 +154,19 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
               },
             };
           },
-          // Login aceito no log de segurança, com o usuário e a origem em HMAC (nunca o e-mail).
-          after: (s) => {
-            registrarEventoDeSeguranca('LOGIN_OK', {
-              userId: s.userId,
-              ...(typeof s.ipAddress === 'string' && HEX16.test(s.ipAddress) ? { origem: s.ipAddress } : {}),
-            });
-            return Promise.resolve();
+          // Login aceito no log de segurança, com o usuário e a origem em HMAC (nunca o e-mail). R3 do #152: com TOTP
+          // cadastrado, a sessão do passo da senha é PROVISÓRIA (a biblioteca a apaga e abre o desafio): sai
+          // `LOGIN_SENHA_OK` aguardando o fator, e o `LOGIN_OK` só na sessão definitiva, depois do código.
+          after: async (s, ctx) => {
+            const origem = typeof s.ipAddress === 'string' && HEX16.test(s.ipAddress) ? { origem: s.ipAddress } : {};
+            if (ctx?.path === '/sign-in/email') {
+              const [u] = await o.db.select({ fator: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, s.userId));
+              if (u?.fator) {
+                registrarEventoDeSeguranca('LOGIN_SENHA_OK', { motivo: 'aguardando_fator', userId: s.userId, ...origem });
+                return;
+              }
+            }
+            registrarEventoDeSeguranca('LOGIN_OK', { userId: s.userId, ...origem });
           },
         },
       },

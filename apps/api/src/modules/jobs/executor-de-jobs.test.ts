@@ -1,13 +1,13 @@
 import type { TenantId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
-import { codigoDoErro, FalhaDeJobError, validarDefinicoes, type DefinicaoDeJob, type ResultadoDeJob } from './agendador.port';
+import { codigoDoErro, FalhaDeJobError, validarDefinicoes, type DefinicaoDeJob, type JobPorClinica, type ResultadoDeJob } from './agendador.port';
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
 import { contagensParaTrilha, ExecutorDeJobs, type LinhaDeTrilhaDoJob } from './executor-de-jobs';
 
 const A = '00000000-0000-4000-8000-00000000000a' as TenantId;
 const B = '00000000-0000-4000-8000-00000000000b' as TenantId;
 
-function job(porClinica: (t: TenantId) => Promise<ResultadoDeJob>, extra: Partial<DefinicaoDeJob> = {}): DefinicaoDeJob {
+function job(porClinica: (t: TenantId) => Promise<ResultadoDeJob>, extra: Partial<Omit<JobPorClinica, 'porClinica' | 'daPlataforma'>> = {}): DefinicaoDeJob {
   return { nome: 'teste', periodicidade: { cron: '0 3 * * *', descricao: 'diário' }, prazoMaximoMs: 26 * 3_600_000, travaMs: 60_000, critico: true, trilha: 'sempre', porClinica, ...extra };
 }
 
@@ -35,6 +35,43 @@ function montar(jobs: DefinicaoDeJob[], clinicas: TenantId[] = [A, B]) {
   });
   return { executor, trilha, logs, esperas, registro, trava };
 }
+
+describe('job da plataforma (D4, PR 3a: expurgo do schema identidade)', () => {
+  const plataforma = (daPlataforma: () => Promise<ResultadoDeJob>): DefinicaoDeJob => ({
+    nome: 'plataforma',
+    periodicidade: { cron: '0 3 * * *', descricao: 'diário' },
+    prazoMaximoMs: 26 * 3_600_000,
+    travaMs: 60_000,
+    critico: true,
+    trilha: 'sempre',
+    daPlataforma,
+  });
+
+  it('roda UMA vez, sem listar clínicas nem trilha de clínica; contagens no log; registra o sucesso', async () => {
+    let vezes = 0;
+    const m = montar([plataforma(() => (vezes++, Promise.resolve({ sessoes: 3 })))]);
+    const r = await m.executor.executar('plataforma');
+    expect(r).toMatchObject({ situacao: 'ok', clinicas: 0 });
+    expect(vezes).toBe(1);
+    expect(m.trilha).toEqual([]);
+    expect(m.logs.some((l) => /JOB_OK job=plataforma plataforma tentativas=1 sessoes=3/.test(l))).toBe(true);
+    expect(await m.registro.ultimoSucesso('plataforma')).toBe(42);
+  });
+
+  it('falha em todas as tentativas: FalhaDeJobError, erro só como código, sem sucesso registrado', async () => {
+    const m = montar([plataforma(() => Promise.reject(new TypeError('dado que não pode sair')))]);
+    await expect(m.executor.executar('plataforma')).rejects.toBeInstanceOf(FalhaDeJobError);
+    expect(m.logs.join('\n')).toMatch(/JOB_PLATAFORMA_FALHOU job=plataforma tentativas=3 erro=TypeError/);
+    expect(m.logs.join('\n')).not.toMatch(/dado que não pode sair/);
+    expect(await m.registro.ultimoSucesso('plataforma')).toBeNull();
+  });
+
+  it('a definição usa porClinica OU daPlataforma, nunca os dois nem nenhum', () => {
+    const base = plataforma(() => Promise.resolve({}));
+    expect(() => validarDefinicoes([{ ...base, porClinica: () => Promise.resolve({}) } as never])).toThrow(/porClinica OU daPlataforma/);
+    expect(() => validarDefinicoes([{ ...base, daPlataforma: undefined } as never])).toThrow(/porClinica OU daPlataforma/);
+  });
+});
 
 describe('executor de jobs', () => {
   it('roda o job em cada clínica separadamente, deixa trilha em cada uma e registra o sucesso', async () => {

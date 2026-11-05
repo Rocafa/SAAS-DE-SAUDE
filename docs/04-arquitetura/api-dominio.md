@@ -875,6 +875,7 @@ Antes do piloto, os jobs que só podiam ser chamados à mão (rotas do admin) pa
 | `retencao-fiscal` | diário, 04:30 | sim, 26 h | elimina o retrato do recibo e o pagador vencidos (política de 5 anos, a confirmar com o contador) | §9a, R7 do #65 |
 | `responsaveis-descarte` | diário, 05:00 | sim, 26 h | descarta a pessoa de cadastro de responsável anulado há mais de 30 dias | §11a, A4 do #67 |
 | `cpf-indice-reindexacao` | diário, 05:30 | sim, 26 h | reindexa o CPF fora da chave ativa do índice cego, em pacientes e responsáveis (0054; até 20 × 500 por clínica), e, zerado, destrói as versões aposentadas; sem pendente, não decifra nada | §12d, R9 do importador |
+| `identidade-expurgo` | diário, 03:20 | sim, 26 h | **da plataforma** (roda uma vez, fora de clínica): apaga sessões vencidas, tokens de uso único vencidos há mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h; só contagens no log | D4, R11 do desenho e R7 do PR 3 |
 
 Fora do registro, por decisão: a **reconferência dos modelos** não é job próprio (o estado é por processo: quem despacha reconfere, dentro dos dois jobs do WhatsApp); a **eliminação dos responsáveis com o prontuário** (guarda de 20 anos) é passo da futura rotina de eliminação do prontuário; a **recifração após rotação de chave** é operação, não rotina.
 

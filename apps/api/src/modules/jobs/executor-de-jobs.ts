@@ -103,6 +103,11 @@ export class ExecutorDeJobs {
       return { job: nome, situacao: 'em_andamento', clinicas: 0, clinicasComFalha: 0 };
     }
     try {
+      if (job.daPlataforma) {
+        await this.naPlataforma(job.nome, job.daPlataforma);
+        await this.deps.registro.marcarSucesso(nome, this.agora());
+        return { job: nome, situacao: 'ok', clinicas: 0, clinicasComFalha: 0 };
+      }
       const clinicas = await this.deps.listarClinicas();
       let falhas = 0;
       for (const [posicao, tenantId] of clinicas.entries()) {
@@ -120,11 +125,33 @@ export class ExecutorDeJobs {
     }
   }
 
-  private async naClinica(job: DefinicaoDeJob, tenantId: TenantId, posicao: number): Promise<boolean> {
+  /** Job da plataforma: uma passada, com as mesmas tentativas; o resultado (só contagens) vai para o log. */
+  private async naPlataforma(nome: string, trabalho: () => Promise<ResultadoDeJob>): Promise<void> {
     let ultimoErro: unknown;
     for (let tentativa = 1; tentativa <= this.tentativas; tentativa++) {
       try {
-        const resultado = contagensParaTrilha(await job.porClinica(tenantId));
+        const resultado = contagensParaTrilha(await trabalho());
+        const contagens = Object.entries(resultado)
+          .map(([k, v]) => `${k}=${String(v)}`)
+          .join(' ');
+        this.deps.logger.log(`JOB_OK job=${nome} plataforma tentativas=${tentativa} ${contagens}`);
+        return;
+      } catch (err) {
+        ultimoErro = err;
+        if (tentativa < this.tentativas) await this.dormir(this.backoffMs * 2 ** (tentativa - 1));
+      }
+    }
+    this.deps.logger.error(`JOB_PLATAFORMA_FALHOU job=${nome} tentativas=${this.tentativas} erro=${codigoDoErro(ultimoErro)}`);
+    throw new FalhaDeJobError(nome, 1);
+  }
+
+  private async naClinica(job: DefinicaoDeJob, tenantId: TenantId, posicao: number): Promise<boolean> {
+    const porClinica = job.porClinica;
+    if (!porClinica) return true;
+    let ultimoErro: unknown;
+    for (let tentativa = 1; tentativa <= this.tentativas; tentativa++) {
+      try {
+        const resultado = contagensParaTrilha(await porClinica(tenantId));
         if (resultado.alarme === true) {
           this.deps.logger.error(`JOB_ALARME job=${job.nome} clinica=${tenantId}: o job sinalizou atraso (ver contagens na trilha)`);
         }
