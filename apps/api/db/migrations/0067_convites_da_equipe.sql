@@ -37,6 +37,10 @@ CREATE POLICY tenant_isolation ON team_invites
   USING (tenant_id = (SELECT app_current_tenant()))
   WITH CHECK (tenant_id = (SELECT app_current_tenant()));
 REVOKE DELETE, TRUNCATE ON team_invites FROM app_user;
+-- Na sessão do portal do paciente, nenhuma linha (padrão das tabelas da clínica, 0027).
+CREATE POLICY portal_fora ON team_invites AS RESTRICTIVE
+  USING (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL)
+  WITH CHECK (tenant_id = (SELECT app_current_tenant()) AND (SELECT app_portal_patient()) IS NULL);
 
 ALTER TABLE identidade.sessao ADD COLUMN cadastro_pendente_ate timestamptz;
 ALTER TABLE identidade.usuario ADD COLUMN clinica_de_origem uuid, ADD COLUMN convite_de_origem uuid;

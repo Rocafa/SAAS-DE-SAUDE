@@ -748,6 +748,20 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
     await expect(convites().aceitar({ token: c.token, email, nome: 'X', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
   });
 
+  it('isolamento: a clínica B não lê nem altera o convite da clínica A (team_invites com RLS)', async () => {
+    const a = await clinicaComAdmin();
+    const b = await clinicaComAdmin();
+    const c = await convites().criar(a.ctx, novoEmail(), 'recepcao');
+    const vistos = await withTenant(api.db.db, b.tenantId, (tx) => tx.execute<{ id: string }>(sql`select id from team_invites where id = ${c.conviteId}`));
+    expect([...vistos]).toEqual([]);
+    const mudou = await withTenant(api.db.db, b.tenantId, (tx) =>
+      tx.execute<{ id: string }>(sql`update team_invites set revoked_at = now(), revoked_by = ${b.adm.userId} where id = ${c.conviteId} returning id`),
+    );
+    expect([...mudou]).toEqual([]);
+    await expect(convites().revogar(b.ctx, c.conviteId)).rejects.toBeInstanceOf(NaoEncontradoError);
+    expect((await convites().listar(a.ctx)).map((x) => x.id)).toContain(c.conviteId);
+  });
+
   it('R9: teto diário de convites por admin', async () => {
     const { ctx } = await clinicaComAdmin();
     for (let i = 0; i < TETO_DIARIO_DE_CONVITES; i++) await convites().criar(ctx, novoEmail(), 'recepcao');

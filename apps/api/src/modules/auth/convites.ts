@@ -10,7 +10,7 @@
  *   `via: convite`). A sessão aberta no aceite só serve ao cadastro do TOTP, por 15 min (R8).
  * - Teto diário de convites por admin (R9).
  */
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, eq, gt, isNull, sql } from 'drizzle-orm';
@@ -129,7 +129,8 @@ export class ConvitesService {
    * inválido, vencido, usado, revogado ou e-mail diferente. Devolve os `Set-Cookie` da sessão de cadastro.
    */
   async aceitar(e: { token: string; email: string; nome: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
-    if (!ehProvedorDeConvite(this.provider)) throw new NaoEncontradoError();
+    const provedor = this.provider;
+    if (!ehProvedorDeConvite(provedor)) throw new NaoEncontradoError();
     const tenantId = clinicaDoToken(e.token);
     if (!tenantId) throw new NaoEncontradoError();
     const hash = hashDoToken(e.token);
@@ -142,29 +143,27 @@ export class ConvitesService {
     if (!convite || convite.emailHmac !== hmacDoEmail(e.email)) throw new NaoEncontradoError();
     if (!ehPerfilDoBanco(convite.role)) throw new NaoEncontradoError();
     const perfil = convite.role;
-    const conta = await this.provider.criarContaDoConvite({ email: e.email, nome: e.nome, senha: e.senha, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
-    // R18: quem usa o token percebe se a conta já existe (registrado no RIPD); a conta existente entra no 3b-2.
-    if (conta === 'conta_existente') throw new ConflitoError('conta_existente_exige_login');
-    if (conta === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senha']);
+    const userId = randomUUID();
     const ctx: RequestContext = { tenantId: tenantId as TenantId, userId: convite.createdBy as RequestContext['userId'], roles: [] };
-    try {
-      await escreverNaClinica(this.db, ctx, async (tx) => {
-        // Quem convidou precisa continuar admin ativo; o convite é travado e conferido de novo (aceite em paralelo).
-        await exigirPerfilNoBanco(tx, ctx, 'admin');
-        const marcado = await tx
-          .update(teamInvites)
-          .set({ acceptedAt: new Date(), acceptedUserId: conta.userId })
-          .where(and(eq(teamInvites.id, convite.id), isNull(teamInvites.acceptedAt), isNull(teamInvites.revokedAt), gt(teamInvites.expiresAt, new Date())))
-          .returning({ id: teamInvites.id });
-        if (marcado.length === 0) throw new NaoEncontradoError();
-        await gravarConcessao(tx, ctx, conta.userId, perfil, 'member_grant', { via: 'convite', invite_id: convite.id });
-      });
-    } catch (err) {
-      // Sem vínculo, a conta recém-criada não fica órfã.
-      await this.provider.apagarContaDoConvite(conta.userId);
-      throw err instanceof NaoEncontradoError ? err : new NaoEncontradoError();
-    }
-    return this.provider.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
+    // Tudo dentro da transação da clínica: convite travado, admin conferido, conta criada e vínculo gravado. Qualquer
+    // falha desfaz o vínculo e o convite; a conta só é criada depois do convite travado, e a criação falha antes do
+    // vínculo (o app_auth não apaga identidade.usuario, R18).
+    await escreverNaClinica(this.db, ctx, async (tx) => {
+      // Quem convidou precisa continuar admin ativo; o convite é travado e conferido de novo (aceite em paralelo).
+      await exigirPerfilNoBanco(tx, ctx, 'admin');
+      const marcado = await tx
+        .update(teamInvites)
+        .set({ acceptedAt: new Date(), acceptedUserId: userId })
+        .where(and(eq(teamInvites.id, convite.id), isNull(teamInvites.acceptedAt), isNull(teamInvites.revokedAt), gt(teamInvites.expiresAt, new Date())))
+        .returning({ id: teamInvites.id });
+      if (marcado.length === 0) throw new NaoEncontradoError();
+      const conta = await provedor.criarContaDoConvite({ userId, email: e.email, nome: e.nome, senha: e.senha, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
+      // R18: quem usa o token percebe se a conta já existe (registrado no RIPD); a conta existente entra no 3b-2.
+      if (conta === 'conta_existente') throw new ConflitoError('conta_existente_exige_login');
+      if (conta === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senha']);
+      await gravarConcessao(tx, ctx, userId, perfil, 'member_grant', { via: 'convite', invite_id: convite.id });
+    });
+    return provedor.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
   }
 }
 

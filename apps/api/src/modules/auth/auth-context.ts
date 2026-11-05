@@ -75,13 +75,13 @@ export interface ProvedorDePessoa {
 /** Parte OPCIONAL da porta para o aceite do convite da equipe (PR 3b): só o provedor real. */
 export interface ProvedorDeConvite {
   criarContaDoConvite(e: {
+    userId: string;
     email: string;
     nome: string;
     senha: string;
     clinicaDeOrigem: string;
     conviteDeOrigem: string;
   }): Promise<{ userId: string } | 'conta_existente' | 'senha_vazada'>;
-  apagarContaDoConvite(userId: string): Promise<void>;
   /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
   abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
 }

@@ -236,6 +236,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
 
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
   async criarContaDoConvite(e: {
+    userId: string;
     email: string;
     nome: string;
     senha: string;
@@ -255,7 +256,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
       }
     }
-    const userId = randomUUID();
+    const userId = e.userId;
     try {
       await this.d.dbAuth.transaction(async (tx) => {
         await tx.insert(usuario).values({
@@ -273,10 +274,6 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       return 'conta_existente';
     }
     return { userId };
-  }
-
-  async apagarContaDoConvite(userId: string): Promise<void> {
-    await this.d.dbAuth.delete(usuario).where(eq(usuario.id, userId));
   }
 
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
