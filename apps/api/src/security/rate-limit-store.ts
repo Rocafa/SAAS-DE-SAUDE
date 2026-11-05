@@ -38,14 +38,18 @@ export interface RateLimitStore {
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly windows = new Map<number, { start: number; hits: Map<string, number> }>();
 
-  constructor(private readonly label: Extract<RateLimitMode, 'memoria' | 'instancia-unica'> = 'memoria') {}
+  /** `agora` injetável (R4 do parecer do #141): testes de janela determinísticos, sem relógio real nem timers falsos. */
+  constructor(
+    private readonly label: Extract<RateLimitMode, 'memoria' | 'instancia-unica'> = 'memoria',
+    private readonly agora: () => number = Date.now,
+  ) {}
 
   mode(): RateLimitMode {
     return this.label;
   }
 
   hit(key: string, windowMs: number): Promise<RateLimitHit> {
-    const now = Date.now();
+    const now = this.agora();
     let w = this.windows.get(windowMs);
     if (!w || now - w.start >= windowMs) {
       w = { start: now, hits: new Map() };

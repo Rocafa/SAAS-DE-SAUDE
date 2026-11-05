@@ -8,6 +8,10 @@
  *   corpo, mensagem do erro, stack, token, senha…), em identificadores e acessos a propriedade;
  * - reprova passar o erro inteiro (`logger.error(err)` ou `${err}`): a mensagem pode ter dado; use `err.name`.
  * Exceções têm de estar em `PERMITIDOS`, com o motivo.
+ *
+ * NÃO cobre (R5 do parecer do #154; revisão humana): atribuição a propriedade (`o.doc = p.cpf`), variável do
+ * `for…of` sobre lista sensível e valor que passa de uma função para outra por parâmetro. `format` na lista de
+ * despejos também pega o `format` do date-fns (R7): aceito, porque data formatada no log não é necessária.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -49,7 +53,7 @@ function sensivel(nome: string): boolean {
 }
 
 /** Funções que despejam um objeto inteiro (com o que tiver dentro) no log. */
-const DESPEJOS: ReadonlySet<string> = new Set(['util.inspect', 'inspect', 'Object.values', 'Object.entries', 'Object.keys', 'String', 'JSON.stringify']);
+const DESPEJOS: ReadonlySet<string> = new Set(['util.inspect', 'inspect', 'util.format', 'format', 'Object.values', 'Object.entries', 'Object.keys', 'String', 'JSON.stringify']);
 
 /** Liberações que só valem num arquivo (nome do job, motivo do desligamento), com o motivo. */
 const PERMITIDOS_POR_ARQUIVO: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -82,30 +86,149 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
   const saida: Violacao[] = [];
   const doArquivo = PERMITIDOS_POR_ARQUIVO[arquivo] ?? {};
   const seguras = new Set<string>();
+  /**
+   * Marcas por ESCOPO (função onde a variável foi declarada): duas funções com uma variável `tipos` cada não se
+   * contaminam. Chave: `<início da função>:<nome>`; a busca sobe pelas funções que envolvem a referência.
+   */
   const sensiveisRenomeadas = new Set<string>();
+  /** Apelidos do erro inteiro: `const falha = err` (R2 do parecer do #141). */
+  const apelidosDoErro = new Set<string>();
   const apelidos = new Set<string>();
-  const coletar = (n: ts.Node): void => {
+  const escopos = (n: ts.Node): number[] => {
+    const saida: number[] = [];
+    for (let x: ts.Node | undefined = n.parent; x; x = x.parent) if (ts.isFunctionLike(x)) saida.push(x.pos);
+    saida.push(-1);
+    return saida;
+  };
+  /** Nomes declarados por escopo (variável, parâmetro, variável do catch): `<escopo>:<nome>`. */
+  const declaracoes = new Set<string>();
+  const declarar = (id: ts.Identifier): void => {
+    declaracoes.add(`${escopos(id)[0] ?? -1}:${id.text}`);
+  };
+  const juntarDeclaracoes = (n: ts.Node): void => {
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name)) declarar(n.name);
+    ts.forEachChild(n, juntarDeclaracoes);
+  };
+  juntarDeclaracoes(sf);
+  /**
+   * Escopo onde o nome visto em `n` foi DECLARADO (R1 do parecer do #154): a atribuição dentro de uma callback
+   * (`ps.forEach(p => { ultimo = p.nome })`) marca a variável da função de fora, onde ela foi declarada.
+   */
+  const escopoDaDeclaracao = (n: ts.Node, nome: string): number => {
+    const lista = escopos(n);
+    return lista.find((e) => declaracoes.has(`${e}:${nome}`)) ?? lista[0] ?? -1;
+  };
+  const chaveDe = (n: ts.Node, nome: string): string => `${escopoDaDeclaracao(n, nome)}:${nome}`;
+  const temMarca = (marcas: Set<string>, n: ts.Node, nome: string): boolean => marcas.has(chaveDe(n, nome));
+  const ehErro = (nome: string, n?: ts.Node): boolean => ERRO.test(nome) || (n !== undefined && temMarca(apelidosDoErro, n, nome));
+
+  /**
+   * A expressão carrega valor sensível? Campo ou variável sensível (ou já marcada), getter com nome sensível
+   * (`getCpf()`), em qualquer forma: template, `??`, `||`, ternário, concatenação (R2 do parecer do #141).
+   */
+  const carregaSensivel = (e: ts.Node): boolean => {
+    let achou = false;
+    const ver = (n: ts.Node): void => {
+      if (achou) return;
+      if (PERMITIDOS[n.getText(sf)] !== undefined || doArquivo[n.getText(sf)] !== undefined) return;
+      if (ts.isPropertyAccessExpression(n)) {
+        const ehMetodo = ts.isCallExpression(n.parent) && n.parent.expression === n;
+        if (ehMetodo ? nomeComposto(n.name.text) : sensivel(n.name.text) && !(n.name.text === 'name' && ehErro(n.expression.getText(sf), n))) {
+          achou = true;
+          return;
+        }
+      } else if (ts.isElementAccessExpression(n) && ts.isStringLiteral(n.argumentExpression) && sensivel(n.argumentExpression.text)) {
+        achou = true;
+        return;
+      } else if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
+        const ehChamada = ts.isCallExpression(n.parent) && n.parent.expression === n;
+        if (ehChamada ? nomeComposto(n.text) : sensivel(n.text) || temMarca(sensiveisRenomeadas, n, n.text)) {
+          achou = true;
+          return;
+        }
+      }
+      ts.forEachChild(n, ver);
+    };
+    ver(e);
+    return achou;
+  };
+
+  /** `err`, `err as Error`, `(err)`, `err!`: o erro inteiro, sem acesso a propriedade. */
+  const erroInteiro = (e: ts.Expression): boolean => {
+    let x: ts.Expression = e;
+    while (ts.isAsExpression(x) || ts.isParenthesizedExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+    return ts.isIdentifier(x) && ehErro(x.text, x);
+  };
+
+  /** Marca `alvo` a partir do valor atribuído (declaração ou atribuição a variável já declarada). */
+  const marcar = (alvo: ts.Identifier, valor: ts.Expression): boolean => {
+    // A marca vai para o escopo onde a variável foi declarada (declaração ou atribuição, inclusive em callback).
+    const nome = chaveDe(alvo, alvo.text);
+    const antes = sensiveisRenomeadas.size + apelidosDoErro.size;
+    if (erroInteiro(valor)) apelidosDoErro.add(nome);
+    else if (!INICIALIZACAO_SEGURA.test(valor.getText(sf)) && carregaSensivel(valor)) sensiveisRenomeadas.add(nome);
+    return sensiveisRenomeadas.size + apelidosDoErro.size !== antes;
+  };
+
+  const coletar = (n: ts.Node): boolean => {
+    let mudou = false;
     if (ts.isVariableDeclaration(n) && n.initializer) {
       const ini = n.initializer.getText(sf);
-      if (ts.isIdentifier(n.name) && INICIALIZACAO_SEGURA.test(ini)) seguras.add(n.name.text);
-      // Valor sensível copiado para variável local antes do log: `const x = p.nome` deixa `x` sensível.
-      const fonte = n.initializer;
-      const nomeDaFonte = ts.isPropertyAccessExpression(fonte) ? fonte.name.text : ts.isIdentifier(fonte) ? fonte.text : undefined;
-      if (ts.isIdentifier(n.name) && nomeDaFonte && sensivel(nomeDaFonte)) sensiveisRenomeadas.add(n.name.text);
+      // Liberação por escopo também (R2 do parecer do #154): `const erro = codigoDoErro(e)` num método não libera o
+      // `catch (erro)` de outro.
+      if (ts.isIdentifier(n.name) && INICIALIZACAO_SEGURA.test(ini)) seguras.add(chaveDe(n.name, n.name.text));
+      // Cópia para variável local (direta, em template, com `??`, transitiva…): `const x = p.nome` deixa `x` sensível.
+      if (ts.isIdentifier(n.name)) mudou = marcar(n.name, n.initializer) || mudou;
       // Apelido do logger: `const log = this.logger` (R2 do parecer do #129).
       if (ts.isIdentifier(n.name) && (/logger$/i.test(ini) || /^new Logger\(/.test(ini))) apelidos.add(n.name.text);
       // Desestruturação renomeada: `const { cpf: x } = p` deixa `x` sensível.
       if (ts.isObjectBindingPattern(n.name)) {
         for (const el of n.name.elements) {
           const original = el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName)) ? el.propertyName.text : undefined;
-          if (original && sensivel(original) && ts.isIdentifier(el.name)) sensiveisRenomeadas.add(el.name.text);
+          const chave = ts.isIdentifier(el.name) ? chaveDe(el.name, el.name.text) : '';
+          if (original && sensivel(original) && chave && !sensiveisRenomeadas.has(chave)) {
+            sensiveisRenomeadas.add(chave);
+            mudou = true;
+          }
         }
       }
     }
-    ts.forEachChild(n, coletar);
+    // R3 do parecer do #154: a variável de qualquer `catch` e o parâmetro de `.catch(...)` são o erro inteiro, com
+    // qualquer nome (`catch (agendar)`).
+    if (ts.isCatchClause(n) && n.variableDeclaration && ts.isIdentifier(n.variableDeclaration.name)) {
+      const k = chaveDe(n.variableDeclaration.name, n.variableDeclaration.name.text);
+      if (!apelidosDoErro.has(k)) {
+        apelidosDoErro.add(k);
+        mudou = true;
+      }
+    }
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === 'catch') {
+      const f = n.arguments[0];
+      const param = f && (ts.isArrowFunction(f) || ts.isFunctionExpression(f)) ? f.parameters[0] : undefined;
+      if (param && ts.isIdentifier(param.name)) {
+        const k = chaveDe(param.name, param.name.text);
+        if (!apelidosDoErro.has(k)) {
+          apelidosDoErro.add(k);
+          mudou = true;
+        }
+      }
+    }
+    // Atribuição a variável já declarada: `let x = ''; x = p.cpf`.
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left)) {
+      mudou = marcar(n.left, n.right) || mudou;
+    }
+    let filhos = false;
+    ts.forEachChild(n, (c) => {
+      filhos = coletar(c) || filhos;
+    });
+    return mudou || filhos;
   };
-  coletar(sf);
-  const liberado = (texto: string): boolean => PERMITIDOS[texto] !== undefined || doArquivo[texto] !== undefined || seguras.has(texto);
+  // Ponto fixo: a cópia transitiva (`const a = p.cpf; const b = a`) marca em mais de uma passada.
+  // R4 do parecer do #154: sem convergir em 50 passadas, a trava falha (nunca passa calada).
+  let passadas = 0;
+  while (coletar(sf)) if (++passadas > 50) throw new Error(`trava de logs não convergiu em ${arquivo}`);
+  const liberadoTexto = (texto: string): boolean => PERMITIDOS[texto] !== undefined || doArquivo[texto] !== undefined;
+  const liberado = (n: ts.Node): boolean => liberadoTexto(n.getText(sf)) || (ts.isIdentifier(n) && seguras.has(chaveDe(n, n.text)));
   const linha = (n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   const reprovar = (n: ts.Node, motivo: string): void => {
     saida.push({ arquivo, linha: linha(n), motivo });
@@ -113,7 +236,7 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
 
   const conferirArgumento = (arg: ts.Node): void => {
     const visitar = (n: ts.Node): void => {
-      if (liberado(n.getText(sf))) return;
+      if (liberado(n)) return;
       if (ts.isSpreadElement(n) || ts.isSpreadAssignment(n)) {
         reprovar(n, `objeto espalhado no log: ${n.getText(sf)}`);
         return;
@@ -122,7 +245,7 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
         // String(err) segue reprovado pela regra do erro inteiro; String de um valor seguro é inofensivo, mas a regra é
         // fechada: serialize só campos conferidos (log de segurança).
         const alvo = n.arguments[0];
-        const seguro = n.expression.getText(sf) === 'String' && alvo !== undefined && (liberado(alvo.getText(sf)) || ts.isStringLiteral(alvo) || ts.isNumericLiteral(alvo));
+        const seguro = n.expression.getText(sf) === 'String' && alvo !== undefined && (liberado(alvo) || ts.isStringLiteral(alvo) || ts.isNumericLiteral(alvo));
         if (!seguro) {
           reprovar(n, `${n.expression.getText(sf)} no log: serialize só campos fechados (log de segurança)`);
           return;
@@ -134,14 +257,14 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
       }
       if (ts.isPropertyAccessExpression(n)) {
         // `err.name` (classe do erro) é seguro em qualquer forma: err instanceof Error ? err.name : typeof err
-        if (n.name.text === 'name' && ERRO.test(n.expression.getText(sf))) return;
-        // Chamada de método (`tipos.texto()`) é conferida pela lista de permitidos; nome de método não é dado.
+        if (n.name.text === 'name' && ehErro(n.expression.getText(sf), n)) return;
+        // Método: só o getter com nome sensível composto (`getCpf()`, R2 do parecer do #141); `tipos.texto()` passa.
         const ehMetodo = ts.isCallExpression(n.parent) && n.parent.expression === n;
-        if (!ehMetodo && sensivel(n.name.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
+        if (ehMetodo ? nomeComposto(n.name.text) : sensivel(n.name.text)) reprovar(n, `campo sensível no log: ${n.getText(sf)}`);
       } else if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
         const ehChamada = ts.isCallExpression(n.parent) && n.parent.expression === n;
-        if (!ehChamada && (sensivel(n.text) || sensiveisRenomeadas.has(n.text))) reprovar(n, `variável sensível no log: ${n.text}`);
-        else if (ERRO.test(n.text) && !liberado(n.text)) {
+        if (!ehChamada && (sensivel(n.text) || temMarca(sensiveisRenomeadas, n, n.text))) reprovar(n, `variável sensível no log: ${n.text}`);
+        else if (ehErro(n.text, n) && !liberado(n)) {
           // O erro inteiro em qualquer forma (`err`, `${err}`, String(err), 'x' + err). Liberado só como
           // `err.name`, `err instanceof Error` e `typeof err`.
           const pai = n.parent;
@@ -191,6 +314,61 @@ function arquivosDaApi(raiz: string): string[] {
 }
 
 describe('logs sem dado pessoal (trava de PR)', () => {
+  it('R2 do parecer do #141: template, ??, cópia transitiva, atribuição, apelido do erro, util.format e getter são reprovados', () => {
+    const fonte = [
+      'class X {',
+      '  f(p: { cpf: string; nome?: string; getCpf(): string }, err: Error) {',
+      '    const a = `doc ${p.cpf}`;',
+      '    this.logger.warn(a);',
+      "    const b = p.nome ?? 'sem';",
+      '    this.logger.warn(b);',
+      '    const c = p.cpf;',
+      '    const d = c;',
+      '    this.logger.warn(d);',
+      "    let e2 = '';",
+      '    e2 = p.cpf;',
+      '    this.logger.warn(e2);',
+      '    const falha = err;',
+      '    this.logger.error(`x ${falha}`);',
+      "    this.logger.warn(util.format('%s', p));",
+      '    this.logger.warn(p.getCpf());',
+      '    this.logger.warn(`ok ${falha.name}`);',
+      '  }',
+      '}',
+    ].join('\n');
+    const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
+    // 4 template, 6 ??, 9 transitiva, 12 atribuição, 14 apelido do erro, 15 util.format, 16 getter
+    for (const l of [4, 6, 9, 12, 14, 15, 16]) expect(linhas, `linha ${l}`).toContain(l);
+    // `falha.name` continua liberado (classe do erro).
+    expect(linhas).not.toContain(17);
+    // Escopo: `tipos` sensível numa função não marca o `tipos` de contagem de outra.
+    const duas = [
+      'function a(p: { nome: string }) { const tipos = [p.nome]; return tipos; }',
+      'function b() { const tipos = contar(); this.logger.warn(`tipos=${tipos}`); }',
+      'function c(p: { nome: string }) { const tipos = [p.nome]; this.logger.warn(`${tipos}`); }',
+    ].join('\n');
+    expect(violacoesNoFonte('ficticio.ts', duas).map((v) => v.linha)).toEqual([3]);
+  });
+
+  it('R1 a R3 do parecer do #154: atribuição em callback, liberação por escopo e variável de catch com qualquer nome', () => {
+    const fonte = [
+      'class X {',
+      "  a(ps: { nome: string }[]) { let ultimo = ''; ps.forEach((p) => { ultimo = p.nome; }); this.logger.warn(ultimo); }",
+      '  b(e: unknown) { const erro = codigoDoErro(e); this.logger.warn(erro); }',
+      '  c() { try { f(); } catch (erro) { this.logger.warn(`x ${erro}`); } }',
+      '  d() { try { f(); } catch (agendar) { this.logger.warn(`x ${agendar}`); } }',
+      '  e() { g().catch((falhou) => this.logger.warn(`x ${falhou}`)); }',
+      '  f() { try { f(); } catch (agendar) { this.logger.warn(`x ${agendar.name}`); } }',
+      '}',
+    ].join('\n');
+    const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
+    // 2 callback, 4 catch(erro) cru em outro método, 5 catch com nome livre, 6 parâmetro do .catch
+    for (const l of [2, 4, 5, 6]) expect(linhas, `linha ${l}`).toContain(l);
+    // 3 codigoDoErro continua liberado no próprio método; 7 `.name` do erro passa.
+    expect(linhas).not.toContain(3);
+    expect(linhas).not.toContain(7);
+  });
+
   it('nenhuma chamada de log em src usa dado pessoal, segredo, erro inteiro ou console', () => {
     const raiz = join(__dirname, '..');
     const violacoes = arquivosDaApi(raiz).flatMap((p) => violacoesNoFonte(relative(raiz, p).replace(/\\/g, '/'), readFileSync(p, 'utf8')));
