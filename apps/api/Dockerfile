@@ -47,7 +47,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Estágio 2: runtime distroless (sem shell, sem gerenciador de pacotes). Entrypoint: node.
 # Debian 13: a variante debian12 parou de ser republicada (fev/2026) e ficou com OpenSSL vulnerável.
 # ---------------------------------------------------------------------------------------------
-FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:10747a1323be68f206aed893599d43e6697ad67257e7c42703553f99fbce3d33 AS runtime
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:8ad9cc935b7843c4024b7e1487b5ef472c354ea847b97c667023e2618552607e AS runtime
 
 # Cadeia de certificados do RDS para sa-east-1 (verify-full no Postgres). Se a AWS trocar o bundle,
 # o build falha de propósito: baixe o novo, confira e atualize o checksum aqui.
