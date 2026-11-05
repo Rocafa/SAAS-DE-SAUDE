@@ -17,8 +17,8 @@ import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
 import { useAviso } from './desfazer';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 const NOME_PAPEL: Record<Papel, string> = { admin: 'Administrador', profissional: 'Profissional de saúde', recepcao: 'Recepção' };
 
@@ -390,7 +390,7 @@ function TrilhaDeAcesso() {
 }
 
 function SecaoPrivacidade() {
-  const { api, usuario } = useDados();
+  const { api, usuario, modo } = useDados();
   const [etapa, setEtapa] = useState<'inicio' | 'codigo' | 'pedido'>('inicio');
   const [codigo, setCodigo] = useState('');
   const [ciente, setCiente] = useState(false);
@@ -453,14 +453,21 @@ function SecaoPrivacidade() {
           <div className="flex flex-col gap-3" role="status">
             <p className="font-bold">Pedido feito. Falta a aprovação do responsável técnico da clínica.</p>
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
-            <Botao
-              variante="contorno"
-              className="self-start"
-              onClick={async () => setPedido(await api.aprovarExportacao(pedido.id))}
-            >
-              <ShieldCheck aria-hidden />
-              Aprovar como responsável técnico (demonstração)
-            </Botao>
+            {/*
+              Só na demonstração: o dump completo da clínica (pacientes, agenda, prontuários e
+              financeiro) exige duas pessoas, e aqui quem aprovaria é quem pediu, no mesmo navegador.
+              Com a API real, quem aprova é o responsável técnico, conferido no servidor.
+            */}
+            {modo === 'fake' && (
+              <Botao
+                variante="contorno"
+                className="self-start"
+                onClick={async () => setPedido(await api.aprovarExportacao(pedido.id))}
+              >
+                <ShieldCheck aria-hidden />
+                Aprovar como responsável técnico (demonstração)
+              </Botao>
+            )}
           </div>
         ) : (
           <p role="status" className="flex items-start gap-2 font-bold">
@@ -566,7 +573,17 @@ function SecaoPlano() {
 }
 
 export const SECOES: Record<string, { titulo: string; descricao: string; Componente: () => ReactNode }> = {
-  clinica: { titulo: 'Dados da clínica', descricao: 'Nome, endereço e telefone que aparecem nos documentos.', Componente: SecaoClinica },
+  // `salvarClinica` é `cadastros:gerir`, só do administrador (e o adaptador falso recusa com 403).
+  // Sem este envelope, a recepção veria o formulário editável e levaria o 403 só ao salvar.
+  clinica: {
+    titulo: 'Dados da clínica',
+    descricao: 'Nome, endereço e telefone que aparecem nos documentos.',
+    Componente: () => (
+      <SoAdmin oQue="muda os dados da clínica">
+        <SecaoClinica />
+      </SoAdmin>
+    ),
+  },
   usuarios: {
     titulo: 'Usuários e permissões',
     descricao: 'Quem usa o sistema e o que cada um pode fazer.',

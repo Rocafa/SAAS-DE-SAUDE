@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { criarApiFake } from './api/fake';
-import { MODELOS, diasPorExtenso, ehRestrito, faltasParaAssinar, modeloDoProfissional, textoAtestado, textoDeclaracao, validarCid } from './prontuario';
+import { MODELOS, diasPorExtenso, ehRestrito, faltasParaAssinar, faltasParaEmitir, modeloDoProfissional, textoAtestado, textoDeclaracao, validarCid } from './prontuario';
 
 describe('modelos por nicho', () => {
   it('escolhe pelo profissional', () => {
@@ -26,6 +26,15 @@ describe('modelos por nicho', () => {
 });
 
 describe('documentos', () => {
+  it('não emite sem registro do conselho nem sem nome da clínica', () => {
+    const clinica = { nome: 'Clínica Exemplo' };
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: 'CREFITO-3 000000-F' }, clinica)).toEqual([]);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo' }, clinica)[0]).toMatch(/registro do conselho de Dra. Exemplo/);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: '   ' }, clinica)).toHaveLength(1);
+    expect(faltasParaEmitir(undefined, clinica)[0]).toMatch(/profissional/);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: 'CRP 06/000000' }, { nome: ' ' })[0]).toMatch(/nome da clínica/);
+  });
+
   it('dias por extenso e limite', () => {
     expect(diasPorExtenso(1)).toBe('1 (um) dia');
     expect(diasPorExtenso(3)).toBe('3 (três) dias');

@@ -11,11 +11,12 @@ import { formatarDia } from '@/lib/ajudante/datas';
 import { nomeExibido } from '@/lib/api/tipos';
 import { NOME_FORMA } from '@/lib/financeiro';
 import { reais } from '@/lib/utils';
+import { indexarPorId } from '@/lib/indexar';
 
 export default function PaginaRecibos() {
   const consulta = useConsulta(async (a) => {
     const [recibos, pacientes] = await Promise.all([a.listarRecibos(), a.listarPacientes()]);
-    return { recibos: recibos.slice(0, 50), pacientes: new Map(pacientes.map((p) => [p.id, p])) };
+    return { recibos: recibos.slice(0, 50), pacientes: indexarPorId(pacientes) };
   });
   return (
     <>

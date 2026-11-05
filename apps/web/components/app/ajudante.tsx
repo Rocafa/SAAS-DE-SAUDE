@@ -34,12 +34,6 @@ import { ehPerfilClinico } from '@/lib/prontuario';
 import { useDados } from './dados';
 import { useExecutor } from './executor';
 
-/** Interface pronta para um reconhecimento de voz LOCAL (no aparelho). Nenhum implementado ainda. */
-export interface ReconhecimentoVozLocal {
-  disponivel(): boolean;
-  ouvir(): Promise<string>;
-}
-
 const ICONE_GRUPO: Record<Grupo, typeof Zap> = {
   Fazer: Zap,
   Pacientes: User,

@@ -20,8 +20,8 @@ import { MENSAGEM_GENERICA, mensagemParaTela, type ClientePortal } from '@/lib/a
 import { CODIGO_CONVITE_DEMONSTRACAO, TOKEN_CONVITE_DEMONSTRACAO } from '@/lib/api/portal-fake';
 import { criarClientePortal, lerConfigPortal, type ModoPortal } from '@/lib/api/portal-selecionar';
 import { codigoDoOtp, mensagemDoResgate, tirarTokenDaBarra } from '@/lib/portal-convite';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 export function ResgateDoConvite() {
   const router = useRouter();

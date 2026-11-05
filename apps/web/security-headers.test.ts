@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import nextConfig, { conferirConfigPortal, contentSecurityPolicy, securityHeaders } from './next.config';
+import nextConfig, { conferirConfigClinica, conferirConfigPortal, contentSecurityPolicy, securityHeaders } from './next.config';
 
 function directive(csp: string, name: string): string[] {
   const found = csp.split(';').map((d) => d.trim().split(/\s+/)).find(([n]) => n === name);
@@ -78,6 +78,13 @@ describe('headers de segurança do web', () => {
     expect(() => conferirConfigPortal({ NODE_ENV: 'production', NEXT_PUBLIC_PORTAL_SESSAO_DEV: 'ptl_x' })).toThrow(/desenvolvimento/);
     expect(() => conferirConfigPortal({ NODE_ENV: 'production' })).not.toThrow();
     expect(() => conferirConfigPortal({ NODE_ENV: 'development', NEXT_PUBLIC_PORTAL_MODO: 'http' })).not.toThrow();
+  });
+
+  it('clínica em modo http recusada em build de produção enquanto a D4 não existe', () => {
+    expect(() => conferirConfigClinica({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'http' })).toThrow(/D4/);
+    expect(() => conferirConfigClinica({ NODE_ENV: 'production' })).not.toThrow();
+    expect(() => conferirConfigClinica({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'fake' })).not.toThrow();
+    expect(() => conferirConfigClinica({ NODE_ENV: 'development', NEXT_PUBLIC_API_MODO: 'http' })).not.toThrow();
   });
 
   it('referrer-policy e permissions-policy restritivas', () => {
