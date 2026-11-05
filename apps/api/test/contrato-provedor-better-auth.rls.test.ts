@@ -549,6 +549,15 @@ describe('PR 3a: sessão da pessoa sem clínica (desenho §14.1; R3 a R6 do pare
     expect((await provedor.resolver({ headers: s }))?.mfaEm).toBeNull();
   });
 
+  it('R1 do código do 3a: duas escolhas de clínica AO MESMO TEMPO convertem o TOTP sem clínica uma vez só', async () => {
+    const { userId, t1, t2, c } = await pessoaEmDuasClinicas();
+    const s = await cadastrarFator(c, userId);
+    const pessoa = { sessaoId: await sessaoId(s), userId };
+    await Promise.all([provedor.escolherClinica(pessoa, t1), provedor.escolherClinica(pessoa, t2)]);
+    const verificados = [...(await trilhaDoFator(t1, userId)), ...(await trilhaDoFator(t2, userId))].filter((x) => x === 'login:mfa_verified');
+    expect(verificados).toHaveLength(1);
+  });
+
   it('escolher clínica sem vínculo: false (a rota responde 404)', async () => {
     const { userId, c } = await pessoaEmDuasClinicas();
     const outra = await api.novaClinica();

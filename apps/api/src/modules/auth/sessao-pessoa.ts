@@ -19,6 +19,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
@@ -36,6 +37,7 @@ import {
   type SessaoListada,
 } from './auth-context';
 
+type RespostaComCookie = { append(nome: string, valor: string): void };
 type RequisicaoComPessoa = RequisicaoParaSessao & { pessoa?: SessaoDePessoa; ip?: string };
 
 @Injectable()
@@ -100,14 +102,18 @@ export class SessaoDaPessoaController {
   /** Encerra uma sessão da própria pessoa; de outra pessoa, 404. */
   @Delete('sessoes/:id')
   @HttpCode(204)
-  async encerrar(@Pessoa() p: SessaoDePessoa, @Param('id') id: string): Promise<void> {
-    if (!(await this.pessoas.encerrarSessaoDaPessoa(p, exigirUuid(id, 'id')))) throw new NaoEncontradoError();
+  async encerrar(@Pessoa() p: SessaoDePessoa, @Param('id') id: string, @Res({ passthrough: true }) res: RespostaComCookie): Promise<void> {
+    const alvo = exigirUuid(id, 'id');
+    if (!(await this.pessoas.encerrarSessaoDaPessoa(p, alvo))) throw new NaoEncontradoError();
+    // R2 do código do 3a: encerrou a PRÓPRIA sessão: o navegador recebe o cookie expirado (depois de qualquer renovação).
+    if (alvo === p.sessaoId) res.append('Set-Cookie', this.pessoas.cookieDeEncerramento());
   }
 
   /** Logout global: encerra todas as sessões da pessoa, inclusive esta. */
   @Post('encerrar-todas')
   @HttpCode(204)
-  async encerrarTodas(@Pessoa() p: SessaoDePessoa): Promise<void> {
+  async encerrarTodas(@Pessoa() p: SessaoDePessoa, @Res({ passthrough: true }) res: RespostaComCookie): Promise<void> {
     await this.pessoas.encerrarTodasDaPessoa(p);
+    res.append('Set-Cookie', this.pessoas.cookieDeEncerramento());
   }
 }

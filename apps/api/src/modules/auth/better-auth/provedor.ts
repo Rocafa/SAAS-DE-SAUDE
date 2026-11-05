@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -42,6 +42,8 @@ export interface DependenciasDoProvedor {
   /** Pool do papel `app_user` (RLS por clínica) para ler os perfis e gravar a trilha. */
   readonly dbClinica: Database;
   readonly agora?: () => Date;
+  /** `Set-Cookie` que expira o cookie de sessão (nome e atributos do ambiente), para o logout (R2 do código do 3a). */
+  readonly cookieDeEncerramento?: string;
 }
 
 export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
@@ -175,6 +177,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
     return true;
   }
 
+  cookieDeEncerramento(): string {
+    return this.d.cookieDeEncerramento ?? 'sessao=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict';
+  }
+
   /** Logout global: todas as sessões da pessoa, inclusive a atual. Trilha nas clínicas do vínculo. */
   async encerrarTodasDaPessoa(s: SessaoDePessoa): Promise<number> {
     const apagadas = await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, s.userId)).returning({ id: sessao.id });
@@ -239,15 +245,25 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
   async definirClinica(sessaoId: string, userId: string, tenantId: string): Promise<boolean> {
     if (!(await this.clinicasDoUsuario(userId)).includes(tenantId)) return false;
     // R4 do desenho do PR 3: o TOTP feito sem clínica vale só para ESTA escolha e é zerado nela, valendo ou não.
-    const [antes] = await this.d.dbAuth
-      .select({ semClinica: sessao.mfaSemClinicaEm, clinicaAtiva: sessao.clinicaAtiva })
-      .from(sessao)
-      .where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
-    if (!antes) return false;
-    await this.d.dbAuth
-      .update(sessao)
-      .set({ clinicaAtiva: tenantId, mfaEm: null, perfisNoMfa: null, mfaSemClinicaEm: null })
-      .where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    // R1 do parecer do código do 3a: leitura do valor anterior e troca na MESMA instrução, com a linha travada; duas
+    // escolhas em paralelo não convertem as duas (a segunda espera e já vê o valor zerado).
+    const linhas = await this.d.dbAuth.execute<{ clinica_antes: string | null; sem_clinica_antes: Date | string | null }>(sql`
+      with antes as (
+        select id, clinica_ativa, mfa_sem_clinica_em from identidade.sessao
+        where id = ${sessaoId} and usuario_id = ${userId}
+        for update
+      )
+      update identidade.sessao s
+         set clinica_ativa = ${tenantId}, mfa_em = null, perfis_no_mfa = null, mfa_sem_clinica_em = null
+        from antes
+       where s.id = antes.id
+      returning antes.clinica_ativa as clinica_antes, antes.mfa_sem_clinica_em as sem_clinica_antes`);
+    const antesDaTroca = [...linhas][0];
+    if (!antesDaTroca) return false;
+    const antes = {
+      clinicaAtiva: antesDaTroca.clinica_antes,
+      semClinica: antesDaTroca.sem_clinica_antes === null ? null : new Date(antesDaTroca.sem_clinica_antes),
+    };
     await withTenant(
       this.d.dbClinica,
       tenantId as TenantId,

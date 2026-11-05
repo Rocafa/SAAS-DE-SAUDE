@@ -68,6 +68,8 @@ export interface ProvedorDePessoa {
   sessoesDaPessoa(s: SessaoDePessoa): Promise<SessaoListada[]>;
   encerrarSessaoDaPessoa(s: SessaoDePessoa, sessaoId: string): Promise<boolean>;
   encerrarTodasDaPessoa(s: SessaoDePessoa): Promise<number>;
+  /** `Set-Cookie` que expira o cookie de sessão no navegador (logout). */
+  cookieDeEncerramento(): string;
 }
 
 export function ehProvedorDePessoa(p: AuthProvider): p is AuthProvider & ProvedorDePessoa {
