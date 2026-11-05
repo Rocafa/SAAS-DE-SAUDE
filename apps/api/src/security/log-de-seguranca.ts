@@ -63,6 +63,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'titular_menor_revogado',
   'perfil_revogado',
   'origem_nao_permitida',
+  'aviso_de_anomalia',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

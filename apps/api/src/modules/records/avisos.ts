@@ -15,12 +15,13 @@
  */
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, desc, eq, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PortalSigiloTransicao, type PsychCompartmentMode } from '../../db/schema';
+import { auditLog, clinicalNotices, clinicMembers, professionals, type ClinicMemberRole, type ClinicalNoticeKind, type PortalSigiloTransicao, type PsychCompartmentMode } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { modeloPelaEspecialidade } from './modelos';
 
@@ -264,24 +265,49 @@ export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas'
 
 /**
  * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
- * disparou não recebe). Mesma transação do alerta. Só a regra e o id de quem disparou. Devolve quantos foram avisados.
+ * disparou não recebe). Só a regra e o id de quem disparou. Devolve quantos foram avisados.
+ * - R2 do parecer do #137: no máximo um aviso por pessoa e regra a cada 24 h (a trilha continua com TODOS os alertas):
+ *   se já há outro `anomaly_alert` da mesma regra e do mesmo ator nas últimas 24 h, não avisa de novo.
+ * - R1 do parecer do #137: best-effort num SAVEPOINT. Se o aviso falhar, o alerta na trilha e a operação do usuário
+ *   continuam; a falha vai para o log de segurança.
  */
 export async function avisarAdminsDeAnomalia(tx: TenantTx, ctx: RequestContext, regra: RegraDeAnomaliaAvisada): Promise<number> {
-  const admins = await tx
-    .select({ userId: clinicMembers.userId })
-    .from(clinicMembers)
-    .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt), ne(clinicMembers.userId, ctx.userId)));
-  const destinatarios = [...new Set(admins.map((a) => a.userId))];
-  if (destinatarios.length === 0) return 0;
-  await tx.insert(clinicalNotices).values(
-    destinatarios.map((u) => ({
-      tenantId: ctx.tenantId,
-      recipientUserId: u,
-      kind: 'alerta_anomalia' as const,
-      anomalyRule: regra,
-      subjectUserId: ctx.userId,
-      createdBy: ctx.userId,
-    })),
-  );
-  return destinatarios.length;
+  try {
+    return await tx.transaction(async (sp) => {
+      const [anteriores] = await sp
+        .select({ n: sql<number>`count(*)::int` })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.tenantId, ctx.tenantId),
+            eq(auditLog.actorId, ctx.userId),
+            eq(auditLog.action, AuditAction.AnomalyAlert),
+            sql`${auditLog.metadata}->>'rule' = ${regra}`,
+            sql`${auditLog.createdAt} > now() - interval '24 hours'`,
+          ),
+        );
+      // O alerta atual já está na trilha (mesma transação): mais de um = já houve aviso nas últimas 24 h.
+      if ((anteriores?.n ?? 0) > 1) return 0;
+      const admins = await sp
+        .select({ userId: clinicMembers.userId })
+        .from(clinicMembers)
+        .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt), ne(clinicMembers.userId, ctx.userId)));
+      const destinatarios = [...new Set(admins.map((a) => a.userId))];
+      if (destinatarios.length === 0) return 0;
+      await sp.insert(clinicalNotices).values(
+        destinatarios.map((u) => ({
+          tenantId: ctx.tenantId,
+          recipientUserId: u,
+          kind: 'alerta_anomalia' as const,
+          anomalyRule: regra,
+          subjectUserId: ctx.userId,
+          createdBy: ctx.userId,
+        })),
+      );
+      return destinatarios.length;
+    });
+  } catch {
+    registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId: ctx.tenantId, regra, motivo: 'aviso_de_anomalia' });
+    return 0;
+  }
 }

@@ -138,7 +138,9 @@ describe('E12: alerta de vínculo cruzado', () => {
 
   it('resto do E10 (0063): o admin vê o alerta na caixa de avisos, com a regra e quem disparou; o banco recusa o aviso sem regra', async () => {
     const avisos = ((await api.http().get('/avisos').set(cab(admin))).body as { tipo: string; regra?: string; usuarioId?: string }[]).filter((a) => a.tipo === 'alerta_anomalia');
-    expect(avisos.some((a) => a.regra === 'vinculo_cruzado' && a.usuarioId === profB.userId)).toBe(true);
+    // R2 do parecer do #137: profB disparou duas vezes (criação e remarcação), mas o admin recebe UM aviso em 24 h.
+    expect(avisos.filter((a) => a.regra === 'vinculo_cruzado' && a.usuarioId === profB.userId)).toHaveLength(1);
+    expect(avisos.filter((a) => a.regra === 'vinculo_cruzado' && a.usuarioId === profFin.userId)).toHaveLength(1);
     for (const a of avisos) expect(Object.keys(a).sort()).toEqual(['criadoEm', 'id', 'lidoEm', 'regra', 'tipo', 'usuarioId']);
     const semRegra = await withTenant(
       api.db.db,
