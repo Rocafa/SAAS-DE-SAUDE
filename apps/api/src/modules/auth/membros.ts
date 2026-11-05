@@ -178,26 +178,42 @@ export class MembrosService {
     });
   }
 
-  private async inserir(tx: TenantTx, ctx: RequestContext, usuarioId: string, perfil: ClinicMemberRole, op: string): Promise<MembroDto> {
-    const [m] = await tx
-      .insert(clinicMembers)
-      .values({ tenantId: ctx.tenantId, userId: usuarioId, role: perfil, grantedBy: ctx.userId })
-      .returning();
-    if (!m) throw new Error('falha ao conceder perfil');
-    await recordAudit(tx, ctx, {
-      action: AuditAction.PermissionChange,
-      scope: SCOPE,
-      metadata: {
-        op,
-        member_id: m.id,
-        user_id: usuarioId,
-        role: perfil,
-        // A fundação não tem "demais admins"; a concessão avisa todos os outros admins ativos.
-        admins_avisados: op === 'member_found' ? 0 : await avisarDemaisAdmins(tx, ctx, { tipo: 'perfil_alterado', usuarioId, perfil, mudanca: 'concedido' }),
-      },
-    });
-    return { usuarioId: m.userId, perfil: m.role, concedidoPor: m.grantedBy, concedidoEm: m.grantedAt.toISOString() };
+  private inserir(tx: TenantTx, ctx: RequestContext, usuarioId: string, perfil: ClinicMemberRole, op: string): Promise<MembroDto> {
+    return gravarConcessao(tx, ctx, usuarioId, perfil, op);
   }
+}
+
+/**
+ * Grava a concessão de perfil e a trilha na MESMA transação (o banco exige o evento no COMMIT, 0022). Usada pela rota
+ * de membros e pelo aceite do convite da equipe (PR 3b), que passa `extra` com o id do convite.
+ */
+export async function gravarConcessao(
+  tx: TenantTx,
+  ctx: RequestContext,
+  usuarioId: string,
+  perfil: ClinicMemberRole,
+  op: string,
+  extra: Readonly<Record<string, string>> = {},
+): Promise<MembroDto> {
+  const [m] = await tx
+    .insert(clinicMembers)
+    .values({ tenantId: ctx.tenantId, userId: usuarioId, role: perfil, grantedBy: ctx.userId })
+    .returning();
+  if (!m) throw new Error('falha ao conceder perfil');
+  await recordAudit(tx, ctx, {
+    action: AuditAction.PermissionChange,
+    scope: SCOPE,
+    metadata: {
+      op,
+      member_id: m.id,
+      user_id: usuarioId,
+      role: perfil,
+      ...extra,
+      // A fundação não tem "demais admins"; a concessão avisa todos os outros admins ativos.
+      admins_avisados: op === 'member_found' ? 0 : await avisarDemaisAdmins(tx, ctx, { tipo: 'perfil_alterado', usuarioId, perfil, mudanca: 'concedido' }),
+    },
+  });
+  return { usuarioId: m.userId, perfil: m.role, concedidoPor: m.grantedBy, concedidoEm: m.grantedAt.toISOString() };
 }
 
 function exigirPerfilDoBanco(valor: unknown): ClinicMemberRole {
