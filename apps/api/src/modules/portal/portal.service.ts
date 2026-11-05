@@ -202,7 +202,8 @@ export class PortalService {
    * único ao telefone DO CADASTRO do paciente (destino nunca informado por quem resgata). Devolve só o canal
    * e o destino mascarado. Falha sempre igual (409 convite_invalido), inclusive paciente sem telefone.
    */
-  async iniciarResgate(sessao: SessaoDoPortal, token: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
+  /** `origem`: HMAC do IP (log de segurança, R7 do parecer do #129); nunca o IP. */
+  async iniciarResgate(sessao: SessaoDoPortal, token: string, origem?: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
     await this.vigilancia.resgate(sessao.contaId);
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
     const codigo = novoCodigoOtp();
@@ -229,7 +230,7 @@ export class PortalService {
     });
     if (!telefone) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
-      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO', { origem });
       throw new ConflitoError('convite_invalido');
     }
     await this.otp.enviar({ canal: 'sms', valor: telefone }, codigo);
@@ -242,6 +243,7 @@ export class PortalService {
     req: RequisicaoParaSessao,
     token: string,
     codigo: string,
+    origem?: string,
   ): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
     await this.vigilancia.resgate(sessao.contaId);
     if (!TOKEN_CONVITE_RE.test(token) || !OTP_CODIGO_RE.test(codigo)) throw new ConflitoError('convite_invalido');
@@ -253,7 +255,7 @@ export class PortalService {
     });
     if (!vinculo) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
-      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO', { origem });
       throw new ConflitoError('convite_invalido');
     }
     await this.provider.escolherVinculo(req, vinculo);

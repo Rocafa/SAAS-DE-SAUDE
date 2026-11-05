@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WhatsappWebhookController } from '../modules/messaging/whatsapp.controller';
 import { VIGILANCIA_PADRAO, VigilanciaDeLeituraService } from '../modules/patients/vigilancia-de-leitura';
+import { PortalController } from '../modules/portal/portal.controller';
 import { PortalVigilanciaService } from '../modules/portal/portal-vigilancia';
 import { ExportsService } from '../modules/exports/exports.module';
 import { protecaoCsrf, rateLimiter } from './http-security';
@@ -153,6 +154,23 @@ describe('vigilância do portal (R2 do parecer do #138)', () => {
     const v = new PortalVigilanciaService(bancoFora as never, quebrado, { config: VIGILANCIA_PADRAO, hashKey: segredo, fecharStore: false }, { contaMax: 1, contaJanelaMs: 60_000, resgateMax: 1, resgateJanelaMs: 60_000 });
     for (let i = 0; i < 3; i++) await v.requisicao(conta, vinculo);
     expect(log.eventos().filter((e) => e['evento'] === 'RATE_LIMIT_FAIL_OPEN' && e['motivo'] === 'portal')).toHaveLength(1);
+  });
+});
+
+describe('portal: resgate de convite leva a origem (R7 do parecer do #129)', () => {
+  it('o controller passa ao serviço o HMAC do IP, nunca o IP', async () => {
+    const chamadas: unknown[][] = [];
+    const servico = {
+      iniciarResgate: (...a: unknown[]) => (chamadas.push(a), Promise.resolve({})),
+      resgatar: (...a: unknown[]) => (chamadas.push(a), Promise.resolve({})),
+    };
+    const c = new PortalController(servico as never);
+    const sessao = { contaId: '66666666-6666-4666-8666-666666666666' } as never;
+    await c.iniciarResgate(sessao, { ip: '198.51.100.7' }, {}, { token: 'x' });
+    await c.resgatar(sessao, { headers: {} }, { ip: '198.51.100.7' }, {}, { token: 'x', codigo: '123456' });
+    expect(chamadas[0]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
+    expect(chamadas[1]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
+    expect(JSON.stringify(chamadas)).not.toContain('198.51.100.7');
   });
 });
 
