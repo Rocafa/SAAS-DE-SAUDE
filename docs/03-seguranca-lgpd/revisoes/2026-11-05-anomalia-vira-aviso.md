@@ -78,3 +78,13 @@ TS sem migração quebra o alerta em produção (e, sem R1, apaga o alerta da tr
 - **R1 (feita):** o aviso é best-effort, num SAVEPOINT (`tx.transaction` aninhada). Se falhar, o alerta continua na trilha, a operação do usuário segue, e sai `TRILHA_NAO_GRAVADA` (`motivo: aviso_de_anomalia`) no log de segurança.
 - **R2 (feita):** no máximo um aviso por pessoa e regra a cada 24 h, contado pelos `anomaly_alert` da trilha (a RLS dos avisos não deixa o ator ver os avisos dos outros). A trilha continua com todos os alertas. O teste RLS confere que dois disparos do mesmo colega geram um único aviso.
 - **R3 a R6 (fila):** clínica com um só admin, registro no RIPD de que a equipe é monitorada, testes dos outros caminhos (admin que dispara, admin revogado, falha do aviso) e a lista de regras repetida entre TS e SQL.
+
+## Reconferência do Guardião (05/11/2026, commit `fe829fd`)
+
+R1 conferida: só o aviso fica no SAVEPOINT; a falha é engolida ali, a transação de fora continua usável, e o motivo novo entrou na allowlist do log. R2 conferida: a contagem é por tenant, ator, ação e regra, só na trilha; o teste cobre dois disparos que viram um aviso. Ressalva nova, para a fila antes do GA:
+
+**R7 — A janela da R2 desliza a partir do último alerta, não do último aviso.** Se o colega dispara a regra todo dia em intervalos menores que 24 h (`vinculo_autoagendado` tem limiar 0), sempre existe um alerta anterior nas últimas 24 h, e o admin recebe **um aviso só, enquanto o padrão durar**. O mesmo acontece se o primeiro aviso falhou (R1) ou se não havia admin naquela hora. Correção: marcar no próprio `anomaly_alert` se ele gerou aviso (ex.: `metadata.avisado = true`, gravado antes do hash) e contar só esses, ou usar um balde fixo por dia no fuso da clínica.
+
+**Veredito final: APROVADO** — R1 e R2 atendidas; R3 a R7 na fila (R7 antes do GA).
+
+**Nota do Maestro sobre a R7 (05/11/2026), feita:** o período agora é fixo, o dia no fuso da clínica: `created_at >= date_trunc('day', now() AT TIME ZONE INTERVAL '-03:00') AT TIME ZONE INTERVAL '-03:00'`. Usei `INTERVAL` para o sinal seguir o ISO, porque o texto `'-03:00'` no `AT TIME ZONE` é lido ao contrário (POSIX). Um padrão que se repete todo dia gera um aviso por dia. Fica um caso residual: se o primeiro aviso do dia falhar, ou não houver admin, os outros alertas daquele dia não avisam. A falha já sai como `TRILHA_NAO_GRAVADA` no log, e a trilha guarda todos os alertas.

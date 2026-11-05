@@ -266,8 +266,9 @@ export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas'
 /**
  * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
  * disparou não recebe). Só a regra e o id de quem disparou. Devolve quantos foram avisados.
- * - R2 do parecer do #137: no máximo um aviso por pessoa e regra a cada 24 h (a trilha continua com TODOS os alertas):
- *   se já há outro `anomaly_alert` da mesma regra e do mesmo ator nas últimas 24 h, não avisa de novo.
+ * - R2 e R7 do parecer do #137: no máximo um aviso por pessoa e regra por DIA no fuso da clínica (a trilha continua com
+ *   TODOS os alertas):
+ *   se já há outro `anomaly_alert` da mesma regra e do mesmo ator hoje, não avisa de novo.
  * - R1 do parecer do #137: best-effort num SAVEPOINT. Se o aviso falhar, o alerta na trilha e a operação do usuário
  *   continuam; a falha vai para o log de segurança.
  */
@@ -283,10 +284,12 @@ export async function avisarAdminsDeAnomalia(tx: TenantTx, ctx: RequestContext, 
             eq(auditLog.actorId, ctx.userId),
             eq(auditLog.action, AuditAction.AnomalyAlert),
             sql`${auditLog.metadata}->>'rule' = ${regra}`,
-            sql`${auditLog.createdAt} > now() - interval '24 hours'`,
+            // R7 do parecer do #137: período FIXO (o dia no fuso da clínica, -03:00), não 24 h corridas a partir do
+            // último alerta: um padrão que se repete todo dia gera um aviso por dia, e não um só enquanto durar.
+            sql`${auditLog.createdAt} >= date_trunc('day', now() AT TIME ZONE INTERVAL '-03:00') AT TIME ZONE INTERVAL '-03:00'`,
           ),
         );
-      // O alerta atual já está na trilha (mesma transação): mais de um = já houve aviso nas últimas 24 h.
+      // O alerta atual já está na trilha (mesma transação): mais de um hoje = o primeiro do dia já avisou.
       if ((anteriores?.n ?? 0) > 1) return 0;
       const admins = await sp
         .select({ userId: clinicMembers.userId })
