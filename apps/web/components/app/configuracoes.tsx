@@ -573,7 +573,17 @@ function SecaoPlano() {
 }
 
 export const SECOES: Record<string, { titulo: string; descricao: string; Componente: () => ReactNode }> = {
-  clinica: { titulo: 'Dados da clínica', descricao: 'Nome, endereço e telefone que aparecem nos documentos.', Componente: SecaoClinica },
+  // `salvarClinica` é `cadastros:gerir`, só do administrador (e o adaptador falso recusa com 403).
+  // Sem este envelope, a recepção veria o formulário editável e levaria o 403 só ao salvar.
+  clinica: {
+    titulo: 'Dados da clínica',
+    descricao: 'Nome, endereço e telefone que aparecem nos documentos.',
+    Componente: () => (
+      <SoAdmin oQue="muda os dados da clínica">
+        <SecaoClinica />
+      </SoAdmin>
+    ),
+  },
   usuarios: {
     titulo: 'Usuários e permissões',
     descricao: 'Quem usa o sistema e o que cada um pode fazer.',
