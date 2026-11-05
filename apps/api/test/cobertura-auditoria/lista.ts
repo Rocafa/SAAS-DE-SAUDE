@@ -16,6 +16,7 @@
 /** Rotas de escrita cuja trilha é gravada pelo código da API. */
 export const AUDITADAS: readonly string[] = [
   'DELETE /clinica/membros/:usuarioId/:perfil',
+  'DELETE /sessao/sessoes/:id',
   'PATCH /convenios/:id',
   'PATCH /guias/:id',
   'PATCH /notas-privadas/:id',
@@ -31,6 +32,8 @@ export const AUDITADAS: readonly string[] = [
   'POST /atendimentos/:id/finalizar',
   'POST /avisos/:id/lido',
   'POST /clinica/membros',
+  'POST /sessao/clinica',
+  'POST /sessao/encerrar-todas',
   'POST /clinica/portal/convites',
   'POST /clinica/portal/convites/:id/revogar',
   'POST /clinica/portal/solicitacoes/:id/situacao',
@@ -210,6 +213,10 @@ export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
     'texto e versão do termo de migração e limites do arquivo; constantes, sem dado',
   'GET /profissionais':
     'cadastro da agenda: nome, especialidade, capacidade e marca de área sensível de cada profissional (dado da equipe exibido ao agendar), sem dado de paciente',
+  'GET /sessao/clinicas':
+    'clínicas da própria pessoa (id e nome da clínica, que não é dado pessoal); sem perfis, contagens nem dado de paciente',
+  'GET /sessao/sessoes':
+    'sessões da própria pessoa: id, criação e última atividade; sem IP, user-agent, clínica nem dado de paciente (R20)',
   'GET /sessao':
     'a própria sessão: id do usuário, id da clínica e perfis, todos já do contexto de quem pede',
   'GET /tipos-atendimento':

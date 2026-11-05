@@ -9,15 +9,15 @@
 import { createHash } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
-import { clinicMembers } from '../../../db/schema';
+import { clinicMembers, tenants } from '../../../db/schema';
 import { sessao, usuario, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
-import type { AuthContext, AuthProvider, RequisicaoParaSessao } from '../auth-context';
+import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
 
@@ -41,7 +41,7 @@ export interface DependenciasDoProvedor {
   readonly agora?: () => Date;
 }
 
-export class BetterAuthProvider implements AuthProvider {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -93,6 +93,85 @@ export class BetterAuthProvider implements AuthProvider {
     }
     const mfaVale = linha.mfaEm !== null && linha.clinicaAtiva === tenantId && linha.perfisNoMfa === impressaoDosPerfis(perfis);
     return { tenantId: tenantId as TenantId, userId: userId as UserId, perfis, mfaEm: mfaVale ? linha.mfaEm : null };
+  }
+
+  /**
+   * Sessão da pessoa SEM exigir clínica (PR 3a; R3 do desenho do PR 3): as mesmas travas do `resolver` (sessão da
+   * biblioteca, prazo absoluto de 12 h que APAGA a sessão, conta ativa), sem ler clínica nem perfis.
+   */
+  async sessaoDePessoa(req: RequisicaoParaSessao): Promise<SessaoDePessoa | null> {
+    const lida = await this.d.auth.api.getSession({ headers: fromNodeHeaders(req.headers) }).catch(() => null);
+    if (!lida) return null;
+    const [linha] = await this.d.dbAuth
+      .select({ criadaEm: sessao.createdAt, usuarioId: sessao.userId, ativo: usuario.ativo })
+      .from(sessao)
+      .innerJoin(usuario, eq(usuario.id, sessao.userId))
+      .where(eq(sessao.id, lida.session.id));
+    if (!linha) return null;
+    if (this.agora().getTime() - linha.criadaEm.getTime() > PRAZO_ABSOLUTO_MS) {
+      await this.encerrar(lida.session.id, 'prazo_absoluto', linha.usuarioId);
+      return null;
+    }
+    if (!linha.ativo) {
+      await this.encerrar(lida.session.id, 'conta_inativa', linha.usuarioId);
+      return null;
+    }
+    return { sessaoId: lida.session.id, userId: linha.usuarioId };
+  }
+
+  /** Clínicas com vínculo ativo e o nome de cada uma (lido na própria clínica, com RLS). Sem perfis nem contagens. */
+  async clinicasDaPessoa(userId: string): Promise<ClinicaDaPessoa[]> {
+    const saida: ClinicaDaPessoa[] = [];
+    for (const id of await this.clinicasDoUsuario(userId)) {
+      const [t] = await withTenant(this.d.dbClinica, id as TenantId, (tx) => tx.select({ nome: tenants.displayName }).from(tenants).where(eq(tenants.id, id)), userId);
+      if (t) saida.push({ id, nome: t.nome });
+    }
+    return saida;
+  }
+
+  escolherClinica(s: SessaoDePessoa, clinicaId: string): Promise<boolean> {
+    return this.definirClinica(s.sessaoId, s.userId, clinicaId);
+  }
+
+  /** Só as sessões da própria pessoa, sem IP, user-agent nem clínica (R20). */
+  async sessoesDaPessoa(s: SessaoDePessoa): Promise<SessaoListada[]> {
+    const linhas = await this.d.dbAuth
+      .select({ id: sessao.id, criadaEm: sessao.createdAt, atualizadaEm: sessao.updatedAt })
+      .from(sessao)
+      .where(and(eq(sessao.userId, s.userId), gt(sessao.expiresAt, this.agora())))
+      .orderBy(desc(sessao.updatedAt));
+    return linhas.map((l) => ({ id: l.id, criadaEm: l.criadaEm.toISOString(), ultimaAtividade: l.atualizadaEm.toISOString(), atual: l.id === s.sessaoId }));
+  }
+
+  /** Encerra UMA sessão da própria pessoa; o dono é conferido no banco pelo id completo (R6 do desenho do PR 3). */
+  async encerrarSessaoDaPessoa(s: SessaoDePessoa, sessaoId: string): Promise<boolean> {
+    const apagadas = await this.d.dbAuth
+      .delete(sessao)
+      .where(and(eq(sessao.id, sessaoId), eq(sessao.userId, s.userId)))
+      .returning({ id: sessao.id });
+    if (apagadas.length === 0) return false;
+    registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout', userId: s.userId });
+    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_revoked');
+    return true;
+  }
+
+  /** Logout global: todas as sessões da pessoa, inclusive a atual. Trilha nas clínicas do vínculo. */
+  async encerrarTodasDaPessoa(s: SessaoDePessoa): Promise<number> {
+    const apagadas = await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, s.userId)).returning({ id: sessao.id });
+    registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout_global', userId: s.userId, contagem: apagadas.length });
+    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_logout_global');
+    return apagadas.length;
+  }
+
+  private async trilhaDeSessaoNasClinicas(userId: string, op: string): Promise<void> {
+    for (const tenantId of await this.clinicasDoUsuario(userId)) {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op } }),
+        userId,
+      );
+    }
   }
 
   /** Clínicas com vínculo ativo, pelo espelho `identidade.vinculo` (0064, só ids). */

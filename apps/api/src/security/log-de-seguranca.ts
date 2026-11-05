@@ -76,6 +76,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'aviso_de_anomalia',
   'erro_na_autenticacao',
   'logout',
+  'logout_global',
   'prazo_absoluto',
   'conta_inativa',
   'senha_errada',
