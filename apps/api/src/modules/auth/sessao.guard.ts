@@ -118,11 +118,13 @@ export class SessaoGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequisicaoComSessao>();
     const semRenovar = this.reflector.getAllAndOverride<boolean | undefined>(SEM_RENOVAR_SESSAO_KEY, [context.getHandler(), context.getClass()]) === true;
-    const res = context.switchToHttp().getResponse<{ append?: (nome: string, valor: string[]) => void }>();
+    const http = context.switchToHttp();
+    // Contexto sem resposta (dublê de teste, contexto não HTTP): sem cookie a devolver.
+    const res = typeof http.getResponse === 'function' ? http.getResponse<{ append?: (nome: string, valor: string[]) => void }>() : undefined;
     let auth = await this.provider.resolver({
       headers: req.headers,
       semRenovar,
-      aoRenovarCookie: (cookies) => res.append?.('Set-Cookie', cookies),
+      aoRenovarCookie: (cookies) => res?.append?.('Set-Cookie', cookies),
     });
     if (!auth) {
       registrarEventoDeSeguranca('SESSAO_INVALIDA', { rota: rotaDoTemplate(req), origem: origemDaRequisicao(req.ip) });
