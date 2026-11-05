@@ -5,6 +5,7 @@ import { PORTAL_CONSENT_PURPOSES, PORTAL_LINK_REVOKE_REASONS, PORTAL_ACTING_AS, 
 import type { RequisicaoParaSessao } from '../auth/auth-context';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { PortalGuard, RequisicaoPortal, SessaoPortal, type SessaoDoPortal } from './portal-auth';
 import { PortalClinicaService } from './portal-clinica.service';
 import { hojeNaClinica } from '../insurance/guias-regras';
@@ -213,6 +214,7 @@ export class PortalClinicaController {
 
   @Post('convites')
   @Permissao('portal:convidar')
+  @ExigeMfaRecente() // E8 (parecer do #131): rota de poder
   convidar(@Sessao() auth: AuthContext, @Body() corpo: unknown) {
     const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'agindoComo', 'validadeHoras', 'responsavelId']));
     const pacienteId = v.uuid('pacienteId', true);
@@ -278,6 +280,7 @@ export class PortalClinicaController {
   }
 
   @Post('solicitacoes/:id/situacao')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('titular:atender')
   atualizar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {

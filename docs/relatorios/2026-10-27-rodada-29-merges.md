@@ -95,5 +95,11 @@ Nenhuma dessas mudanças altera regra de negócio, dado pessoal ou política de 
 - **Antes:** o CodeQL rodava com `upload: never`, herança do repositório privado. Os achados de nível warning nunca eram vistos.
 - **Agora:** os resultados vão para a aba Security e para as anotações do PR. O artefato SARIF e a trava de achado grave continuam.
 - **1ª análise na `main`:** 103 regras do conjunto `security-extended`, **0 alertas**.
-- **Configuração do repositório, sem mudança:** varredura de segredos e proteção de push já estavam ligadas. Os **alertas do Dependabot estão desligados**. As atualizações do Dependabot por PR funcionam, mas os alertas de vulnerabilidade não. Ligar é recomendado; depende do OK do sócio, por ser configuração do repositório.
+- **Configuração do repositório, sem mudança:** varredura de segredos e proteção de push já estavam ligadas. Os alertas do Dependabot estavam desligados; **ligados em 29/10 com o OK do sócio** (§7).
 - **Verificado:** a O-R17d do #63 (lista branca no registro do fundador) já tinha sido fechada na 0047. Não sobra item de código "antes do GA" nos pareceres. O que falta depende de infraestrutura e dos sócios.
+
+## 7. 29/10: alertas do Dependabot ligados (#108)
+
+- **Configuração:** alertas de vulnerabilidade do Dependabot ligados com o OK do sócio. Agora o GitHub avisa quando uma dependência já instalada ganha falha conhecida, e não só quando sai versão nova.
+- **1ª varredura:** 1 alerta, médio. O `qs` 6.16.0 (GHSA-6pq8-jhm2-2vcw, DoS no `stringify` com `arrayFormat: 'comma'`) chegava pelo `superagent` do `supertest`, que só roda em teste.
+- **Correção (#108):** override `qs@>=6.7.0 <6.16.1 → ^6.16.1`, no mesmo padrão de multer e body-parser. O lockfile ficou só com o `qs` 6.17.0. `pnpm audit --prod` limpo e api 996/996.

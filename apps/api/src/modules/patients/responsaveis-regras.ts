@@ -1,4 +1,4 @@
-import type { GuardianKind } from '../../db/schema';
+import type { EscopoInformacaoClinica, GuardianKind } from '../../db/schema';
 import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 
 /**
@@ -37,7 +37,17 @@ export const ROTULO_DO_TIPO: Readonly<Record<GuardianKind, string>> = {
   tutor: 'Tutor(a)',
   curador: 'Curador(a)',
   representante: 'Representante legal',
+  apoiador: 'Apoiador(a) (decisão apoiada)',
 };
+
+/**
+ * Decisão apoiada (CC art. 1.783-A; 0055): o apoiador NÃO representa. O paciente é maior e capaz e decide em
+ * nome próprio. O apoiador não age pelo paciente no portal nem recebe lembrete por ele, e a informação clínica
+ * só chega a ele com a autorização expressa do paciente e a decisão do profissional.
+ */
+export function tipoRepresentaPaciente(tipo: GuardianKind): boolean {
+  return tipo !== 'apoiador';
+}
 
 export type MotivoInformacaoClinica =
   | 'permitida'
@@ -47,6 +57,11 @@ export type MotivoInformacaoClinica =
   | 'adolescente_requer_nova_decisao'
   | 'paciente_maior_de_idade'
   | 'paciente_emancipado'
+  | 'sem_autorizacao_do_paciente'
+  /** 0056 (A1 c): o adolescente pediu sigilo e não há decisão posterior que o supere por risco. */
+  | 'sigilo_pedido_pelo_adolescente'
+  /** Como o motivo acima aparece para quem não é profissional (o pedido em si é dado sensível). */
+  | 'restrita_pelo_profissional'
   | 'sem_data_de_nascimento';
 
 export type FaixaEtaria = 'crianca' | 'adolescente' | 'adulto';
@@ -99,6 +114,14 @@ export interface VinculoParaInformacaoClinica extends Vigencia {
   readonly recebeInformacaoClinica: boolean;
   /** Data (AAAA-MM-DD, fuso da clínica) da decisão do profissional; null sem decisão. */
   readonly decididaEm: string | null;
+  /** Apoiador (0055, B1): autorização expressa do paciente registrada. Os outros tipos ignoram. */
+  readonly autorizadoPeloPaciente?: boolean;
+  /** 0056 (A1 c): instante (ISO) da decisão do profissional, para comparar com o pedido de sigilo. */
+  readonly decisaoInstante?: string | null;
+  /** 0056 (A1 c): a decisão supera o pedido de sigilo por risco. */
+  readonly superaSigiloPorRisco?: boolean;
+  /** 0056 (A1 c): instante (ISO) do pedido de sigilo vigente mais recente que alcança este vínculo; null sem pedido. */
+  readonly sigiloPedidoEm?: string | null;
 }
 
 export function informacaoClinica(
@@ -113,6 +136,9 @@ export function informacaoClinica(
   if (!vigenteEm(vinculo, hoje)) return negar('vinculo_nao_vigente');
   if (vinculo.decididaEm === null) return negar('sem_decisao_do_profissional');
   if (vinculo.tipo === 'curador') return { permitida: true, motivo: 'permitida' };
+  // Decisão apoiada (B1 do parecer de 29/10): o apoiado é capaz; além da decisão do profissional, exige a
+  // autorização expressa do paciente (CEM art. 73, LGPD art. 11, I). Sem regra de idade.
+  if (vinculo.tipo === 'apoiador') return vinculo.autorizadoPeloPaciente === true ? { permitida: true, motivo: 'permitida' } : negar('sem_autorizacao_do_paciente');
   const menor = menorEm(nascimentoDoPaciente, hoje, emancipadoEm);
   if (menor === null) return negar('sem_data_de_nascimento');
   if (!menor) return negar(emancipadoEm !== null && emancipadoEm <= hoje ? 'paciente_emancipado' : 'paciente_maior_de_idade');
@@ -121,19 +147,66 @@ export function informacaoClinica(
     const inicio = aniversarioDe(nascimentoDoPaciente as string, regra.idadeInicioAdolescencia);
     if (vinculo.decididaEm < inicio) return negar('adolescente_requer_nova_decisao');
   }
+  // A1 (c) do #67: pedido de sigilo do adolescente. Só uma decisão TOMADA DEPOIS do pedido, que o supere por
+  // risco (CEM art. 74, parte final), devolve o efeito à marca.
+  if (vinculo.sigiloPedidoEm) {
+    const superou = vinculo.superaSigiloPorRisco === true && !!vinculo.decisaoInstante && vinculo.decisaoInstante > vinculo.sigiloPedidoEm;
+    if (!superou) return negar('sigilo_pedido_pelo_adolescente');
+  }
   return { permitida: true, motivo: 'permitida' };
 }
 
+/** Escopo padrão quando o profissional liga a marca sem dizer (A1 b do #67): o mais restrito. */
+export const ESCOPO_PADRAO: EscopoInformacaoClinica = 'essencial';
+
+/** Pedido de sigilo pode ser registrado? Só para adolescente (12 a 17 anos, não emancipado, com nascimento). */
+export function faixaDoPedidoDeSigilo(
+  nascimento: string | null,
+  hoje: string,
+  emancipadoEm: string | null,
+  regra: RegraInformacaoClinica = REGRA_INFORMACAO_CLINICA,
+): 'ok' | 'nascimento_nao_informado' | 'sigilo_so_para_adolescente' {
+  const faixa = faixaEtariaEm(nascimento, hoje, emancipadoEm, regra);
+  if (faixa === null) return 'nascimento_nao_informado';
+  return faixa === 'adolescente' ? 'ok' : 'sigilo_so_para_adolescente';
+}
+
 /**
- * Pendências do cadastro (para a tela): menor sem responsável vigente, menor sem pagador vigente (vira
+ * Pedido vigente mais recente que alcança o vínculo: o pedido para todos, ou o pedido sobre a PESSOA do vínculo
+ * (vale para qualquer vínculo dela com o paciente; refazer o vínculo não apaga o sigilo).
+ */
+export function pedidoDeSigiloDoVinculo(
+  pedidos: readonly { readonly responsavelId: string | null; readonly em: string }[],
+  responsavelId: string,
+): string | null {
+  let ultimo: string | null = null;
+  for (const p of pedidos) if ((p.responsavelId === null || p.responsavelId === responsavelId) && (ultimo === null || p.em > ultimo)) ultimo = p.em;
+  return ultimo;
+}
+
+/**
+ * Pendências do cadastro (para a tela): paciente maior com pai/mãe ou tutor vigente sem confirmação (0057), menor sem responsável vigente, menor sem pagador vigente (vira
  * `pagador_responsavel` no recibo quando o recebimento não congela pagador) e marca clínica de adolescente
  * à espera de nova decisão do profissional.
  */
 export function pendenciasDoCadastro(
   menor: boolean | null,
-  vinculos: readonly (Vigencia & { readonly pagador: boolean; readonly motivoInformacaoClinica?: MotivoInformacaoClinica })[],
+  vinculos: readonly (Vigencia & {
+    readonly pagador: boolean;
+    readonly motivoInformacaoClinica?: MotivoInformacaoClinica;
+    readonly tipo?: GuardianKind;
+    readonly confirmadoParaMaior?: boolean;
+  })[],
   hoje: string,
 ): string[] {
+  // 0057 (R4 do parecer do apoiador): paciente maior (ou emancipado) com pai/mãe ou tutor vigente e não confirmado —
+  // cadastrado sem data de nascimento, ou o paciente fez 18 anos. A recepção encerra o vínculo ou confirma.
+  if (menor === false) {
+    const aRevisar = vinculos.some(
+      (v) => vigenteEm(v, hoje) && (v.tipo === 'pai_mae' || v.tipo === 'tutor') && v.confirmadoParaMaior !== true,
+    );
+    return aRevisar ? ['revisar_pai_mae_tutor_de_maior'] : [];
+  }
   if (menor !== true) return [];
   const vigentes = vinculos.filter((v) => vigenteEm(v, hoje));
   const p: string[] = [];

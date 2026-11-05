@@ -1,11 +1,79 @@
 # Relatório geral do projeto Plataforma Saúde
 
 > **Para quem:** os dois sócios (N0). Dá para entender o projeto inteiro só com este documento, sem abrir o resto.
-> **Autor:** Maestro (N1) · **Data de referência:** 27/10/2026 (atualizado até a rodada 27; versões anteriores: 25/10, 15/10, 12/10 e 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
+> **Autor:** Maestro (N1) · **Data de referência:** 29/10/2026 (a **§0** resume as rodadas 28 a 30; o resto do documento descreve o estado de 27/10, rodada 27; versões anteriores: 25/10, 15/10, 12/10 e 09/10/2026) · **Base:** só fatos do repositório, com o arquivo de origem citado em cada ponto.
 > **Escopo:** rodadas 1 a 27. A `main` continua no código de 12/10 (migrações 0001 a 0006), porque o GitHub Actions está parado por cobrança desde então e a regra é não mergear código sem CI verde. Todo o resto está **pronto em PR**, testado só localmente: #43 a #47, #75 e #76 (telas), #54 (economia de minutos), #56 (IA), #57, #60, #61, #62, #63, #65 e **#73** (API, que substitui #66 a #69), #58 (Terraform), #59 (Docker), #36 (PoC da D4, rascunho), #74 (multer) e os Dependabot #49, #51, #52, #70, #71 e #72. A §6 (rodada 5) fica como registro histórico.
 > **Números de teste:** são os últimos verificados localmente pelo Maestro. Nenhum passou pelo CI.
 >
 > **Legenda de estado:** ✅ pronto · 🛠️ em andamento ou aguardando merge · 📋 planejado (só no papel)
+
+---
+
+## 0. Atualização de 03/11/2026 (rodadas 30 e 31)
+
+> **Leia isto primeiro.** Vale por cima do que as seções abaixo dizem. A §0 anterior, de 29/10, vem logo depois e continua valendo no que não mudou.
+
+**Auditoria: nenhuma rota entra sem trilha.** A trilha é gravada dentro da mesma operação de quem age. Um teste no CI agora garante isso para toda rota:
+- **Escrita** (#117, fecha a issue #105, S6): as 99 rotas que gravam dado estão declaradas. 97 registram pelo código, e as 2 exceções têm prova no teste. O teste segue o código de cada rota até a gravação da trilha. Avisos de anomalia e negação de acesso não contam como trilha.
+- **Leitura** (#119 e #120): as 63 rotas de leitura estão declaradas. As 50 que mostram dado de paciente gravam a leitura, **conferido contra banco real**. As 13 restantes não mostram dado de paciente, cada uma com o motivo. Rotas de paciente, prontuário, financeiro e portal nunca podem ser exceção.
+- **Fora de controller** (#121): handler HTTP montado fora da estrutura normal só entra numa lista fechada. O login da D4 vai ter de ser declarado ali, com parecer.
+- **Portal do paciente:** o veto do Guardião no #119 achou uma falha real. Uma conta com um só vínculo abria o contexto do paciente sem registro. Corrigido: a escolha automática e a saudação agora gravam na trilha.
+
+**Acesso do suporte autorizado pela clínica** (#115, S9). O dono da clínica autoriza o acesso do suporte a um chamado por 1 a 72 h e pode revogar. O banco recusa qualquer registro de acesso do suporte sem autorização válida. O acesso de emergência fica desligado até a D4.
+
+**MFA, independente do provedor** (#123 a #125, parte do #106). O MFA é obrigatório para todos os perfis. 24 ações sensíveis exigem o código dos últimos 15 minutos, e a exportação total vai exigir 5. No prontuário, o código recente só é exigido na psicologia. A recusa vai para a trilha, no máximo uma linha por minuto. Acima de 20 recusas, a API bloqueia o usuário e gera um alerta. O Guardião vetou duas vezes: a recepção estava sem MFA, e o tipo de erro revelava que o paciente faz psicoterapia. As duas falhas foram corrigidas antes do merge. Falta o código de verdade, que chega com o provedor da D4.
+
+**Exportação total** (#126 e #127). O manifesto marca o prontuário por área, e um teste prova que a psicologia sai inteira mesmo sem o código recente. Se a exportação falha, a trilha registra o motivo, sem dado do paciente. A rota HTTP da exportação depende de e-mail, armazenamento (AWS) e da definição do responsável técnico.
+
+**postgres.js v4** (#116, rascunho). CI 17/17 com a versão nova, e a reprodução do bug virou teste automático. Entra a partir de 12/11.
+
+**Decisões e PRs do @Lopesloro:**
+- **D4:** @Rocafa votou no Better Auth (03/11). Falta a confirmação do @Lopesloro no #36.
+- As duas correções obrigatórias do #103 estão no #118, um PR para o branch dele, com CI verde.
+- O #92, o #91 e o #104 estão aprovados. O merge é dele.
+
+**O que falta para o piloto, hoje:**
+1. **D4 confirmada**, seguida do login real (#107) e do código de MFA de verdade (a política já está pronta, #123 a #125). O PR do login precisa auditar login, logout, falhas e os eventos do MFA.
+2. Conta AWS para as provas K-c3/K-c5 no staging, o R10 do importador e o armazenamento da exportação total. Provedor de e-mail e definição do responsável técnico (rota da exportação).
+3. Front: merge do #118, do #103, do #92, do #91 e do #104, e a decisão do `fake.ts` (#86).
+4. Jurídico: D8 (advogado, com a pergunta 1.15), D7 e D13.
+
+Fontes: [rodada 30](2026-10-29-rodada-30.md), [rodada 31](2026-11-03-rodada-31.md).
+
+---
+
+## 0-a. Atualização de 29/10/2026 (rodadas 28 a 30)
+
+> **Leia isto primeiro.** As seções 1 a 11 descrevem 27/10, quando o GitHub Actions estava parado e a `main` ainda tinha o código de 12/10. **Isso mudou:** onde elas dizem "CI parado", "pronto em PR" ou "main em 0006", vale o que está aqui.
+
+**O CI voltou e o backend entrou.** Em 27/10 o repositório ficou **público** e o GitHub Actions voltou a rodar de graça. A fila validada no ensaio do merge completo entrou na `main`, PR por PR, cada um com CI verde (CI, Segurança com Redis real, Testes de produção, CodeQL, imagem e infra): #77, #43, #57, #61, #62, #63, #65, #56, #59, **#73** (importador, responsáveis, portal, WhatsApp e tarefas automáticas), #60, #58, #76, #49 e as atualizações do Dependabot. O CI real achou 4 defeitos que o teste local não pegava (imagem, Trivy/OpenSSL, k6 e infra), todos corrigidos. Fonte: [rodada 29](2026-10-27-rodada-29-merges.md).
+
+**Proteção do repositório (28 e 29/10, com o OK do sócio).**
+- A `main` só aceita PR com a branch atualizada e 10 checks obrigatórios verdes, sem force push nem exclusão (#87).
+- CodeQL publica na aba Security (#90): 103 regras, **0 alertas**.
+- Alertas do Dependabot ligados (#108): o único achado (`qs`, só em teste) foi corrigido; **0 abertos**.
+
+**Entregas de código depois dos merges** (todas com parecer do Guardião e CI verde):
+
+| PR | O quê | Guardião |
+|---|---|---|
+| #88 | Job diário que gera o índice cego do CPF dos pacientes antigos, sem script manual | aprovado após C1/C2 |
+| #89 | Índice cego do CPF também nos responsáveis (0054) | aprovado após C1 |
+| #109 | Tipo `apoiador` (tomada de decisão apoiada): não representa o paciente; informação clínica exige a decisão do profissional **e** a autorização do paciente (0055) | vetado, depois aprovado |
+| #110 | Escopo da informação clínica ao responsável (`essencial` por padrão) e pedido de sigilo do adolescente (0056) | aprovado com ressalvas |
+| #111 | Pendência de revisão de pai/mãe ou tutor de paciente adulto (0057) | aprovado |
+| #113 | Pedido de sigilo ligado ao atendimento do prontuário, só pelo id (0058) | aprovado com ressalvas (feitas) |
+
+Com isso, **não sobra pendência de código nos pareceres do Guardião**. O que falta depende de pessoas, de infraestrutura ou de data. Fonte: [rodada 30](2026-10-29-rodada-30.md).
+
+**Bug do postgres.js 3.4.9 (#112).** Já tinha sido relatado por terceiros e foi corrigido na v4.0.0 (29/10). Seguimos com o nosso patch; a troca para a v4 fica para depois de ~12/11, porque ela quebra compatibilidade.
+
+**O que falta para o piloto, hoje:**
+1. **D4** (login real): é o bloqueio técnico nº 1, junto com MFA (issues #106 e #107 do @Lopesloro).
+2. Rodar as provas K-c3/K-c5 no staging da AWS (nada foi aplicado ainda) e o R10 do importador.
+3. Front: o @Lopesloro decidir o `fake.ts` no #86 (pilha #44–#47 + #75 sobre a `main`, CI verde) e atualizar sobre a `main` os PRs #91 e #104, já aprovados pelo Maestro.
+4. Interceptor geral de auditoria (issue #105, com o @Lopesloro).
+5. Jurídico: **D8** (advogado), agora com a pergunta 1.15 sobre o sigilo do adolescente; D7 e D13.
 
 ---
 
