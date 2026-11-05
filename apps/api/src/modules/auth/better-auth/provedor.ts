@@ -9,11 +9,11 @@
 import { createHash } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
-import { sessao, usuario, vinculo } from '../../../db/identidade';
+import { doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
@@ -192,6 +192,22 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
         userId,
       );
     }
+  }
+
+  /**
+   * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
+   * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
+   */
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number }> {
+    const agora = this.agora();
+    const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
+    const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
+    const verificacoes = await this.d.dbAuth.delete(verificacao).where(lt(verificacao.expiresAt, umDia)).returning({ id: verificacao.id });
+    const cadastros = await this.d.dbAuth
+      .delete(doisFatores)
+      .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
+      .returning({ id: doisFatores.id });
+    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
   }
 
   /** Clínicas com vínculo ativo, pelo espelho `identidade.vinculo` (0064, só ids). */

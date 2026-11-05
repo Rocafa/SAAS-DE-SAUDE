@@ -88,4 +88,6 @@ export const doisFatores = identidade.table('dois_fatores', {
   verified: boolean('verificado').notNull().default(false),
   failedVerificationCount: integer('falhas').notNull().default(0),
   lockedUntil: timestamp('bloqueado_ate', { withTimezone: true }),
+  /** 0066: para o expurgo do cadastro não concluído (a biblioteca não grava; o banco preenche). */
+  criadoEm: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
 });

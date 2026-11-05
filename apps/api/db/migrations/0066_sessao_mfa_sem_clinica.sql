@@ -6,3 +6,6 @@
 -- o zera. O provedor NUNCA lê esta coluna como MFA: ela só vale dentro da escolha de clínica.
 
 ALTER TABLE identidade.sessao ADD COLUMN mfa_sem_clinica_em timestamptz;
+
+-- R7 do desenho do PR 3: o expurgo diário apaga o cadastro de TOTP não concluído há mais de 24 h; precisa da data.
+ALTER TABLE identidade.dois_fatores ADD COLUMN criado_em timestamptz NOT NULL DEFAULT now();

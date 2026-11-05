@@ -629,6 +629,27 @@ describe('PR 3a: cookie renovado e polling sem renovar (pendência do #149; R19;
   });
 });
 
+describe('PR 3a: expurgo diário do schema identidade (R11 do desenho, R7 do desenho do PR 3)', () => {
+  it('apaga sessões vencidas e cadastros de TOTP não concluídos há mais de 24 h; mantém o resto', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const viva = cookieDe(await entrar(p.email));
+    const vencida = cookieDe(await entrar(p.email));
+    const idVencida = await sessaoId(vencida);
+    const idViva = await sessaoId(viva);
+    await dbAuth.db.update(sessao).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(sessao.id, idVencida));
+    // Cadastro iniciado e abandonado há 2 dias.
+    expect((await postar('/two-factor/enable', viva, { password: SENHA })).r.status).toBe(200);
+    await dbAuth.db.update(doisFatores).set({ criadoEm: new Date(Date.now() - 48 * 3_600_000) }).where(eq(doisFatores.userId, p.userId));
+    const r = await provedor.expurgarComoSistema();
+    expect(r.sessoes).toBeGreaterThanOrEqual(1);
+    expect(r.cadastrosNaoConcluidos).toBeGreaterThanOrEqual(1);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idVencida))).toEqual([]);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idViva))).toHaveLength(1);
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+  });
+});
+
 async function sequencial<T>(tarefas: (() => Promise<T>)[]): Promise<T[]> {
   const saida: T[] = [];
   for (const t of tarefas) saida.push(await t());
