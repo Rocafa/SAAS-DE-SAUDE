@@ -270,12 +270,20 @@ describe('rate limit global', () => {
 
   it('sonda de liveness nunca leva 429, mesmo com o IP já bloqueado (balanceador não derruba instância saudável)', async () => {
     const http = app.getHttpServer() as Server;
-    await request(http).get('/qualquer-rota').expect(429); // IP já acima do limite neste ponto
+    // Esgota o limite AQUI, sem depender do teste anterior: a janela é fixa e pode virar entre um teste e outro, o que
+    // zerava o contador e deixava o teste instável sob carga (fila de 05/11).
+    let status = 0;
+    for (let i = 0; i < 10 && status !== 429; i += 1) status = (await request(http).get('/qualquer-rota')).status;
+    expect(status).toBe(429);
     for (let i = 0; i < 20; i += 1) await request(http).get('/health').expect(200);
   });
 
   it('isenção é por caminho exato: variações não escapam do limite', async () => {
     const http = app.getHttpServer() as Server;
+    // Mesmo motivo do teste acima: garante o IP acima do limite dentro deste teste.
+    let status = 0;
+    for (let i = 0; i < 10 && status !== 429; i += 1) status = (await request(http).get('/qualquer-rota')).status;
+    expect(status).toBe(429);
     await request(http).get('/health/../qualquer-rota').expect(429);
     await request(http).get('/healthz').expect(429);
   });

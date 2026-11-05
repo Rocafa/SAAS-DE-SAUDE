@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import type { RequisicaoParaSessao } from '../auth/auth-context';
+import { origemDaRequisicao, registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 /**
  * Sessão do PORTAL DO PACIENTE (veto B3 do parecer front-r8; recomendação da D4: login do portal
@@ -27,6 +28,8 @@ export interface SessaoDoPortal {
   readonly contaId: string;
   /** Vínculo escolhido nesta sessão (conta↔paciente↔clínica); null até escolher. */
   readonly vinculoId: string | null;
+  /** HMAC do IP da requisição (log de segurança), preenchido pelo guard; nunca o IP. */
+  readonly origem?: string;
 }
 
 /**
@@ -118,6 +121,7 @@ export function createPortalAuthProvider(env: NodeJS.ProcessEnv = process.env): 
 
 interface RequisicaoDoPortal extends RequisicaoParaSessao {
   portal?: SessaoDoPortal;
+  ip?: string;
 }
 
 /**
@@ -131,8 +135,12 @@ export class PortalGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequisicaoDoPortal>();
     const sessao = await this.provider.resolver(req);
-    if (!sessao) throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });
-    req.portal = sessao;
+    const origem = origemDaRequisicao(req.ip);
+    if (!sessao) {
+      registrarEventoDeSeguranca('SESSAO_INVALIDA', { motivo: 'portal', origem });
+      throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });
+    }
+    req.portal = origem ? { ...sessao, origem } : sessao;
     return true;
   }
 }
