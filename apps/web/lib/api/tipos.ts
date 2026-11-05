@@ -184,7 +184,11 @@ export const TETO_LISTA_PACIENTES = 1000;
  */
 export type ListaPacientes = Paciente[] & { truncado?: true };
 
-/** Anota (ou não) o truncamento numa lista nova. */
+/**
+ * Anota (ou não) o truncamento numa lista nova. Sempre copia: marcar a lista recebida mudaria o
+ * retrato de quem chamou, e devolvê-la sem copiar carregaria para a frente uma marca já vencida.
+ */
 export function comTruncado(lista: Paciente[], truncado: boolean | undefined): ListaPacientes {
-  return truncado ? Object.assign(lista, { truncado: true as const }) : lista;
+  const copia: Paciente[] = [...lista];
+  return truncado ? Object.assign(copia, { truncado: true as const }) : copia;
 }
