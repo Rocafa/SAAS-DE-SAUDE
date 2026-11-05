@@ -8,7 +8,7 @@
 --   `perfis_no_mfa` (gravados só pelas nossas funções; a biblioteca recebe `input: false`, R5).
 -- * `app_clinicas_do_usuario(usuario)`: as clínicas com vínculo ATIVO da pessoa (só ids), para a escolha da clínica
 --   (R7). `clinic_members` tem RLS forçado por clínica; a leitura cruzada vale SÓ dentro desta função, por uma
---   política que exige o DONO da tabela E a GUC que a cláusula SET da função liga. Outras funções SECURITY DEFINER
+--   política que exige o DONO da tabela E a GUC que a própria função liga e desliga. Outras funções SECURITY DEFINER
 --   do mesmo dono não ligam a GUC e seguem vendo só a clínica da transação; o app_user não é dono.
 
 CREATE TABLE identidade.usuario (
@@ -80,13 +80,19 @@ CREATE POLICY clinicas_do_usuario_leitura ON clinic_members FOR SELECT
   USING (current_setting('app.clinicas_do_usuario', true) = 'on' AND (SELECT app_running_as_owner('public.clinic_members'::regclass)));
 
 CREATE FUNCTION app_clinicas_do_usuario(p_usuario uuid) RETURNS SETOF uuid
-  LANGUAGE sql STABLE SECURITY DEFINER
+  LANGUAGE plpgsql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
-  SET app.clinicas_do_usuario = 'on'
 AS $$
-  SELECT DISTINCT m.tenant_id FROM public.clinic_members m
-   WHERE m.user_id = p_usuario AND m.revoked_at IS NULL AND m.role IN ('admin', 'profissional', 'recepcao', 'financeiro')
-   ORDER BY m.tenant_id
+BEGIN
+  -- A GUC liga a política de leitura SÓ durante esta consulta e é desligada antes de sair (não vaza para o resto
+  -- da transação). Ligar a GUC por fora não basta: a política também exige o dono da tabela.
+  PERFORM set_config('app.clinicas_do_usuario', 'on', true);
+  RETURN QUERY
+    SELECT DISTINCT m.tenant_id FROM public.clinic_members m
+     WHERE m.user_id = p_usuario AND m.revoked_at IS NULL AND m.role IN ('admin', 'profissional', 'recepcao', 'financeiro')
+     ORDER BY m.tenant_id;
+  PERFORM set_config('app.clinicas_do_usuario', 'off', true);
+END;
 $$;
 REVOKE ALL ON FUNCTION app_clinicas_do_usuario(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_clinicas_do_usuario(uuid) TO app_auth;
