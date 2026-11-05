@@ -35,7 +35,7 @@ const SANITIZADORES_POR_ARQUIVO: Readonly<Record<string, ReadonlySet<string>>> =
  * Palavras que, dentro de um nome composto (`cpfDoPaciente`, `telefone_responsavel`), tornam o nome sensível. Mais
  * curta que SENSIVEL de propósito: 'name' e 'texto' sozinhos aparecem em nomes seguros (`err.name`, `tipos.texto()`).
  */
-const PALAVRAS_SENSIVEIS: ReadonlySet<string> = new Set(['cpf', 'cns', 'rg', 'telefone', 'celular', 'phone', 'email', 'senha', 'password', 'token', 'segredo', 'secret', 'nascimento', 'endereco', 'queixa', 'evolucao', 'diagnostico', 'conteudo']);
+const PALAVRAS_SENSIVEIS: ReadonlySet<string> = new Set(['cpf', 'cns', 'rg', 'telefone', 'celular', 'phone', 'email', 'senha', 'password', 'token', 'segredo', 'secret', 'nascimento', 'endereco', 'queixa', 'evolucao', 'diagnostico', 'conteudo', 'nome', 'mensagem', 'message', 'stack', 'body', 'corpo', 'payload']);
 
 function nomeComposto(nome: string): boolean {
   return nome
@@ -255,21 +255,23 @@ describe('logs sem dado pessoal (trava de PR)', () => {
   it('resíduos do parecer do #129: cópia para variável local, despejo de objeto, nome composto e describe fora do arquivo', () => {
     const fonte = [
       'class X {',
-      '  f(p: { nome: string; cpfDoPaciente: string }, err: Error, o: object) {',
+      '  f(p: { nome: string; cpfDoPaciente: string; nomeDoPaciente: string }, err: Error, o: object) {',
       '    const x = p.nome;',
       '    this.logger.warn(x);',
       '    this.logger.warn(util.inspect(o));',
       '    this.logger.warn(Object.values(o).join());',
       '    this.logger.warn(p.cpfDoPaciente);',
+      '    this.logger.warn(p.nomeDoPaciente);',
       '    this.logger.error(describe(err));',
       "    this.logger.warn(String('ok'));",
       '  }',
       '}',
     ].join('\n');
     const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
-    // 4 cópia local, 5 util.inspect, 6 Object.values, 7 nome composto, 8 describe fora do graceful-shutdown
-    for (const l of [4, 5, 6, 7, 8]) expect(linhas, `linha ${l}`).toContain(l);
-    expect(linhas).not.toContain(9);
+    // 4 cópia local, 5 util.inspect, 6 Object.values, 7 e 8 nome composto (R1 do parecer do #141), 9 describe fora do
+    // graceful-shutdown
+    for (const l of [4, 5, 6, 7, 8, 9]) expect(linhas, `linha ${l}`).toContain(l);
+    expect(linhas).not.toContain(10);
     // describe continua liberado só no arquivo onde foi conferido.
     expect(violacoesNoFonte('lifecycle/graceful-shutdown.ts', 'const f = (err: Error) => logger.error(describe(err));')).toEqual([]);
   });

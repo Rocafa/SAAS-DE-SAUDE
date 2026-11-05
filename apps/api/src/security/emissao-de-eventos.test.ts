@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WhatsappWebhookController } from '../modules/messaging/whatsapp.controller';
 import { VIGILANCIA_PADRAO, VigilanciaDeLeituraService } from '../modules/patients/vigilancia-de-leitura';
+import { PortalGuard } from '../modules/portal/portal-auth';
 import { PortalController } from '../modules/portal/portal.controller';
 import { PortalVigilanciaService } from '../modules/portal/portal-vigilancia';
 import { ExportsService } from '../modules/exports/exports.module';
@@ -128,14 +129,16 @@ describe('vigilância do portal (R2 do parecer do #138)', () => {
   const conta = '44444444-4444-4444-8444-444444444444';
   const vinculo = '55555555-5555-4555-8555-555555555555';
 
-  it('limite por conta: um ALERTA_ANOMALIA e, com o banco fora, TRILHA_NAO_GRAVADA; 429', async () => {
+  it('limite por conta: um ALERTA_ANOMALIA (com a origem da sessão) e, com o banco fora, TRILHA_NAO_GRAVADA; 429', async () => {
     const log = capturar();
     const v = vig();
-    await v.requisicao(conta, vinculo);
-    await v.requisicao(conta, vinculo);
-    await expect(v.requisicao(conta, vinculo)).rejects.toMatchObject({ status: 429 });
+    const origem = origemDaRequisicao('198.51.100.20');
+    await v.requisicao(conta, vinculo, origem);
+    await v.requisicao(conta, vinculo, origem);
+    await expect(v.requisicao(conta, vinculo, origem)).rejects.toMatchObject({ status: 429 });
     const eventos = log.eventos();
-    expect(eventos.filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_limite_por_conta' })]);
+    // R3 do parecer do #141: a origem chega ao alerta.
+    expect(eventos.filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_limite_por_conta', origem })]);
     expect(eventos.some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['regra'] === 'portal_limite_por_conta')).toBe(true);
     expect(log.tudo()).not.toContain(conta);
   });
@@ -173,6 +176,27 @@ describe('portal: resgate de convite leva a origem (R7 do parecer do #129)', () 
     expect(chamadas[0]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
     expect(chamadas[1]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
     expect(JSON.stringify(chamadas)).not.toContain('198.51.100.7');
+  });
+});
+
+describe('guard do portal (R3 do parecer do #141)', () => {
+  const contexto = (req: Record<string, unknown>): never => ({ switchToHttp: () => ({ getRequest: () => req }) }) as never;
+
+  it('sem sessão: 401 e SESSAO_INVALIDA com motivo portal e a origem em HMAC (nunca o IP)', async () => {
+    const log = capturar();
+    const guard = new PortalGuard({ resolver: () => Promise.resolve(null) } as never);
+    await expect(guard.canActivate(contexto({ headers: {}, ip: '198.51.100.30' }))).rejects.toMatchObject({ status: 401 });
+    expect(log.eventos().find((e) => e['evento'] === 'SESSAO_INVALIDA')).toMatchObject({ motivo: 'portal', origem: origemDaRequisicao('198.51.100.30') });
+    expect(log.tudo()).not.toContain('198.51.100.30');
+  });
+
+  it('com sessão: a origem vai numa CÓPIA na requisição; a sessão guardada pelo provedor não muda', async () => {
+    const guardada = Object.freeze({ contaId: '77777777-7777-4777-8777-777777777777', vinculoId: null });
+    const req: Record<string, unknown> = { headers: {}, ip: '198.51.100.31' };
+    const guard = new PortalGuard({ resolver: () => Promise.resolve(guardada) } as never);
+    await expect(guard.canActivate(contexto(req))).resolves.toBe(true);
+    expect(req['portal']).toEqual({ ...guardada, origem: origemDaRequisicao('198.51.100.31') });
+    expect(guardada).not.toHaveProperty('origem');
   });
 });
 
