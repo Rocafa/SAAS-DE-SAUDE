@@ -359,7 +359,8 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
     expect((await provedor.resolver({ headers: nova }))?.mfaEm).toBeInstanceOf(Date);
     const [u] = await dbAuth.db.select({ ativo: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, userId));
     expect(u?.ativo).toBe(true);
-    expect(await trilhaDoFator(tenantId, userId)).toEqual(['login:mfa_enrolled', 'login:mfa_verified']);
+    // A senha errada do cadastro também fica na trilha (falha do fator com sessão aberta).
+    expect(await trilhaDoFator(tenantId, userId)).toEqual(['login_failed:mfa_failed', 'login:mfa_enrolled', 'login:mfa_verified']);
   });
 
   it('login com TOTP: a senha certa não abre sessão (só o desafio); "lembrar este aparelho" é recusado; o código abre a sessão já com mfa_em', async () => {
@@ -400,6 +401,37 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
     expect(trilha.filter((x) => x === 'login_failed:mfa_locked')).toHaveLength(1);
   });
 
+  it('R1 do parecer: 20 códigos errados AO MESMO TEMPO; no máximo 5 chegam à conferência e o código certo depois recebe 429', async () => {
+    const { userId, tenantId, c } = await pessoaLogada();
+    const s = await cadastrarFator(c, userId);
+    const segredo = segredos.get(userId)?.segredo ?? Buffer.alloc(0);
+    const rajada = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => postar('/two-factor/verify-totp', s, { code: codigoErrado(segredo, 100 + i) }, '0a1b2c3d4e5f6071')),
+    );
+    const status = rajada.map((x) => x.r.status);
+    expect(status.filter((x) => x === 401).length).toBeLessThanOrEqual(5);
+    expect(status.filter((x) => x === 429).length).toBeGreaterThanOrEqual(15);
+    // Só as que chegaram à conferência geram linha de falha na trilha.
+    expect((await trilhaDoFator(tenantId, userId)).filter((x) => x === 'login_failed:mfa_failed').length).toBeLessThanOrEqual(5);
+    const certo = await postar('/two-factor/verify-totp', s, { code: proximoCodigo(userId) }, '0a1b2c3d4e5f6071');
+    expect(certo.r.status).toBe(429);
+  });
+
+  it('R1 do parecer: o acerto devolve a reserva (4 erros + 1 acerto não travam a próxima tentativa)', async () => {
+    const { userId, c } = await pessoaLogada();
+    const s = await cadastrarFator(c, userId);
+    const segredo = segredos.get(userId)?.segredo ?? Buffer.alloc(0);
+    for (let i = 0; i < 4; i++) expect((await postar('/two-factor/verify-totp', s, { code: codigoErrado(segredo, 200 + i) }, '1a1b2c3d4e5f6071')).r.status).toBe(401);
+    expect((await reverificar(s, userId)).status).toBe(200);
+    expect((await reverificar(s, userId)).status).toBe(200);
+  });
+
+  it('R12 do parecer: o cadastro aceita só TOTP com o emissor nosso', async () => {
+    const { c } = await pessoaLogada();
+    expect((await postar('/two-factor/enable', c, { password: SENHA, method: 'otp' })).r.status).toBe(400);
+    expect((await postar('/two-factor/enable', c, { password: SENHA, issuer: 'Banco Ficticio' })).r.status).toBe(400);
+  });
+
   it('bloqueio do login: depois de 5 senhas erradas, até a senha certa recebe a MESMA resposta da senha errada; e-mail inexistente idem', async () => {
     const { email } = await pessoaLogada();
     const origem = 'e1b2c3d4e5f60718';
@@ -419,13 +451,13 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
 
   it('R15: senha nova que aparece na base de vazadas é recusada na troca; a senha atual continua valendo', async () => {
     const { email, c } = await pessoaLogada();
-    const r = await auth.api.changePassword({
-      body: { currentPassword: SENHA, newPassword: SENHA_VAZADA, revokeOtherSessions: true },
-      headers: new Headers(c as Record<string, string>),
-      asResponse: true,
-    });
-    expect(r.status).toBe(400);
-    expect(((await r.json()) as { code?: string }).code).toBe('PASSWORD_COMPROMISED');
+    // Chamada interna: o erro do gancho `before` sobe como exceção (pela HTTP vira a resposta 400).
+    await expect(
+      auth.api.changePassword({
+        body: { currentPassword: SENHA, newPassword: SENHA_VAZADA, revokeOtherSessions: true },
+        headers: new Headers(c as Record<string, string>),
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, body: { code: 'PASSWORD_COMPROMISED' } });
     expect((await entrar(email)).status).toBe(200);
   });
 

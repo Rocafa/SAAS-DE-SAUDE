@@ -100,6 +100,10 @@ export const REGRAS_DE_SEGURANCA = [
   'vinculo_autoagendado',
   'mfa_recusas_por_usuario',
   'vinculo_cruzado',
+  'login_por_email',
+  'login_por_origem',
+  'fator_por_pessoa',
+  'fator_por_origem',
 ] as const;
 const MOTIVOS: ReadonlySet<string> = new Set(MOTIVOS_DE_SEGURANCA);
 const REGRAS: ReadonlySet<string> = new Set(REGRAS_DE_SEGURANCA);

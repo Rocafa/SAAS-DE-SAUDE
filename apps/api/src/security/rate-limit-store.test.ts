@@ -27,6 +27,9 @@ function primarioFalso(): RateLimitStore & { fora: boolean; chamadas: number } {
     peek(key: string, windowMs: number) {
       return p.fora ? Promise.reject(new Error('redis fora')) : memoria.peek(key, windowMs);
     },
+    release(key: string, windowMs: number) {
+      return p.fora ? Promise.reject(new Error('redis fora')) : memoria.release(key, windowMs);
+    },
     mode: () => 'compartilhado' as const,
     close: () => Promise.resolve(),
   };
@@ -120,6 +123,7 @@ describe('rateLimiter', () => {
         return memoria.hit(key, windowMs);
       },
       peek: (key, windowMs) => memoria.peek(key, windowMs),
+      release: (key, windowMs) => memoria.release(key, windowMs),
       mode: () => 'memoria',
       close: () => Promise.resolve(),
     };
@@ -137,6 +141,7 @@ describe('rateLimiter', () => {
     const quebrado: RateLimitStore = {
       hit: () => Promise.reject(new Error('caiu')),
       peek: () => Promise.reject(new Error('caiu')),
+      release: () => Promise.reject(new Error('caiu')),
       mode: () => 'compartilhado',
       close: () => Promise.resolve(),
     };
@@ -240,5 +245,18 @@ describe('peek (consulta do bloqueio de login, D4 PR 2)', () => {
     primario.fora = true;
     await s.hit('k', 60_000);
     expect(await s.peek('k', 60_000)).toBe(1);
+  });
+});
+
+describe('release (reserva atômica do bloqueio, R1 do parecer do PR 2 da D4)', () => {
+  it('devolve uma batida com piso 0', async () => {
+    const s = new MemoryRateLimitStore();
+    await s.hit('k', 60_000);
+    await s.hit('k', 60_000);
+    await s.release('k', 60_000);
+    expect(await s.peek('k', 60_000)).toBe(1);
+    await s.release('k', 60_000);
+    await s.release('k', 60_000);
+    expect(await s.peek('k', 60_000)).toBe(0);
   });
 });
