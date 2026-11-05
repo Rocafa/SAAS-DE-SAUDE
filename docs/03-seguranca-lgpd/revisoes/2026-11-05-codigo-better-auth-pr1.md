@@ -63,3 +63,10 @@ O núcleo está certo: o papel `app_auth` isola o schema `identidade`, a allowli
   - segredos no Secrets Manager via Terraform (depende da AWS);
   - `Set-Cookie` renovado quando o provedor estende a sessão.
 - **Fila:** os itens do §3 do parecer.
+
+## Veredito final (reconferido em `4191525`): **APROVADO COM RESSALVAS**
+Reconferi no código o que a nota acima diz:
+- **Veto R8 resolvido:** `useSecureCookies: false`; o `Secure` vem dos atributos. A escolha do modo usa `!AMBIENTES_SESSAO_FICTICIA.has(NODE_ENV)`, e só development e test ficam sem `Secure`. O teste em modo produção, com `rememberMe: false`, confere todos os `Set-Cookie`, o nome `__Host-sessao` e a ausência de `__Secure-__Host`.
+- **Fechados:** ressalva 2 (o gancho `session.create.before` recusa conta inativa, com teste), ressalva 3 (teto de 4 KiB e 413 para chunked, com teste) e ressalva 7 (12 h na montagem, com teste).
+- **Seguem abertas antes do PR 3:** as ressalvas 4, 5 e 6. A fila (8–12) fica como está.
+- Os testes RLS novos não rodaram aqui (sem Postgres local). A aprovação depende do CI do RLS verde neste commit.
