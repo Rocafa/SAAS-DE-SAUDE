@@ -9,6 +9,7 @@
  *   `input: false`; cadastro público desligado; cookieCache desligado (GHSA-xg6x-h9c9-2m83).
  */
 import { createHmac, randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import type { Database } from '../../../db/tenant-transaction';
@@ -96,7 +97,9 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao) {
     // R10: o rate limit da biblioteca (em memória, por instância) fica desligado; o bloqueio é nosso, no Redis.
     rateLimit: { enabled: false },
     advanced: {
-      useSecureCookies: o.producao,
+      // R8 do parecer do código (#149): com useSecureCookies a biblioteca acrescenta __Secure- ao nome e o cookie
+      // sairia __Secure-__Host-sessao. O Secure vem dos atributos; o nome fica exatamente o nosso.
+      useSecureCookies: false,
       cookies: { session_token: { name: nomeDoCookie(o.producao) } },
       defaultCookieAttributes: { httpOnly: true, sameSite: 'strict', secure: o.producao, path: '/' },
       database: { generateId: () => randomUUID() },
@@ -112,14 +115,18 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao) {
       session: {
         create: {
           // R10: só HMAC na tabela. O IP chega em HMAC pelo nosso cabeçalho; o user-agent vira HMAC aqui.
-          before: (s) =>
-            Promise.resolve({
+          before: async (s) => {
+            // Conta inativa (desligada) não abre sessão nem gera LOGIN_OK (ressalva do parecer do código, #149).
+            const [u] = await o.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, s.userId));
+            if (!u?.ativo) return false;
+            return {
               data: {
                 ...s,
                 ipAddress: typeof s.ipAddress === 'string' && HEX16.test(s.ipAddress) ? s.ipAddress : null,
                 userAgent: typeof s.userAgent === 'string' && s.userAgent !== '' ? hmacCurto(o.chaveHmac, `ua:${s.userAgent}`) : null,
               },
-            }),
+            };
+          },
           // Login aceito no log de segurança, com o usuário e a origem em HMAC (nunca o e-mail).
           after: (s) => {
             registrarEventoDeSeguranca('LOGIN_OK', {

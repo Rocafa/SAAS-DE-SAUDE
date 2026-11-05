@@ -16,6 +16,8 @@ import { CABECALHO_ORIGEM, PRAZO_ABSOLUTO_MS, type Autenticacao } from './instan
 import type { BetterAuthProvider } from './provedor';
 
 export const PREFIXO = '/api/auth';
+/** Login é e-mail e senha: 4 KiB bastam. Corpo maior ou sem tamanho declarado (chunked) dá 413. */
+export const TETO_DO_CORPO = 4 * 1024;
 
 /** Endpoints da biblioteca expostos (método + caminho depois do prefixo). O PR 2 acrescenta o TOTP. */
 export const ENDPOINTS_PERMITIDOS: ReadonlySet<string> = new Set(['POST /sign-in/email', 'POST /sign-out', 'GET /get-session']);
@@ -42,6 +44,11 @@ export function montarAutenticacao(auth: Autenticacao, provedor: BetterAuthProvi
     const rota = `${metodo} ${caminho}`;
     if (!ENDPOINTS_PERMITIDOS.has(rota)) {
       responder(res, 404, 'Not Found');
+      return;
+    }
+    // A biblioteca lê o corpo cru, antes do parser JSON da borda: limite próprio (ressalva do parecer do código).
+    if (Number(req.headers['content-length'] ?? '0') > TETO_DO_CORPO || req.headers['transfer-encoding'] !== undefined) {
+      responder(res, 413, 'Payload Too Large');
       return;
     }
     const origem = origemDaRequisicao(req.ip ?? req.socket.remoteAddress);

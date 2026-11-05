@@ -5,6 +5,7 @@
  * tipo pode subir (só dev/test até o PR 3).
  */
 import { createDatabase } from '../../../db/tenant-transaction';
+import { AMBIENTES_SESSAO_FICTICIA } from '../auth-provider.factory';
 import { loadRateLimitHashKey } from '../../../security/rate-limit-store';
 import { criarAutenticacao } from './instancia';
 import { montarAutenticacao } from './montagem';
@@ -19,7 +20,8 @@ function obrigatoria(env: NodeJS.ProcessEnv, nome: string): string {
 export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: readonly string[]) {
   const dbAuth = createDatabase(obrigatoria(env, 'DATABASE_AUTH_URL'), { max: 5 });
   const dbClinica = createDatabase(obrigatoria(env, 'DATABASE_URL'), { max: 5 });
-  const producao = env.NODE_ENV === 'production';
+  // Falha fechada (R8 do parecer do código): cookie seguro em tudo que NÃO for development/test (staging, vazio…).
+  const producao = !AMBIENTES_SESSAO_FICTICIA.has(env.NODE_ENV ?? '');
   const auth = criarAutenticacao({
     db: dbAuth.db,
     segredo: obrigatoria(env, 'BETTER_AUTH_SECRET'),

@@ -133,6 +133,41 @@ describe('Better Auth: o que o desenho promete (R1, R3, R5, R7, R8 do parecer)',
     expect(nomeDoCookie(true)).toBe('__Host-sessao');
   });
 
+  it('R8 do parecer do código: em modo produção TODO Set-Cookie é Secure, HttpOnly, SameSite=Strict, Path=/ e sem Domain; a sessão sai exatamente como __Host-sessao', async () => {
+    const prod = criarAutenticacao({
+      db: dbAuth.db,
+      segredo: randomBytes(32).toString('base64'),
+      baseURL: 'https://api.exemplo.test',
+      origensConfiaveis: ['https://app.exemplo.test'],
+      producao: true,
+      chaveHmac: randomBytes(32),
+    });
+    const tenantId = await api.novaClinica();
+    const { email } = await novaPessoa(tenantId, ['recepcao']);
+    const r = await prod.api.signInEmail({ body: { email, password: SENHA, rememberMe: false }, asResponse: true });
+    expect(r.status).toBe(200);
+    const cookies = r.headers.getSetCookie();
+    expect(cookies.length).toBeGreaterThan(0);
+    for (const c of cookies) {
+      expect(c, c.split('=')[0]).toMatch(/;\s*Secure/i);
+      expect(c, c.split('=')[0]).toMatch(/HttpOnly/i);
+      expect(c, c.split('=')[0]).toMatch(/SameSite=Strict/i);
+      expect(c, c.split('=')[0]).toMatch(/Path=\//i);
+      expect(c, c.split('=')[0]).not.toMatch(/Domain=/i);
+      expect(c.startsWith('__Secure-__Host')).toBe(false);
+    }
+    expect(cookies.some((c) => c.startsWith('__Host-sessao='))).toBe(true);
+  });
+
+  it('conta inativa não abre sessão (o gancho recusa antes de criar)', async () => {
+    const tenantId = await api.novaClinica();
+    const { userId, email } = await novaPessoa(tenantId, ['recepcao']);
+    await dbAuth.db.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    const r = await entrar(email);
+    expect(r.headers.getSetCookie().some((c) => c.startsWith(`${nomeDoCookie(false)}=`))).toBe(false);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, userId))).toEqual([]);
+  });
+
   it('senha errada: sem cookie de sessão e sem dizer se a conta existe (mesmo status para e-mail inexistente)', async () => {
     const tenantId = await api.novaClinica();
     const { email } = await novaPessoa(tenantId, ['recepcao']);

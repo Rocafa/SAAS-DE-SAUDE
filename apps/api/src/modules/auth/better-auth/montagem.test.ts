@@ -75,4 +75,27 @@ describe('montagem do Better Auth', () => {
     expect(r.headers[CABECALHO_ORIGEM]).toBe(origemDaRequisicao('203.0.113.50'));
     expect(r.headers[CABECALHO_ORIGEM]).not.toBe('ffffffffffffffff');
   });
+
+  it('corpo acima de 4 KiB ou chunked dá 413 sem chegar à biblioteca', () => {
+    const { mw, handlerDaBiblioteca } = montar();
+    for (const h of [{ 'content-length': '5000' }, { 'transfer-encoding': 'chunked' }]) {
+      const r = resposta();
+      mw(req('POST', '/api/auth/sign-in/email', { origin: 'https://app.exemplo.test', ...h }), r, vi.fn());
+      expect(r.statusCode).toBe(413);
+    }
+    expect(handlerDaBiblioteca).not.toHaveBeenCalled();
+  });
+
+  it('R3: sessão com mais de 12 h é encerrada e recusada também nos endpoints da biblioteca', async () => {
+    const handlerDaBiblioteca = vi.fn(() => Promise.resolve());
+    const encerrar = vi.fn(() => Promise.resolve());
+    const velha = { session: { id: 's1', createdAt: new Date(Date.now() - 13 * 3600_000) }, user: { id: 'u1' } };
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(velha) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    const r = resposta();
+    mw(req('GET', '/api/auth/get-session'), r, vi.fn());
+    await vi.waitFor(() => expect(r.statusCode).toBe(401));
+    expect(encerrar).toHaveBeenCalledWith('s1', 'prazo_absoluto', 'u1');
+    expect(handlerDaBiblioteca).not.toHaveBeenCalled();
+  });
 });
