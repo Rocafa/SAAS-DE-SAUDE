@@ -83,6 +83,75 @@ Vale **no banco** (`audit_metadata_ok` + `CHECK ... NOT VALID`, então pega tamb
 
 Pendente: o contrato **por ação** (quais chaves cada `action`/`scope` pode ter), versionado, que depende do catálogo de ações do produto.
 
+## 4b. Ações (migração 0006)
+O enum `AuditAction` de `packages/shared/src/enums.ts` e o CHECK `audit_log_action_check` têm exatamente os mesmos valores. Um teste de paridade em `test/audit-chain.rls.test.ts` lê o CHECK do catálogo e compara com o enum. Ação nova exige mudar os dois no mesmo PR.
+
+A 0006 acrescentou, por decisão do Maestro (ORDEM-004, resposta 5):
+
+| Ação | Quando |
+|---|---|
+| `key_provision`, `key_rotate`, `key_destroy` | Ciclo de vida das chaves por clínica (criptografia de campo, migração 0004) |
+| `ai_use`, `ai_refusal` | Uso de IA sobre dado da clínica e recusa pela política. Nunca o conteúdo |
+| `break_glass` | Acesso de emergência fora da permissão normal; exige revisão posterior |
+
+A migração só amplia o conjunto: as linhas antigas continuam válidas e o hash delas não muda.
+
+**Prazo de guarda (D7, ORDEM-004):** default configurável de 20 anos para eventos de prontuário e 5 anos para os administrativos (proposta de `retencao-e-descarte.md`). A decisão final é dos sócios. O job de expurgo ainda não existe; quando existir, a classificação sai do `scope` e da ação.
+
+## 4c. Tipo de ator e pseudônimo do suporte (migração 0008)
+
+Decisão 1 do Guardião (parecer do PR #57): a trilha vai no pacote de exportação G2 com os campos da cadeia, para a clínica verificar. Reescrever o `actor_id` do suporte na saída quebraria o hash, então o ator interno é gravado **já pseudonimizado** no INSERT.
+
+| `actor_kind` | `actor_id` | Exigência no banco |
+|---|---|---|
+| `usuario_clinica` | id real do usuário da clínica | — |
+| `suporte_plataforma` | UUID v8 de HMAC-SHA256(segredo do operador, `tenant_id` + 0x1f + id do atendente), calculado pela porta `PseudonymSigner` (KMS `GenerateMac` em staging/prod) | `metadata.ticket` = `SUP-` + até 7 dígitos e `metadata.reason` em (`pedido_da_clinica`, `break_glass`) |
+| `sistema` | `00000000-0000-0000-0000-000000000000` | e só ele |
+
+- Pseudônimo **por clínica**: o mesmo atendente tem sempre o mesmo id dentro de uma clínica, e ids diferentes entre clínicas. O segredo é uma chave HMAC_256 do **KMS** (`SUPPORT_PSEUDONYM_KMS_KEY_ID`; N1 da re-revisão do #57): a API só pede `GenerateMac` e o segredo nunca entra no processo nem no banco. Segredo local (`SUPPORT_PSEUDONYM_KEY`) só em `development`/`test` (lista fechada); em qualquer outro ambiente, sem KMS, a API não sobe, e a variável local é recusada. A tabela de reidentificação (pseudônimo para pessoa) é do operador, com acesso restrito ao DPO e à segurança.
+- Código: `recordAudit` grava `usuario_clinica`/`sistema`; `recordSupportAudit` (`src/modules/audit/ator-suporte.ts`) grava o suporte. Ainda não há rota de suporte: o módulo existe para a regra valer desde o primeiro acesso.
+- **Autorização da clínica (0059, S9).** Linha de suporte com `reason = pedido_da_clinica` só entra com autorização **vigente** do mesmo chamado nesta clínica (`support_access_grants`: não revogada e dentro do prazo); senão o gatilho `audit_log_support_grant_guard` recusa (`42501`), em qualquer caminho de código. O gatilho não altera a linha: a cadeia não muda. `break_glass` fica desligado no banco até existir a aprovação por duas pessoas do operador, o alerta à clínica e a revisão posterior (D4); ligar exige migração própria, com parecer. Rotas em [api-dominio.md](api-dominio.md) §16.
+- **Sem reescrever o passado e sem quebrar a cadeia.** A coluna nasce nula e **sem DEFAULT** (um DEFAULT faria o Postgres devolvê-lo também nas linhas antigas). O JSON canônico ganha a **v2** (com `actor_kind`) só para linhas com `actor_kind` preenchido; linha com `actor_kind` nulo continua com o JSON **v1** da 0005, byte a byte, então o hash antigo confere e a primeira linha nova encadeia no hash da última antiga. Leitura das antigas: `actor_id` zero = sistema; qualquer outro = usuário da clínica (não existia acesso de suporte).
+- Toda linha nova tem tipo: a trigger da cadeia deduz `sistema`/`usuario_clinica` quando o INSERT não traz (SQL direto; nunca deduz suporte), e um CHECK `NOT VALID` recusa nulo dali em diante. Linha carregada com elos prontos (restauração) não é tocada.
+- Exportação (G2, `schemaVersion` 1.2.0): `auditoria.jsonl` com `seq`, `prevHash`, `hash`, o JSON canônico e `createdAt` com microssegundos; `verifyExportedAuditTrail` confere, sem banco, campo a campo contra o canônico, o SHA-256 e os elos (com âncora, também o corte do fim).
+- Provas: `test/exportacao-cobertura.rls.test.ts` (canônico v1 idêntico para linha sem tipo; CHECKs; pseudônimo por clínica; pacote verificável e adulteração detectada) e `src/modules/audit/ator-suporte.test.ts`. Atualização de banco com linhas antigas conferida localmente (0001 a 0007, linhas no formato antigo, 0008, linhas novas: hashes antigos iguais e cadeia contínua).
+
+## 4d. Cobertura das rotas de escrita (#105, S6)
+
+A trilha é gravada **dentro da transação de quem age** (`recordAudit(tx, ...)`): se a gravação falha, a ação falha
+junto. Por isso não há interceptor global: um interceptor roda em volta do handler, depois que a transação já foi
+confirmada ou desfeita.
+
+A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `apps/api/test/cobertura-auditoria/`:
+
+- **Declaração obrigatória** (`lista.ts`): toda rota `POST/PATCH/PUT/DELETE` está em `AUDITADAS` ou em `EXCECOES`
+  (com o motivo). Rota nova fora das duas falha o CI, com o nome da rota e do handler.
+- **Prova pelo compilador** (`analise.ts`): para cada rota de `AUDITADAS`, o verificador de tipos do TypeScript segue as
+  chamadas a partir do handler (serviços, funções importadas, callbacks como o de `escreverNaClinica`) e exige um
+  caminho até `insertAudit` (`audit-log.ts`), por onde passam `recordAudit`, `recordSupportAudit` e o portal.
+- **Gravadores incidentais não contam:** `comNegacaoAuditada` (grava só a negação de acesso clínico) e os `alertar` das
+  vigilâncias (gravam só a anomalia) não são atravessados; o callback da operação é. Gravador incidental novo entra na
+  lista `GRAVADORES_INCIDENTAIS` com parecer do Guardião.
+- **Decorators pelo símbolo:** `import { Post as P }` é visto; `@All` conta como escrita; `@Head`, `@Options`, `@Search`,
+  `@RequestMapping` e decorator composto (`applyDecorators`) fazem o teste falhar com o nome.
+- **Exceções provadas:** `banco` exige que o handler chame a função SQL citada e que a última definição dela (sem
+  `DROP` depois) tenha `INSERT INTO audit_log`; `sem_efeito` exige handler que só lança erro. Exceção que passa a gravar
+  pelo código tem de ir para `AUDITADAS`.
+- **Sanidade:** fixtures fictícios em `test/cobertura-auditoria/fixtures/` provam cada uma dessas regras.
+- **Limite:** a análise prova que EXISTE caminho até a trilha (sem contar gravador incidental), não que todo ramo do
+  handler grava.
+- **Fora de controller (R6 do #117):** todo handler HTTP registrado fora de controller (`app.use`, rota no adaptador,
+  `MiddlewareConsumer`) tem de estar em `HANDLERS_FORA_DE_CONTROLLER`, com o motivo. Hoje são só os 4 middlewares de
+  segurança; o login da D4 entra aí com parecer e com a auditoria de login, logout, falha e troca de credencial.
+- **Leitura (R5):** o mesmo vale para toda rota `GET`: `AUDITADAS_LEITURA` (com a prova de alcance) ou
+  `LEITURA_SEM_DADO_DE_PACIENTE` (com o motivo). Rota sob caminho clínico (por prefixo: pacientes, prontuário,
+  atendimentos, agenda, guias, pacotes, convênios, o financeiro inteiro salvo as configurações, importações, o portal
+  inteiro, envios do WhatsApp e suporte) nunca pode ser exceção. Os testes RLS de cada
+  módulo conferem a linha gravada nos casos principais. Mudar uma rota de lista exige parecer do Guardião.
+
+Em 03/11/2026: 63 rotas de leitura, 50 auditadas e 13 sem dado de paciente (com motivo). 99 rotas de escrita, 97 auditadas pelo código, 2 exceções (resgate do convite do portal, gravado pela
+função `app_portal_redeem_invite`; e `POST /whatsapp/modelos`, que sempre responde 409).
+
 ## 5. Linhas antigas
 
 Linhas gravadas antes da 0005 ficam com `seq` nulo (fora da cadeia). O append-only impede reescrevê-las e o verificador as conta em `legacy`. Hoje só existem em ambientes de teste, porque não há produção.

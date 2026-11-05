@@ -1,0 +1,606 @@
+name: Infra (Terraform)
+
+# Checagem estática do Terraform: fmt, init sem backend, validate, tflint e checkov.
+# NADA aqui fala com a AWS: sem credencial, sem OIDC, sem plan, sem apply. O apply é manual e
+# exige aprovação dos sócios (docs/04-arquitetura/infra-staging.md §3).
+
+on:
+  # Todo PR dispara, porque a trava de TLS (job tls, segundos) vale para o repositório inteiro.
+  # Economia de minutos do Actions (billing): os jobs pesados só rodam quando o PR mexe na infra
+  # (job mudancas).
+  pull_request:
+  schedule:
+    - cron: '23 6 * * 1' # semanal: pega regra nova do checkov/tflint e provider com problema
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: '1'
+  TF_INPUT: '0'
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+  # Garante que nenhum provider tente achar credencial no metadata do runner.
+  AWS_EC2_METADATA_DISABLED: 'true'
+  # Raízes do Terraform (módulos em infra/terraform/modules entram pelas raízes que os chamam).
+  RAIZES: bootstrap-state staging
+  # Imagem oficial do checkov fixada por digest (3.3.19, publicada em 17/09/2026).
+  CHECKOV_IMAGE: bridgecrew/checkov@sha256:d3e96adafdb315ca82e792ca8708c01adae85292800fb064c8b309b3d0cb7b80
+
+jobs:
+  mudancas:
+    # Filtro por mudança sem ação de terceiros: diff entre a base do PR e o merge do PR.
+    # Fora de PR (schedule, dispatch), roda tudo.
+    name: o PR mexe na infra?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      infra: ${{ steps.filtro.outputs.infra }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+      - id: filtro
+        env:
+          EVENTO: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENTO" != pull_request ]; then echo infra=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          if git diff --name-only "$BASE" HEAD \
+               | grep -Eq '^(infra/|apps/api/db/migrations/|\.github/workflows/infra\.yml$)'; then
+            echo infra=true >> "$GITHUB_OUTPUT"
+          else
+            echo infra=false >> "$GITHUB_OUTPUT"
+          fi
+
+  tls:
+    # Condição (a) da conferência da rodada 21 (revisoes/2026-10-23-jobs.md): desligar a validação
+    # de certificado é proibido fora de infra/terraform/staging/ (o canary do staging fica lá, com a
+    # exceção ligada em jobs-ready.tf até existir domínio). Roda em todo PR, sem depender da infra.
+    # docs/ fica de fora (texto, não executa). Cada padrão tem uma letra entre colchetes para o
+    # próprio workflow não casar consigo.
+    # Limite: grep pega a forma literal; desligar por variável indireta passa (revisão humana).
+    name: trava de TLS (validação de certificado)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: validação de certificado só desligada em staging
+        run: |
+          padroes='rejectunauthoriz[e]d[^,;}]{0,60}(false|!1)'      # Node/pg: opção literal
+          padroes="$padroes|node_tls_reject_unauthoriz[e]d"         # variável global do Node (só serve para desligar)
+          padroes="$padroes|validar_certificad[o].{0,40}false"      # a exceção do canary
+          padroes="$padroes|sslmode=no-verif[y]"                    # pg: TLS sem conferir certificado
+          padroes="$padroes|checkserveridentit[y]"                  # troca a conferência do nome
+          padroes="$padroes|--insecur[e]([^a-z-]|$)|--no-check-certificat[e]|strict-ss[l][^a-z]{0,5}false"
+          if git grep -nIiE "$padroes" -- . ':!infra/terraform/staging/' ':!docs/'; then
+            echo "::error::Validação de TLS desligada fora de infra/terraform/staging/ (proibido em produção; infra-staging.md §4.4)."
+            exit 1
+          fi
+          # IaC fora do staging não aponta canary/health check para o DNS do ALB (sem certificado válido).
+          if git grep -nE 'dns_name\}/health' -- '*.tf' ':!infra/terraform/staging/'; then
+            echo "::error::Canary fora do staging usando o DNS do ALB; use o domínio."; exit 1
+          fi
+          # Canary do staging: valida por padrão; só a variável do canary com o valor "false" desliga.
+          c=infra/terraform/staging/canary/index.js
+          grep -q "^const VALIDAR_CERTIFICAD[O] = process.env.VALIDAR_CERTIFICAD[O] !== 'false';$" "$c" \
+            || { echo "::error::$c deve validar o certificado por padrão"; exit 1; }
+          [ "$(grep -c 'rejectUnauthorized' "$c")" -eq 1 ] && grep -q 'rejectUnauthorized: VALIDAR_CERTIFICADO,' "$c" \
+            || { echo "::error::$c: a opção de TLS deve vir só de VALIDAR_CERTIFICADO"; exit 1; }
+          # A exceção do staging é explícita e tem prazo no comentário.
+          t=infra/terraform/staging/jobs-ready.tf
+          if grep -q 'VALIDAR_CERTIFICADO' "$t"; then
+            grep -B3 'VALIDAR_CERTIFICAD[O] *= *"false"' "$t" | grep -q 'remover quando houver domínio' \
+              || { echo "::error::$t: exceção de TLS sem o comentário 'remover quando houver domínio'"; exit 1; }
+          fi
+
+  scripts-staging:
+    # Provas K-c3/K-c5 (infra/scripts/staging): só checagem estática. Os scripts falam com a AWS e
+    # rodam à mão, com SSO, no primeiro dia do staging (runbook-primeiro-dia-staging.md); aqui NUNCA.
+    name: scripts de prova do staging (bash -n, shellcheck e travas)
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: bash -n, shellcheck e node --check
+        run: |
+          d=infra/scripts/staging
+          for f in "$d"/*.sh; do bash -n "$f"; done
+          # shellcheck vem instalado na imagem ubuntu-latest do GitHub.
+          shellcheck --version
+          shellcheck -x "$d"/*.sh
+          node --check "$d/politica-kc3.mjs"
+
+      - name: travas das provas
+        run: |
+          d=infra/scripts/staging
+          # Região fixa em sa-east-1, definida num lugar só.
+          grep -qx 'readonly REGIAO=sa-east-1' "$d/comum.sh"
+          if grep -nE -- '--region(=| )' "$d"/*.sh; then echo "::error::região fora do comum.sh"; exit 1; fi
+          for f in "$d"/prova-*.sh; do
+            grep -qx 'set -euo pipefail' "$f" || { echo "::error::$f sem set -euo pipefail"; exit 1; }
+            grep -q '^trap limpar EXIT INT TERM$' "$f" || { echo "::error::$f sem limpeza garantida (trap)"; exit 1; }
+            # Chave só some pela função que confere a tag prova=... e usa a janela mínima de 7 dias.
+            if grep -n 'schedule-key-deletion' "$f"; then echo "::error::$f: use agendar_exclusao_chave_de_prova"; exit 1; fi
+          done
+          [ "$(grep -c 'schedule-key-deletion' "$d/comum.sh")" -eq 1 ]
+          grep -q -- '--pending-window-in-days 7' "$d/comum.sh"
+          grep -q 'exigir_tag_prova_kms "$chave" "$valor" || return 1' "$d/comum.sh"
+          # Proibido (K-c2): pular a trava de lockout da key policy. Reativar chave dispara outro alerta.
+          if grep -nE -- '--bypass-policy-lockout-safety-check|enable-key|cancel-key-deletion' "$d"/*.sh; then
+            echo "::error::ação proibida nos scripts de prova"; exit 1
+          fi
+          # A K-c3 usa a política gerada pelo código da API, não uma cópia.
+          grep -q 'politicaDaChaveDaClinica' "$d/politica-kc3.mjs"
+          grep -q 'politica-kc3.mjs' "$d/prova-kc3.sh"
+          # R4 (#73 15e3303): extras repassados à função da API e o negativo do papel humano presente.
+          grep -q "'papeisHumanosExtraDoAmbiente'" "$d/politica-kc3.mjs"
+          grep -q 'process.env.KMS_PAPEIS_HUMANOS_EXTRA' "$d/politica-kc3.mjs"
+          grep -qF '"$DIR/politica-kc3.mjs" "$CONTA" "$TENANT" "$EXTRAS"' "$d/prova-kc3.sh"
+          grep -q '^negativo H1 ' "$d/prova-kc3.sh" || { echo "::error::K-c3 sem o negativo do papel humano (H1)"; exit 1; }
+          # Conferência de 27/10 (parecer do #76): H3 pela sessão SSO real, negação explícita da key
+          # policy exigida em H1-H3, recusa de principal não SSO, hash da política efetiva e commit do .ts.
+          grep -q '^negativo H3 ' "$d/prova-kc3.sh" || { echo "::error::K-c3 sem o H3 (sessão SSO do operador)"; exit 1; }
+          awk '/^EXIGIR_EXPLICITA=sim$/{s=1} s&&/^negativo H[0-9] /{print $2} /^EXIGIR_EXPLICITA=nao$/{s=0}' "$d/prova-kc3.sh" \
+            | sort | tr '\n' ' ' | grep -qx 'H1 H2 H3 ' || { echo "::error::H1-H3 sem exigir a negação explícita"; exit 1; }
+          grep -qF 'role/aws-reserved/sso\.amazonaws\.com/' "$d/prova-kc3.sh"
+          grep -qF "grep -qiE 'explicit deny in (a |the )?resource[- ]based polic(y|ies)'" "$d/comum.sh"
+          grep -q 'sha256_json_canonico "$TMP/politica-efetiva.json"' "$d/prova-kc3.sh"
+          grep -q "'status', '--porcelain'" "$d/politica-kc3.mjs"
+          grep -q "'rev-parse', 'HEAD'" "$d/politica-kc3.mjs"
+          # As duas: limpeza com FALHOU reprova e a evidência é relida (e-mail, token, AccessKeyId, IP).
+          for f in "$d"/prova-kc3.sh "$d"/prova-kc5.sh; do
+            grep -q 'sanear_evidencia "$EVIDENCIA_ARQUIVO" || APROVADA=false' "$f" || { echo "::error::$f sem releitura da evidência"; exit 1; }
+            grep -q '^  if limpeza_falhou ' "$f" || { echo "::error::$f: limpeza com falha não reprova"; exit 1; }
+          done
+          grep -q 'email_recebido_em' "$d/prova-kc5.sh"
+
+  terraform:
+    name: fmt, validate, tflint e checkov
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Cache dos providers do Terraform
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('infra/terraform/**/.terraform.lock.hcl') }}
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.64.0
+          # SHA-256 oficial de tflint_linux_amd64.zip (checksums.txt da release v0.64.0).
+          checksums: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+          cache: true
+          tflint_config_path: infra/terraform/.tflint.hcl
+
+      - name: terraform fmt
+        # A pasta do TF_PLUGIN_CACHE_DIR tem de existir antes do primeiro comando do terraform (até o fmt
+        # falha sem ela quando o cache ainda não foi restaurado).
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          terraform fmt -check -recursive -diff
+
+      - name: terraform init (sem backend) e validate
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for raiz in $RAIZES; do
+            echo "::group::$raiz"
+            terraform -chdir="$raiz" init -backend=false -lockfile=readonly
+            terraform -chdir="$raiz" validate
+            echo "::endgroup::"
+          done
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # download do ruleset aws sem estourar o rate limit
+        run: |
+          tflint --init --config "$PWD/.tflint.hcl"
+          for raiz in $RAIZES; do
+            echo "::group::$raiz"
+            tflint --chdir="$raiz" --config "$PWD/.tflint.hcl" --format compact
+            echo "::endgroup::"
+          done
+
+      - name: checkov
+        run: |
+          docker run --rm -v "$PWD:/tf:ro" "$CHECKOV_IMAGE" \
+            --directory /tf --framework terraform --compact --quiet \
+            --skip-path '\.terraform/' --download-external-modules false
+
+      # Travas de desenho que nenhum linter conhece.
+      - name: Travas do projeto
+        run: |
+          # ALB usa liveness (/health), nunca /health/ready (ver comentário em staging/app.tf).
+          grep -Eq 'alb_health_check_path *= *"/health"' staging/app.tf
+          # Bootstrap do RDS repete o REVOKE TEMPORARY (I14).
+          grep -Eiq 'REVOKE +TEMPORARY' ../rds/bootstrap.sql
+          # Nenhuma senha/token no estado: segredo nasce efêmero e vai só para atributo *_wo
+          # (ou é gerado pelo próprio RDS em manage_master_user_password).
+          if grep -En '^\s*(auth_token|secret_string|master_password)\s*=|resource\s+"random_password"' \
+               --include='*.tf' -r .; then
+            echo "Segredo persistido no estado; use ephemeral + atributo write-only (_wo)."; exit 1
+          fi
+          # Export de log do RDS só com o grupo declarado (retenção + KMS); senão nasce "nunca expira".
+          if grep -rq --include='*.tf' 'enabled_cloudwatch_logs_exports' . \
+             && ! grep -rq --include='*.tf' '"/aws/rds/instance/' .; then
+            echo "enabled_cloudwatch_logs_exports sem aws_cloudwatch_log_group do RDS declarado."; exit 1
+          fi
+          # Postgres nunca loga valor de linha nem SQL (V2 do PR #58).
+          grep -Eq 'name *= *"log_error_verbosity"' staging/dados.tf
+          grep -Eq 'name *= *"log_min_error_statement"' staging/dados.tf
+          # R11 do PR #61: pgaudit só com DDL e ROLE (nunca read/write/all), sem bind nem relação,
+          # alarme de DDL sensível no SNS e bootstrap sem senha no log.
+          grep -Eq 'value *= *"[^"]*pgaudit[^"]*"' staging/dados.tf
+          grep -A1 'name *= *"pgaudit.log"' staging/dados.tf | grep -Eq 'value *= *"ddl, ?role"'
+          grep -A1 'name *= *"pgaudit.log_parameter"' staging/dados.tf | grep -Eq 'value *= *"(0|off)"'
+          grep -A1 'name *= *"pgaudit.log_relation"' staging/dados.tf | grep -Eq 'value *= *"(0|off)"'
+          grep -q 'log_group_name *= *aws_cloudwatch_log_group.rds\["postgresql"\].name' staging/auditoria-banco.tf
+          grep -q 'alarm_actions *= *\[aws_sns_topic.alertas_seguranca.arn\]' staging/auditoria-banco.tf
+          # R12: função, policy e dono também alertam; a conferência pós-deploy existe.
+          # R10 do #58: constraint, índice, rule, REPLICA/ALWAYS, GRANT/REVOKE, session_replication_role;
+          # O1 da conferência da R10: CREATE TRIGGER, REVOKE ROLE, DROP ... CASCADE, DETACH PARTITION.
+          for f in alter-table-guardas constraint session-replication-role owner-to \
+                   create-trigger drop-trigger alter-role create-function alter-function drop-function \
+                   create-policy alter-policy drop-policy drop-index create-rule \
+                   grant revoke grant-role revoke-role alter-default-privileges; do
+            grep -Eq "^\s*$f\s*=" staging/auditoria-banco.tf || { echo "filtro $f ausente"; exit 1; }
+          done
+          # Cada palavra-chave das regex agrupadas continua lá (DISABLE TRIGGER, NO FORCE RLS,
+          # DISABLE RLS, DISABLE RULE, ENABLE REPLICA, ENABLE ALWAYS, DROP/ALTER CONSTRAINT, DROP NOT NULL,
+          # DETACH PARTITION, DROP ... CASCADE).
+          for k in '[Tt][Rr][Ii][Gg][Gg][Ee][Rr]"' '[Nn][Oo]\\s+[Ff][Oo][Rr][Cc][Ee]' \
+                   '[Dd][Ii][Ss][Aa][Bb][Ll][Ee]\\s+[Rr][Oo][Ww]' '[Dd][Ii][Ss][Aa][Bb][Ll][Ee]\\s+[Rr][Uu][Ll][Ee]' \
+                   '[Rr][Ee][Pp][Ll][Ii][Cc][Aa]"' '[Aa][Ll][Ww][Aa][Yy][Ss]"' \
+                   '[Dd][Rr][Oo][Pp]\\s+[Cc][Oo][Nn]' '[Aa][Ll][Tt][Ee][Rr]\\s+[Cc][Oo][Nn]' \
+                   '[Dd][Rr][Oo][Pp]\\s+[Nn][Oo][Tt]\\s+[Nn][Uu][Ll][Ll]' \
+                   '[Dd][Ee][Tt][Aa][Cc][Hh]\\s+[Pp][Aa][Rr]' '\\s[Cc][Aa][Ss][Cc][Aa][Dd][Ee]'; do
+            grep -Fq "$k" staging/auditoria-banco.tf || { echo "regex sem $k"; exit 1; }
+          done
+          # Cota do CloudWatch: no máximo 5 filtros com regex por log group.
+          n=$(grep -Ec '^\s*[a-z-]+\s*=\s*"%' staging/auditoria-banco.tf)
+          [ "$n" -le 5 ] || { echo "$n filtros com regex (máximo 5 por log group)"; exit 1; }
+          # R3 do parecer de jobs (infra-staging.md §4.4): REDIS_URL obrigatório na tarefa da API,
+          # sem JOBS_HABILITADOS, alarme (termo exato) para cada marcador de falha dos jobs no log
+          # group da API, todos para a operação; DPO só para falha de retenção/revogação.
+          grep -Eq 'REDIS_URL += \{ segredo = aws_secretsmanager_secret.app\["redis"\].arn, campo = "url" \}' staging/app.tf
+          grep -Eq 'secrets +=\s*local.api_segredos' staging/app.tf
+          grep -q 'contains(\[for s in local.api_segredos : s.name\], "REDIS_URL")' staging/app.tf
+          # §4.5 (C1 do parecer 2026-10-25-pr76): lista de segredos obrigatórios da API, cada um
+          # vindo do seu segredo no Secrets Manager; o mesmo nome na lista da precondição.
+          for par in DATABASE_URL:banco-app-user REDIS_URL:redis \
+                     PAGINATION_CURSOR_KEY:pagination-cursor-key RATE_LIMIT_HASH_KEY:rate-limit-hash-key; do
+            v=${par%%:*}; s=${par#*:}
+            grep -Eq "^\s*$v += \{ segredo = aws_secretsmanager_secret.app\[\"$s\"\].arn," staging/app.tf \
+              || { echo "segredo $v fora de api_segredos_origem (ou de outro segredo)"; exit 1; }
+            grep -E '^\s*api_segredos_obrigatorios *=' staging/app.tf | grep -q "\"$v\"" \
+              || { echo "$v fora de api_segredos_obrigatorios"; exit 1; }
+            grep -Eq "^\s*\"$s\" = \{" staging/dados.tf || { echo "segredo $s ausente em segredos_app"; exit 1; }
+          done
+          # Chaves HMAC efêmeras (nunca no estado), uma por uso, cada uma com sua versão.
+          grep -q 'ephemeral "random_password" "chave_api"' staging/dados.tf
+          grep -q 'versao    = var.pagination_cursor_key_versao' staging/dados.tf
+          grep -q 'versao    = var.rate_limit_hash_key_versao' staging/dados.tf
+          # Leitura de segredo pela role de execução: só os da tarefa (nunca banco-app-migrator).
+          grep -q 'resources = local.api_segredos_arns' staging/app.tf
+          grep -Eq 'api_segredos_arns *= *distinct\(\[for s in local.api_segredos_origem : s.segredo\]\)' staging/app.tf
+          if grep -A6 'sid *= *"SegredosDaApi"' staging/app.tf | grep -q 'banco-app-migrator'; then
+            echo "role de execução da API lendo o segredo do migrator"; exit 1
+          fi
+          # Precondições de segredos e ambiente obrigatórios, chaves distintas e variáveis proibidas.
+          grep -q 'setsubtract(local.api_segredos_obrigatorios, local.api_nomes_segredos)' staging/app.tf
+          grep -q 'setsubtract(local.api_ambiente_obrigatorio, local.api_nomes_ambiente)' staging/app.tf
+          grep -q 'local.api_segredos_origem\["PAGINATION_CURSOR_KEY"\].segredo != local.api_segredos_origem\["RATE_LIMIT_HASH_KEY"\].segredo' staging/app.tf
+          grep -q 'setintersection(local.api_variaveis_proibidas,' staging/app.tf
+          for v in DATABASE_ADMIN_URL DATABASE_MIGRATOR_URL SUPPORT_PSEUDONYM_KEY FIELD_KEYS_DEV_ROOT_SECRET \
+                   RATE_LIMIT_ALLOW_SINGLE_INSTANCE JOBS_HABILITADOS NODE_TLS_REJECT_UNAUTHORIZE[D] AUTH_PROVIDER; do
+            grep -A3 '^\s*api_variaveis_proibidas *=' staging/app.tf | grep -q "\"$v\"" \
+              || { echo "$v fora de api_variaveis_proibidas"; exit 1; }
+          done
+          if grep -rEn --include='*.tf' 'name *= *"(DATABASE_ADMIN_URL|DATABASE_MIGRATOR_URL|SUPPORT_PSEUDONYM_KEY|FIELD_KEYS_DEV_ROOT_SECRET|RATE_LIMIT_ALLOW_SINGLE_INSTANCE)"' .; then
+            echo "variável proibida na tarefa da API (§4.5)"; exit 1
+          fi
+          # Valores seguros por padrão: importador e WhatsApp desligados; atrás do ALB, 1 salto de proxy.
+          grep -A3 'variable "importador_habilitado"' staging/variables.tf | grep -Eq 'default += false'
+          grep -A3 'variable "whatsapp_provedor"' staging/variables.tf | grep -Eq 'default += "desligado"'
+          grep -A3 'variable "whatsapp_clausulas_padrao_assinadas"' staging/variables.tf | grep -Eq 'default += false'
+          grep -q '{ name = "HTTP_TRUST_PROXY_HOPS", value = "1" }' staging/app.tf
+          # C1-b: o salto 1 só é o IP real se o ALB ACRESCENTAR ao X-Forwarded-For (append explícito).
+          alb=$(sed -n '/^resource "aws_lb" "this"/,/^}/p' staging/app.tf)
+          echo "$alb" | grep -Eq '^\s*xff_header_processing_mode\s*=\s*"append"' \
+            || { echo "aws_lb.this sem xff_header_processing_mode = \"append\" (§4.5)"; exit 1; }
+          echo "$alb" | grep -Eq '^\s*drop_invalid_header_fields\s*=\s*true' \
+            || { echo "aws_lb.this sem drop_invalid_header_fields = true"; exit 1; }
+          if grep -rEn --include='*.tf' 'xff_header_processing_mode\s*=\s*"(preserve|remove)"' .; then
+            echo "XFF preserve/remove deixa o IP do rate limit falsificável ou inútil (§4.5)"; exit 1
+          fi
+          grep -q '{ name = "SUPPORT_PSEUDONYM_KMS_KEY_ID", value = aws_kms_key.pseudonimo_suporte.arn }' staging/app.tf
+          # K-b: região do cliente KMS explícita e obrigatória (a API só aceita sa-east-1).
+          grep -q '{ name = "AWS_REGION", value = local.regiao }' staging/app.tf
+          grep -E '^\s*api_ambiente_obrigatorio *=' staging/app.tf | grep -q '"AWS_REGION"' \
+            || { echo "AWS_REGION fora de api_ambiente_obrigatorio"; exit 1; }
+          grep -q 'v.name == "AWS_REGION"\]) == "sa-east-1"' staging/app.tf
+          # R4: a API recebe os papéis humanos extras (mesma lista do Deny do Terraform), só quando há.
+          grep -qF 'length(var.papeis_humanos_extra) > 0 ? [{ name = "KMS_PAPEIS_HUMANOS_EXTRA", value = join(",", var.papeis_humanos_extra) }] : [],' staging/app.tf \
+            || { echo "KMS_PAPEIS_HUMANOS_EXTRA fora de api_ambiente (ou sem a condição de lista não vazia)"; exit 1; }
+          if grep -rEn --include='*.tf' 'name *= *"KMS_PAPEIS_HUMANOS_EXTRA"' . | grep -v 'length(var.papeis_humanos_extra) > 0'; then
+            echo "KMS_PAPEIS_HUMANOS_EXTRA declarada fora do padrão condicional de app.tf (vazia, a variável é omitida)"; exit 1
+          fi
+          # R4: os 3 padrões fixos de humano do Terraform são os mesmos que a API põe no HumanoNaoDecifra
+          # (politicaDaChaveDaClinica, #73). Normaliza partição/conta dos dois lados e compara.
+          tf_humanos=$(sed -n '/^\s*principais_humanos *= *concat(/,/^\s*\],/p' staging/acesso-humano.tf \
+            | grep -o '"arn:[^"]*"' | tr -d '"' \
+            | sed -E 's#^arn:\$\{data\.aws_partition\.atual\.partition\}:iam::\$\{local\.conta\}:#arn:aws:iam::CONTA:#' | sort)
+          [ "$(printf '%s\n' "$tf_humanos" | grep -c .)" -eq 3 ] \
+            || { echo "local.principais_humanos: esperava 3 padrões fixos"; printf '%s\n' "$tf_humanos"; exit 1; }
+          # Ações do HumanoNaoDecifra no Terraform: Decrypt, ReEncrypt* e CreateGrant (recomendação do
+          # Guardião, 27/10), nos dois documentos: kms_deny_humanos (Deny puro, referência da API) e
+          # kms_deny_humanos_grant_servico (CreateGrant com a exceção de grant de serviço integrado).
+          doc_puro=$(sed -n '/^data "aws_iam_policy_document" "kms_deny_humanos" {/,/^}/p' staging/kms.tf)
+          doc_servico=$(sed -n '/^data "aws_iam_policy_document" "kms_deny_humanos_grant_servico" {/,/^}/p' staging/kms.tf)
+          acoes_esperadas=$(printf '%s\n' kms:CreateGrant kms:Decrypt 'kms:ReEncrypt*')
+          for doc in puro servico; do
+            if [ "$doc" = puro ]; then corpo=$doc_puro; else corpo=$doc_servico; fi
+            [ "$(printf '%s\n' "$corpo" | grep -cE '^\s*statement *\{')" -eq 1 ] \
+              && printf '%s\n' "$corpo" | grep -qE '^\s*sid *= *"HumanoNaoDecifra"' \
+              || { echo "kms.tf: kms_deny_humanos ($doc) tem de ter um único statement, Sid HumanoNaoDecifra"; exit 1; }
+            acoes=$(printf '%s\n' "$corpo" | grep -E '^\s*actions *=' | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
+            [ "$acoes" = "$acoes_esperadas" ] \
+              || { echo "kms.tf: HumanoNaoDecifra ($doc) tem de negar kms:Decrypt, kms:ReEncrypt* e kms:CreateGrant"; printf '%s\n' "$acoes"; exit 1; }
+          done
+          tf_acoes=$(printf '%s\n' "$doc_puro" | grep -E '^\s*actions *=' | grep -o '"kms:[^"]*"' | tr -d '"' | sort)
+          # Condição 1 do Guardião (27/10, parecer do #76): a exceção BoolIfExists kms:GrantIsForAWSResource
+          # só nas chaves rds e backup. Nas demais sem humanos (s3, exportacoes, segredos...) o Deny é puro.
+          if printf '%s\n' "$doc_puro" | grep -q 'GrantIsForAWSResource'; then
+            echo "kms.tf: kms_deny_humanos (referência da API; s3/exportacoes/segredos) tem de ser Deny puro, sem GrantIsForAWSResource"; exit 1
+          fi
+          printf '%s\n' "$doc_servico" | grep -A2 'test *= *"BoolIfExists"' | grep -q 'variable *= *"kms:GrantIsForAWSResource"' \
+            && printf '%s\n' "$doc_servico" | grep -A3 'test *= *"BoolIfExists"' | grep -q 'values *= *\["false"\]' \
+            || { echo "kms.tf: kms_deny_humanos_grant_servico sem a exceção BoolIfExists kms:GrantIsForAWSResource = false (rds/backup)"; exit 1; }
+          [ "$(grep -rhE --include='*.tf' '^\s*variable *= *"kms:GrantIsForAWSResource"' . | wc -l)" -eq 1 ] \
+            || { echo "GrantIsForAWSResource só pode aparecer em kms_deny_humanos_grant_servico (condição 1 do Guardião)"; exit 1; }
+          grant_chaves=$(grep -E '^\s*chaves_grant_de_servico *=' staging/kms.tf | grep -o '"[^"]*"' | tr -d '"' | sort | paste -sd' ')
+          [ "$grant_chaves" = "backup rds" ] \
+            || { echo "kms.tf: a exceção de grant de serviço vale só em rds e backup; chaves_grant_de_servico = [$grant_chaves]"; exit 1; }
+          sem_humanos=$(grep -E '^\s*chaves_sem_humanos *=' staging/kms.tf | grep -o '"[^"]*"' | tr -d '"')
+          for c in rds backup; do
+            printf '%s\n' "$sem_humanos" | grep -qx "$c" || { echo "kms.tf: $c fora de chaves_sem_humanos"; exit 1; }
+          done
+          # Escolha por chave: sem humanos e fora de rds/backup → Deny puro; rds/backup → com a exceção.
+          sed -n '/^data "aws_iam_policy_document" "kms" {/,/^}/p' staging/kms.tf | tr -s ' \n' ' ' \
+            | grep -qF 'source_policy_documents = ( !contains(local.chaves_sem_humanos, each.key) ? [] : contains(local.chaves_grant_de_servico, each.key) ? [data.aws_iam_policy_document.kms_deny_humanos_grant_servico.json] : [data.aws_iam_policy_document.kms_deny_humanos.json] )' \
+            || { echo "kms.tf: source_policy_documents de \"kms\" fora do padrão (puro nas sem humanos, exceção só em chaves_grant_de_servico)"; exit 1; }
+          [ "$(grep -rhF --include='*.tf' 'data.aws_iam_policy_document.kms_deny_humanos_grant_servico.json' . | wc -l)" -eq 1 ] \
+            || { echo "kms_deny_humanos_grant_servico usado fora da escolha por chave de kms.tf"; exit 1; }
+          grep -qE '^\s*value *= *data\.aws_iam_policy_document\.kms_deny_humanos\.json$' staging/outputs.tf \
+            || { echo "outputs.tf: kms_deny_humanos tem de apontar para o Deny puro"; exit 1; }
+          api_kms=../../apps/api/src/modules/crypto/kms-key-provider.ts
+          # Antes do #73 o arquivo existe sem a key policy própria (K-c2): aí não há o que comparar.
+          if [ -f "$api_kms" ] && grep -q 'export function politicaDaChaveDaClinica' "$api_kms"; then
+            api_humanos=$(sed -n '/^\s*const humanos = \[/,/^\s*\];/p' "$api_kms" \
+              | grep -o '`arn:[^`]*`' | tr -d '`' \
+              | sed -E 's#^arn:aws:iam::\$\{contaAws\}:#arn:aws:iam::CONTA:#' | sort)
+            [ "$tf_humanos" = "$api_humanos" ] || {
+              echo "padrões humanos divergem: Terraform (acesso-humano.tf) x API (politicaDaChaveDaClinica)"
+              diff <(printf '%s\n' "$tf_humanos") <(printf '%s\n' "$api_humanos") || true; exit 1; }
+            grep -q "Sid: 'HumanoNaoDecifra'" "$api_kms" || { echo "API sem o statement HumanoNaoDecifra"; exit 1; }
+            # Ações do HumanoNaoDecifra: iguais dos dois lados. Transição: a API sem kms:CreateGrant
+            # (antes do commit do #73 que o inclui) só gera aviso; qualquer outra diferença reprova.
+            api_acoes=$(sed -n "/Sid: 'HumanoNaoDecifra'/,/Condition:/p" "$api_kms" | grep 'Action:' \
+              | grep -o "'kms:[^']*'" | tr -d "'" | sort)
+            if [ "$api_acoes" != "$tf_acoes" ]; then
+              if [ "$api_acoes" = "$(printf '%s\n' kms:Decrypt 'kms:ReEncrypt*')" ]; then
+                echo "::notice::HumanoNaoDecifra da API ainda sem kms:CreateGrant (chega com o #73); Terraform já nega"
+              else
+                echo "ações do HumanoNaoDecifra divergem: Terraform (kms.tf) x API (politicaDaChaveDaClinica)"
+                diff <(printf '%s\n' "$tf_acoes") <(printf '%s\n' "$api_acoes") || true; exit 1
+              fi
+            fi
+          else
+            echo "::notice::politicaDaChaveDaClinica ausente nesta árvore (chega com o #73); comparação dos padrões humanos pulada"
+          fi
+          # K-a/K-b: só a role da tarefa. Lista de portas da cadeia de credenciais e endpoints vetados.
+          aws_proib=$(sed -n '/^\s*api_variaveis_aws_proibidas *= *\[/,/^\s*\]/p' staging/app.tf)
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE \
+                   AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_WEB_IDENTITY_TOKEN_FILE \
+                   AWS_ROLE_ARN AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE AWS_EC2_METADATA_SERVICE_ENDPOINT KMS_ENDPOINT; do
+            echo "$aws_proib" | grep -q "\"$v\"" || { echo "$v fora de api_variaveis_aws_proibidas"; exit 1; }
+          done
+          ! echo "$aws_proib" | grep -q '"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"' \
+            || { echo "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI é a credencial da role (o ECS injeta): não vetar"; exit 1; }
+          # K-a2: e também nunca declarada à mão (environment, secrets ou mapa); apontaria para outro caminho.
+          if grep -rEn --include='*.tf' '(name *= *"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"|^\s*"?AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"?\s*=)' .; then
+            echo "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI declarada na tarefa: quem a injeta é o ECS (K-a2, §4.5)"; exit 1
+          fi
+          grep -q 'api_prefixos_aws_proibidos *= *\["AWS_ENDPOINT_URL"\]' staging/app.tf
+          grep -q 'setintersection(local.api_variaveis_aws_proibidas,' staging/app.tf
+          grep -q 'startswith(n, p)' staging/app.tf
+          if grep -rEn --include='*.tf' 'name *= *"(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_PROFILE|AWS_ROLE_ARN|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_CONTAINER_CREDENTIALS_FULL_URI|AWS_CONTAINER_AUTHORIZATION_TOKEN|AWS_SHARED_CREDENTIALS_FILE|AWS_CONFIG_FILE|AWS_EC2_METADATA_SERVICE_ENDPOINT|KMS_ENDPOINT|AWS_ENDPOINT_URL[A-Z_]*)"' .; then
+            echo "credencial AWS fixa ou endpoint alternativo na tarefa (§4.5)"; exit 1
+          fi
+          # Pseudônimo: a role da API só gera MAC (VerifyMac não é concedido; decisão do Guardião, §4.5).
+          sed -n '/data "aws_iam_policy_document" "api_pseudonimo"/,/^}/p' staging/api-ambiente.tf \
+            | grep -q 'actions *= *\["kms:GenerateMac"\]' || { echo "api_pseudonimo diferente de só GenerateMac"; exit 1; }
+          if sed -n '/data "aws_iam_policy_document" "api_pseudonimo"/,/^}/p' staging/api-ambiente.tf | grep -q 'VerifyMac'; then
+            echo "kms:VerifyMac na role da API sem decisão registrada (§4.5)"; exit 1
+          fi
+          # Segredo do WhatsApp nasce vazio: nenhuma versão com valor no IaC.
+          if grep -rEn --include='*.tf' 'secret_id *= *aws_secretsmanager_secret.whatsapp' .; then
+            echo "credencial da Meta no IaC; o segredo whatsapp é preenchido fora do git (§4.5)"; exit 1
+          fi
+          if grep -rEn --include='*.tf' 'name *= *"JOBS_HABILITADOS"' .; then
+            echo "JOBS_HABILITADOS definido no IaC (§4.4: só com incidente registrado)."; exit 1
+          fi
+          for t in JOB_ATRASADO JOBS_DESLIGADOS JOBS_NAO_AGENDADOS JOB_ALARME JOB_CLINICA_FALHOU \
+                   JOB_TRILHA_FALHOU JOBS_DESLIGADOS_POR_OPCAO JOB_TRABALHADOR_ERRO JOB_FALHOU JOB_DESCONHECIDO; do
+            grep -Eq "termo +=\s*\"$t\"" staging/jobs.tf || { echo "filtro $t ausente"; exit 1; }
+          done
+          # JOBS_DESLIGADOS não casa com JOBS_DESLIGADOS_POR_OPCAO (N2) e é o único marcador geral com DPO.
+          grep -A3 '^\s*jobs-desligados = {' staging/jobs.tf | grep -q 'excluir *= *\["JOBS_DESLIGADOS_POR_OPCAO"\]'
+          grep -A8 '^\s*jobs-desligados = {' staging/jobs.tf | grep -Eq 'dpo +=\s*true'
+          [ "$(grep -Ec 'dpo +=\s*true' staging/jobs.tf)" -eq 1 ] || { echo "DPO só em JOBS_DESLIGADOS entre os gerais"; exit 1; }
+          # DPO: JOB_ATRASADO/JOB_ALARME dos 6 jobs de retenção/revogação, alarme só no tópico do DPO.
+          for j in whatsapp-retencao importador-expurgo notas-privadas-ciclo retencao-fiscal \
+                   responsaveis-descarte portal-representacoes; do
+            grep -q "^\s*\"$j\",$" staging/jobs.tf || { echo "job de retenção $j fora do alarme do DPO"; exit 1; }
+          done
+          grep -q 'setproduct(\["JOB_ATRASADO", "JOB_ALARME"\], local.jobs_de_retencao)' staging/jobs.tf
+          grep -q 'alarm_actions = \[aws_sns_topic.alertas_dpo.arn\]' staging/jobs.tf
+          grep -q 'log_group_name *= *aws_cloudwatch_log_group.api.name' staging/jobs.tf
+          grep -q 'pattern *= *join(" ", concat(\["\\"${each.value.termo}\\""\]' staging/jobs.tf
+          ! grep -q '"%' staging/jobs.tf || { echo "jobs.tf usa regex; só termo exato"; exit 1; }
+          grep -q 'resource "aws_cloudwatch_metric_alarm" "jobs"' staging/jobs.tf
+          grep -q 'aws_sns_topic.alertas_seguranca.arn, aws_sns_topic.alertas_dpo.arn\] : \[aws_sns_topic.alertas_seguranca.arn\]' staging/jobs.tf
+          grep -q 'resource "aws_sns_topic" "alertas_dpo"' staging/jobs.tf
+          grep -q 'aws_cloudwatch_metric_alarm.jobs' staging/acesso-humano.tf
+          # jobs != bullmq no /health/ready: canary do Synthetics em sa-east-1 (jobs-ready.tf).
+          unzip -p staging/canary/jobs-ready.zip nodejs/node_modules/index.js | cmp - staging/canary/index.js \
+            || { echo "canary/jobs-ready.zip diferente de canary/index.js: refazer o zip"; exit 1; }
+          grep -q "jobs !== 'bullmq'" staging/canary/index.js
+          grep -q 'URL_READY = "https://${aws_lb.this.dns_name}/health/ready"' staging/jobs-ready.tf
+          grep -q 'expression = "rate(5 minutes)"' staging/jobs-ready.tf
+          grep -A30 'resource "aws_cloudwatch_metric_alarm" "jobs_ready"' staging/jobs-ready.tf > /tmp/alarme-ready
+          grep -q 'metric_name = "SuccessPercent"' /tmp/alarme-ready
+          grep -Eq 'evaluation_periods += 6' /tmp/alarme-ready
+          grep -Eq 'datapoints_to_alarm += 3' /tmp/alarme-ready
+          grep -q 'treat_missing_data = "breaching"' /tmp/alarme-ready
+          grep -q 'alarm_actions = \[aws_sns_topic.alertas_seguranca.arn\]' /tmp/alarme-ready
+          grep -q 'aws_cloudwatch_metric_alarm.jobs_ready.arn' staging/acesso-humano.tf
+          # Cota de 5 filtros com regex no log group da API (os de jobs são termos exatos).
+          n=$(grep -rlE --include='*.tf' 'log_group_name *= *aws_cloudwatch_log_group.api.name' staging | xargs grep -Ec '"%' | awk -F: '{s+=$NF} END {print s+0}')
+          [ "$n" -le 5 ] || { echo "$n filtros com regex no log group da API (máximo 5)"; exit 1; }
+          grep -Eiq 'CREATE EXTENSION IF NOT EXISTS pgaudit' ../rds/bootstrap.sql
+          grep -Eq "SET LOCAL pgaudit.log = 'none'" ../rds/bootstrap.sql
+          # Ressalvas do PR #58 (infra-staging.md §4.1).
+          # R2: bucket de logs de acesso só lido pelo papel de investigação; N2: leituras no CloudTrail.
+          grep -q 'sid *= *"LeituraSoPelaInvestigacao"' staging/s3.tf
+          grep -q 'starts_with = \["${aws_s3_bucket.logs.arn}/"\]' staging/cloudtrail.tf
+          # R4: humano não decifra com as chaves de dado (Deny na key policy).
+          grep -q 'sid *= *"HumanoNaoDecifra"' staging/kms.tf
+          grep -Eq 'chaves_sem_humanos *= *\[[^]]*"rds"[^]]*"s3"[^]]*"exportacoes"' staging/kms.tf
+          # R5: slow-log do Redis desligado por padrão (grava argumentos dos comandos).
+          grep -A4 'variable "redis_slow_log"' staging/variables.tf | grep -Eq 'default *= *false'
+          # R7: backup nunca sai de sa-east-1.
+          if grep -rEn --include='*.tf' '^\s*copy_action\s*\{' .; then
+            echo "copy_action no AWS Backup: backup não sai de sa-east-1 (D8)."; exit 1
+          fi
+          # N1: chave do objeto de exportação só UUID opaco.
+          grep -q 'sid *= *"ChaveSoUuidOpaco"' staging/exportacoes.tf
+          # R3-b do parecer do importador (api-dominio.md §12d): chave de lote separável no IAM.
+          # Cada statement da API é recortado do sid até o próximo e conferido.
+          k=staging/kms-clinicas.tf
+          api() { sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" \
+                  | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
+          gestor() { sed -n '/data "aws_iam_policy_document" "gestor_chaves"/,/^}/p' "$k" \
+                  | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
+          grep -q 'role *= *aws_iam_role.api_tarefa.id' "$k"
+          # Criar: purpose só tenant_data/import_batch, tenant_id presente, TagKeys restrito.
+          api CriarChaveDaClinica | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          api CriarChaveDeLote    | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          api CriarChaveDeLote    | grep -q '"aws:RequestTag/batch_id"'
+          api TagNaCriacao        | grep -A2 '"aws:RequestTag/purpose"' | grep -q 'values *= *\["tenant_data", "import_batch"\]'
+          for s in CriarChaveDaClinica CriarChaveDeLote TagNaCriacao; do
+            api $s | grep -q '"aws:RequestTag/tenant_id"' || { echo "$s sem tenant_id"; exit 1; }
+            api $s | grep -q '"aws:TagKeys"' || { echo "$s sem aws:TagKeys"; exit 1; }
+          done
+          grep -q 'kms_tags_permitidas *= *\["tenant_id", "purpose", "batch_id"\]' "$k"
+          # Nenhum outro statement de CreateKey/TagResource na API.
+          n=$(sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" | grep -Ec '"kms:(CreateKey|TagResource)"\]')
+          [ "$n" -eq 4 ] || { echo "CreateKey/TagResource em $n statements da API (esperado 4: 3 Allow + 1 Deny)"; exit 1; }
+          # Exclusão: Allow só em import_batch; Deny fora de import_batch; Cancel/EnableKey negados no lote.
+          api ExclusaoSoDaChaveDeLote | grep -q 'actions *= *\["kms:ScheduleKeyDeletion"\]'
+          api ExclusaoSoDaChaveDeLote | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          api NuncaExcluiChaveDaClinica | grep -q 'effect *= *"Deny"'
+          api NuncaExcluiChaveDaClinica | grep -q 'test *= *"StringNotEquals"'
+          api LoteDestruidoNaoVolta | grep -q 'effect *= *"Deny"'
+          api LoteDestruidoNaoVolta | grep -q '"kms:CancelKeyDeletion", "kms:EnableKey"'
+          api LoteDestruidoNaoVolta | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["import_batch"\]'
+          [ "$(sed -n '/data "aws_iam_policy_document" "api_kek"/,/^}/p' "$k" | grep -c 'ScheduleKeyDeletion"\]')" -eq 1 ] \
+            || { echo "ScheduleKeyDeletion em mais de um Allow da API"; exit 1; }
+          api NuncaDestagear | grep -q '"kms:UntagResource"'
+          api NuncaRetagear | grep -q 'effect *= *"Deny"'
+          # Uso: EncryptionContext tenant_id igual à tag tenant_id da chave.
+          api DekDaClinica | grep -q '"kms:GenerateDataKey", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo"'
+          api DekDaClinica | grep -A2 '"kms:EncryptionContext:tenant_id"' | grep -q 'values *= *\["&{aws:ResourceTag/tenant_id}"\]'
+          api RotacaoSoDaClinica | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          # Eliminação da clínica (G3) é do gestor, só em tenant_data; o gestor nunca reabre lote.
+          gestor AgendarDestruicaoComJanela | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          gestor GerirKekDeClinica | grep -A2 '"aws:ResourceTag/purpose"' | grep -q 'values *= *\["tenant_data"\]'
+          gestor LoteDestruidoNaoVolta | grep -q 'effect *= *"Deny"'
+          # K-c: todo Allow de uso de DEK (API, gestor, break-glass) exige contexto tenant_id = tag.
+          api DekDaClinica | grep -A2 '"kms:EncryptionContextKeys"' | grep -q 'values *= *\["tenant_id"\]'
+          gestor RecifrarDekDaClinica | grep -q 'actions *= *\["kms:ReEncryptFrom", "kms:ReEncryptTo"\]'
+          gestor RecifrarDekDaClinica | grep -A2 '"kms:EncryptionContext:tenant_id"' | grep -q 'values *= *\["&{aws:ResourceTag/tenant_id}"\]'
+          if gestor GerirKekDeClinica | grep -q '"kms:ReEncrypt'; then echo "ReEncrypt do gestor fora de RecifrarDekDaClinica"; exit 1; fi
+          bg() { sed -n '/data "aws_iam_policy_document" "break_glass"/,/^}/p' staging/acesso-humano.tf \
+                 | awk -v s="sid *= *\"$1\"" '$0 ~ s {p=1; print; next} p && /sid *=/ {exit} p'; }
+          bg DecifrarKekDeClinica | grep -q 'actions *= *\["kms:Decrypt"\]'
+          bg DecifrarKekDeClinica | grep -A2 '"kms:EncryptionContext:tenant_id"' | grep -q 'values *= *\["&{aws:ResourceTag/tenant_id}"\]'
+          # K-c1: break-glass igual à API, contexto só com a chave tenant_id.
+          bg DecifrarKekDeClinica | grep -B1 -A1 '"kms:EncryptionContextKeys"' | grep -q 'test *= *"ForAllValues:StringEquals"' \
+            || { echo "DecifrarKekDeClinica sem ForAllValues:StringEquals em kms:EncryptionContextKeys (K-c1)"; exit 1; }
+          bg DecifrarKekDeClinica | grep -A1 '"kms:EncryptionContextKeys"' | grep -q 'values *= *\["tenant_id"\]' \
+            || { echo "DecifrarKekDeClinica: kms:EncryptionContextKeys diferente de [\"tenant_id\"] (K-c1)"; exit 1; }
+          # Nenhum outro Allow de GenerateDataKey/Decrypt/ReEncrypt em chave com tag tenant_id.
+          for f in "$k" staging/acesso-humano.tf; do
+            n=$(grep -Ec '"kms:(GenerateDataKey|ReEncryptFrom|ReEncryptTo)"|actions *= *\["kms:Decrypt"\]' "$f")
+            m=$(grep -c '"kms:EncryptionContext:tenant_id"' "$f")
+            [ "$n" -le "$m" ] || { echo "$f: $n Allow de DEK e só $m com EncryptionContext:tenant_id (K-c)"; exit 1; }
+          done
+          # Alerta de CancelKeyDeletion/EnableKey no tópico de segurança.
+          grep -q 'eventName   = \["CancelKeyDeletion", "EnableKey"\]' "$k"
+          grep -q 'aws_cloudwatch_event_rule.kms_reativacao.arn' staging/acesso-humano.tf
+          # K-c5: alerta de PutKeyPolicy/ScheduleKeyDeletion/DisableKey/CreateGrant no tópico de
+          # segurança, em todas as chaves (o EventBridge não filtra pela tag da chave).
+          grep -q 'eventName   = \["PutKeyPolicy", "ScheduleKeyDeletion", "DisableKey", "CreateGrant"\]' "$k" \
+            || { echo "$k: regra kms_administracao sem as 4 ações da K-c5"; exit 1; }
+          grep -A3 'resource "aws_cloudwatch_event_target" "kms_administracao"' "$k" \
+            | grep -q 'arn *= *aws_sns_topic.alertas_seguranca.arn' \
+            || { echo "$k: alvo de kms_administracao não é o tópico de segurança (K-c5)"; exit 1; }
+          grep -q 'aws_cloudwatch_event_rule.kms_administracao.arn' staging/acesso-humano.tf \
+            || { echo "acesso-humano.tf: tópico de segurança não aceita a regra kms_administracao (K-c5)"; exit 1; }
+          # Região: somente sa-east-1.
+          if grep -En 'region\s*=\s*"[a-z]{2}-[a-z]+-[0-9]"' --include='*.tf' -r . | grep -v 'sa-east-1'; then
+            echo "Região fora de sa-east-1."; exit 1
+          fi
+
+  guardas-banco:
+    # R12 do PR #61: a conferência pós-deploy precisa funcionar ANTES de ser preciso. Sobe um
+    # PostgreSQL 16 descartável no runner (sem rede, sem segredo: senhas geradas na hora), aplica
+    # bootstrap + migrações do repositório e prova que CREATE OR REPLACE FUNCTION, ALTER FUNCTION,
+    # ALTER POLICY e NO FORCE RLS aparecem na comparação, e também (R10 do #58) DROP CONSTRAINT,
+    # DROP NOT NULL, DROP INDEX, CREATE RULE, ENABLE REPLICA/ALWAYS TRIGGER, GRANT de tabela e de
+    # coluna e ALTER DEFAULT PRIVILEGES; e (O2 da conferência da R10) atributo de papel e vínculo
+    # em pg_auth_members.
+    name: conferência das guardas do banco (autoteste)
+    needs: mudancas
+    if: needs.mudancas.outputs.infra == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: autoteste do verificar-guardas
+        env:
+          PG_BIN: /usr/lib/postgresql/16/bin # PostgreSQL 16 já vem na imagem ubuntu-24.04
+        run: sh infra/rds/verificar-guardas.sh autoteste

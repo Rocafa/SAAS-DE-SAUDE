@@ -149,14 +149,20 @@ flowchart LR
       <table>
         <thead><tr><th>Frente</th><th>Entrega</th><th>Status</th><th>Onde</th></tr></thead>
         <tbody>
-          <tr><td>Governança</td><td>Hierarquia, fluxogramas, RACI, rituais, modelos de issue</td><td><span class="pill ok">pronto</span></td><td><code>docs/00-governanca/</code></td></tr>
-          <tr><td>Mercado</td><td>11 nichos, relatório executivo, matriz de nichos</td><td><span class="pill ok">pronto</span></td><td><code>docs/01-mercado/</code></td></tr>
-          <tr><td>Produto</td><td>Visão, PRD, WBS, backlog do MVP, piloto, métricas</td><td><span class="pill ok">pronto</span></td><td>PR #5</td></tr>
-          <tr><td>Produto</td><td>Controle de guia, pacotes e agenda simultânea no MVP</td><td><span class="pill ok">pronto</span></td><td>PR #6</td></tr>
-          <tr><td>LGPD</td><td>Mapa regulatório, checklist, RIPD, parecer do PR #5 com correções aplicadas</td><td><span class="pill ok">pronto</span></td><td><code>docs/03-seguranca-lgpd/</code></td></tr>
-          <tr><td>Engenharia</td><td>API NestJS, web Next.js, teste de isolamento entre clínicas no CI</td><td><span class="pill ok">pronto</span></td><td>PR #7</td></tr>
-          <tr><td>IA/LLM</td><td>Estratégia em 3 fases, arquitetura, custos</td><td><span class="pill ok">pronto</span></td><td><code>docs/05-ia-llm/</code></td></tr>
-          <tr><td>Sócios</td><td>Decisões D1 a D8 (nicho, preço, provedor de IA, advogado)</td><td><span class="pill block">aguardando</span></td><td><code>decisoes.md</code></td></tr>
+          <tr><td>Governança</td><td>Hierarquia, fluxogramas, RACI, rituais, modelos de issue, memos D1–D14, fila compartilhada entre os dois Maestros, @Lopesloro no CODEOWNERS</td><td><span class="pill ok">pronto</span></td><td><code>docs/00-governanca/</code> · PR #48</td></tr>
+          <tr><td>Mercado</td><td>11 nichos, relatório executivo, matriz de nichos; necessidades de produção (rodada 7)</td><td><span class="pill ok">pronto</span></td><td><code>docs/01-mercado/</code> · PR #27</td></tr>
+          <tr><td>Produto</td><td>Visão, PRD, WBS, backlog do MVP, piloto, métricas, garantias G1–G9</td><td><span class="pill ok">pronto</span></td><td>PRs #5, #6, #8</td></tr>
+          <tr><td>LGPD</td><td>RIPD da plataforma, da IA e do WhatsApp; minuta do DPA; retenção; plano de incidente; matriz de retenção; pareceres de #29, #30, #35, #37</td><td><span class="pill ok">pronto</span></td><td>PRs #28, #38</td></tr>
+          <tr><td>LGPD</td><td>Parecer das telas: #44, #46 e #47 vetados (B1 recepção/admin lendo evoluções; B2 atestado com CID por qualquer perfil; B3 portal com o contrato da clínica)</td><td><span class="pill block">vetado</span></td><td><code>revisoes/2026-10-12-front-r8.md</code></td></tr>
+          <tr><td>Engenharia</td><td>Isolamento por clínica, garantia de saída, criptografia por clínica, auditoria encadeada, guarda de schema, rate limit em Redis, NestJS 12. API ainda sem rotas de negócio</td><td><span class="pill ok">pronto</span></td><td>PRs #9, #30, #32, #34, #35, #37, #40, #41</td></tr>
+          <tr><td>Engenharia</td><td>Login, RBAC e MFA (PoC Zitadel × Better Auth em rascunho)</td><td><span class="pill block">aguarda D4</span></td><td>PR #36</td></tr>
+          <tr><td>Front</td><td>Design system, Ajudante, Hoje, Agenda, Pacientes (dados fictícios, sem API)</td><td><span class="pill ok">pronto</span></td><td>PR #42</td></tr>
+          <tr><td>Front</td><td>Agenda e Pacientes completos (#43, pronto, parado sem CI); Financeiro/guias/mensagens (#45, aprovado com ressalvas, empilhado sobre o #44)</td><td><span class="pill wip">em PR</span></td><td>PRs #43, #45</td></tr>
+          <tr><td>Front</td><td>Atendimento/prontuário/documentos, configurações, portal do paciente</td><td><span class="pill block">vetado</span></td><td>PRs #44, #46, #47</td></tr>
+          <tr><td>Infra / DevOps</td><td>Terraform do staging (sem PR) e imagem Docker da API (só levantamento); E2E do front fora do CI</td><td><span class="pill wip">parado</span></td><td><code>devops/terraform-staging-b</code></td></tr>
+          <tr><td>Infra / DevOps</td><td>GitHub Actions parado por billing: nenhum CI roda</td><td><span class="pill block">bloqueado</span></td><td><code>fila.md</code></td></tr>
+          <tr><td>IA/LLM</td><td>Estratégia em 3 fases; golden sets sintéticos (8 por nicho); interface de LLM com adaptador falso</td><td><span class="pill ok">pronto</span></td><td><code>docs/05-ia-llm/</code> · PR #29</td></tr>
+          <tr><td>Sócios</td><td>Decisões D1 a D14 + DPO (D4 login é o gargalo; D8 advogado; D13 orçamento)</td><td><span class="pill block">aguardando</span></td><td><code>decisoes.md</code> · <code>memos/</code></td></tr>
         </tbody>
       </table>
     </div>

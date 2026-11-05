@@ -74,7 +74,8 @@ describe('timeouts por conexão', () => {
     const err = await erroDe(
       withTenant(h.db, tenant, async (tx) => {
         await tx.execute(sql`set transaction read only`);
-        await tx.execute(sql`delete from patients where false`);
+        // Escrita que não muda nada (o runtime não tem DELETE em patients desde a 0009).
+        await tx.execute(sql`update patients set display_name = display_name where false`);
       }),
     );
     expect(dbErrorCode(err)).toBe('25006');

@@ -53,6 +53,18 @@ describe('headers de segurança do web', () => {
     }
   });
 
+  it('modo http: connect-src libera só a origem da API configurada (obrigatória; https em produção)', () => {
+    const csp = contentSecurityPolicy({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'http', NEXT_PUBLIC_API_ORIGIN: 'https://API.exemplo.test' });
+    expect(directive(csp, 'connect-src')).toEqual(["'self'", 'https://api.exemplo.test']);
+    expect(() => contentSecurityPolicy({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'http' })).toThrow(/obrigatória/);
+    expect(() =>
+      contentSecurityPolicy({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'http', NEXT_PUBLIC_API_ORIGIN: 'http://api.exemplo.test' }),
+    ).toThrow(/https/);
+    expect(() => contentSecurityPolicy({ NODE_ENV: 'production', NEXT_PUBLIC_API_MODO: 'outro' })).toThrow(/MODO/);
+    // Modo fake (padrão) sem origem: nenhuma origem externa no connect-src.
+    expect(directive(contentSecurityPolicy({ NODE_ENV: 'production' }), 'connect-src')).toEqual(["'self'"]);
+  });
+
   it('referrer-policy e permissions-policy restritivas', () => {
     const h = Object.fromEntries(securityHeaders({ NODE_ENV: 'production' }).map((x) => [x.key, x.value]));
     expect(h['Referrer-Policy']).toBe('strict-origin-when-cross-origin');

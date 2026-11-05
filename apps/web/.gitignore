@@ -1,0 +1,4 @@
+# Saídas do Playwright (as capturas que valem ficam em docs/02-produto/telas/)
+test-results/
+playwright-report/
+blob-report/

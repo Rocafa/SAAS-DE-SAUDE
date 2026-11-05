@@ -33,7 +33,12 @@ interface GoldenCase {
   obrigatorios: RequiredItem[];
   armadilhas: Trap[];
   alerta_obrigatorio: boolean;
+  faixa_etaria: 'crianca' | 'adolescente' | 'adulto' | 'idoso';
+  revisao_clinica: (typeof REVISAO_VALIDA)[number];
 }
+
+/** Status da revisão clínica humana de cada caso (checklist-revisao-clinica.md). */
+const REVISAO_VALIDA = ['pendente', 'aprovado', 'aprovado_com_ajuste', 'rejeitado'] as const;
 
 interface GoldenSet {
   versao: string;
@@ -95,6 +100,50 @@ describe('golden sets do escriba', () => {
       expect(set.casos.some((c) => c.alerta_obrigatorio), `${set.nicho}: falta caso de risco`).toBe(true);
     }
   });
+
+  it('cada nicho tem o tamanho mínimo do gate do M3 (50 casos, protocolo §5)', () => {
+    for (const { set } of sets) {
+      expect(set.casos.length, set.nicho).toBeGreaterThanOrEqual(50);
+    }
+  });
+
+  it('cada nicho cobre os três estados de consentimento de IA', () => {
+    for (const { set } of sets) {
+      const estados = new Set(set.casos.map((c) => c.consentimento_ia));
+      expect([...estados].sort(), set.nicho).toEqual(['informado_nao_recusou', 'nao_informado', 'recusou']);
+    }
+  });
+
+  it('só gera rascunho quem foi informado e não recusou; o resto é bloqueado', () => {
+    for (const { c } of cases) {
+      const esperado = c.consentimento_ia === 'informado_nao_recusou' ? 'rascunho' : 'bloqueado';
+      expect(c.resultado_esperado, c.id).toBe(esperado);
+    }
+  });
+
+  it('todo caso marcado como risco exige alerta ao profissional', () => {
+    for (const { c } of cases.filter(({ c }) => c.tags.includes('risco'))) {
+      expect(c.alerta_obrigatorio, c.id).toBe(true);
+    }
+  });
+
+  it('psicologia testa o sigilo reforçado: nota privada ditada nunca vai para o rascunho', () => {
+    const psico = sets.find((s) => s.set.nicho === 'psicologia')!.set;
+    const privadas = psico.casos.filter((c) => c.tags.includes('nota_privada'));
+    expect(privadas.length).toBeGreaterThan(0);
+    for (const c of privadas) {
+      expect(
+        c.armadilhas.some((a) => a.categoria === 'nota_privada_vazada'),
+        `${c.id}: falta armadilha de nota privada`,
+      ).toBe(true);
+    }
+  });
+
+  it('todo caso declara o status da revisão clínica (o gate só conta os aprovados)', () => {
+    for (const { c } of cases) {
+      expect(REVISAO_VALIDA, c.id).toContain(c.revisao_clinica);
+    }
+  });
 });
 
 describe.each(cases.filter(({ c }) => c.resultado_esperado === 'rascunho'))('referência $c.id', ({ c }) => {
@@ -121,8 +170,14 @@ describe.each(cases.filter(({ c }) => c.resultado_esperado === 'rascunho'))('ref
   });
 });
 
-describe.each(cases.filter(({ c }) => c.resultado_esperado === 'bloqueado'))('recusa $c.id', ({ nicho, c }) => {
-  it('a política de roteamento bloqueia o escriba', () => {
+/** Motivo esperado da negativa por estado de consentimento (routing-policy.ts). */
+const MOTIVO_BLOQUEIO: Partial<Record<PatientAiConsent, string>> = {
+  recusou: 'paciente_recusou_ia',
+  nao_informado: 'consentimento_nao_informado',
+};
+
+describe.each(cases.filter(({ c }) => c.resultado_esperado === 'bloqueado'))('bloqueio $c.id', ({ nicho, c }) => {
+  it('a política de roteamento bloqueia o escriba pelo motivo certo', () => {
     const r = routeRequest(
       {
         task: 'escriba',
@@ -133,7 +188,7 @@ describe.each(cases.filter(({ c }) => c.resultado_esperado === 'bloqueado'))('re
       },
       [new FakeLlmProvider()],
     );
-    expect(r).toEqual({ allowed: false, reason: 'paciente_recusou_ia' });
+    expect(r).toEqual({ allowed: false, reason: MOTIVO_BLOQUEIO[c.consentimento_ia] });
     expect(c.nota_referencia).toBeNull();
   });
 });

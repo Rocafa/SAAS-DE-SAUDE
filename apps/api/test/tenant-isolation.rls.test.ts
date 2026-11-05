@@ -102,10 +102,10 @@ describe('isolamento entre tenants (RLS)', () => {
       tx.update(patients).set({ displayName: 'Alterado' }).where(eq(patients.id, patientB)).returning(),
     );
     expect(updated).toEqual([]);
-    const deleted = await withTenant(h.db, tenantA, (tx) =>
-      tx.delete(patients).where(eq(patients.id, patientB)).returning(),
+    // DELETE é recusado antes do RLS: o runtime não tem o privilégio em patients (0009, retenção).
+    await expectRlsViolation(
+      withTenant(h.db, tenantA, (tx) => tx.delete(patients).where(eq(patients.id, patientB)).returning()),
     );
-    expect(deleted).toEqual([]);
     const intacto = await withTenant(h.db, tenantB, (tx) =>
       tx.select().from(patients).where(eq(patients.id, patientB)),
     );

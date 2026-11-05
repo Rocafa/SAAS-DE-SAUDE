@@ -1,4 +1,5 @@
-# Dono padrão de tudo. Adicione o usuário GitHub do sócio ao lado, ex.: * @Rocafa @usuario-do-socio
-*                         @Rocafa
-/docs/03-seguranca-lgpd/  @Rocafa
-/.github/                 @Rocafa
+# Donos do código: os dois sócios revisam tudo. O GitHub pede a revisão deles
+# automaticamente em todo PR que toca estes caminhos.
+*                         @Rocafa @Lopesloro
+/docs/03-seguranca-lgpd/  @Rocafa @Lopesloro
+/.github/                 @Rocafa @Lopesloro

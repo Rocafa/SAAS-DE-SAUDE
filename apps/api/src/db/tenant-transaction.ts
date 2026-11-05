@@ -154,6 +154,9 @@ export class SlotLimiter {
   }
 }
 
+/** Sentinela de sistema no slot do usuário da sessão (migração 0019). Nunca é um usuário. */
+export const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
+
 /**
  * Executa `fn` dentro de uma transação com o contexto do tenant definido.
  *
@@ -163,18 +166,32 @@ export class SlotLimiter {
  * tenant no meio dela (set_config/SET LOCAL/nova chamada) não tem efeito ou é recusado.
  *
  * Isto é a segunda camada (RLS). Repositórios continuam filtrando por tenant_id explicitamente.
+ *
+ * `userId` (migração 0016): o usuário da sessão fica travado na transação do mesmo jeito
+ * (`app_set_user`), e o banco confere com ele quem cria e quem remarca agendamento. Toda transação
+ * da API de domínio passa o usuário (transacao-clinica.ts); sem ele, essas escritas são recusadas.
+ *
+ * Sem `userId` (job do sistema), o slot é TRAVADO com o sentinela de sistema (`app_set_system_user`,
+ * migração 0019): um `app_set_user` posterior, inclusive vindo de SQL injetado, dá 42501, e nenhum
+ * trigger aceita o sistema como autor (R10 do #61).
  */
 export async function withTenant<T>(
   db: Database,
   tenantId: TenantId,
   fn: (tx: TenantTx) => Promise<T>,
+  userId?: string,
 ): Promise<T> {
   if (!isTenantId(tenantId)) {
     // Falha fechada: nunca abre transação com contexto inválido.
     throw new Error('tenant_id inválido: esperado UUID');
   }
+  if (userId !== undefined && (!UUID_RE.test(userId) || userId === USUARIO_SISTEMA)) {
+    throw new Error('user_id inválido: esperado UUID de usuário');
+  }
   return db.transaction(async (tx) => {
     await tx.execute(sql`select app_set_tenant(${tenantId}::uuid)`);
+    if (userId !== undefined) await tx.execute(sql`select app_set_user(${userId}::uuid)`);
+    else await tx.execute(sql`select app_set_system_user()`);
     return fn(tx);
   });
 }
