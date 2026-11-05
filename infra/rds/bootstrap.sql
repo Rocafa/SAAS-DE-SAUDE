@@ -80,9 +80,10 @@ SELECT format('GRANT app_migrator TO %I WITH INHERIT FALSE, SET TRUE', current_u
 -- Schema da identidade (D4): dono é o app_migrator (as migrações criam as tabelas); só o app_auth usa. Fica aqui,
 -- depois do GRANT ... SET acima: AUTHORIZATION app_migrator exige poder agir como ele.
 CREATE SCHEMA IF NOT EXISTS identidade AUTHORIZATION app_migrator;
+SET LOCAL ROLE app_migrator;
+-- Permissões no schema identidade: só o dono (app_migrator) concede.
 REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
 GRANT USAGE ON SCHEMA identidade TO app_auth;
-SET LOCAL ROLE app_migrator;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
 RESET ROLE;
