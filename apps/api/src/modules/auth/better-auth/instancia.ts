@@ -120,6 +120,14 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao) {
                 userAgent: typeof s.userAgent === 'string' && s.userAgent !== '' ? hmacCurto(o.chaveHmac, `ua:${s.userAgent}`) : null,
               },
             }),
+          // Login aceito no log de segurança, com o usuário e a origem em HMAC (nunca o e-mail).
+          after: (s) => {
+            registrarEventoDeSeguranca('LOGIN_OK', {
+              userId: s.userId,
+              ...(typeof s.ipAddress === 'string' && HEX16.test(s.ipAddress) ? { origem: s.ipAddress } : {}),
+            });
+            return Promise.resolve();
+          },
         },
       },
     },
