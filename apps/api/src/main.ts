@@ -13,7 +13,12 @@ async function bootstrap(): Promise<void> {
   // O mesmo store conta por IP (borda) e por usuário (lista/busca de pacientes, R5).
   const rateLimitStore = createRateLimitStore();
   // rawBody: o webhook do WhatsApp confere o HMAC sobre os bytes EXATOS recebidos (0032).
-  const app = await NestFactory.create(AppModule.forRoot(config, { rateLimitStore }), { rawBody: true });
+  const app = await NestFactory.create(AppModule.forRoot(config, { rateLimitStore }), {
+    rawBody: true,
+    // R2 do parecer do #132: sem os parsers padrão do Nest (que registrariam urlencoded de novo no init); a borda
+    // registra só o JSON (applyHttpSecurity), que respeita o rawBody acima.
+    bodyParser: false,
+  });
   applyHttpSecurity(app, undefined, rateLimitStore);
   // Sem esperar, as primeiras requisições contariam só em memória (fallback) até o Redis conectar.
   if (rateLimitStore.ready && !(await rateLimitStore.ready())) {

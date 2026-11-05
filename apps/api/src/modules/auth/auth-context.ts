@@ -10,6 +10,11 @@ export interface AuthContext {
   readonly tenantId: TenantId;
   readonly userId: UserId;
   readonly perfis: readonly Perfil[];
+  /**
+   * Quando o usuário passou pelo segundo fator nesta sessão (informado pelo provedor), ou null se não passou. A
+   * obrigatoriedade é decidida pela API (mfa.ts), não pelo provedor.
+   */
+  readonly mfaEm: Date | null;
 }
 
 /** Só o que o provedor pode ler da requisição: cabeçalhos (cookie/Authorization). */
@@ -30,5 +35,5 @@ export interface AuthProvider {
 export const AUTH_PROVIDER = Symbol('AUTH_PROVIDER');
 
 export function paraRequestContext(auth: AuthContext): RequestContext {
-  return { tenantId: auth.tenantId, userId: auth.userId, roles: auth.perfis };
+  return { tenantId: auth.tenantId, userId: auth.userId, roles: auth.perfis, mfaEm: auth.mfaEm };
 }

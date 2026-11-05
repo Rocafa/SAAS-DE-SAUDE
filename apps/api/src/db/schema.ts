@@ -448,6 +448,23 @@ export const clinicMembers = pgTable('clinic_members', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 });
 
+/**
+ * Autorização de acesso do suporte pela clínica (0059, S9): o admin autoriza um chamado por até 72 h e pode revogar;
+ * a trilha recusa linha de suporte `pedido_da_clinica` sem autorização vigente. Só ids, o chamado e datas.
+ */
+export const supportAccessGrants = pgTable('support_access_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  ticket: text('ticket').notNull(),
+  grantedBy: uuid('granted_by').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedBy: uuid('revoked_by'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
 /** Custódia das notas lacradas de um psicólogo desligado (0017, R2 do #63): designa o admin, aceita o substituto. */
 export const noteCustodies = pgTable('note_custodies', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -473,6 +490,10 @@ export const CLINICAL_NOTICE_KINDS = [
   // 0039 (N1 do #73): o recálculo desligou o sigilo do adolescente ou estendeu a representação além dos 18;
   // 0050 (R3 do #68): o titular passou a constar menor e perdeu o acesso (`titular_menor_revogado`).
   'portal_sigilo_transicao',
+  // 0060 (E8 de 04/11): a área sensível de um profissional foi desmarcada; leva só o id do profissional.
+  'area_sensivel_desmarcada',
+  // 0063 (resto do E10 de 04/11): alerta de anomalia de sessão da equipe; leva a regra e quem disparou (id).
+  'alerta_anomalia',
 ] as const;
 export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
 export const PORTAL_SIGILO_TRANSICOES = ['sigilo_desligado', 'representacao_estendida', 'titular_menor_revogado'] as const;
@@ -494,6 +515,10 @@ export const clinicalNotices = pgTable('clinical_notices', {
   patientId: uuid('patient_id'),
   portalTransition: text('portal_transition', { enum: PORTAL_SIGILO_TRANSICOES }),
   restrictedExisting: integer('restricted_existing').notNull().default(0),
+  /** 0060: só no aviso `area_sensivel_desmarcada`. */
+  professionalId: uuid('professional_id'),
+  /** 0063: só no aviso `alerta_anomalia`. */
+  anomalyRule: text('anomaly_rule'),
   createdBy: uuid('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   readAt: timestamp('read_at', { withTimezone: true }),
@@ -994,8 +1019,8 @@ export const portalRightsRequests = pgTable('portal_rights_requests', {
   documentRequired: boolean('document_required').notNull().default(sql`null`),
 });
 
-/** Responsáveis do paciente (migração 0028). Valores no mesmo CHECK do banco. */
-export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante'] as const;
+/** Responsáveis do paciente (migração 0028; `apoiador` na 0055). Valores no mesmo CHECK do banco. */
+export const GUARDIAN_KINDS = ['pai_mae', 'tutor', 'curador', 'representante', 'apoiador'] as const;
 export type GuardianKind = (typeof GUARDIAN_KINDS)[number];
 export const GUARDIAN_END_REASONS = [
   'maioridade',
@@ -1033,6 +1058,12 @@ export const guardians = pgTable('guardians', {
   discardedAt: timestamp('discarded_at', { withTimezone: true }),
   /** 0048: marca imutável do lote de importação que CRIOU a pessoa (pessoa que já existia não a tem). */
   importBatchId: uuid('import_batch_id'),
+  /**
+   * 0054: índice cego do CPF (HMAC com a MESMA chave de índice da clínica dos pacientes, domínio
+   * `guardians.cpf:v1:`) e a versão da chave. Mudar só estas colunas não exige usuário nem gera histórico.
+   */
+  cpfBidx: text('cpf_bidx'),
+  cpfBidxVersion: smallint('cpf_bidx_version'),
 });
 
 /** Vínculo responsável ↔ paciente (0028). Vigência [validFrom, validUntil), validUntil exclusivo. */
@@ -1065,6 +1096,16 @@ export const patientGuardians = pgTable('patient_guardians', {
   /** Paciente adulto ciente de que um terceiro é o pagador (autor/data pelo banco). */
   payerPatientAwareBy: uuid('payer_patient_aware_by'),
   payerPatientAwareAt: timestamp('payer_patient_aware_at', { withTimezone: true }),
+  /** 0055 (B1): autorização expressa do paciente para o APOIADOR receber informação clínica (quem registrou e quando). */
+  patientAuthorizedBy: uuid('patient_authorized_by'),
+  patientAuthorizedAt: timestamp('patient_authorized_at', { withTimezone: true }),
+  /** 0056 (A1 b do #67): escopo da marca decidido pelo profissional; null com a marca desligada. */
+  clinicalInfoScope: text('clinical_info_scope').$type<EscopoInformacaoClinica>(),
+  /** 0056 (A1 c): a decisão supera o pedido de sigilo do adolescente por risco (justificativa na decisão). */
+  clinicalInfoRiskOverride: boolean('clinical_info_risk_override').notNull().default(false),
+  /** 0057 (R4 do parecer do apoiador): pai/mãe ou tutor confirmado para paciente maior (quem e quando). */
+  adultConfirmedBy: uuid('adult_confirmed_by'),
+  adultConfirmedAt: timestamp('adult_confirmed_at', { withTimezone: true }),
   /** Anulação (cadastro errado): motivo cifrado e prazo para o descarte da pessoa. */
   annulReasonEnc: text('annul_reason_enc'),
   discardAfter: date('discard_after'),
@@ -1072,6 +1113,29 @@ export const patientGuardians = pgTable('patient_guardians', {
   eliminatedAt: timestamp('eliminated_at', { withTimezone: true }),
   /** 0048: marca imutável do lote de importação que criou o vínculo (só INSERT, só pelo lote em aplicação). */
   importBatchId: uuid('import_batch_id'),
+});
+
+/** 0056 (A1 b do #67): escopo da informação clínica ao responsável. */
+export const ESCOPOS_INFORMACAO_CLINICA = ['essencial', 'integral'] as const;
+export type EscopoInformacaoClinica = (typeof ESCOPOS_INFORMACAO_CLINICA)[number];
+
+/**
+ * Pedido de sigilo do adolescente (0056, A1 c do #67): só ids e datas. `guardianLinkId` null = todos os
+ * responsáveis. Registrado e revogado só pelo profissional; nada se apaga.
+ */
+export const adolescentConfidentialityRequests = pgTable('adolescent_confidentiality_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  patientId: uuid('patient_id').notNull(),
+  guardianLinkId: uuid('guardian_link_id'),
+  /** A pessoa do vínculo: o pedido vale para qualquer vínculo dela com o paciente. */
+  guardianId: uuid('guardian_id'),
+  /** 0058 (R5): atendimento do prontuário onde o profissional registrou o pedido (só o id; do mesmo paciente e autor). */
+  encounterId: uuid('encounter_id'),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+  requestedBy: uuid('requested_by').notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
 });
 
 /** Histórico append-only dos responsáveis (0028), gravado só pelos triggers. */

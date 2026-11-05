@@ -362,3 +362,61 @@ Conferido:
 - `app_close_import_batch_key_intent` não confere o perfil admin, só a clínica. Só o runtime a chama, e o pior caso é uma chave sem dado ficar sem destruição.
 
 **Varredura de testes instáveis (`e281e88..6e3b54d`): nenhuma garantia ficou mais fraca.** Os detalhes estão na conferência da rodada 23 em `2026-10-22-pr73.md`.
+
+## Conferência PR #88 (28/10/2026)
+
+> Escopo: `git diff origin/main...origin/eng/reindexacao-indice-cpf` (job `cpf-indice-reindexacao`, passos 2 e 3 do §12d como `sistema`). Leitura de código; unitários informados como verdes (995/995), RLS no CI.
+
+**Veredito: APROVADO COM RESSALVAS.** O job fecha a observação "antes do GA" da conferência R3-a/R3-b sem script manual, com uma correção obrigatória (C1) antes do merge.
+
+**O que conferi e aceito:**
+- **Ator `sistema` em vez de admin: aceito.** O passo 1 (girar a chave) continua decisão humana de admin. Os passos 2 e 3 são manutenção mecânica, sem leitura de conteúdo clínico, com trilha de ator `sistema` (mesmo padrão de `descartarAnuladosComoSistema`). A destruição automática da aposentada é segura: só roda com `pendentes = 0`, sob a trava da clínica, e o banco recusa destruir versão com paciente indexado (`not exists` em `descartarChavesAntigas`). Ela apaga só uma chave de HMAC sem uso, sem perda de dado. Depois de uma suspeita de vazamento, fechar a troca sozinho é o comportamento desejado.
+- **CPF fora de log, trilha e retorno.** O retorno e a trilha (`cpf_reindex`, `key_destroy`) têm só contagens e versões. O CPF decifrado fica na memória do lote e não é logado. Os erros de cripto têm mensagem fixa.
+- **Isolamento.** Toda transação é `db.run(tenantId, …)` da própria clínica, e todas as consultas novas (`pendentes`, `temChaveAposentada`) filtram `tenant_id` além do RLS. Nenhuma consulta cruza clínicas.
+- **Sem pendente, não decifra nem cria chave.** `pendentes` e `temChaveAposentada` não tocam o `FieldCipher`. Com pendente e sem chave ativa, `criarChave` cria a versão 1 como `sistema`, o mesmo que o primeiro cadastro faria.
+- **Todas as clínicas, inclusive canceladas (R1 dos jobs): aceito.** O job não envia nada nem age em nome da clínica, e concluir uma troca de chave aberta (por exemplo, depois de suspeita de vazamento) tem valor de segurança também na clínica cancelada. O §14 registra a exceção.
+- **Testes.** O teste RLS prova o lote limitado (`maxLotes: 1` deixa pendente e não destrói a aposentada em uso), que a rodada seguinte zera e destrói a aposentada, a busca pelo índice novo, a trilha só com contagens e o ator `sistema`, e a ausência de decifração sem pendente (com espião em `decrypt`/`decryptString`).
+
+**Correções exigidas:**
+
+1. **C1 (antes do merge): clínica de chave destruída (G3) falha todo dia.** Arquivo: `apps/api/src/modules/patients/patients.service.ts`, linhas 93–103 (`reindexarIndiceCpfComoSistema`). Depois do *crypto-shredding*, se ainda houver `cpf_enc` fora da chave ativa, `reindexar` lança erro em toda rodada. Com chave de índice ativa, `chaveAtiva` lança `KeyUnavailableError` (DEK `destroyed`). Sem chave ativa, `criarChave` → `provisionTenant` lança `TenantKeysDestroyedError`. Não há vazamento nem chave nova: `provisionTenant` recusa, e isso está correto. Mas o job é `critico: true`, e a clínica vira `clinicasComFalha` todo dia, para sempre. Esse alarme permanente esconde falhas reais (fadiga de alarme). **Correção:** tratar `KeyUnavailableError` e `TenantKeysDestroyedError` nesse caminho, ou conferir antes se a clínica tem chaves destruídas. Devolver contagens zeradas mais um indicador numérico/booleano (ex.: `chaveDestruida: 1`), sem falhar, sem tentar provisionar e sem decifrar. Acrescentar em `apps/api/test/importador.rls.test.ts` um caso com a DEK da clínica destruída que prove: o job não falha, nenhuma chave nova em `tenant_keys`/`patient_cpf_index_keys`, nenhuma trilha `cpf_reindex`. Registrar o comportamento numa linha do §12d de `docs/04-arquitetura/api-dominio.md` (linha 762).
+2. **C2 (junto com C1): provar "não cria chave".** No mesmo teste (`apps/api/test/importador.rls.test.ts`, bloco "Sem pendente", perto da linha 1068), conferir também que a contagem de `patient_cpf_index_keys` não mudou. O §12d e o comentário do serviço afirmam isso, e hoje o teste só prova "não decifra".
+
+**Observações (sem bloqueio):**
+- **Encerramento da observação R3-a/R3-b.** Ela fica atendida quando o job tiver rodado em produção com Redis (`JOBS_HABILITADOS`) e a trilha de cada clínica existente mostrar `cpf_reindex` com `pending = 0`. Conferir isso no checklist do GA.
+- **Lote de 500 numa transação de 15 s** (`pool-config.ts:36`). Cada linha faz cerca de 3 consultas (`findById`, `UPDATE`, mais o KMS na primeira DEK). Deve caber, mas acompanhar a duração. Se chegar perto do teto, baixar o lote padrão.
+- **Responsáveis (0048)** continuam fora do índice e decifrando na dedup. O prazo segue o mesmo, antes do GA. Este job não cobre `guardians`.
+
+**Reconferência (28/10/2026, `ef7ddd6..28b16d4`): APROVADO.** C1 e C2 atendidas.
+- **C1.** `FieldCipher.tenantKeysDestroyed` delega a `hasDestroyedKeys`, que só olha `tenant_master_keys` em `destroying`/`destroyed`. Conferi `data-key-store.ts`: esse estado só nasce em `beginDestroy`, a eliminação da clínica inteira. A rotação normal de DEK não marca a clínica, então nenhuma clínica viva é pulada por engano. O estado `destroying` (eliminação a meio caminho) também é pulado, e isso está correto. A conferência roda na 1ª transação, antes de qualquer `chaveAtiva`/`criarChave`: não decifra, não provisiona, não grava trilha e não falha. O retorno traz só contagens e `chaveDestruida`. O teste da clínica E prova duas rodadas sem erro, `patient_cpf_index_keys` idêntica e trilha `cpf_reindex` vazia. O §12d registra o comportamento.
+- **C2.** O bloco "sem pendente" agora confere que a contagem de `patient_cpf_index_keys` não muda.
+- As observações anteriores continuam valendo (encerramento da R3-a/R3-b pela trilha `pending = 0` em produção; duração do lote; responsáveis antes do GA).
+
+## Conferência PR #89 (29/10/2026)
+
+> Escopo: `git diff origin/main...origin/eng/indice-cego-responsaveis` (ponta `5b56f34`): migração 0054, índice cego do CPF nos responsáveis, dedup do importador pelo índice, job cobrindo as duas tabelas. Leitura de código; CI verde com RLS, informado pelo coordenador.
+
+**Veredito: APROVADO COM RESSALVAS.** Fecha a pendência "antes do GA" da dedup de responsáveis (0048), com uma correção obrigatória (C1) antes do merge.
+
+**O que conferi e aceito:**
+- **Exceção sem usuário no `guardians_guard` (ponto 1 do executor): aceita.** Ela só vale quando `NEW`, com as duas colunas do índice repostas, é idêntico a `OLD`. Também vem depois da regra de "descartada é terminal", e os CHECKs (formato, par, `needs_cpf`) e a FK por `(tenant_id, version)` continuam valendo. Não há escrita entre clínicas (RLS + FK composta). O `guardians_history` (0031) só registra nome, CPF e telefone, e o `guardian_import_provenance_guard` (0048) só barra mudança de `import_batch_id` no UPDATE: a reindexação pelo `sistema` passa e não gera `alterado_depois`. Um índice forjado só pode esconder a pessoa da dedup até a próxima reindexação, porque a busca confirma decifrando. Esse risco residual é o mesmo aceito para os pacientes desde a 0046: integridade da dedup, sem quebra de sigilo. A ressalva é que a UPDATE só do índice não deixa rastro (nem histórico nem trilha), o que é coerente com a finalidade. Com a C1, o índice forjado deixa de ter qualquer efeito fora da dedup.
+- **Chave compartilhada com separação por domínio (ponto 2): aceita.** HMAC com rótulo de domínio distinto (`patients.cpf:v1:` / `guardians.cpf:v1:`) é a separação padrão. Comprometer a chave expõe as duas tabelas de qualquer forma, e uma chave só simplifica a rotação e a destruição. O teste unitário prova que o domínio dos pacientes não mudou: os índices gravados seguem válidos.
+- **Minimização.** A dedup recebe só os CPFs do arquivo e decifra apenas as pessoas casadas e as pendentes sem índice válido (o teste prova 1 de 4). Pessoa descartada não entra.
+- **Descarte.** O descarte zera o índice junto com o CPF, e a pessoa descartada continua terminal.
+- **Destruição de versão.** Serviço e banco (`patient_cpf_index_keys_guard`) recusam destruir versão com paciente **ou** responsável indexado, e o teste cobre também o SQL direto.
+- **Trilha e log.** Só contagens, com `table: 'guardians'` no escopo `patient_guardians`. O teste de stdout/stderr cobre os responsáveis.
+- **Gatilhos.** A ordem dos gatilhos (índice ausente antes da guarda) e a ausência de SECURITY DEFINER são conferidas na própria migração.
+
+**Correções exigidas:**
+
+1. **C1 (antes do merge): o `alterar` confia no índice para decidir "mesmo CPF".** Arquivo: `apps/api/src/modules/patients/responsaveis.service.ts`, linhas 322–326. Se `cpf_bidx`/`cpf_bidx_version` da pessoa casarem com o índice do CPF enviado, o CPF não é regravado. Mas o índice é justamente a coluna que a 0054 deixa qualquer sessão da clínica trocar sem usuário e sem rastro. Um índice copiado de outra pessoa da clínica (o cenário que o próprio teste da linha 515 encena) faz uma alteração legítima de CPF ser **descartada em silêncio**: a tela diz que salvou, e o CPF antigo continua. É falha de integridade do dado pessoal (art. 6º, V, LGPD: exatidão) que o modelo de ameaça do PR admite como possível. Os pacientes não têm o problema porque comparam decifrando (`patients.service.ts:217`). **Correção:** comparar com o CPF atual decifrado, como nos pacientes: uma decifração por edição, só quando `dados.cpf` vem preenchido. O índice pode servir de atalho apenas para *descartar* a igualdade (índices diferentes na versão ativa = CPF diferente), nunca para afirmá-la. Acrescentar em `apps/api/test/importador-responsaveis.rls.test.ts`, perto da linha 461, o caso: índice da pessoa forjado por SQL com o índice de outra pessoa, seguido de `alterar` com o CPF dessa outra pessoa. O teste deve provar que o CPF é regravado (decifrado igual ao novo), que o índice fica correto e que o histórico registra `cpf`.
+
+**Observações (sem bloqueio):**
+- O `alterar` com `cpf: null` numa pessoa já sem CPF continua gravando `cpf` no histórico (comportamento anterior, sem dado exposto). Dá para alinhar junto com a C1.
+- A observação de encerramento do #88 vale aqui também: a pendência dos responsáveis fecha quando a trilha `cpf_reindex` com `table: 'guardians'` mostrar `pending = 0` em cada clínica existente, em produção.
+
+**Reconferência (29/10/2026, `7a47299..73ce1d7`): APROVADO.** C1 atendida.
+- `alterar` (`responsaveis.service.ts:320-336`) decide "mesmo CPF" decifrando o atual (`decifrarCampoResponsavel`; `null` sobre `null` também não regrava), igual aos pacientes. O índice deixou de afirmar igualdade. A observação do `cpf: null` repetido ficou alinhada junto.
+- O defeito revelado pelo teste foi corrigido do jeito certo: quando o índice gravado (forjado) coincide com o novo, uma UPDATE só do índice o zera antes, dentro da exceção da guarda e sem histórico. A escrita principal grava depois a cifra e o índice novos, e o gatilho de índice ausente não os apaga.
+- O teste novo forja o índice com o de outra pessoa e faz o PATCH para o CPF dela. Ele prova que a cifra muda, que a resposta traz o CPF novo, que o índice fica correto, que o histórico cresce e que a trilha registra `changed: 'cpf'`. Nenhum CPF em claro entra na trilha.
+- As observações anteriores continuam valendo (encerramento pela trilha `pending = 0` com `table: 'guardians'` em produção).

@@ -170,7 +170,7 @@ flowchart LR
 1. **Só testar o que mudou:** `turbo run test --filter=...[origin/main]` — em monorepo corta o tempo drasticamente.
 2. **Cache:** `actions/setup-node` com `cache: pnpm` + **Turborepo Remote Cache** (Vercel ou self-hosted) — builds repetidos viram segundos.
 3. **Jobs em paralelo:** lint, typecheck, test e gitleaks em jobs separados (matrix), não em sequência.
-4. **Branch protection na `main`:** exigir CI verde + 1 aprovação de sócio + conversa resolvida; proibir push direto. *(Hoje os commits vão direto na main por pedido dos sócios — ligar isso quando o código começar.)*
+4. **Branch protection na `main`:** exigir CI verde + 1 aprovação de sócio + conversa resolvida; proibir push direto. *(Ligada em 28/10/2026 com PR obrigatório e 10 checks; aprovação e conversa resolvida ainda não: ver [ambientes-e-devops](../04-arquitetura/ambientes-e-devops.md).)*
 5. **Segurança automática:** gitleaks (já existe), **CodeQL**, **Dependabot** (adicionado neste commit), `pnpm audit` com falha em severidade alta.
 6. **Teste de RLS obrigatório:** job com Postgres efêmero (service container) que tenta ler dado de outro tenant e **precisa falhar**. É o teste mais importante do produto.
 7. **Preview por PR:** deploy efêmero (Vercel/Render) com dados **sintéticos** para os sócios testarem antes do merge.

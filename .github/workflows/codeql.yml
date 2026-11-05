@@ -25,11 +25,12 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
-      # Repositório privado sem GitHub Code Security: não há upload para a aba Security.
-      # Os resultados ficam como artefato e o job falha se houver achado de nível "error".
+      # Repositório público (desde 27/10/2026): o code scanning é grátis, então os resultados vão para a aba
+      # Security e para as anotações do PR, inclusive os de nível warning. Continuam também como artefato, e o
+      # job falha se houver achado de nível "error" (check obrigatório da proteção da main).
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          upload: never
+          upload: always
           output: codeql-results
       - name: Publicar resultados (SARIF)
         if: always()
