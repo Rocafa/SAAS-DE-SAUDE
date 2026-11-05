@@ -26,6 +26,12 @@ export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
   return createHash('sha256').update([...perfis].sort().join(',')).digest('hex').slice(0, 16);
 }
 
+/** Prazo para a primeira escolha de clínica aproveitar o TOTP feito sem clínica (R7 do #152, R4 do desenho do PR 3). */
+export const PRAZO_MFA_SEM_CLINICA_MS = 5 * 60 * 1000;
+
+/** Resultado do TOTP aceito: MFA marcado, guardado para a escolha de clínica, ou nada (sessão sumiu, sem perfil). */
+export type ResultadoDoMfa = 'marcado' | 'sem_clinica' | 'nada';
+
 export interface DependenciasDoProvedor {
   readonly auth: Autenticacao;
   /** Pool do papel `app_auth` (schema identidade e a função de clínicas). */
@@ -117,7 +123,16 @@ export class BetterAuthProvider implements AuthProvider {
    */
   async definirClinica(sessaoId: string, userId: string, tenantId: string): Promise<boolean> {
     if (!(await this.clinicasDoUsuario(userId)).includes(tenantId)) return false;
-    await this.d.dbAuth.update(sessao).set({ clinicaAtiva: tenantId, mfaEm: null, perfisNoMfa: null }).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    // R4 do desenho do PR 3: o TOTP feito sem clínica vale só para ESTA escolha e é zerado nela, valendo ou não.
+    const [antes] = await this.d.dbAuth
+      .select({ semClinica: sessao.mfaSemClinicaEm, clinicaAtiva: sessao.clinicaAtiva })
+      .from(sessao)
+      .where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    if (!antes) return false;
+    await this.d.dbAuth
+      .update(sessao)
+      .set({ clinicaAtiva: tenantId, mfaEm: null, perfisNoMfa: null, mfaSemClinicaEm: null })
+      .where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
     await withTenant(
       this.d.dbClinica,
       tenantId as TenantId,
@@ -129,6 +144,9 @@ export class BetterAuthProvider implements AuthProvider {
         }),
       userId,
     );
+    const aproveita =
+      antes.clinicaAtiva === null && antes.semClinica !== null && this.agora().getTime() - antes.semClinica.getTime() <= PRAZO_MFA_SEM_CLINICA_MS;
+    if (aproveita && (await this.marcarMfa(sessaoId))) await this.trilhaDoFator(tenantId, userId, ['mfa_verified'], AuditAction.Login);
     return true;
   }
 
@@ -150,19 +168,25 @@ export class BetterAuthProvider implements AuthProvider {
    * (trocar de clínica zera o MFA); então `mfa_em` e a trilha da clínica (R5 do #123: cadastro e verificação). Com
    * várias clínicas e nenhuma escolhida, o MFA não é marcado: a escolha (PR 3) vem antes da reverificação.
    */
-  async aposMfaVerificado(sessaoId: string, userId: string, motivo: 'login_em_duas_etapas' | 'reverificacao' | 'cadastro_do_fator'): Promise<void> {
+  async aposMfaVerificado(sessaoId: string, userId: string, motivo: 'login_em_duas_etapas' | 'reverificacao' | 'cadastro_do_fator'): Promise<ResultadoDoMfa> {
     const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
-    if (!s) return;
+    if (!s) return 'nada';
     let tenantId = s.clinicaAtiva;
     if (!tenantId) {
       const clinicas = await this.clinicasDoUsuario(userId);
-      if (clinicas.length !== 1 || !clinicas[0]) return;
+      if (clinicas.length > 1) {
+        // Várias clínicas e nenhuma escolhida: guarda para a primeira escolha em até 5 min (nunca vira mfa_em aqui).
+        await this.d.dbAuth.update(sessao).set({ mfaSemClinicaEm: this.agora() }).where(eq(sessao.id, sessaoId));
+        return 'sem_clinica';
+      }
+      if (clinicas.length !== 1 || !clinicas[0]) return 'nada';
       tenantId = clinicas[0];
       await this.definirClinica(sessaoId, userId, tenantId);
     }
-    if (!(await this.marcarMfa(sessaoId))) return;
+    if (!(await this.marcarMfa(sessaoId))) return 'nada';
     const ops = motivo === 'cadastro_do_fator' ? ['mfa_enrolled', 'mfa_verified'] : ['mfa_verified'];
     await this.trilhaDoFator(tenantId, userId, ops, AuditAction.Login);
+    return 'marcado';
   }
 
   /** Código ou senha do cadastro recusados com sessão aberta: trilha da clínica ativa (falha e, se for o caso, bloqueio). */

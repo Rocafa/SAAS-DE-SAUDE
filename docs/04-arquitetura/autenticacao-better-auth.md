@@ -189,3 +189,8 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
   - **R12:** TLS verificado no banco e no Redis, a chave do HMAC no Secrets Manager, e a rotação testada no staging.
   - **R13:** checklist assinado e parecer final antes de abrir produção; teste de fumaça só com contas fictícias.
   - **R14:** e-mail da conta não verificado no RIPD; responsabilidade do admin pela entrega dos tokens no contrato.
+- **3b, depois da reconferência:**
+  - **R15:** os fluxos de token entram no bloqueio 5/15 com reserva atômica. O TOTP pedido na recuperação conta no bloqueio do fator, com a marca de reuso. A senha pedida na recuperação de fator e no aceite de conta existente conta no bloqueio de login. O token é consumido de forma atômica.
+  - **R16:** no aceite de conta existente, o e-mail da conta autenticada precisa ser o do convite. Na recuperação, `:usuarioId` precisa ter vínculo ativo na clínica do admin; senão, 404.
+  - **R17:** a conta guarda a clínica e o convite de origem; a pessoa vê as próprias clínicas; há procedimento de disputa de e-mail no suporte; a verificação de e-mail fica obrigatória quando houver provedor (inclusive para contas antigas); RIPD e contrato registram que o e-mail é declarado pelo admin.
+  - **R18:** quem perdeu os dois fatores recebe a conta nova com **outro** e-mail, até o suporte liberar o antigo pelo procedimento de disputa. O RIPD registra que quem usa o token percebe se a conta já existe.

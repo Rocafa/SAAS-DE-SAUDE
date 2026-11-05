@@ -38,6 +38,8 @@ export const sessao = identidade.table(
     clinicaAtiva: uuid('clinica_ativa'),
     mfaEm: timestamp('mfa_em', { withTimezone: true }),
     perfisNoMfa: text('perfis_no_mfa'),
+    /** TOTP aceito sem clínica ativa (0066): só a escolha de clínica em até 5 min o converte em `mfaEm`. */
+    mfaSemClinicaEm: timestamp('mfa_sem_clinica_em', { withTimezone: true }),
   },
   (t) => [index('sessao_usuario_idx').on(t.userId)],
 );

@@ -75,3 +75,41 @@ O veto da 3b vem de um problema de fundo. Sem provedor de e-mail, **o admin vê 
 | R16, R17, R19 e R20 | Endereçadas, com as correções acima. ✅ |
 | Dados reais | Desenho sem nenhum. ✅ |
 | CFM, ANS e ICP-Brasil | R18 resolvida pela tabela da clínica, com a retenção de 20 anos. MFA real em produção atende ao NGS2. Não toca TISS nem assinatura. ✅ |
+
+## Reconferência da 3b (05/11/2026, commit `553ca97`)
+
+### Veredito: **o veto da 3b está retirado. APROVADO COM RESSALVAS.** A 3b pode ir para o código com R15 a R18 no desenho ou no próprio PR.
+
+- **R1: resolvida.** Nenhum token restaura os dois fatores. O token de senha exige o TOTP atual, e o token de fator exige a senha atual. O TOTP antigo só sai quando o novo é confirmado. "Perdeu os dois" vai para o suporte. O desbloqueio só zera os contadores. Com isso, o admin que vê o token não entra como a pessoa.
+- **R2: resolvida.**
+  - O convite fica numa tabela da clínica, com o e-mail cifrado, sem perfil concedido e sem tocar em `identidade.usuario`.
+  - O vínculo nasce no aceite.
+  - A conta que já existe exige login completo (senha e TOTP).
+  - A recuperação não restaura credencial sem o fator que a pessoa já tem, então o efeito entre clínicas ficou neutralizado na origem, que é melhor do que suspender os vínculos.
+  - As outras clínicas recebem só o aviso, sem detalhe.
+- **R8 a R11:** incorporadas (15 min da sessão pendente, bloqueio no aceite, teto de convites, trigger só na clínica, credencial apagada na anonimização).
+
+### Risco residual do "Aceite: pessoa nova" (o admin aceita o próprio convite)
+
+**Aceito, com condições.** O desenho diz que isso "equivale a o próprio admin criar uma conta falsa". É verdade **dentro da clínica**, porque o admin já controla o cadastro de `professionals` e os perfis. Há, porém, dois efeitos que vão além disso, porque o e-mail é único na plataforma e não é verificado:
+
+- **Apropriação do e-mail de outra pessoa.** A conta fica com o e-mail **real** do profissional. Quando a clínica B convidar a mesma pessoa, cai em "conta existente" e pede a senha e o TOTP, que só o admin da clínica A tem. A pessoa verdadeira fica impedida de entrar na clínica B. O admin de A não entra em B, porque não tem o token de B, mas o titular perde o próprio e-mail na plataforma.
+- **Atribuição.** O que essa conta fizer aparece na trilha ligado a um e-mail que parece ser da pessoa. A autoria do prontuário segue o `professionals` da clínica, que o admin já controla. A assinatura ICP-Brasil, quando existir, é a garantia de autoria real.
+
+### Ressalvas novas
+
+15. **Os fluxos de token passam pelos mesmos bloqueios.**
+    - O código TOTP pedido na recuperação de senha conta no bloqueio do fator (`fator:<userId>` e origem), com a reserva atômica do #152 e a marca de reuso do código.
+    - A senha pedida na recuperação de fator e no aceite de conta existente conta no bloqueio de login.
+    - O token é consumido de forma atômica (uso único mesmo com requisições em paralelo), e o erro é o mesmo para token inválido, vencido ou usado.
+    - Sem isso, quem tem o token de recuperação tenta TOTP ou senha fora do teto de 5 em 15 min.
+16. **Vínculos conferidos.**
+    - No aceite de conta existente, a conta autenticada tem de ter **o e-mail do convite**. Sem isso, um token desviado vira vínculo para outra pessoa.
+    - Na recuperação, `:usuarioId` precisa ter vínculo **ativo na clínica do admin** (conferido sob RLS). Fora disso, 404.
+17. **Condições do risco residual:**
+    - (a) `identidade.usuario` guarda a origem da conta (clínica e convite que a criaram, como id), para investigação.
+    - (b) Depois do login, a pessoa vê a lista das próprias clínicas (já existe na 3a), e uma clínica estranha aparece ali.
+    - (c) Procedimento escrito de **disputa de e-mail** no suporte: o titular contesta, a conta é suspensa e investigada, e o resultado vai para a trilha das clínicas envolvidas.
+    - (d) A verificação de e-mail passa a ser **obrigatória** assim que existir o provedor (§9), inclusive para as contas antigas na próxima entrada.
+    - (e) RIPD e contrato (R14): o e-mail é declarado pelo admin, e o admin responde por convites aceitos indevidamente.
+18. **"Perdeu os dois → convite novo vira conta nova":** com o e-mail único, a conta nova precisa de outro e-mail, ou o suporte libera o e-mail antigo. Escrever qual dos dois, e que o id antigo continua ligado ao histórico (R18) sem ganhar credencial nova. Um resíduo aceito: quem usa o token percebe se a conta já existe, porque o aceite muda de modo. É o próprio admin abusando do token, o que fica na trilha. Registrar no RIPD.

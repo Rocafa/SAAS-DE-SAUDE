@@ -86,6 +86,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'cadastro_do_fator',
   'login_em_duas_etapas',
   'reverificacao',
+  'login_em_duas_etapas_sem_clinica',
   'senha_vazada',
   'conferencia_indisponivel',
 ] as const;

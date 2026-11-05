@@ -91,6 +91,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
         clinicaAtiva: { type: 'string', input: false, required: false, returned: false },
         mfaEm: { type: 'date', input: false, required: false, returned: false },
         perfisNoMfa: { type: 'string', input: false, required: false, returned: false },
+        mfaSemClinicaEm: { type: 'date', input: false, required: false, returned: false },
       },
     },
     account: { modelName: 'conta' },
