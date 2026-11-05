@@ -253,6 +253,11 @@ export function registerRateLimitStore(store: RateLimitStore | undefined): void 
   activeStore = store;
 }
 
+/** O store registrado no boot (Redis em produção), ou undefined. Para contadores fora do middleware (R9 do #123). */
+export function rateLimitStoreAtivo(): RateLimitStore | undefined {
+  return activeStore;
+}
+
 /** Modo atual do rate limit; `desligado` se nenhum store foi registrado. */
 export function rateLimitMode(): RateLimitMode | 'desligado' {
   return activeStore?.mode() ?? 'desligado';

@@ -1,6 +1,6 @@
 import type { TenantId } from '@plataforma/shared';
 import { asc, eq, sql } from 'drizzle-orm';
-import { guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
+import { adolescentConfidentialityRequests, guardians, patientGuardianHistory, patientGuardians } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { guardianFieldRef, guardianLinkFieldRef, type GuardianEncryptedColumn, type GuardianLinkEncryptedColumn } from './guardian-fields';
@@ -46,10 +46,23 @@ export interface ExportedGuardians {
     clinicalInfoDecidedBy: string | null;
     clinicalInfoDecidedAt: string | null;
     clinicalInfoBasis: string | null;
+    /** Curatela (kind = curador). Desde a 1.19.0 vem null para o apoiador: o termo dele sai em `supportTerm*`. */
     courtDecisionRef: string | null;
     curatorshipScope: string | null;
+    /** 1.19.0 (0055): termo de decisão apoiada (kind = apoiador): referência da homologação e limites do apoio. */
+    supportTermRef: string | null;
+    supportTermScope: string | null;
     payerPatientAwareBy: string | null;
     payerPatientAwareAt: string | null;
+    /** 1.19.0 (0055, B1): autorização expressa do paciente para o apoiador receber informação clínica. */
+    patientAuthorizedBy: string | null;
+    patientAuthorizedAt: string | null;
+    /** 1.20.0 (0056): escopo da marca e exceção por risco ao pedido de sigilo do adolescente. */
+    clinicalInfoScope: string | null;
+    clinicalInfoRiskOverride: boolean;
+    /** 1.21.0 (0057): pai/mãe ou tutor confirmado para paciente maior. */
+    adultConfirmedBy: string | null;
+    adultConfirmedAt: string | null;
     annulReason: string | null;
     discardAfter: string | null;
     /** 0034 (A4 do #67): eliminado com o prontuário e a data em que vence a guarda do prontuário do paciente. */
@@ -76,6 +89,19 @@ export interface ExportedGuardians {
     endReason: string | null;
     actorId: string;
     occurredAt: string;
+  }[];
+  /** 1.20.0 (0056, A1 c do #67): pedidos de sigilo do adolescente (só ids e datas; vínculo null = todos). */
+  readonly adolescentConfidentialityRequests: readonly {
+    id: string;
+    patientId: string;
+    guardianLinkId: string | null;
+    guardianId: string | null;
+    /** 1.22.0 (0058, R5): atendimento do prontuário onde o pedido foi registrado. */
+    encounterId: string | null;
+    requestedAt: string;
+    requestedBy: string;
+    revokedAt: string | null;
+    revokedBy: string | null;
   }[];
 }
 
@@ -133,6 +159,15 @@ export async function exportarResponsaveis(
     tenantId,
   );
 
+  const pedidosDeSigilo = soDaClinica(
+    await tx
+      .select()
+      .from(adolescentConfidentialityRequests)
+      .where(eq(adolescentConfidentialityRequests.tenantId, tenantId))
+      .orderBy(asc(adolescentConfidentialityRequests.requestedAt), asc(adolescentConfidentialityRequests.id)),
+    tenantId,
+  );
+
   const data: ExportedGuardians = {
     guardians: await Promise.all(
       pessoas.map(async (g) => ({
@@ -167,10 +202,19 @@ export async function exportarResponsaveis(
       clinicalInfoDecidedBy: v.clinicalInfoDecidedBy,
       clinicalInfoDecidedAt: iso(v.clinicalInfoDecidedAt),
       clinicalInfoBasis: await decVinculo(v.id, 'clinical_info_basis', v.clinicalInfoBasisEnc),
-      courtDecisionRef: await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc),
-      curatorshipScope: await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc),
+      // Curatela e termo de apoio dividem as colunas cifradas; o tipo decide em que campo cada um sai (R3 de 29/10).
+      courtDecisionRef: v.kind === 'apoiador' ? null : await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc),
+      curatorshipScope: v.kind === 'apoiador' ? null : await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc),
+      supportTermRef: v.kind === 'apoiador' ? await decVinculo(v.id, 'court_decision_ref', v.courtDecisionRefEnc) : null,
+      supportTermScope: v.kind === 'apoiador' ? await decVinculo(v.id, 'curatorship_scope', v.curatorshipScopeEnc) : null,
       payerPatientAwareBy: v.payerPatientAwareBy,
       payerPatientAwareAt: iso(v.payerPatientAwareAt),
+      patientAuthorizedBy: v.patientAuthorizedBy,
+      patientAuthorizedAt: iso(v.patientAuthorizedAt),
+      clinicalInfoScope: v.clinicalInfoScope,
+      clinicalInfoRiskOverride: v.clinicalInfoRiskOverride,
+      adultConfirmedBy: v.adultConfirmedBy,
+      adultConfirmedAt: iso(v.adultConfirmedAt),
       annulReason: await decVinculo(v.id, 'annul_reason', v.annulReasonEnc),
       discardAfter: v.discardAfter,
       eliminatedAt: iso(v.eliminatedAt),
@@ -198,6 +242,17 @@ export async function exportarResponsaveis(
         occurredAt: h.occurredAt.toISOString(),
       })),
     ),
+    adolescentConfidentialityRequests: pedidosDeSigilo.map((p) => ({
+      id: p.id,
+      patientId: p.patientId,
+      guardianLinkId: p.guardianLinkId,
+      guardianId: p.guardianId,
+      encounterId: p.encounterId,
+      requestedAt: p.requestedAt.toISOString(),
+      requestedBy: p.requestedBy,
+      revokedAt: iso(p.revokedAt),
+      revokedBy: p.revokedBy,
+    })),
   };
   const counts = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, (v as readonly unknown[]).length])) as GuardiansCounts;
   return { data, counts };

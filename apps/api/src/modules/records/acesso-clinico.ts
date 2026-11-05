@@ -17,7 +17,7 @@ import type { TenantDatabase } from '../tenancy/tenancy.module';
 export const SCOPE_ACESSO_NEGADO = 'clinical_access_denied';
 
 /** Motivos de 403 do prontuário que são TENTATIVA de acesso (e por isso auditados). */
-const MOTIVOS_AUDITADOS = new Set(['sem_vinculo_de_cuidado', 'sigilo_psicologia', 'somente_o_autor']);
+const MOTIVOS_AUDITADOS = new Set(['sem_vinculo_de_cuidado', 'sigilo_psicologia', 'somente_o_autor', 'mfa_obrigatorio', 'mfa_recente_obrigatorio']);
 
 /**
  * Nota privada de OUTRO autor: para quem pediu, é igual a inexistente (404, não revela que existe);

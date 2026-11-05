@@ -1,6 +1,6 @@
 import type { GuardianKind } from '../../db/schema';
 import { normalizarTextoParaChecagem } from '../finance/financeiro-regras';
-import { idadeEm, menorEm, REGRA_INFORMACAO_CLINICA } from '../patients/responsaveis-regras';
+import { idadeEm, menorEm, REGRA_INFORMACAO_CLINICA, tipoRepresentaPaciente } from '../patients/responsaveis-regras';
 import { noFusoDaClinica } from '../scheduling/agenda-regras';
 
 /**
@@ -232,6 +232,8 @@ export const MAX_TENTATIVAS = 3;
  * presume menoridade: nada sai (falha fechada, como a V2 do parecer #69).
  */
 export function responsavelRepresentaParaLembrete(tipo: GuardianKind, nascimento: string | null, emancipadoEm: string | null, hoje: string): boolean {
+  // Decisão apoiada (0055): o apoiador não representa; o lembrete vai ao próprio paciente.
+  if (!tipoRepresentaPaciente(tipo)) return false;
   if (tipo === 'curador') return true;
   return menorEm(nascimento, hoje, emancipadoEm) === true;
 }
@@ -242,7 +244,7 @@ export function responsavelRepresentaParaLembrete(tipo: GuardianKind, nascimento
  * curatelado é adulto). Só a criança (< 12) tem a agenda inteira lembrada ao responsável.
  */
 export function sigiloDoAdolescenteNoLembrete(tipo: GuardianKind, nascimento: string | null, hoje: string): boolean {
-  if (tipo === 'curador') return true;
+  if (tipo === 'curador' || tipo === 'apoiador') return true;
   const idade = idadeEm(nascimento, hoje);
   return idade === null || idade >= REGRA_INFORMACAO_CLINICA.idadeInicioAdolescencia;
 }

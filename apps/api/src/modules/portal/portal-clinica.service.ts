@@ -26,7 +26,7 @@ import { IDADE_MAIORIDADE } from '../finance/financeiro-regras';
 import { hojeNaClinica } from '../insurance/guias-regras';
 import { documentoNaoConferido, exigirPerfilQueConfere, nascimentoVigente, recalcularSigiloDoPortal } from '../patients/nascimento-do-cadastro';
 import { patientFieldRef } from '../patients/patient-fields';
-import { aniversarioDe, idadeEm, menorEm, REGRA_INFORMACAO_CLINICA, vigenteEm } from '../patients/responsaveis-regras';
+import { aniversarioDe, idadeEm, menorEm, REGRA_INFORMACAO_CLINICA, tipoRepresentaPaciente, vigenteEm } from '../patients/responsaveis-regras';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { cifrarCampoPortal, decifrarCampoPortal } from './portal-fields';
 import {
@@ -42,6 +42,7 @@ import {
   novoTokenDeConvite,
   type RespostaConsentimento,
 } from './portal-regras';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 export interface PedidoDoTitularDto {
   readonly id: string;
@@ -118,6 +119,8 @@ export class PortalClinicaService {
           .where(and(eq(patientGuardians.tenantId, ctx.tenantId), eq(patientGuardians.id, dados.responsavelId), eq(patientGuardians.patientId, dados.pacienteId)));
         if (!g) throw new NaoEncontradoError();
         if (g.endedAt !== null || !vigenteEm({ desde: g.validFrom, ate: g.validUntil }, hoje)) throw new ConflitoError('responsavel_nao_vigente');
+        // Decisão apoiada (0055): o apoiador não representa o paciente; o banco também recusa.
+        if (!tipoRepresentaPaciente(g.kind)) throw new ConflitoError('apoiador_nao_representa');
         if (g.kind === 'curador') {
           // Curatelado é adulto: o sigilo da área sensível vale desde já.
           representacao = { guardianLinkId: g.id, guardianId: g.guardianId, representUntil: null, confidentialFrom: hoje };
@@ -314,7 +317,10 @@ export class PortalClinicaService {
         convitesEncerrados += i;
         if (v + i > 0) pacientes += 1;
       }
-      if (pacientes > 0) this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=titular_menor_revogado pacientes=${pacientes}`);
+      if (pacientes > 0) {
+        this.logger.warn(`ALERTA_ANOMALIA regra=portal_sigilo_transicao transicao=titular_menor_revogado pacientes=${pacientes}`);
+        registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_sigilo_transicao', motivo: 'titular_menor_revogado', contagem: pacientes });
+      }
       // Data que não se decifra não decide nada: fica visível como `alarme` (JOB_ALARME) e na contagem.
       return { verificados: candidatos.length, titularesRevogados, convitesEncerrados, pacientes, ilegiveis, alarme: ilegiveis > 0 };
     });

@@ -25,6 +25,8 @@ import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-store';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
+import { avisarAdminsDeAnomalia } from '../records/avisos';
 
 export interface VigilanciaConfig {
   readonly listaMax: number;
@@ -132,6 +134,7 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`RATE_LIMIT_FAIL_OPEN: contador por usuário indisponível (${name}); leitura seguiu sem limite`);
+      registrarNoMaximoUmaVez('fail_open:vigilancia_de_leitura', 60_000, 'RATE_LIMIT_FAIL_OPEN', { motivo: 'vigilancia_de_leitura' });
       return undefined;
     }
   }
@@ -142,18 +145,25 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
    */
   private async alertar(ctx: RequestContext, regra: RegraDeAnomalia, janelaMs: number, limiar: number, contagem: number): Promise<void> {
     this.logger.warn(`ALERTA_ANOMALIA regra=${regra}`);
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra });
     try {
-      await this.db.run(ctx.tenantId, (tx) =>
-        recordAudit(tx, ctx, {
-          action: AuditAction.AnomalyAlert,
-          scope: 'patients',
-          metadata: { rule: regra, window_s: Math.round(janelaMs / 1000), threshold: limiar, count: contagem },
-        }),
+      await this.db.run(
+        ctx.tenantId,
+        async (tx) => {
+          await recordAudit(tx, ctx, {
+            action: AuditAction.AnomalyAlert,
+            scope: 'patients',
+            metadata: { rule: regra, window_s: Math.round(janelaMs / 1000), threshold: limiar, count: contagem },
+          });
+          // Resto do E10 (0063): os demais admins veem o alerta na caixa interna.
+          await avisarAdminsDeAnomalia(tx, ctx, regra);
+        },
         ctx.userId,
       );
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`ALERTA_ANOMALIA_NAO_GRAVADO regra=${regra} (${name})`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { regra, motivo: 'alerta_de_anomalia' });
     }
   }
 }
