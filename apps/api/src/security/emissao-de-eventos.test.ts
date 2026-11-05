@@ -8,6 +8,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WhatsappWebhookController } from '../modules/messaging/whatsapp.controller';
 import { VIGILANCIA_PADRAO, VigilanciaDeLeituraService } from '../modules/patients/vigilancia-de-leitura';
+import { PortalGuard } from '../modules/portal/portal-auth';
+import { PortalController } from '../modules/portal/portal.controller';
 import { PortalVigilanciaService } from '../modules/portal/portal-vigilancia';
 import { ExportsService } from '../modules/exports/exports.module';
 import { protecaoCsrf, rateLimiter } from './http-security';
@@ -127,14 +129,16 @@ describe('vigilância do portal (R2 do parecer do #138)', () => {
   const conta = '44444444-4444-4444-8444-444444444444';
   const vinculo = '55555555-5555-4555-8555-555555555555';
 
-  it('limite por conta: um ALERTA_ANOMALIA e, com o banco fora, TRILHA_NAO_GRAVADA; 429', async () => {
+  it('limite por conta: um ALERTA_ANOMALIA (com a origem da sessão) e, com o banco fora, TRILHA_NAO_GRAVADA; 429', async () => {
     const log = capturar();
     const v = vig();
-    await v.requisicao(conta, vinculo);
-    await v.requisicao(conta, vinculo);
-    await expect(v.requisicao(conta, vinculo)).rejects.toMatchObject({ status: 429 });
+    const origem = origemDaRequisicao('198.51.100.20');
+    await v.requisicao(conta, vinculo, origem);
+    await v.requisicao(conta, vinculo, origem);
+    await expect(v.requisicao(conta, vinculo, origem)).rejects.toMatchObject({ status: 429 });
     const eventos = log.eventos();
-    expect(eventos.filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_limite_por_conta' })]);
+    // R3 do parecer do #141: a origem chega ao alerta.
+    expect(eventos.filter((e) => e['evento'] === 'ALERTA_ANOMALIA')).toEqual([expect.objectContaining({ regra: 'portal_limite_por_conta', origem })]);
     expect(eventos.some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['regra'] === 'portal_limite_por_conta')).toBe(true);
     expect(log.tudo()).not.toContain(conta);
   });
@@ -153,6 +157,46 @@ describe('vigilância do portal (R2 do parecer do #138)', () => {
     const v = new PortalVigilanciaService(bancoFora as never, quebrado, { config: VIGILANCIA_PADRAO, hashKey: segredo, fecharStore: false }, { contaMax: 1, contaJanelaMs: 60_000, resgateMax: 1, resgateJanelaMs: 60_000 });
     for (let i = 0; i < 3; i++) await v.requisicao(conta, vinculo);
     expect(log.eventos().filter((e) => e['evento'] === 'RATE_LIMIT_FAIL_OPEN' && e['motivo'] === 'portal')).toHaveLength(1);
+  });
+});
+
+describe('portal: resgate de convite leva a origem (R7 do parecer do #129)', () => {
+  it('o controller passa ao serviço o HMAC do IP, nunca o IP', async () => {
+    const chamadas: unknown[][] = [];
+    const servico = {
+      iniciarResgate: (...a: unknown[]) => (chamadas.push(a), Promise.resolve({})),
+      resgatar: (...a: unknown[]) => (chamadas.push(a), Promise.resolve({})),
+    };
+    const c = new PortalController(servico as never);
+    const sessao = { contaId: '66666666-6666-4666-8666-666666666666' } as never;
+    await c.iniciarResgate(sessao, { ip: '198.51.100.7' }, {}, { token: 'x' });
+    await c.resgatar(sessao, { headers: {} }, { ip: '198.51.100.7' }, {}, { token: 'x', codigo: '123456' });
+    // R4 do parecer do #139: o valor existe e tem o formato do HMAC (sem chave, seriam dois undefined iguais).
+    expect(chamadas[0]?.at(-1)).toMatch(/^[0-9a-f]{16}$/);
+    expect(chamadas[0]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
+    expect(chamadas[1]?.at(-1)).toBe(origemDaRequisicao('198.51.100.7'));
+    expect(JSON.stringify(chamadas)).not.toContain('198.51.100.7');
+  });
+});
+
+describe('guard do portal (R3 do parecer do #141)', () => {
+  const contexto = (req: Record<string, unknown>): never => ({ switchToHttp: () => ({ getRequest: () => req }) }) as never;
+
+  it('sem sessão: 401 e SESSAO_INVALIDA com motivo portal e a origem em HMAC (nunca o IP)', async () => {
+    const log = capturar();
+    const guard = new PortalGuard({ resolver: () => Promise.resolve(null) } as never);
+    await expect(guard.canActivate(contexto({ headers: {}, ip: '198.51.100.30' }))).rejects.toMatchObject({ status: 401 });
+    expect(log.eventos().find((e) => e['evento'] === 'SESSAO_INVALIDA')).toMatchObject({ motivo: 'portal', origem: origemDaRequisicao('198.51.100.30') });
+    expect(log.tudo()).not.toContain('198.51.100.30');
+  });
+
+  it('com sessão: a origem vai numa CÓPIA na requisição; a sessão guardada pelo provedor não muda', async () => {
+    const guardada = Object.freeze({ contaId: '77777777-7777-4777-8777-777777777777', vinculoId: null });
+    const req: Record<string, unknown> = { headers: {}, ip: '198.51.100.31' };
+    const guard = new PortalGuard({ resolver: () => Promise.resolve(guardada) } as never);
+    await expect(guard.canActivate(contexto(req))).resolves.toBe(true);
+    expect(req['portal']).toEqual({ ...guardada, origem: origemDaRequisicao('198.51.100.31') });
+    expect(guardada).not.toHaveProperty('origem');
   });
 });
 
