@@ -30,7 +30,7 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
    - `console.*`;
    - nomes sensíveis (`nome`, `cpf`, `telefone`, `email`, `conteudo`, `texto`, `corpo`, `message`, `stack`, `token`, `senha`…);
    - o erro inteiro, em qualquer forma: `err`, `${err}`, `String(err)` ou `'x' + err`. O certo é usar `err.name` ou `codigoDoErro(err)`;
-   - spread, `JSON.stringify`, `p['cpf']`, desestruturação renomeada de campo sensível, apelido do logger, chamada dinâmica `logger[metodo]` e `process.stdout/stderr.write`.
+   - spread, `JSON.stringify`, `util.inspect`, `Object.values/entries/keys`, `String(obj)`, `p['cpf']`, desestruturação renomeada ou cópia para variável local de campo sensível, nome composto (`cpfDoPaciente`), apelido do logger, chamada dinâmica `logger[metodo]` e `process.stdout/stderr.write`.
 
    Exceções só com motivo escrito, em `PERMITIDOS` ou `PERMITIDOS_POR_ARQUIVO`.
 

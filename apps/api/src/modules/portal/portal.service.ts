@@ -150,7 +150,7 @@ export class PortalService {
   // ------------------------------------------------------------ sessão e vínculos
 
   async vinculos(sessao: SessaoDoPortal): Promise<RespostaPortal<'GET /portal/vinculos'>> {
-    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId, sessao.origem);
     const ids = await this.vinculosDaConta(sessao.contaId);
     const itens: VinculoDaConta[] = [];
     for (const id of ids) {
@@ -173,7 +173,7 @@ export class PortalService {
 
   /** Escolha da clínica/paciente NA SESSÃO do servidor (nunca por cabeçalho). */
   async escolherVinculo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, vinculoId: string): Promise<RespostaPortal<'POST /portal/sessao/vinculo'>> {
-    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId, sessao.origem);
     if (!(await this.vinculosDaConta(sessao.contaId)).includes(vinculoId)) throw new NaoEncontradoError();
     const dto = await this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
       const ctx = await this.contexto(tx, sessao.contaId, vinculoId);
@@ -204,7 +204,7 @@ export class PortalService {
    */
   /** `origem`: HMAC do IP (log de segurança, R7 do parecer do #129); nunca o IP. */
   async iniciarResgate(sessao: SessaoDoPortal, token: string, origem?: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
-    await this.vigilancia.resgate(sessao.contaId);
+    await this.vigilancia.resgate(sessao.contaId, origem ?? sessao.origem);
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
     const codigo = novoCodigoOtp();
     const telefone = await this.db.semContextoDoPortal(async (tx) => {
@@ -245,7 +245,7 @@ export class PortalService {
     codigo: string,
     origem?: string,
   ): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
-    await this.vigilancia.resgate(sessao.contaId);
+    await this.vigilancia.resgate(sessao.contaId, origem ?? sessao.origem);
     if (!TOKEN_CONVITE_RE.test(token) || !OTP_CODIGO_RE.test(codigo)) throw new ConflitoError('convite_invalido');
     const vinculo = await this.db.semContextoDoPortal(async (tx) => {
       const r = await tx.execute<{ v: string | null }>(
@@ -461,7 +461,7 @@ export class PortalService {
       if (e instanceof TetoDePedidosError) teto = { vinculoId: e.vinculoId };
       else throw e;
     }
-    if (teto) return this.vigilancia.tetoDePedidos(sessao.contaId, teto.vinculoId, TETO_DIARIO_PEDIDOS);
+    if (teto) return this.vigilancia.tetoDePedidos(sessao.contaId, teto.vinculoId, TETO_DIARIO_PEDIDOS, sessao.origem);
     const { dto, tenantId } = aberto as { dto: PedidoPortalDto; tenantId: TenantId };
     // Aviso aos admins numa transação de SISTEMA da clínica (o portal não vê a equipe). O pedido já está
     // gravado: se o aviso falhar, fica o log e a lista de pedidos abertos da clínica.
@@ -643,7 +643,7 @@ export class PortalService {
     fn: (tx: TenantTx, ctx: ContextoPortal) => Promise<T>,
   ): Promise<T> {
     let vinculoId = sessao.vinculoId;
-    await this.vigilancia.requisicao(sessao.contaId, vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, vinculoId, sessao.origem);
     let automatico = false;
     if (!vinculoId) {
       const ids = await this.vinculosDaConta(sessao.contaId);
