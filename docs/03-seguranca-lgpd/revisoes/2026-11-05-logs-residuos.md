@@ -31,3 +31,5 @@ Base legal: sem tratamento novo; é log de segurança, legítimo interesse/segur
   - os furos restantes da trava, sem ocorrência hoje: template, `??`, cópia transitiva, atribuição, `const falha = err`, `util.format` e `getCpf()`;
   - o relógio injetado no rate limit;
   - a `origem` não pode ser gravada na sessão do provedor real (D4).
+
+**Reconferência (b8bd50d, 05/11):** R1 corrigida (`nome`, `mensagem`, `message`, `stack`, `body`, `corpo`, `payload`; `nomeDoPaciente` no teste de sanidade). R3 coberta: 401 do portal com motivo e origem, sem IP; origem numa cópia, com a sessão do provedor congelada e intacta; origem no alerta `portal_limite_por_conta`. Os testes não passam por vacuidade: no ambiente de teste a origem é um HMAC definido. Ainda sem teste de origem em `portal_resgate` e `portal_teto_diario_pedidos` (não bloqueia). R2, R4 e R5 na fila. `npx vitest run src/security`: 51/51. **Veredito final: APROVADO.**
