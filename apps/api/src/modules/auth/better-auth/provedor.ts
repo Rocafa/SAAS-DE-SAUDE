@@ -235,8 +235,26 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   }
 
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
+  async idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'> {
+    const [ja] = await this.d.dbAuth
+      .select({ id: usuario.id, ativo: usuario.ativo, origem: usuario.conviteDeOrigem, senha: conta.password })
+      .from(usuario)
+      .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
+      .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
+    if (!ja) return { userId: randomUUID(), reaproveita: false };
+    const abandonada = !ja.ativo && ja.origem !== null && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
+  }
+
+  async desfazerContaDoConvite(userId: string): Promise<void> {
+    await this.d.dbAuth.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    await this.d.dbAuth.update(conta).set({ password: null }).where(eq(conta.userId, userId));
+    await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, userId));
+  }
+
   async criarContaDoConvite(e: {
     userId: string;
+    reaproveita: boolean;
     email: string;
     nome: string;
     senha: string;
@@ -244,8 +262,6 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     conviteDeOrigem: string;
   }): Promise<{ userId: string } | 'conta_existente' | 'senha_vazada'> {
     const email = e.email.trim().toLowerCase();
-    const [ja] = await this.d.dbAuth.select({ id: usuario.id }).from(usuario).where(sql`lower(${usuario.email}) = ${email}`);
-    if (ja) return 'conta_existente';
     if (this.d.conferirSenhaVazada) {
       try {
         if (await this.d.conferirSenhaVazada(e.senha)) {
@@ -257,6 +273,18 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       }
     }
     const userId = e.userId;
+    if (e.reaproveita) {
+      // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
+      const hash = await gerarHashDeSenha(e.senha);
+      const r = await this.d.dbAuth
+        .update(usuario)
+        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+        .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
+        .returning({ id: usuario.id });
+      if (r.length === 0) return 'conta_existente';
+      await this.d.dbAuth.update(conta).set({ password: hash }).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+      return { userId };
+    }
     try {
       await this.d.dbAuth.transaction(async (tx) => {
         await tx.insert(usuario).values({

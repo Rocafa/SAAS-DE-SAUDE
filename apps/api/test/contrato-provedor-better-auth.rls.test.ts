@@ -762,6 +762,20 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
     expect((await convites().listar(a.ctx)).map((x) => x.id)).toContain(c.conviteId);
   });
 
+  it('R1 do código do 3b-1: conta abandonada por um aceite que falhou é reaproveitada pelo mesmo convite (o e-mail não fica preso)', async () => {
+    const { tenantId, ctx } = await clinicaComAdmin();
+    const email = novoEmail();
+    const c = await convites().criar(ctx, email, 'recepcao');
+    // Simula o resto de um aceite que falhou depois de criar a conta: inativa, sem senha, sem vínculo.
+    const orfa = randomUUID();
+    await dbAuth.db.insert(usuario).values({ id: orfa, name: 'Orfa', email, emailVerified: false, ativo: false, conviteDeOrigem: c.conviteId });
+    await dbAuth.db.insert(conta).values({ id: randomUUID(), accountId: orfa, providerId: 'credential', userId: orfa, password: null });
+    await convites().aceitar({ token: c.token, email, nome: 'Pessoa Ficticia', senha: SENHA, cabecalhos: new Headers() });
+    expect(await provedor.clinicasDoUsuario(orfa)).toEqual([tenantId]);
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, orfa));
+    expect(u?.ativo).toBe(true);
+  });
+
   it('R9: teto diário de convites por admin', async () => {
     const { ctx } = await clinicaComAdmin();
     for (let i = 0; i < TETO_DIARIO_DE_CONVITES; i++) await convites().criar(ctx, novoEmail(), 'recepcao');
