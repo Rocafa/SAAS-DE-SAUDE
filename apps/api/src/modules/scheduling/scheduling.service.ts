@@ -39,7 +39,7 @@ import {
   type NovoTipoAtendimento,
 } from './scheduling.validation';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
-import { avisarAreaSensivelDesmarcada } from '../records/avisos';
+import { avisarAdminsDeAnomalia, avisarAreaSensivelDesmarcada } from '../records/avisos';
 
 export interface AgendamentoDto {
   readonly id: string;
@@ -456,6 +456,7 @@ export class SchedulingService {
       scope: SCOPE,
       metadata: { rule: 'vinculo_cruzado', op, appointment_id: agendamentoId, professional_id: profissional.id, actor_id: ctx.userId },
     });
+    await avisarAdminsDeAnomalia(tx, ctx, 'vinculo_cruzado');
     registrarEventoDeSeguranca('ALERTA_ANOMALIA', { tenantId: ctx.tenantId, regra: 'vinculo_cruzado' });
   }
 
@@ -542,6 +543,7 @@ export class SchedulingService {
       scope: SCOPE,
       metadata: { rule: 'vinculo_autoagendado', window_s: DIA_MS / 1000, threshold: limiar, count: contagem },
     });
+    await avisarAdminsDeAnomalia(tx, ctx, 'vinculo_autoagendado');
   }
 
   private async autoagendado(tx: TenantTx, ctx: RequestContext, id: string): Promise<boolean> {

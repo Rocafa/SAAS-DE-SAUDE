@@ -492,6 +492,8 @@ export const CLINICAL_NOTICE_KINDS = [
   'portal_sigilo_transicao',
   // 0060 (E8 de 04/11): a área sensível de um profissional foi desmarcada; leva só o id do profissional.
   'area_sensivel_desmarcada',
+  // 0063 (resto do E10 de 04/11): alerta de anomalia de sessão da equipe; leva a regra e quem disparou (id).
+  'alerta_anomalia',
 ] as const;
 export type ClinicalNoticeKind = (typeof CLINICAL_NOTICE_KINDS)[number];
 export const PORTAL_SIGILO_TRANSICOES = ['sigilo_desligado', 'representacao_estendida', 'titular_menor_revogado'] as const;
@@ -515,6 +517,8 @@ export const clinicalNotices = pgTable('clinical_notices', {
   restrictedExisting: integer('restricted_existing').notNull().default(0),
   /** 0060: só no aviso `area_sensivel_desmarcada`. */
   professionalId: uuid('professional_id'),
+  /** 0063: só no aviso `alerta_anomalia`. */
+  anomalyRule: text('anomaly_rule'),
   createdBy: uuid('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   readAt: timestamp('read_at', { withTimezone: true }),

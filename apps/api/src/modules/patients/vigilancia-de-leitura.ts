@@ -26,6 +26,7 @@ import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-store';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
+import { avisarAdminsDeAnomalia } from '../records/avisos';
 
 export interface VigilanciaConfig {
   readonly listaMax: number;
@@ -146,12 +147,17 @@ export class VigilanciaDeLeituraService implements OnApplicationShutdown {
     this.logger.warn(`ALERTA_ANOMALIA regra=${regra}`);
     registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra });
     try {
-      await this.db.run(ctx.tenantId, (tx) =>
-        recordAudit(tx, ctx, {
-          action: AuditAction.AnomalyAlert,
-          scope: 'patients',
-          metadata: { rule: regra, window_s: Math.round(janelaMs / 1000), threshold: limiar, count: contagem },
-        }),
+      await this.db.run(
+        ctx.tenantId,
+        async (tx) => {
+          await recordAudit(tx, ctx, {
+            action: AuditAction.AnomalyAlert,
+            scope: 'patients',
+            metadata: { rule: regra, window_s: Math.round(janelaMs / 1000), threshold: limiar, count: contagem },
+          });
+          // Resto do E10 (0063): os demais admins veem o alerta na caixa interna.
+          await avisarAdminsDeAnomalia(tx, ctx, regra);
+        },
         ctx.userId,
       );
     } catch (err) {
