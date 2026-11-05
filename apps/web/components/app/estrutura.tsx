@@ -37,7 +37,7 @@ function ativo(pathname: string, rota: string) {
 export function Estrutura({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const online = useOnline();
-  const { usuario } = useDados();
+  const { usuario, modo } = useDados();
 
   return (
     <div className="min-h-dvh md:pl-64">
@@ -79,9 +79,11 @@ export function Estrutura({ children }: { children: ReactNode }) {
 
       <div className="flex min-h-dvh flex-col pb-52 md:pb-28">
         {!online && <SemInternet />}
-        <p className="border-b-2 border-borda bg-superficie-2 px-4 py-2 text-center text-[0.95rem] font-bold">
-          Demonstração com pacientes fictícios. Nenhum dado é real nem é gravado de verdade.
-        </p>
+        {modo === 'fake' && (
+          <p className="border-b-2 border-borda bg-superficie-2 px-4 py-2 text-center text-[0.95rem] font-bold">
+            Demonstração com pacientes fictícios. Nenhum dado é real nem é gravado de verdade.
+          </p>
+        )}
         <main id="conteudo" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 md:px-8">
           {children}
         </main>

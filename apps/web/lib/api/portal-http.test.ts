@@ -34,6 +34,34 @@ function api(respostas: { status: number; corpo?: unknown; texto?: string }[], a
   return { api: criarApiPortalHttp({ baseUrl: `${BASE}/`, sessao: { tipo: 'dev', token: TOKEN }, fetch: s.fetch, ...(aoDivergir ? { aoDivergir } : {}) }), ...s };
 }
 
+describe('portal HTTP: timeout', () => {
+  it('servidor que aceita a conexão e não responde vira erro de rede, não espera para sempre', async () => {
+    const cliente = criarApiPortalHttp({
+      baseUrl: BASE,
+      sessao: { tipo: 'dev', token: TOKEN },
+      timeoutMs: 20,
+      fetch: ((_: unknown, init: RequestInit) =>
+        new Promise((_r, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('abortado', 'AbortError'))))) as unknown as typeof fetch,
+    });
+    await expect(cliente.vinculos()).rejects.toMatchObject({ name: 'ErroPortal', status: 0 });
+  }, 1000);
+
+  it('o timeout também vale para a leitura do corpo', async () => {
+    const cliente = criarApiPortalHttp({
+      baseUrl: BASE,
+      sessao: { tipo: 'dev', token: TOKEN },
+      timeoutMs: 20,
+      fetch: ((_: unknown, init: RequestInit) =>
+        Promise.resolve({
+          status: 200,
+          json: () =>
+            new Promise((_r, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('abortado', 'AbortError')))),
+        })) as unknown as typeof fetch,
+    });
+    await expect(cliente.vinculos()).rejects.toMatchObject({ name: 'ErroPortal', status: 0 });
+  }, 1000);
+});
+
 const VINCULO = { vinculoId: 'v1', clinica: 'Clínica Exemplo (fictícia)', primeiroNome: 'Ana', agindoComo: 'responsavel_legal' };
 const CONSULTA = { id: 'c1', data: '2026-11-03', hora: '09:00', profissional: 'Dra. Exemplo', status: 'agendado', podeConfirmar: true, podeCancelar: true };
 const PEDIDO = { id: 'pd1', protocolo: '20261025-0000ABCD', tipo: 'correcao', abertoEm: '2026-10-25T12:00:00.000Z', prazo: '2026-11-09T12:00:00.000Z', situacao: 'aberto', resposta: null };

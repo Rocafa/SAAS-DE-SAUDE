@@ -31,6 +31,8 @@ export interface OpcoesPortalHttp {
   baseUrl: string;
   sessao: SessaoPortalHttp;
   fetch?: typeof fetch;
+  /** Teto de cada chamada, cabeçalhos e corpo juntos (padrão: 10 s). */
+  timeoutMs?: number;
   /** Chamado quando a resposta foge do contrato: só a rota e as mensagens (sem valores). */
   aoDivergir?: (rota: RotaPortal, mensagens: readonly string[]) => void;
 }
@@ -50,6 +52,7 @@ export function criarApiPortalHttp(opcoes: OpcoesPortalHttp): ClientePortal {
     throw new Error('Sessão de desenvolvimento do portal inválida (esperado ptl_ + 43 caracteres).');
   }
   const sessao = opcoes.sessao;
+  const timeoutMs = opcoes.timeoutMs ?? 10_000;
 
   async function chamar<R extends RotaPortal>(
     rota: R,
@@ -71,6 +74,25 @@ export function criarApiPortalHttp(opcoes: OpcoesPortalHttp): ClientePortal {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(corpo ?? {});
     }
+    // O portal é a tela do paciente: sem teto, um servidor que aceita a conexão e não responde deixa
+    // a tela carregando para sempre, sem erro e sem "tentar de novo". O relógio cobre também a
+    // leitura do corpo, porque o servidor pode travar depois dos cabeçalhos.
+    const controle = new AbortController();
+    const relogio = setTimeout(() => controle.abort(), timeoutMs);
+    init.signal = controle.signal;
+    try {
+      return await chamarSemRelogio(rota, params, init, def);
+    } finally {
+      clearTimeout(relogio);
+    }
+  }
+
+  async function chamarSemRelogio<R extends RotaPortal>(
+    rota: R,
+    params: Readonly<Record<string, string>>,
+    init: RequestInit,
+    def: (typeof CONTRATO_PORTAL)[R],
+  ): Promise<ApiPortal[R]['resposta']> {
     let resp: Response;
     try {
       // GET sem query (o backend recusa com 400): o caminho sai só do contrato e dos ids de URL.
@@ -83,6 +105,8 @@ export function criarApiPortalHttp(opcoes: OpcoesPortalHttp): ClientePortal {
     try {
       dados = await resp.json();
     } catch {
+      // Corpo interrompido pelo relógio é falha de rede, não contrato quebrado.
+      if (init.signal?.aborted) throw new ErroPortal(0);
       opcoes.aoDivergir?.(rota, ['$: corpo não é JSON']);
       throw new ErroPortal(STATUS_FORA_DO_CONTRATO);
     }

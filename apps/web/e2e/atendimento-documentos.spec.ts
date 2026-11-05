@@ -1,8 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-
-const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));
+import { capturar } from './captura';
 
 /** Troca o usuário da demonstração e segue navegando sem recarregar (os dados vivem na memória da aba). */
 async function entrarComo(page: Page, nome: RegExp) {
@@ -25,7 +23,7 @@ test.describe('Atendimento e prontuário', () => {
     await entrarComo(page, /Dra\. Beatriz/);
     await irPeloMenu(page, 'Atendimento');
     await expect(page.getByRole('heading', { level: 1, name: 'Atendimento' })).toBeVisible();
-    await page.screenshot({ path: `${PASTA}${info.project.name}-atendimento.png`, fullPage: true });
+    await capturar(page, info, 'atendimento');
     await page.getByRole('link', { name: 'Atender' }).first().click();
 
     await expect(page.getByRole('button', { name: 'Escriba de IA (em breve)' })).toBeDisabled();
@@ -39,7 +37,7 @@ test.describe('Atendimento e prontuário', () => {
 
     await page.getByLabel('O que foi feito na sessão').fill('Fortalecimento e alongamento, 40 minutos (fictício).');
     await semViolacaoSeria(page);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-tela-atendimento.png`, fullPage: true });
+    await capturar(page, info, 'tela-atendimento');
     await page.getByRole('button', { name: 'Assinar' }).click();
     await expect(page.getByText(/Depois de assinada ela não muda mais/)).toBeVisible();
     await page.getByTestId('confirmar-assinatura').click();
@@ -62,7 +60,7 @@ test.describe('Atendimento e prontuário', () => {
     await expect(page.getByText(/Seu perfil não tem acesso ao conteúdo clínico/)).toBeVisible();
     await expect(page.getByText(/Conteúdo fictício de demonstração/)).toHaveCount(0);
     await semViolacaoSeria(page);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-prontuario.png`, fullPage: true });
+    await capturar(page, info, 'prontuario');
 
     await entrarComo(page, /Dr\. Henrique/);
     await irPeloMenu(page, 'Pacientes');
@@ -126,7 +124,7 @@ test.describe('Documentos', () => {
     await expect(page.getByTestId('imprimir-documento')).toBeEnabled();
     await expect(page.getByText(/ICP-Brasil: em breve/)).toBeVisible();
     await semViolacaoSeria(page);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-documentos.png`, fullPage: true });
+    await capturar(page, info, 'documentos');
   });
 
   test('declaração de comparecimento e recibo', async ({ page }) => {

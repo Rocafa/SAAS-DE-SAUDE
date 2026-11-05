@@ -114,8 +114,12 @@ test.describe('PWA e páginas de erro', () => {
     await page.goto('/pacientes').catch(() => undefined);
     await expect(page.getByRole('heading', { name: 'Sem conexão com a internet' })).toBeVisible();
     // O cache só tem a tela offline e arquivos estáticos: nenhuma página com dados.
+    // O nome do cache carrega a versão do build (`plataforma-saude-<build>`), então acha pelo prefixo:
+    // `caches.open` com nome fixo CRIARIA um cache vazio e o teste passaria sem ver nada.
     const guardados = await page.evaluate(async () => {
-      const c = await caches.open('plataforma-saude-v1');
+      const nomes = (await caches.keys()).filter((n) => n.startsWith('plataforma-saude-'));
+      if (nomes.length !== 1) throw new Error(`esperava um cache do app, achei: ${nomes.join(', ') || 'nenhum'}`);
+      const c = await caches.open(nomes[0]!);
       return (await c.keys()).map((r) => new URL(r.url).pathname);
     });
     expect(guardados.filter((p) => !p.startsWith('/_next/static/') && !p.startsWith('/icones/'))).toEqual(['/offline']);

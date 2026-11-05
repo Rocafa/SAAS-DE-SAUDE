@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { criarApiFake } from './api/fake';
-import { MODELOS, diasPorExtenso, ehRestrito, faltasParaAssinar, modeloDoProfissional, textoAtestado, textoDeclaracao, validarCid } from './prontuario';
+import { MODELOS, diasPorExtenso, ehRestrito, faltasParaAssinar, faltasParaEmitir, modeloDoProfissional, textoAtestado, textoDeclaracao, validarCid } from './prontuario';
 
 describe('modelos por nicho', () => {
   it('escolhe pelo profissional', () => {
@@ -26,6 +26,15 @@ describe('modelos por nicho', () => {
 });
 
 describe('documentos', () => {
+  it('não emite sem registro do conselho nem sem nome da clínica', () => {
+    const clinica = { nome: 'Clínica Exemplo' };
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: 'CREFITO-3 000000-F' }, clinica)).toEqual([]);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo' }, clinica)[0]).toMatch(/registro do conselho de Dra. Exemplo/);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: '   ' }, clinica)).toHaveLength(1);
+    expect(faltasParaEmitir(undefined, clinica)[0]).toMatch(/profissional/);
+    expect(faltasParaEmitir({ nome: 'Dra. Exemplo', registro: 'CRP 06/000000' }, { nome: ' ' })[0]).toMatch(/nome da clínica/);
+  });
+
   it('dias por extenso e limite', () => {
     expect(diasPorExtenso(1)).toBe('1 (um) dia');
     expect(diasPorExtenso(3)).toBe('3 (três) dias');
@@ -61,6 +70,16 @@ describe('fake: registro clínico', () => {
     await api.entrarComo('u3');
     const comoPsicologo = await api.listarRegistros('p04');
     expect(Object.keys(comoPsicologo.find((r) => r.restrito)!.campos).length).toBeGreaterThan(0);
+  });
+
+  it('abrir a demonstração como profissional dá um profissional de verdade, com vínculo', async () => {
+    const api = criarApiFake({ agora, papel: 'profissional' });
+    const usuario = await api.usuarioAtual();
+    expect(usuario.papel).toBe('profissional');
+    // Sem o vínculo o perfil não é clínico: todo registro voltaria oculto e nada poderia ser assinado.
+    expect(usuario.profissionalId).toBeTruthy();
+    const registros = await api.listarRegistros('p04');
+    expect(registros.some((r) => Object.keys(r.campos).length > 0)).toBe(true);
   });
 
   it('só o profissional do atendimento escreve e assina; assinado não muda', async () => {

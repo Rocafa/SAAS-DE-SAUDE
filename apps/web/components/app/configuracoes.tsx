@@ -17,8 +17,8 @@ import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
 import { useAviso } from './desfazer';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 const NOME_PAPEL: Record<Papel, string> = { admin: 'Administrador', profissional: 'Profissional de saúde', recepcao: 'Recepção' };
 
@@ -42,8 +42,10 @@ function SecaoClinica() {
   useEffect(() => {
     if (consulta.estado === 'pronto' && !d) setD(consulta.dados);
   }, [consulta, d]);
-  if (consulta.estado === 'carregando' || !d) return <Carregando />;
+  // O erro vem antes: com a primeira carga falhando, `d` fica nulo e a tela ficaria em "Carregando…"
+  // para sempre, sem o botão de tentar de novo.
   if (consulta.estado === 'erro') return <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />;
+  if (consulta.estado === 'carregando' || !d) return <Carregando />;
   const mudar = (k: keyof DadosClinica) => (e: { target: { value: string } }) => setD({ ...d, [k]: e.target.value });
   async function salvar(e: FormEvent) {
     e.preventDefault();
@@ -94,7 +96,10 @@ const PERMISSOES: [string, string, string, string][] = [
 
 function SoAdmin({ children, oQue }: { children: ReactNode; oQue: string }) {
   const { usuario } = useDados();
-  if (usuario && usuario.papel !== 'admin') {
+  // Falha fechado: enquanto o papel não é conhecido (primeira carga, ou `usuarioAtual` que falhou)
+  // nada do conteúdo de administrador aparece.
+  if (!usuario) return <Carregando />;
+  if (usuario.papel !== 'admin') {
     return <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica {oQue}.</p>;
   }
   return <>{children}</>;
@@ -330,15 +335,67 @@ function SecaoModelos() {
   );
 }
 
-function SecaoPrivacidade() {
-  const { api, usuario } = useDados();
+/**
+ * Trilha de acesso. Fica em componente próprio de propósito: assim `listarAuditoria` só é chamada
+ * quando quem está na tela é administrador. A trilha traz nome de paciente e e-mail da equipe, então
+ * não pode ser buscada para depois ser escondida na renderização.
+ */
+function TrilhaDeAcesso() {
   const auditoria = useConsulta((a) => a.listarAuditoria());
+  const [filtro, setFiltro] = useState('');
+  return (
+      <section aria-labelledby="t-auditoria">
+        <h2 id="t-auditoria" className="mb-2 text-xl font-bold">
+          Quem acessou o quê
+        </h2>
+        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser alterado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
+        <label htmlFor="a-filtro" className="font-bold">
+          Filtrar por pessoa
+        </label>
+        <input id="a-filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Ex.: Beatriz" className={`${CAMPO} mb-3 mt-2 max-w-md`} />
+        {auditoria.estado === 'carregando' && <Carregando />}
+        {auditoria.estado === 'erro' && <Erro mensagem={auditoria.mensagem} tentarDeNovo={auditoria.tentarDeNovo} />}
+        {auditoria.estado === 'pronto' &&
+          (() => {
+            const lista = auditoria.dados.filter((e) => e.quem.toLowerCase().includes(filtro.trim().toLowerCase()));
+            return lista.length === 0 ? (
+              <Vazio titulo="Nada encontrado" oQueFazer="Confira o nome ou apague o filtro." />
+            ) : (
+              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Registro de acessos">
+                <table className="w-full border-collapse text-left">
+                  <thead>
+                    <tr className="border-b-2 border-borda-forte">
+                      <th className="p-2">Quando</th>
+                      <th className="p-2">Quem</th>
+                      <th className="p-2">O quê</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lista.map((e) => (
+                      <tr key={e.id} className="border-b border-borda">
+                        <td className="whitespace-nowrap p-2 tabular-nums">
+                          {formatarDia(e.quando.slice(0, 10), new Date())} {e.quando.slice(11)}
+                        </td>
+                        <td className="p-2">{e.quem}</td>
+                        <td className="p-2">{e.acao}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+      </section>
+  );
+}
+
+function SecaoPrivacidade() {
+  const { api, usuario, modo } = useDados();
   const [etapa, setEtapa] = useState<'inicio' | 'codigo' | 'pedido'>('inicio');
   const [codigo, setCodigo] = useState('');
   const [ciente, setCiente] = useState(false);
   const [erro, setErro] = useState('');
   const [pedido, setPedido] = useState<PedidoExportacao | null>(null);
-  const [filtro, setFiltro] = useState('');
   const admin = usuario?.papel === 'admin';
 
   async function pedir(e: FormEvent) {
@@ -396,14 +453,21 @@ function SecaoPrivacidade() {
           <div className="flex flex-col gap-3" role="status">
             <p className="font-bold">Pedido feito. Falta a aprovação do responsável técnico da clínica.</p>
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
-            <Botao
-              variante="contorno"
-              className="self-start"
-              onClick={async () => setPedido(await api.aprovarExportacao(pedido.id))}
-            >
-              <ShieldCheck aria-hidden />
-              Aprovar como responsável técnico (demonstração)
-            </Botao>
+            {/*
+              Só na demonstração: o dump completo da clínica (pacientes, agenda, prontuários e
+              financeiro) exige duas pessoas, e aqui quem aprovaria é quem pediu, no mesmo navegador.
+              Com a API real, quem aprova é o responsável técnico, conferido no servidor.
+            */}
+            {modo === 'fake' && (
+              <Botao
+                variante="contorno"
+                className="self-start"
+                onClick={async () => setPedido(await api.aprovarExportacao(pedido.id))}
+              >
+                <ShieldCheck aria-hidden />
+                Aprovar como responsável técnico (demonstração)
+              </Botao>
+            )}
           </div>
         ) : (
           <p role="status" className="flex items-start gap-2 font-bold">
@@ -416,48 +480,7 @@ function SecaoPrivacidade() {
       </section>
 
       {admin ? (
-      <section aria-labelledby="t-auditoria">
-        <h2 id="t-auditoria" className="mb-2 text-xl font-bold">
-          Quem acessou o quê
-        </h2>
-        <p className="mb-3 text-texto-suave">Tudo fica registrado e não pode ser alterado. Mostramos a ação, nunca o conteúdo do prontuário.</p>
-        <label htmlFor="a-filtro" className="font-bold">
-          Filtrar por pessoa
-        </label>
-        <input id="a-filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Ex.: Beatriz" className={`${CAMPO} mb-3 mt-2 max-w-md`} />
-        {auditoria.estado === 'carregando' && <Carregando />}
-        {auditoria.estado === 'erro' && <Erro mensagem={auditoria.mensagem} tentarDeNovo={auditoria.tentarDeNovo} />}
-        {auditoria.estado === 'pronto' &&
-          (() => {
-            const lista = auditoria.dados.filter((e) => e.quem.toLowerCase().includes(filtro.trim().toLowerCase()));
-            return lista.length === 0 ? (
-              <Vazio titulo="Nada encontrado" oQueFazer="Confira o nome ou apague o filtro." />
-            ) : (
-              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Registro de acessos">
-                <table className="w-full border-collapse text-left">
-                  <thead>
-                    <tr className="border-b-2 border-borda-forte">
-                      <th className="p-2">Quando</th>
-                      <th className="p-2">Quem</th>
-                      <th className="p-2">O quê</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lista.map((e) => (
-                      <tr key={e.id} className="border-b border-borda">
-                        <td className="whitespace-nowrap p-2 tabular-nums">
-                          {formatarDia(e.quando.slice(0, 10), new Date())} {e.quando.slice(11)}
-                        </td>
-                        <td className="p-2">{e.quem}</td>
-                        <td className="p-2">{e.acao}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-      </section>
+        <TrilhaDeAcesso />
       ) : (
         <p className="rounded-md border-2 border-dashed border-borda p-3 font-bold">Só o administrador da clínica vê quem acessou o quê.</p>
       )}
@@ -550,7 +573,17 @@ function SecaoPlano() {
 }
 
 export const SECOES: Record<string, { titulo: string; descricao: string; Componente: () => ReactNode }> = {
-  clinica: { titulo: 'Dados da clínica', descricao: 'Nome, endereço e telefone que aparecem nos documentos.', Componente: SecaoClinica },
+  // `salvarClinica` é `cadastros:gerir`, só do administrador (e o adaptador falso recusa com 403).
+  // Sem este envelope, a recepção veria o formulário editável e levaria o 403 só ao salvar.
+  clinica: {
+    titulo: 'Dados da clínica',
+    descricao: 'Nome, endereço e telefone que aparecem nos documentos.',
+    Componente: () => (
+      <SoAdmin oQue="muda os dados da clínica">
+        <SecaoClinica />
+      </SoAdmin>
+    ),
+  },
   usuarios: {
     titulo: 'Usuários e permissões',
     descricao: 'Quem usa o sistema e o que cada um pode fazer.',
