@@ -13,7 +13,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
-import { and, asc, count, eq, gt, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, gt, isNull, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
@@ -87,14 +87,14 @@ export class ConvitesService {
         .where(and(eq(teamInvites.tenantId, ctx.tenantId), eq(teamInvites.createdBy, ctx.userId), gt(teamInvites.createdAt, desde)));
       if ((hoje?.n ?? 0) >= TETO_DIARIO_DE_CONVITES) throw new ConflitoError('teto_diario_de_convites');
       const token = gerarTokenDeConvite(ctx.tenantId);
-      const expira = new Date(Date.now() + VALIDADE_DO_CONVITE_MS);
       const [c] = await tx
         .insert(teamInvites)
-        .values({ tenantId: ctx.tenantId, tokenHash: hashDoToken(token), emailHmac: hmacDoEmail(email), role: perfil, createdBy: ctx.userId, expiresAt: expira })
-        .returning({ id: teamInvites.id });
+        .values({ tenantId: ctx.tenantId, tokenHash: hashDoToken(token), emailHmac: hmacDoEmail(email), role: perfil, createdBy: ctx.userId, expiresAt: sql`now() + interval '72 hours'` })
+        .returning({ id: teamInvites.id, expiraEm: teamInvites.expiresAt });
       if (!c) throw new Error('falha ao criar convite');
       await recordAudit(tx, ctx, { action: AuditAction.PermissionChange, scope: SCOPE, metadata: { op: 'member_invite', invite_id: c.id, role: perfil } });
-      return { conviteId: c.id, token, expiraEm: expira.toISOString() };
+      // O prazo vem do relógio do banco (o mesmo do created_at), para a trava de 72 h fechar exata.
+      return { conviteId: c.id, token, expiraEm: c.expiraEm.toISOString() };
     });
   }
 
