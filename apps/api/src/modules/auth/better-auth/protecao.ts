@@ -110,7 +110,13 @@ export function criarProtecao(d: DependenciasDaProtecao) {
       const contagens: number[] = [];
       for (const c of contadores) contagens.push((await d.store.hit(c.chave, JANELA_DE_BLOQUEIO_MS)).count);
       const i = contadores.findIndex((c, j) => (contagens[j] ?? 0) > c.teto);
-      return { reserva: { contadores, contagens }, ...(i >= 0 && contadores[i] ? { travou: contadores[i] } : {}) };
+      if (i >= 0 && contadores[i]) {
+        // R13 do parecer: a tentativa barrada devolve a reserva de TODOS os contadores; senão um contador travado
+        // somaria no outro (quem insiste num e-mail bloqueado trancaria a origem, e a origem bloqueada, os e-mails).
+        await devolver({ contadores, contagens });
+        return { reserva: null, travou: contadores[i] };
+      }
+      return { reserva: { contadores, contagens } };
     } catch {
       registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo });
       return { reserva: null };

@@ -426,6 +426,20 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
     expect((await reverificar(s, userId)).status).toBe(200);
   });
 
+  it('R13 do parecer: tentativa barrada não soma no outro contador (e-mail travado não tranca a origem; origem travada não tranca os e-mails)', async () => {
+    const tenantId = await api.novaClinica();
+    const [insistente, colega, outra] = await Promise.all([0, 1, 2].map(() => novaPessoa(tenantId, ['recepcao'])));
+    const origem = '2a1b2c3d4e5f6071';
+    // E-mail travado (5 falhas) e mais 30 tentativas insistindo nele: a origem continua livre para o colega.
+    for (let i = 0; i < 35; i++) await postar('/sign-in/email', {}, { email: insistente?.email, password: SENHA_ERRADA }, origem);
+    expect((await postar('/sign-in/email', {}, { email: colega?.email, password: SENHA }, origem)).r.status).toBe(200);
+    // Origem travada (30 falhas em e-mails distintos): a senha certa barrada nela não soma no e-mail da pessoa.
+    const origemTravada = '3a1b2c3d4e5f6071';
+    for (let i = 0; i < 30; i++) await postar('/sign-in/email', {}, { email: `fantasma-${i}-${randomUUID().slice(0, 6)}@exemplo.test`, password: SENHA_ERRADA }, origemTravada);
+    for (let i = 0; i < 6; i++) expect((await postar('/sign-in/email', {}, { email: outra?.email, password: SENHA }, origemTravada)).r.status).toBe(401);
+    expect((await postar('/sign-in/email', {}, { email: outra?.email, password: SENHA }, '4a1b2c3d4e5f6071')).r.status).toBe(200);
+  }, 60_000);
+
   it('R12 do parecer: o cadastro aceita só TOTP com o emissor nosso', async () => {
     const { c } = await pessoaLogada();
     expect((await postar('/two-factor/enable', c, { password: SENHA, method: 'otp' })).r.status).toBe(400);

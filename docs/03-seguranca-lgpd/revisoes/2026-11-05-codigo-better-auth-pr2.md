@@ -76,3 +76,34 @@ Correções feitas neste PR, sobre o veto:
 - **R9.** Documentada no §13: rotação do `BETTER_AUTH_SECRET` exige o recadastro do TOTP até migrarmos para os segredos versionados (fila do PR 3).
 
 Itens que vão para a fila do PR 3, com o prazo do parecer: R3 (`LOGIN_SENHA_OK`), R4 (`HTTP_TRUST_PROXY_HOPS` no staging e desbloqueio pelo admin), R5 (egresso e RIPD, conferência explícita nos caminhos nossos de senha), R6 (o #153 já está aberto com os alvos distintos; `MFA_BLOQUEADO` do login em duas etapas vira aviso nas clínicas), R7, R8 e R9.
+
+## Reconferência do Guardião (05/11/2026, commit `6f8b619`)
+
+Diff conferido: `f245e7b..6f8b619` (`protecao.ts`, `rate-limit-store.ts`, `log-de-seguranca.ts`, bancada e §13).
+
+### Veredito final: **APROVADO COM RESSALVAS. O veto da R1 está retirado. A R13 abaixo entra antes do merge, neste PR.**
+
+- **R1 (veto): resolvida.** O `hit` atômico reserva a tentativa no `before`, antes de a biblioteca conferir, e o `release` (DECR com piso 0 em Lua, sem criar a chave nem mexer no prazo) devolve a reserva no acerto ou no erro que não é de credencial. Uma requisição só chega à conferência se a contagem **dela** ficou ≤ teto. Com isso, N requisições em paralelo deixam passar no máximo `teto`, mesmo com acertos devolvendo reservas no meio. O teste da rajada de 20 (≤ 5 respostas 401, ≥ 15 respostas 429, e o código certo depois recebe 429) e o de "4 erros + 1 acerto" cobrem o que foi pedido. A consulta sem reserva vale só para a chamada interna `auth.api.*`, que a montagem não expõe. Aceito.
+- **R2: resolvida.** O evento sai quando a falha **atinge** o teto, com a `regra` em lista fechada. As tentativas já bloqueadas geram no máximo 1 evento por contador a cada 60 s. A chave dessa contenção é o HMAC e fica só em memória.
+- **R11: resolvida.** A sessão nova é apagada antes de o erro subir.
+- **R12: resolvida.** `method` diferente de `totp` ou `issuer` presente dão 400 `TOTP_ONLY`, com teste.
+- **R9 e R10:** documentadas no §13. A migração para os segredos versionados fica na fila do PR 3. Aceito.
+- **R3 a R8:** estão na fila do PR 3 com os prazos do parecer. Aceito. O #153 cobre a parte dos alvos distintos da R6 e tem parecer próprio (`2026-11-05-recusa-mfa-rota-comum.md`).
+
+### Achado novo
+
+13. **(Antes do merge) A tentativa barrada não devolve as reservas: um contador tranca o outro.** Em `reservar`, todos os contadores levam `hit` antes de se ver qual travou. Quando um deles trava, o `antes` lança o erro sem `devolver`, e o `depois` não roda. Consequências:
+    - (a) Uma pessoa já bloqueada por e-mail que continua tentando de dentro da clínica (comportamento comum) soma no contador **da origem**. Mais 25 tentativas e a **clínica inteira** fica sem login por 15 min. Vale o mesmo para o fator: as tentativas barradas por `fator_por_pessoa` somam em `fator_por_origem`, e a reverificação e o login em duas etapas de toda a clínica caem.
+    - (b) Na direção contrária, enquanto a origem estiver bloqueada, cada login da clínica, **inclusive com a senha certa**, soma no contador por e-mail da pessoa. Quando a origem destrava, essas pessoas continuam trancadas.
+    - O resultado é o que a R4 queria evitar com o teto de 30. Hoje não há exposição, porque o provedor não sobe em produção, mas a correção é curta.
+    - **Correção:** quando qualquer contador travar, `devolver` a reserva de **todos** os contadores daquela requisição antes do `throw`. A invariante da R1 se mantém: a requisição barrada desfaz só a própria batida, então a contagem de quem já está na conferência não muda.
+    - **Teste:** com a origem X, travar o e-mail A (5 erros) e fazer mais 30 tentativas com A. Em seguida, B (outro e-mail, mesma origem X) entra com a senha certa. Fazer o equivalente no fator, entre pessoa e origem.
+14. **(Fila)** Se a biblioteca lançar um erro que não é `APIError` (500), o `depois` pode não rodar, e a reserva fica contada como falha. Isso falha fechado e é raro, mas vale um `finally` ou, ao menos, registrar no §13. Outro ponto: o código reutilizado conta como falha (decisão aceita), mas a reserva que atinge o teto por esse caminho não emite `MFA_BLOQUEADO` nem vai para a trilha. Aplicar `atingidos` também ali.
+
+### Nota do Maestro sobre a reconferência (05/11/2026)
+
+**R13 corrigida.** Quando alguma reserva passa do teto, a tentativa barrada devolve a reserva de **todos** os contadores antes de recusar. A garantia da R1 continua: a vaga só fica ocupada pelas tentativas que chegam à conferência. Teste novo na bancada, com os dois casos:
+- um e-mail travado com mais 30 tentativas não tranca a origem para o colega;
+- a origem travada recusa a senha certa sem somar no e-mail da pessoa, que entra por outra origem.
+
+**R14** vai para a fila do PR 3.
