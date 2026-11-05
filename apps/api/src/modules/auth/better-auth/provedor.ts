@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers } from '../../../db/schema';
 import { sessao, usuario } from '../../../db/identidade';
@@ -29,7 +29,7 @@ export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
 export interface DependenciasDoProvedor {
   readonly auth: Autenticacao;
   /** Pool do papel `app_auth` (schema identidade e a função de clínicas). */
-  readonly dbAuth: PostgresJsDatabase;
+  readonly dbAuth: Database;
   /** Pool do papel `app_user` (RLS por clínica) para ler os perfis e gravar a trilha. */
   readonly dbClinica: Database;
   readonly agora?: () => Date;

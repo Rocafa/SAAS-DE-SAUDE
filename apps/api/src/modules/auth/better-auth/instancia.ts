@@ -11,7 +11,8 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../../../db/tenant-transaction';
+
 import { conta, sessao, usuario, verificacao } from '../../../db/identidade';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { conferirSenha, gerarHashDeSenha } from './senha';
@@ -25,7 +26,7 @@ export const CABECALHO_ORIGEM = 'x-plataforma-origem';
 
 export interface OpcoesDaAutenticacao {
   /** Drizzle no pool do papel `app_auth` (R1): o único com acesso ao schema identidade. */
-  readonly db: PostgresJsDatabase;
+  readonly db: Database;
   /** BETTER_AUTH_SECRET: 32 bytes ou mais, do Secrets Manager (R2). */
   readonly segredo: string;
   /** URL pública fixa da API (R2): nunca derivada do Host da requisição. */
