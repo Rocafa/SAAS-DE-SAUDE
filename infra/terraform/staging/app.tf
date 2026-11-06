@@ -244,6 +244,9 @@ locals {
       REDIS_URL             = { segredo = aws_secretsmanager_secret.app["redis"].arn, campo = "url" }
       PAGINATION_CURSOR_KEY = { segredo = aws_secretsmanager_secret.app["pagination-cursor-key"].arn, campo = "chave" }
       RATE_LIMIT_HASH_KEY   = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
+      # D4 (3c): o provedor real só sobe com estes; AUTH_PROVIDER continua proibido até o parecer final do 3c.
+      DATABASE_AUTH_URL  = { segredo = aws_secretsmanager_secret.app["banco-app-auth"].arn, campo = "url" }
+      BETTER_AUTH_SECRET = { segredo = aws_secretsmanager_secret.app["better-auth-secret"].arn, campo = "chave" }
     },
     var.whatsapp_provedor == "cloud_api" ? {
       WHATSAPP_ACCESS_TOKEN         = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "access_token" }
