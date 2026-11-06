@@ -753,8 +753,8 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
       convites().aceitar({ token: c1.token, email: ja.email, senha: SENHA, codigo: codigoErrado(segredos.get(ja.userId)?.segredo ?? Buffer.alloc(0), 7), cabecalhos: new Headers() }),
     ).rejects.toBeInstanceOf(ConflitoError);
     expect(await provedor.clinicasDoUsuario(ja.userId)).not.toContain(tenantId);
-    const cookies = await convites().aceitar({ token: c1.token, email: ja.email, senha: SENHA, codigo: proximoCodigo(ja.userId), cabecalhos: new Headers() });
-    expect(cookies.length).toBeGreaterThan(0);
+    // Conferência sem abrir sessão: a pessoa entra depois, pelo login normal.
+    expect(await convites().aceitar({ token: c1.token, email: ja.email, senha: SENHA, codigo: proximoCodigo(ja.userId), cabecalhos: new Headers() })).toEqual([]);
     expect(await provedor.clinicasDoUsuario(ja.userId)).toContain(tenantId);
     // Conta sem TOTP: recusada, sem vínculo e sem sessão viva.
     const semFator = await novaPessoa(await api.novaClinica(), ['recepcao']);

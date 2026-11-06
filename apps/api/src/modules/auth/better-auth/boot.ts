@@ -44,6 +44,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
       aoVerificarMfa: (e) => doProvedor().aposMfaVerificado(e.sessaoId, e.userId, e.motivo),
       aoFalharMfa: (e) => doProvedor().aposMfaRecusado(e.sessaoId, e.userId, e.bloqueou),
       podeCadastrarFator: (sessaoId) => doProvedor().cadastroLiberado(sessaoId),
+      aoBloquearFator: (userId) => doProvedor().avisarFatorBloqueado(userId),
     },
   });
   const provider = new BetterAuthProvider({
