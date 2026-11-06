@@ -1,0 +1,30 @@
+{
+  "name": "poc-d4-better-auth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PoC da decisão D4 (autenticação): Better Auth dentro de um NestJS mínimo. FORA do workspace do pnpm.",
+  "type": "module",
+  "scripts": {
+    "migrate": "better-auth migrate --config src/auth.ts -y",
+    "start": "tsx src/main.ts",
+    "medir": "node medir.mjs"
+  },
+  "dependencies": {
+    "@better-auth/passkey": "1.7.7",
+    "@nestjs/common": "11.1.6",
+    "@nestjs/core": "11.1.6",
+    "@nestjs/platform-express": "11.1.6",
+    "better-auth": "1.7.7",
+    "pg": "8.23.1",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@better-auth/cli": "1.4.21",
+    "@types/express": "5.0.3",
+    "@types/node": "22.20.0",
+    "@types/pg": "8.11.10",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3"
+  }
+}
