@@ -480,17 +480,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
   async idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'> {
     const [ja] = await this.d.dbAuth
-      .select({ id: usuario.id, ativo: usuario.ativo, origem: usuario.conviteDeOrigem, senha: conta.password })
+      .select({ id: usuario.id, ativo: usuario.ativo, inativaPor: usuario.inativaPor, senha: conta.password })
       .from(usuario)
       .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
       .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
     if (!ja) return { userId: randomUUID(), reaproveita: false };
-    const abandonada = !ja.ativo && ja.origem !== null && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    const abandonada = !ja.ativo && ja.inativaPor === 'convite_desfeito' && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
     return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
   }
 
   async desfazerContaDoConvite(userId: string): Promise<void> {
-    await this.d.dbAuth.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    await this.d.dbAuth.update(usuario).set({ ativo: false, inativaPor: 'convite_desfeito' }).where(eq(usuario.id, userId));
     await this.d.dbAuth.update(conta).set({ password: null }).where(eq(conta.userId, userId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, userId));
   }
@@ -635,7 +635,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    */
   async anonimizarConta(userId: string): Promise<void> {
     await this.d.dbAuth.transaction(async (tx) => {
-      await tx.update(usuario).set({ name: 'Conta anonimizada', email: `anonimizada-${userId}@anonimizada.invalid`, ativo: false, image: null }).where(eq(usuario.id, userId));
+      await tx
+        .update(usuario)
+        .set({ name: 'Conta anonimizada', email: `anonimizada-${userId}@anonimizada.invalid`, ativo: false, inativaPor: 'anonimizada', image: null })
+        .where(eq(usuario.id, userId));
       await tx.update(conta).set({ password: null }).where(eq(conta.userId, userId));
       await tx.delete(doisFatores).where(eq(doisFatores.userId, userId));
       await tx.delete(sessao).where(eq(sessao.userId, userId));
@@ -647,7 +650,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
     await this.d.dbAuth
       .update(usuario)
-      .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+      .set({ ativo: true, inativaPor: null, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
       .where(eq(usuario.id, e.userId));
   }
 

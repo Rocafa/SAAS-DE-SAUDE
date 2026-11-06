@@ -17,6 +17,8 @@ export const usuario = identidade.table('usuario', {
   emailVerified: boolean('email_verificado').notNull().default(false),
   image: text('imagem'),
   ativo: boolean('ativo').notNull().default(true),
+  /** 0069 (R1 do código do 3b-3): por que a conta está inativa; só 'sem_vinculo' volta a valer numa concessão. */
+  inativaPor: text('inativa_por', { enum: ['sem_vinculo', 'anonimizada', 'convite_desfeito'] }),
   /** Cadastro do TOTP concluído (0065): o login passa a pedir o código. */
   twoFactorEnabled: boolean('dois_fatores_ativo').notNull().default(false),
   /** 0067 (R17): clínica e convite de onde a conta veio. */
