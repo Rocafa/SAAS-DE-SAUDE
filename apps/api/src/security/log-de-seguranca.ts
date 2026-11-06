@@ -35,6 +35,7 @@ export const EVENTOS_DE_SEGURANCA = {
   MFA_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'rota recusada por falta de MFA ou MFA antigo' },
   MFA_LIMITE_DE_RECUSAS: { severidade: 'alto', alarme: 'imediato', descricao: 'usuário passou do teto de recusas por MFA (429)' },
   RATE_LIMIT_EXCEDIDO: { severidade: 'aviso', alarme: 'volume', descricao: 'origem passou do limite de requisições (429)' },
+  BLOQUEIO_INDISPONIVEL: { severidade: 'alto', alarme: 'imediato', descricao: 'contador de bloqueio fora do ar; recuperação ou aceite recusados (falha fechada, 503)' },
   RATE_LIMIT_FAIL_OPEN: { severidade: 'alto', alarme: 'imediato', descricao: 'contador indisponível; requisição seguiu sem limite' },
   WEBHOOK_ASSINATURA_INVALIDA: { severidade: 'alto', alarme: 'volume', descricao: 'webhook com assinatura inválida' },
   ALERTA_ANOMALIA: { severidade: 'alto', alarme: 'imediato', descricao: 'regra de vigilância disparou (detalhe na trilha)' },

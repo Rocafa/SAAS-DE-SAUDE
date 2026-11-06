@@ -342,7 +342,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
             { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', u.email.trim().toLowerCase()) : '', teto: TETO_DE_FALHAS },
             ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
           ];
-    const reserva = await this.reservarVarias(contadores);
+    // R3 do parecer do endurecimento: entrada mal formada não gasta tentativa.
+    if (r.tipo === 'senha' && (!e.codigo || !e.senhaNova || e.senhaNova.length < 12 || e.senhaNova.length > 128)) return 'credencial_errada';
+    if (r.tipo === 'fator' && !e.senhaAtual) return 'credencial_errada';
+    const motivoDoContador = r.tipo === 'senha' ? 'bloqueio_do_fator' : 'bloqueio_de_login';
+    const reserva = await this.reservarVarias(contadores, motivoDoContador);
+    if (reserva === 'bloqueado') {
+      // R1: a tentativa barrada pelo token também entra na vigilância.
+      registrarEventoDeSeguranca(r.tipo === 'senha' ? 'MFA_BLOQUEADO' : 'LOGIN_BLOQUEADO', { motivo: motivoDoContador, userId: r.usuarioId, ...(origem ? { origem } : {}) });
+      if (r.tipo === 'senha') await this.avisarFatorBloqueado(r.usuarioId).catch(() => undefined);
+    }
     if (reserva !== 'ok') return reserva;
 
     let confere: boolean;
@@ -351,7 +360,14 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     } else {
       confere = !!e.senhaAtual && (await this.senhaConfere(r.usuarioId, e.senhaAtual));
     }
-    if (!confere) return 'credencial_errada';
+    if (!confere) {
+      registrarEventoDeSeguranca(r.tipo === 'senha' ? 'MFA_FALHOU' : 'LOGIN_FALHOU', {
+        motivo: r.tipo === 'senha' ? 'codigo_errado' : 'senha_errada',
+        userId: r.usuarioId,
+        ...(origem ? { origem } : {}),
+      });
+      return 'credencial_errada';
+    }
     await this.devolverVarias(contadores);
 
     if (r.tipo === 'senha' && e.senhaNova && this.d.conferirSenhaVazada) {
@@ -408,7 +424,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Reserva atômica em vários contadores (R15). R4 do código do 3b-2: na recuperação, o store fora FALHA FECHADO
    * (indisponível), com o alarme do rate limit; barrada, devolve as reservas de todos (R13 do #152).
    */
-  private async reservarVarias(contadores: { chave: string; teto: number }[]): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
+  private async reservarVarias(contadores: { chave: string; teto: number }[], motivo: 'bloqueio_de_login' | 'bloqueio_do_fator'): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
     const b = this.d.bloqueio;
     if (!b) return 'ok';
     const feitas: string[] = [];
@@ -423,7 +439,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       }
       return 'ok';
     } catch {
-      registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'bloqueio_do_fator' });
+      // R2 do parecer do endurecimento: aqui o caminho FALHA FECHADO, então o alarme não é o de "seguiu sem bloqueio".
+      registrarEventoDeSeguranca('BLOQUEIO_INDISPONIVEL', { motivo });
       for (const f of feitas) await b.store.release(f, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
       return 'indisponivel';
     }
@@ -610,7 +627,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', email) : '', teto: TETO_DE_FALHAS },
       ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
     ];
-    const r1 = await this.reservarVarias(doLogin);
+    const r1 = await this.reservarVarias(doLogin, 'bloqueio_de_login');
     if (r1 !== 'ok') {
       if (r1 === 'bloqueado') registrarEventoDeSeguranca('LOGIN_BLOQUEADO', { motivo: 'bloqueio_de_login', ...(origem ? { origem } : {}) });
       return r1;
@@ -630,9 +647,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       { chave: b ? chaveDoBloqueio(b.chaveHmac, 'fator', u.id) : '', teto: TETO_DE_FALHAS },
       ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'fator-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
     ];
-    const r2 = await this.reservarVarias(doFator);
+    const r2 = await this.reservarVarias(doFator, 'bloqueio_do_fator');
     if (r2 !== 'ok') {
-      if (r2 === 'bloqueado') registrarEventoDeSeguranca('MFA_BLOQUEADO', { motivo: 'bloqueio_do_fator', ...idsDoEvento });
+      if (r2 === 'bloqueado') {
+        registrarEventoDeSeguranca('MFA_BLOQUEADO', { motivo: 'bloqueio_do_fator', ...idsDoEvento });
+        // R1 do parecer do endurecimento: o aceite que tranca o fator também avisa os admins.
+        await this.avisarFatorBloqueado(u.id).catch(() => undefined);
+      }
       return r2;
     }
     const totp = await this.totpDaPessoaConfere(u.id, e.codigo);

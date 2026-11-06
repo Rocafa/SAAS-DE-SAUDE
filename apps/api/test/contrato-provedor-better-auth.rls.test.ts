@@ -922,6 +922,28 @@ describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR
     expect((await entrar(n.email)).status).toBe(200);
   });
 
+  it('R2 do parecer do endurecimento: com o contador fora do ar, a recuperação recusa (indisponível) e não troca nada', async () => {
+    const m = await membroComFator();
+    const { token } = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'fator', 'perdeu_o_aparelho');
+    const quebrado = {
+      hit: () => Promise.reject(new Error('fora')),
+      peek: () => Promise.reject(new Error('fora')),
+      release: () => Promise.reject(new Error('fora')),
+      mode: () => 'compartilhado' as const,
+      close: () => Promise.resolve(),
+    };
+    const semContador = new BetterAuthProvider({
+      auth,
+      dbAuth: dbAuth.db,
+      dbClinica: api.db.db,
+      conferirSenhaVazada: senhaVazadaFicticia,
+      bloqueio: { store: quebrado, chaveHmac: CHAVE_HMAC_DA_BANCADA },
+      segredoDaInstancia: SEGREDO_DA_BANCADA,
+    });
+    expect(await semContador.usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBe('indisponivel');
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toHaveLength(1);
+  });
+
   it('R1 do código do 3b-2: o uso da recuperação deixa linha (sem detalhe) também nas OUTRAS clínicas da pessoa', async () => {
     const m = await membroComFator();
     const outra = await api.novaClinica();
