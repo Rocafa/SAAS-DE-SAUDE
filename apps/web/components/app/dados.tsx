@@ -35,6 +35,8 @@ interface ContextoDados {
   atualizar: () => void;
   /** Apaga o retrato em memória (sair, trocar de clínica). */
   limpar: () => void;
+  /** Só na demonstração: trocar de usuário para ver as permissões. */
+  entrarComo: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<ContextoDados | null>(null);
@@ -102,9 +104,16 @@ export function DadosProvider({ children }: { children: ReactNode }) {
   }, [api, config.modo, versao, limpar]);
 
   const atualizar = useCallback(() => setVersao((v) => v + 1), []);
+  const entrarComo = useCallback(
+    async (id: string) => {
+      await api.entrarComo(id);
+      atualizar();
+    },
+    [api, atualizar],
+  );
   const valor = useMemo(
-    () => ({ api, modo: config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar }),
-    [api, config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar],
+    () => ({ api, modo: config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar, entrarComo }),
+    [api, config.modo, usuario, pacientes, agendamentos, versao, atualizar, limpar, entrarComo],
   );
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;
 }
@@ -120,14 +129,28 @@ export type EstadoConsulta<T> =
   | { estado: 'erro'; mensagem: string; tentarDeNovo: () => void }
   | { estado: 'pronto'; dados: T };
 
+/**
+ * O que fica na tela enquanto a nova resposta não chega. Recarga da MESMA pergunta (atualização em
+ * segundo plano) mantém o dado que já está lá, para a tela não piscar. Pergunta DIFERENTE (a pessoa
+ * trocou o filtro, o intervalo, o termo de busca) volta a "carregando": senão a tela mostra a
+ * resposta da pergunta antiga com a cara de resposta da nova.
+ */
+export function aoRecarregar<T>(atual: EstadoConsulta<T>, mesmaPergunta: boolean): EstadoConsulta<T> {
+  return atual.estado === 'pronto' && mesmaPergunta ? atual : { estado: 'carregando' };
+}
+
 /** Carrega dados com os estados de tela (carregando, erro com "Tentar de novo", pronto). */
 export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: unknown[] = []): EstadoConsulta<T> {
   const { api, versao } = useDados();
   const [tentativa, setTentativa] = useState(0);
   const [estado, setEstado] = useState<EstadoConsulta<T>>({ estado: 'carregando' });
+  const pergunta = JSON.stringify(deps);
+  const perguntaAnterior = useRef(pergunta);
   useEffect(() => {
     let vivo = true;
-    setEstado((e) => (e.estado === 'pronto' ? e : { estado: 'carregando' }));
+    const mesmaPergunta = perguntaAnterior.current === pergunta;
+    perguntaAnterior.current = pergunta;
+    setEstado((e) => aoRecarregar(e, mesmaPergunta));
     carregar(api)
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
@@ -141,7 +164,7 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
     return () => {
       vivo = false;
     };
-  }, [api, versao, tentativa, ...deps]);
+  }, [api, versao, tentativa, pergunta]);
   return estado;
 }
 
