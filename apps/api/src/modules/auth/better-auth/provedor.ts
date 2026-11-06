@@ -480,10 +480,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         .where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential'), isNull(conta.password)))
         .returning({ id: conta.id });
       if (r.length === 0) return 'conta_existente';
-      await this.d.dbAuth
-        .update(usuario)
-        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
-        .where(eq(usuario.id, userId));
+      // Nome e origem vão DEPOIS do commit da clínica (completarContaReaproveitada): a linha de usuario está travada
+      // pelo trigger da concessão nesta transação, e tocá-la por outra conexão travaria as duas.
       return { userId };
     }
     try {
@@ -598,6 +596,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, userId), isNull(recuperacao.usadoEm)));
     });
     registrarEventoDeSeguranca('LOGOUT', { motivo: 'conta_inativa', userId });
+  }
+
+  async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
+    await this.d.dbAuth
+      .update(usuario)
+      .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+      .where(eq(usuario.id, e.userId));
   }
 
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {

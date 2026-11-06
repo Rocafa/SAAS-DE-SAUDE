@@ -95,6 +95,8 @@ export interface ProvedorDeConvite {
    * passa pelo bloqueio de login e de fator). Sem fator cadastrado, recusa e apaga a sessão aberta.
    */
   conferirCredenciais(e: { email: string; senha: string; codigo: string }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado'>;
+  /** Depois do commit da clínica: nome e origem da conta abandonada que foi reaproveitada. */
+  completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void>;
   /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
   abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
 }

@@ -181,6 +181,7 @@ export class ConvitesService {
         throw err;
       })
       .catch(naoAdmin);
+    if (reaproveita) await provedor.completarContaReaproveitada({ userId, nome, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
     return provedor.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
   }
 

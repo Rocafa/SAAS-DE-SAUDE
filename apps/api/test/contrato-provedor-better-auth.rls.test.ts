@@ -58,6 +58,7 @@ beforeAll(async () => {
       aoVerificarMfa: (e) => provedor.aposMfaVerificado(e.sessaoId, e.userId, e.motivo),
       aoFalharMfa: (e) => provedor.aposMfaRecusado(e.sessaoId, e.userId, e.bloqueou),
       podeCadastrarFator: (id) => provedor.cadastroLiberado(id),
+      aoBloquearFator: (userId) => provedor.avisarFatorBloqueado(userId),
     },
   });
   provedor = new BetterAuthProvider({
@@ -929,9 +930,10 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     const adm2 = await api.membro(t2, api.sessao(t2, 'admin'), 'admin');
     const p = await novaPessoa(t1, ['recepcao']);
     await api.membro(t2, { userId: p.userId }, 'recepcao');
-    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    // Sessões abertas antes do TOTP (depois dele, a senha sozinha não abre sessão).
     const em1 = cookieDe(await entrar(p.email, SENHA));
     const em2 = cookieDe(await entrar(p.email, SENHA));
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
     await dbAuth.db.update(sessao).set({ clinicaAtiva: t1 }).where(eq(sessao.id, await sessaoId(em1)));
     await dbAuth.db.update(sessao).set({ clinicaAtiva: t2 }).where(eq(sessao.id, await sessaoId(em2)));
     const id2 = await sessaoId(em2);
