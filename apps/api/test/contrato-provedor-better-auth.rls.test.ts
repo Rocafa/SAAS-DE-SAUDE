@@ -7,7 +7,7 @@
  * Dados fictícios.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { conta, doisFatores, sessao, usuario } from '../src/db/identidade';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
@@ -916,6 +916,66 @@ describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR
     const m = await membroComFator();
     const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
     await expect(credenciais().emitirRecuperacao(m.ctx, estranha.userId, 'senha', 'esqueceu_a_senha')).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+});
+
+describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fator bloqueado (R10, R11, R18; R6 do #152)', () => {
+  const convites = (): ConvitesService => new ConvitesService(new TenantDatabase(api.db), provedor);
+
+  it('R10: revogar o último perfil numa clínica derruba só as sessões dela; sem vínculo em nenhuma, conta inativa e sem login; convite aceito reativa', async () => {
+    const t1 = await api.novaClinica();
+    const t2 = await api.novaClinica();
+    const adm1 = await api.membro(t1, api.sessao(t1, 'admin'), 'admin');
+    const adm2 = await api.membro(t2, api.sessao(t2, 'admin'), 'admin');
+    const p = await novaPessoa(t1, ['recepcao']);
+    await api.membro(t2, { userId: p.userId }, 'recepcao');
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    const em1 = cookieDe(await entrar(p.email, SENHA));
+    const em2 = cookieDe(await entrar(p.email, SENHA));
+    await dbAuth.db.update(sessao).set({ clinicaAtiva: t1 }).where(eq(sessao.id, await sessaoId(em1)));
+    await dbAuth.db.update(sessao).set({ clinicaAtiva: t2 }).where(eq(sessao.id, await sessaoId(em2)));
+    const id2 = await sessaoId(em2);
+    await api.http().delete(`/clinica/membros/${p.userId}/recepcao`).set({ Authorization: adm1.Authorization }).expect(204);
+    expect(await dbAuth.db.select().from(sessao).where(and(eq(sessao.userId, p.userId), eq(sessao.clinicaAtiva, t1)))).toEqual([]);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, id2))).toHaveLength(1);
+    await api.http().delete(`/clinica/membros/${p.userId}/recepcao`).set({ Authorization: adm2.Authorization }).expect(204);
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(u?.ativo).toBe(false);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, p.userId))).toEqual([]);
+    expect((await entrar(p.email)).headers.getSetCookie().some((c) => c.startsWith(`${nomeDoCookie(false)}=`))).toBe(false);
+    // Recontratação: convite aceito com senha e TOTP (sem abrir sessão) reativa a conta.
+    const c = await convites().criar({ tenantId: t1, userId: adm1.userId, roles: ['admin'] } as never, p.email, 'recepcao');
+    await convites().aceitar({ token: c.token, email: p.email, senha: SENHA, codigo: proximoCodigo(p.userId), cabecalhos: new Headers() });
+    const [depois] = await dbAuth.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(depois?.ativo).toBe(true);
+    expect(await provedor.clinicasDoUsuario(p.userId)).toEqual([t1]);
+  });
+
+  it('R11 e R18: anonimizar mantém o id e apaga e-mail, nome, senha, TOTP e sessões; a pessoa não entra mais', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    await provedor.anonimizarConta(p.userId);
+    const [u] = await dbAuth.db.select().from(usuario).where(eq(usuario.id, p.userId));
+    expect(u?.email).not.toBe(p.email);
+    expect(u?.name).toBe('Conta anonimizada');
+    expect(u?.ativo).toBe(false);
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, p.userId))).toEqual([]);
+    expect((await entrar(p.email)).status).not.toBe(200);
+  });
+
+  it('R6 do #152: o fator trancado por pessoa identificada vira aviso aos admins da clínica dela (1 por dia)', async () => {
+    const tenantId = await api.novaClinica();
+    await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const s = await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    const segredo = segredos.get(p.userId)?.segredo ?? Buffer.alloc(0);
+    for (let k = 0; k < 5; k++) await postar('/two-factor/verify-totp', s, { code: codigoErrado(segredo, 300 + k) }, '7a1b2c3d4e5f6071');
+    const avisos = await withTenant(api.db.db, tenantId, (tx) =>
+      tx.execute<{ n: number }>(sql`select count(*)::int as n from clinical_notices where kind = 'alerta_anomalia' and anomaly_rule = 'fator_bloqueado'`),
+    );
+    expect([...avisos][0]?.n).toBeGreaterThanOrEqual(1);
   });
 });
 
