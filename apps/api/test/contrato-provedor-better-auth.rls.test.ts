@@ -899,6 +899,19 @@ describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR
     expect((await postar('/two-factor/enable', sessaoDeCadastro, { password: SENHA })).r.status).toBe(200);
   });
 
+  it('R1 do código do 3b-2: o uso da recuperação deixa linha (sem detalhe) também nas OUTRAS clínicas da pessoa', async () => {
+    const m = await membroComFator();
+    const outra = await api.novaClinica();
+    await api.membro(outra, { userId: m.userId }, 'recepcao');
+    const { token } = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'fator', 'perdeu_o_aparelho');
+    await credenciais().usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() });
+    const naOutra = await withTenant(api.db.db, outra, (tx) =>
+      tx.execute<{ op: string; kind: string | null }>(sql`select metadata->>'op' as op, metadata->>'kind' as kind from audit_log where actor_id = ${m.userId} and metadata->>'op' = 'credential_changed'`),
+    );
+    expect(naOutra).toHaveLength(1);
+    expect(naOutra[0]?.kind).toBeNull();
+  });
+
   it('R16: o admin não emite recuperação para quem não tem vínculo ativo na clínica dele; motivo fora da lista não passa na rota', async () => {
     const m = await membroComFator();
     const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
