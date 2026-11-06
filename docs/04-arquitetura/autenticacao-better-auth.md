@@ -194,3 +194,10 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
   - **R16:** no aceite de conta existente, o e-mail da conta autenticada precisa ser o do convite. Na recuperação, `:usuarioId` precisa ter vínculo ativo na clínica do admin; senão, 404.
   - **R17:** a conta guarda a clínica e o convite de origem; a pessoa vê as próprias clínicas; há procedimento de disputa de e-mail no suporte; a verificação de e-mail fica obrigatória quando houver provedor (inclusive para contas antigas); RIPD e contrato registram que o e-mail é declarado pelo admin.
   - **R18:** quem perdeu os dois fatores recebe a conta nova com **outro** e-mail, até o suporte liberar o antigo pelo procedimento de disputa. O RIPD registra que quem usa o token percebe se a conta já existe.
+
+### 14.5 Mudanças no código do 3b-2 em relação ao desenho (para o Guardião)
+
+- **Motivo da recuperação em lista fechada** (`esqueceu_a_senha`, `perdeu_o_aparelho`, `troca_de_aparelho`, `suspeita_de_invasao`, `conta_bloqueada`), no lugar da justificativa de 10 a 500 caracteres. O contrato da trilha (0005) não aceita texto livre, e assim nenhum texto livre fica para sempre na trilha.
+- **O TOTP antigo sai quando o token de fator é usado**, e não só quando o novo é confirmado. A biblioteca recusa um segundo cadastro enquanto existe um verificado. Se a pessoa abandonar o cadastro, o admin emite outra recuperação.
+- **Conta existente sem TOTP** não aceita convite (`conta_sem_fator`): o login completo exige o fator. A pessoa passa antes pela recuperação de fator na clínica de origem.
+- **Código TOTP conferido fora do login** (só na recuperação de senha), com o segredo decifrado pela própria biblioteca (`better-auth/crypto`) e os mesmos parâmetros do plugin, pelo bloqueio do fator e pela marca de reuso.
