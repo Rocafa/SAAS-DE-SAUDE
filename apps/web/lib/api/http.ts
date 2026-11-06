@@ -45,6 +45,7 @@ import type {
   Papel,
   Pendencia,
   Profissional,
+  Registro,
   Repeticao,
   StatusAgendamento,
   TipoAtendimento,
@@ -52,6 +53,50 @@ import type {
 } from './tipos';
 import { comTruncado } from './tipos';
 import { CURSOR_INVALIDO, type PaginaPorCursor } from '@plataforma/shared';
+
+/** Atendimento como a API devolve (`AtendimentoDto` de `modules/records/prontuario.service.ts`). */
+interface AtendimentoApi {
+  id: string;
+  pacienteId: string;
+  profissionalId: string;
+  agendamentoId: string;
+  modelo: 'fisio' | 'to' | 'psicologia';
+  restrito: boolean;
+  status: 'aberto' | 'finalizado';
+  conteudo: Record<string, unknown> | null;
+  adendos: readonly { id: string; texto: string; em: string; autorId: string }[];
+  abertoEm: string;
+  finalizadoEm: string | null;
+  conteudoOculto: boolean;
+  motivoOculto?: Registro['motivoOculto'];
+}
+
+/**
+ * O servidor é quem decide o sigilo: o adaptador só traduz nomes e NUNCA recalcula visibilidade.
+ * `conteudo` do servidor aceita medida e plano de sessões; a tela de hoje só sabe campo de texto, então
+ * só texto entra em `campos` — medida e plano ficam de fora de propósito, em vez de virar string torta.
+ */
+function paraRegistro(a: AtendimentoApi): Registro {
+  const campos: Record<string, string> = {};
+  for (const [chave, valor] of Object.entries(a.conteudo ?? {})) {
+    if (typeof valor === 'string') campos[chave] = valor;
+  }
+  return {
+    id: a.id,
+    pacienteId: a.pacienteId,
+    agendamentoId: a.agendamentoId,
+    profissionalId: a.profissionalId,
+    modelo: a.modelo,
+    data: a.abertoEm.slice(0, 10),
+    campos,
+    status: a.status === 'finalizado' ? 'assinado' : 'rascunho',
+    ...(a.finalizadoEm ? { assinadoEm: a.finalizadoEm } : {}),
+    adendos: a.adendos.map((d) => ({ texto: d.texto, em: d.em, autor: d.autorId })),
+    restrito: a.restrito,
+    ...(a.conteudoOculto ? { conteudoOculto: true } : {}),
+    ...(a.motivoOculto ? { motivoOculto: a.motivoOculto } : {}),
+  };
+}
 
 /** Parte da ApiClinica que já fala com a API real. */
 export type ApiHttpPacientesAgenda = Pick<
@@ -76,6 +121,13 @@ export type ApiHttpPacientesAgenda = Pick<
   | 'pendenciasDoDia'
   | 'buscarPacientes'
   | 'esquecerCache'
+  | 'listarRegistros'
+  | 'obterRegistroDoAgendamento'
+  | 'salvarRascunho'
+  | 'assinarRegistro'
+  | 'adicionarAdendo'
+  | 'listarAnexos'
+  | 'linhaDoTempo'
 >;
 
 export interface OpcoesHttp {
@@ -139,6 +191,9 @@ export const MENSAGENS = {
   semResponsavel:
     'O cadastro de responsável ainda não está ligado ao sistema. Cadastre o paciente sem o responsável e anote-o na ficha depois.',
   semReativar: 'Reativar paciente ainda não está disponível nesta versão. Peça ao suporte.',
+  semAnexos: 'A lista de anexos ainda não está disponível nesta versão. Peça ao suporte.',
+  semDemonstracao: 'Esta ação existe só na demonstração.',
+  semLinhaDoTempo: 'A linha do tempo do paciente ainda não está disponível nesta versão. Peça ao suporte.',
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',
   faltaTipo: 'Falta o tipo de atendimento. Escolha um da lista.',
@@ -160,6 +215,18 @@ const NOMES_CAMPOS: Record<string, string> = {
   busca: 'busca',
   de: 'período',
   ate: 'período',
+  // Campos do registro clínico (409 `registro_incompleto` da finalização): o servidor manda o NOME do
+  // campo, e a tela precisa do rótulo que a pessoa leu no formulário.
+  queixa: 'como o paciente chegou hoje',
+  conduta: 'o que foi feito na sessão',
+  resposta: 'como o paciente respondeu',
+  plano: 'próximos passos',
+  objetivo: 'objetivo da sessão',
+  atividades: 'atividades feitas',
+  desempenho: 'desempenho do paciente',
+  tema: 'tema principal da sessão',
+  intervencoes: 'intervenções',
+  evolucao: 'evolução',
 };
 
 /** Traduz a resposta de erro da API em mensagem fixa. Só lê `codigo` e nomes de `campos`. */
@@ -182,6 +249,13 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
   }
   if (status === 404) return new ErroApi(MENSAGENS.naoEncontrado, 404);
   if (status === 409) {
+    if (codigo === 'registro_incompleto') {
+      // Ordem do servidor, rótulo da tela. Só nome de campo entra na mensagem; valor nunca.
+      const faltas = Array.isArray(c.campos)
+        ? c.campos.filter((x): x is string => typeof x === 'string').map((x) => NOMES_CAMPOS[x] ?? 'um campo obrigatório')
+        : [];
+      if (faltas.length) return new ErroApi(`Falta preencher: ${faltas.join(', ')}.`, 409, codigo);
+    }
     if (codigo === 'horario_lotado') return new ErroApi(MENSAGENS.lotado, 409, codigo);
     if (codigo === 'paciente_inativo') return new ErroApi(MENSAGENS.inativo, 409, codigo);
     if (codigo === 'transicao_invalida' || codigo === 'status_nao_permite') return new ErroApi(MENSAGENS.transicao, 409, codigo);
@@ -420,7 +494,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
   const series = new Map<string, string[]>();
   let seqSerie = 0;
 
-  async function chamar<T>(metodo: 'GET' | 'POST' | 'PATCH', caminho: string, corpo?: unknown): Promise<T> {
+  async function chamar<T>(metodo: 'GET' | 'POST' | 'PATCH' | 'PUT', caminho: string, corpo?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (corpo !== undefined) headers['Content-Type'] = 'application/json';
     const token = opcoes.obterToken?.();
@@ -439,7 +513,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
    * servidor pode responder os cabeçalhos e travar no meio do corpo.
    */
   async function chamarComRelogio<T>(
-    metodo: 'GET' | 'POST' | 'PATCH',
+    metodo: 'GET' | 'POST' | 'PATCH' | 'PUT',
     caminho: string,
     corpo: unknown,
     headers: Record<string, string>,
@@ -669,6 +743,33 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       // Valor do tipo ainda não existe na API (fora da rodada 11.1).
       return r.map((t) => ({ id: t.id, nome: t.nome, minutos: t.minutos, valor: 0 }));
     },
+    async listarRegistros(pacienteId) {
+      const pagina = await chamar<{ itens: AtendimentoApi[] }>('GET', `/pacientes/${encodeURIComponent(pacienteId)}/prontuario`);
+      return pagina.itens.map(paraRegistro);
+    },
+    async obterRegistroDoAgendamento(agendamentoId) {
+      try {
+        return paraRegistro(await chamar<AtendimentoApi>('GET', `/atendimentos/${encodeURIComponent(agendamentoId)}`));
+      } catch (e) {
+        // 404 aqui é "este agendamento ainda não tem evolução", não falha: a tela abre o formulário vazio.
+        if (e instanceof ErroApi && e.status === 404) return null;
+        throw e;
+      }
+    },
+    async salvarRascunho(agendamentoId, campos) {
+      // `POST /atendimentos` é idempotente por agendamento: devolve o atendimento aberto, se já existir.
+      const aberto = await chamar<AtendimentoApi>('POST', '/atendimentos', { agendamentoId });
+      return paraRegistro(await chamar<AtendimentoApi>('PUT', `/atendimentos/${encodeURIComponent(aberto.id)}/registro`, { conteudo: campos }));
+    },
+    async assinarRegistro(id) {
+      return paraRegistro(await chamar<AtendimentoApi>('POST', `/atendimentos/${encodeURIComponent(id)}/finalizar`, {}));
+    },
+    async adicionarAdendo(id, texto) {
+      return paraRegistro(await chamar<AtendimentoApi>('POST', `/atendimentos/${encodeURIComponent(id)}/adendos`, { texto }));
+    },
+    // Sem rota na API: recusa explícita em vez de cair no adaptador falso e mostrar lista vazia (R-A do plano do E4).
+    listarAnexos: () => Promise.reject(new ErroApi(MENSAGENS.semAnexos, 501)),
+    linhaDoTempo: () => Promise.reject(new ErroApi(MENSAGENS.semLinhaDoTempo, 501)),
     listarAgendamentos,
     criarAgendamento,
     removerAgendamento: cancelar,

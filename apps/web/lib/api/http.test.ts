@@ -678,6 +678,116 @@ describe('adaptador HTTP: erros', () => {
     await expect(corpoQueNuncaChega.listarProfissionais()).rejects.toThrow(MENSAGENS.demorou);
   }, 1000);
 
+  describe('prontuário na API real (S1 do E4)', () => {
+    const ATENDIMENTO = {
+      id: U(90),
+      pacienteId: U(1),
+      profissionalId: U(50),
+      agendamentoId: U(80),
+      autorId: U(50),
+      modelo: 'fisio',
+      restrito: false,
+      sigilo: 'compartilhado',
+      status: 'aberto',
+      versao: 1,
+      versaoModelo: 3,
+      conteudo: { queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento', medidas: [{ nome: 'dor', valor: '7' }] },
+      adendos: [],
+      consentimentoIa: 'nao_perguntado',
+      abertoEm: '2026-11-05T09:00:00.000Z',
+      atualizadoEm: '2026-11-05T09:10:00.000Z',
+      finalizadoEm: null,
+      finalizadoPor: null,
+      hashFinalizacao: null,
+      conteudoOculto: false,
+    };
+
+    it('lista o histórico do paciente e traduz o estado do servidor', async () => {
+      const { chamadas, fetch } = simular((c) =>
+        c.url.pathname === `/pacientes/${U(1)}/prontuario`
+          ? respostaJson(200, { itens: [ATENDIMENTO], pagina: 1, limite: 20, temMais: false })
+          : respostaJson(404, { statusCode: 404 }),
+      );
+      const registros = await criarApiHttp({ baseUrl: BASE, fetch }).listarRegistros(U(1));
+      expect(chamadas.filter((c) => c.url.pathname.endsWith('/prontuario'))).toHaveLength(1);
+      expect(registros).toHaveLength(1);
+      expect(registros[0]).toMatchObject({
+        id: ATENDIMENTO.id,
+        pacienteId: U(1),
+        agendamentoId: U(80),
+        modelo: 'fisio',
+        status: 'rascunho',
+        data: '2026-11-05',
+        restrito: false,
+      });
+      // Só campo de texto entra em `campos`: medida e plano não têm tela ainda e não podem virar string torta.
+      expect(registros[0]?.campos).toEqual({ queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento' });
+    });
+
+    it('registro oculto vem do servidor com o motivo, inclusive MFA recente', async () => {
+      const oculto = { ...ATENDIMENTO, conteudo: null, adendos: [], conteudoOculto: true, motivoOculto: 'mfa_recente_obrigatorio' };
+      const { fetch } = simular(() => respostaJson(200, { itens: [oculto], pagina: 1, limite: 20, temMais: false }));
+      const [registro] = await criarApiHttp({ baseUrl: BASE, fetch }).listarRegistros(U(1));
+      expect(registro).toMatchObject({ conteudoOculto: true, motivoOculto: 'mfa_recente_obrigatorio' });
+      expect(registro?.campos).toEqual({});
+    });
+
+    it('registro do agendamento: 404 é "ainda não existe", não erro de tela', async () => {
+      const { fetch } = simular(() => respostaJson(404, { statusCode: 404 }));
+      await expect(criarApiHttp({ baseUrl: BASE, fetch }).obterRegistroDoAgendamento(U(80))).resolves.toBeNull();
+    });
+
+    it('rascunho: abre o atendimento e grava o registro', async () => {
+      const { chamadas, fetch } = simular((c) =>
+        c.metodo === 'POST' && c.url.pathname === '/atendimentos'
+          ? respostaJson(200, ATENDIMENTO)
+          : respostaJson(200, { ...ATENDIMENTO, conteudo: { queixa: 'Chegou melhor' } }),
+      );
+      const r = await criarApiHttp({ baseUrl: BASE, fetch }).salvarRascunho(U(80), { queixa: 'Chegou melhor' });
+      expect(chamadas.map((c) => `${c.metodo} ${c.url.pathname}`)).toEqual([
+        'POST /atendimentos',
+        `PUT /atendimentos/${ATENDIMENTO.id}/registro`,
+      ]);
+      expect(chamadas[0]?.corpo).toMatchObject({ agendamentoId: U(80) });
+      expect(r.campos).toEqual({ queixa: 'Chegou melhor' });
+    });
+
+    it('assinar registro incompleto: a tela recebe os campos que o servidor nomeou (409 registro_incompleto)', async () => {
+      const { fetch } = simular(() =>
+        respostaJson(409, { statusCode: 409, codigo: 'registro_incompleto', campos: ['conduta', 'queixa'] }),
+      );
+      // O servidor manda NOMES de campo, nunca valor: a tela traduz para o rótulo que a pessoa vê.
+      await expect(criarApiHttp({ baseUrl: BASE, fetch }).assinarRegistro(ATENDIMENTO.id)).rejects.toThrow(
+        /Falta preencher: o que foi feito na sessão, como o paciente chegou hoje/,
+      );
+    });
+
+    it('adendo: a única escrita depois de assinado', async () => {
+      const assinado = { ...ATENDIMENTO, status: 'finalizado', finalizadoEm: '2026-11-05T10:00:00.000Z' };
+      const { chamadas, fetch } = simular(() =>
+        respostaJson(201, { ...assinado, adendos: [{ id: U(91), texto: 'Correção (fictícia)', em: '2026-11-05T11:00:00.000Z', autorId: U(50) }] }),
+      );
+      const r = await criarApiHttp({ baseUrl: BASE, fetch }).adicionarAdendo(ATENDIMENTO.id, 'Correção (fictícia)');
+      expect(chamadas.map((c) => `${c.metodo} ${c.url.pathname}`)).toEqual([`POST /atendimentos/${ATENDIMENTO.id}/adendos`]);
+      expect(r.status).toBe('assinado');
+      expect(r.adendos).toEqual([{ texto: 'Correção (fictícia)', em: '2026-11-05T11:00:00.000Z', autor: U(50) }]);
+    });
+
+    it('o que não tem rota recusa com 501 e mensagem própria, em vez de cair no fake', async () => {
+      const api = criarApiHttp({ baseUrl: BASE, fetch: simular(() => respostaJson(200, {})).fetch });
+      await expect(api.listarAnexos(U(1))).rejects.toMatchObject({ status: 501 });
+      await expect(api.linhaDoTempo(U(1))).rejects.toMatchObject({ status: 501 });
+    });
+  });
+
+  it('no modo http, o que é da demonstração não vem do fake (R-C do plano do E4)', async () => {
+    const api = criarApi({ modo: 'http', origem: BASE }, { http: { fetch: simular(() => respostaJson(200, {})).fetch } });
+    // `entrarComo` e `usuariosDemo` existem só na demonstração: no modo http eram servidos pelo fake,
+    // e um clique trocava o papel pelo cliente (achado ALTA do #92).
+    await expect(api.entrarComo('u2')).rejects.toMatchObject({ status: 501 });
+    await expect(api.usuariosDemo()).rejects.toMatchObject({ status: 501 });
+  });
+
   it('o adaptador não tem console nem storage (sem log de dado pessoal)', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
