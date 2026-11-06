@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -29,7 +29,7 @@ import { chaveDoBloqueio } from './chaves-do-bloqueio';
 import { symmetricDecrypt } from 'better-auth/crypto';
 import { totpConfere } from './totp';
 import { conferirSenha } from './senha';
-import { JANELA_DE_REUSO_MS, TETO_DE_FALHAS } from './protecao';
+import { CABECALHO_ORIGEM, JANELA_DE_REUSO_MS, TETO_DE_FALHAS, TETO_DE_FALHAS_POR_ORIGEM } from './protecao';
 import { JANELA_DE_BLOQUEIO_MS } from './protecao';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
@@ -229,7 +229,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -238,7 +238,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .delete(doisFatores)
       .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
       .returning({ id: doisFatores.id });
-    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
+    // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias.
+    const trintaDias = new Date(agora.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const recuperacoes = await this.d.dbAuth.delete(recuperacao).where(lt(recuperacao.expiraEm, trintaDias)).returning({ id: recuperacao.id });
+    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length };
   }
 
   async trocarSenhaDaPessoa(e: {
@@ -322,70 +325,113 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (!r) return 'invalido';
     const [u] = await this.d.dbAuth.select({ email: usuario.email, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, r.usuarioId));
     if (!u?.ativo) return 'invalido';
-    const bloqueio = this.d.bloqueio;
-    /** Reserva atômica no contador (R15, mesma regra do #152): devolvida se a credencial conferir. */
-    const reservar = async (chave: string): Promise<boolean> => {
-      if (!bloqueio) return true;
-      const n = (await bloqueio.store.hit(chave, JANELA_DE_BLOQUEIO_MS).catch(() => ({ count: 0 }))).count;
-      if (n > TETO_DE_FALHAS) {
-        await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
-        return false;
-      }
-      return true;
-    };
-    const devolver = async (chave: string): Promise<void> => {
-      if (bloqueio) await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
-    };
+    // R5 do código do 3b-2: no USO, a pessoa ainda tem vínculo ativo na clínica do token e quem emitiu ainda é admin.
+    if (!(await this.vinculoEAdminSeguemAtivos(r.clinicaId, r.usuarioId, r.criadoPor))) return 'invalido';
 
+    const b = this.d.bloqueio;
+    const origemBruta = e.cabecalhos.get(CABECALHO_ORIGEM) ?? '';
+    const origem = /^[0-9a-f]{16}$/.test(origemBruta) ? origemBruta : undefined;
+    // R3: além da pessoa, o contador por origem (teto maior: a clínica sai por um IP).
+    const contadores =
+      r.tipo === 'senha'
+        ? [
+            { chave: b ? chaveDoBloqueio(b.chaveHmac, 'fator', r.usuarioId) : '', teto: TETO_DE_FALHAS },
+            ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'fator-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+          ]
+        : [
+            { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', u.email.trim().toLowerCase()) : '', teto: TETO_DE_FALHAS },
+            ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+          ];
+    const reserva = await this.reservarVarias(contadores);
+    if (reserva !== 'ok') return reserva;
+
+    let confere: boolean;
     if (r.tipo === 'senha') {
-      if (!e.codigo || !e.senhaNova || e.senhaNova.length < 12 || e.senhaNova.length > 128) return 'credencial_errada';
-      const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'fator', r.usuarioId) : '';
-      if (!(await reservar(chave))) return 'bloqueado';
-      if (bloqueio) {
-        const usado = await bloqueio.store.hit(chaveDoBloqueio(bloqueio.chaveHmac, 'totp-usado', `${r.usuarioId}:${e.codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
-        if (usado.count > 1) return 'credencial_errada';
-      }
-      const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
-      let confere = false;
-      if (f?.verificado && this.d.segredoDaInstancia) {
-        const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
-        confere = claro !== null && totpConfere(claro, e.codigo, agora.getTime());
-      }
-      if (!confere) return 'credencial_errada';
-      await devolver(chave);
-      if (this.d.conferirSenhaVazada) {
-        const vazou = await this.d.conferirSenhaVazada(e.senhaNova).catch(() => {
-          registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
-          return false;
-        });
-        if (vazou) return 'senha_vazada';
-      }
-      if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
-      await this.d.dbAuth.update(conta).set({ password: await gerarHashDeSenha(e.senhaNova) }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
-      await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
-      // R2 do código do 3b-2: evento próprio, antes da trilha.
-      registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
-      await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'senha');
-      return { tipo: 'senha', cookies: [] };
+      confere = !!e.codigo && !!e.senhaNova && e.senhaNova.length >= 12 && e.senhaNova.length <= 128 && (await this.totpDaPessoaConfere(r.usuarioId, e.codigo)) === true;
+    } else {
+      confere = !!e.senhaAtual && (await this.senhaConfere(r.usuarioId, e.senhaAtual));
     }
+    if (!confere) return 'credencial_errada';
+    await this.devolverVarias(contadores);
 
-    // Fator: exige a senha atual.
-    if (!e.senhaAtual) return 'credencial_errada';
-    const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'login', u.email.trim().toLowerCase()) : '';
-    if (!(await reservar(chave))) return 'bloqueado';
-    const [c] = await this.d.dbAuth.select({ hash: conta.password }).from(conta).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
-    const senhaConfere = c?.hash ? await conferirSenha({ hash: c.hash, password: e.senhaAtual }).catch(() => false) : (await gerarHashDeSenha(e.senhaAtual), false);
-    if (!senhaConfere) return 'credencial_errada';
-    await devolver(chave);
-    if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
-    // O fator antigo sai e o cadastro de um novo é obrigatório (a sessão aberta só serve a isso, 15 min, R8).
-    await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
-    await this.d.dbAuth.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
-    await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+    if (r.tipo === 'senha' && e.senhaNova && this.d.conferirSenhaVazada) {
+      const vazou = await this.d.conferirSenhaVazada(e.senhaNova).catch(() => {
+        registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+        return false;
+      });
+      if (vazou) return 'senha_vazada';
+    }
+    const hashNovo = r.tipo === 'senha' && e.senhaNova ? await gerarHashDeSenha(e.senhaNova) : null;
+
+    // R6: consumir o token, trocar a credencial e derrubar as sessões numa ÚNICA transação; evento antes da trilha.
+    const consumiu = await this.d.dbAuth.transaction(async (tx) => {
+      const usado = await tx
+        .update(recuperacao)
+        .set({ usadoEm: new Date() })
+        .where(and(eq(recuperacao.id, r.id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
+        .returning({ id: recuperacao.id });
+      if (usado.length === 0) return false;
+      if (hashNovo) {
+        await tx.update(conta).set({ password: hashNovo }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+      } else {
+        // O fator antigo sai; o cadastro de um novo é obrigatório (a sessão aberta só serve a isso, 15 min, R8).
+        await tx.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+        await tx.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
+      }
+      await tx.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+      return true;
+    });
+    if (!consumiu) return 'invalido';
     registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
-    await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'fator');
-    const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual, cabecalhos: e.cabecalhos });
+    await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, r.tipo);
+    if (r.tipo === 'senha') return { tipo: 'senha', cookies: [] };
+    const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual ?? '', cabecalhos: e.cabecalhos });
     return { tipo: 'fator', cookies };
+  }
+
+  /** R5 do código do 3b-2: pessoa com vínculo ativo na clínica do token e quem emitiu ainda admin ativo nela. */
+  private async vinculoEAdminSeguemAtivos(clinicaId: string, userId: string, criadoPor: string): Promise<boolean> {
+    const linhas = await withTenant(
+      this.d.dbClinica,
+      clinicaId as TenantId,
+      (tx) =>
+        tx
+          .select({ userId: clinicMembers.userId, role: clinicMembers.role })
+          .from(clinicMembers)
+          .where(and(eq(clinicMembers.tenantId, clinicaId), isNull(clinicMembers.revokedAt), inArray(clinicMembers.userId, [userId, criadoPor]))),
+      userId,
+    );
+    return linhas.some((l) => l.userId === userId) && linhas.some((l) => l.userId === criadoPor && l.role === 'admin');
+  }
+
+  /**
+   * Reserva atômica em vários contadores (R15). R4 do código do 3b-2: na recuperação, o store fora FALHA FECHADO
+   * (indisponível), com o alarme do rate limit; barrada, devolve as reservas de todos (R13 do #152).
+   */
+  private async reservarVarias(contadores: { chave: string; teto: number }[]): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
+    const b = this.d.bloqueio;
+    if (!b) return 'ok';
+    const feitas: string[] = [];
+    try {
+      for (const c of contadores) {
+        const n = (await b.store.hit(c.chave, JANELA_DE_BLOQUEIO_MS)).count;
+        feitas.push(c.chave);
+        if (n > c.teto) {
+          for (const f of feitas) await b.store.release(f, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+          return 'bloqueado';
+        }
+      }
+      return 'ok';
+    } catch {
+      registrarEventoDeSeguranca('RATE_LIMIT_FAIL_OPEN', { motivo: 'bloqueio_do_fator' });
+      for (const f of feitas) await b.store.release(f, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+      return 'indisponivel';
+    }
+  }
+
+  private async devolverVarias(contadores: { chave: string }[]): Promise<void> {
+    const b = this.d.bloqueio;
+    if (b) for (const c of contadores) await b.store.release(c.chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
   }
 
   /** Consome o token de forma atômica (requisições em paralelo: só uma passa). */

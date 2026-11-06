@@ -115,7 +115,7 @@ export interface ProvedorDeCredencial {
 }
 
 export type TipoDeRecuperacao = 'senha' | 'fator';
-export type ResultadoDaRecuperacao = { readonly tipo: TipoDeRecuperacao; readonly cookies: string[] } | 'invalido' | 'credencial_errada' | 'senha_vazada' | 'bloqueado';
+export type ResultadoDaRecuperacao = { readonly tipo: TipoDeRecuperacao; readonly cookies: string[] } | 'invalido' | 'credencial_errada' | 'senha_vazada' | 'bloqueado' | 'indisponivel';
 
 /** Recuperação pelo admin (R17; R1 do desenho do PR 3): nenhum token restaura os dois fatores. */
 export interface ProvedorDeRecuperacao {
