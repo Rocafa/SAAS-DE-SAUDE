@@ -593,23 +593,58 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Senha e código TOTP de uma conta existente, SEM abrir sessão (aceite de convite, R1 e R2 do desenho do PR 3; R15:
    * pelos bloqueios de login e de fator). Funciona também para a conta desligada que está sendo recontratada.
    */
-  async conferirCredenciais(e: { email: string; senha: string; codigo: string }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado'> {
+  async conferirCredenciais(e: {
+    email: string;
+    senha: string;
+    codigo: string;
+    cabecalhos?: Headers;
+  }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado' | 'indisponivel'> {
     const email = e.email.trim().toLowerCase();
     const [u] = await this.d.dbAuth.select({ id: usuario.id }).from(usuario).where(sql`lower(${usuario.email}) = ${email}`);
     const b = this.d.bloqueio;
-    const chaveLogin = b ? chaveDoBloqueio(b.chaveHmac, 'login', email) : '';
-    if (!(await this.reservarTentativa(chaveLogin))) return 'bloqueado';
-    if (!u || !(await this.senhaConfere(u.id, e.senha))) return 'falhou';
-    await this.devolverTentativa(chaveLogin);
-    const chaveFator = b ? chaveDoBloqueio(b.chaveHmac, 'fator', u.id) : '';
-    if (!(await this.reservarTentativa(chaveFator))) return 'bloqueado';
+    const origemBruta = e.cabecalhos?.get(CABECALHO_ORIGEM) ?? '';
+    const origem = /^[0-9a-f]{16}$/.test(origemBruta) ? origemBruta : undefined;
+    const idsDoEvento = { ...(u ? { userId: u.id } : {}), ...(origem ? { origem } : {}) };
+    // R2 do código do 3b-3: os mesmos contadores do login (e-mail e origem), com falha fechada e eventos.
+    const doLogin = [
+      { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', email) : '', teto: TETO_DE_FALHAS },
+      ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+    ];
+    const r1 = await this.reservarVarias(doLogin);
+    if (r1 !== 'ok') {
+      if (r1 === 'bloqueado') registrarEventoDeSeguranca('LOGIN_BLOQUEADO', { motivo: 'bloqueio_de_login', ...(origem ? { origem } : {}) });
+      return r1;
+    }
+    // R6 do código do 3b-3: e-mail inexistente gasta o mesmo hash (o tempo não revela se a conta existe).
+    if (!u) {
+      await gerarHashDeSenha(e.senha);
+      registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', ...(origem ? { origem } : {}) });
+      return 'falhou';
+    }
+    if (!(await this.senhaConfere(u.id, e.senha))) {
+      registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', ...(origem ? { origem } : {}) });
+      return 'falhou';
+    }
+    await this.devolverVarias(doLogin);
+    const doFator = [
+      { chave: b ? chaveDoBloqueio(b.chaveHmac, 'fator', u.id) : '', teto: TETO_DE_FALHAS },
+      ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'fator-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+    ];
+    const r2 = await this.reservarVarias(doFator);
+    if (r2 !== 'ok') {
+      if (r2 === 'bloqueado') registrarEventoDeSeguranca('MFA_BLOQUEADO', { motivo: 'bloqueio_do_fator', ...idsDoEvento });
+      return r2;
+    }
     const totp = await this.totpDaPessoaConfere(u.id, e.codigo);
     if (totp === 'sem_fator') {
-      await this.devolverTentativa(chaveFator);
+      await this.devolverVarias(doFator);
       return 'sem_fator';
     }
-    if (!totp) return 'falhou';
-    await this.devolverTentativa(chaveFator);
+    if (!totp) {
+      registrarEventoDeSeguranca('MFA_FALHOU', { motivo: 'codigo_errado', ...idsDoEvento });
+      return 'falhou';
+    }
+    await this.devolverVarias(doFator);
     return { userId: u.id };
   }
 
@@ -634,6 +669,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * tabela da clínica); e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; a conta fica inativa.
    */
   async anonimizarConta(userId: string): Promise<void> {
+    const clinicasAntes = await this.clinicasDoUsuario(userId);
     await this.d.dbAuth.transaction(async (tx) => {
       await tx
         .update(usuario)
@@ -644,7 +680,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       await tx.delete(sessao).where(eq(sessao.userId, userId));
       await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, userId), isNull(recuperacao.usadoEm)));
     });
-    registrarEventoDeSeguranca('LOGOUT', { motivo: 'conta_inativa', userId });
+    // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
+    registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
+    for (const tenantId of clinicasAntes) {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } }),
+        userId,
+      );
+    }
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {

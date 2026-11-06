@@ -9,7 +9,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { conta, doisFatores, sessao, usuario } from '../src/db/identidade';
+import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
@@ -900,6 +900,28 @@ describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR
     expect((await postar('/two-factor/enable', sessaoDeCadastro, { password: SENHA })).r.status).toBe(200);
   });
 
+  it('R8 do código do 3b-2: token vencido não vale; dois usos em paralelo, só um passa; 5 códigos errados bloqueiam até o certo', async () => {
+    const m = await membroComFator();
+    const vencido = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'fator', 'perdeu_o_aparelho');
+    await dbAuth.db
+      .update(recuperacao)
+      .set({ criadoEm: new Date(Date.now() - 20 * 60_000), expiraEm: new Date(Date.now() - 5 * 60_000) })
+      .where(eq(recuperacao.usuarioId, m.userId));
+    await expect(credenciais().usarRecuperacao({ token: vencido.token, senhaAtual: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+    const { token } = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'fator', 'perdeu_o_aparelho');
+    const usos = await Promise.allSettled([0, 1].map(() => credenciais().usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() })));
+    expect(usos.filter((u) => u.status === 'fulfilled')).toHaveLength(1);
+    // Bloqueio: outra pessoa, recuperação de senha, 5 códigos errados e então o certo também recusado.
+    const n = await membroComFator();
+    const r = await credenciais().emitirRecuperacao(n.ctx, n.userId, 'senha', 'esqueceu_a_senha');
+    const segredo = segredos.get(n.userId)?.segredo ?? Buffer.alloc(0);
+    for (let k = 0; k < 5; k++) {
+      await expect(credenciais().usarRecuperacao({ token: r.token, codigo: codigoErrado(segredo, 400 + k), senhaNova: SENHA_NOVA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    }
+    await expect(credenciais().usarRecuperacao({ token: r.token, codigo: proximoCodigo(n.userId), senhaNova: SENHA_NOVA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    expect((await entrar(n.email)).status).toBe(200);
+  });
+
   it('R1 do código do 3b-2: o uso da recuperação deixa linha (sem detalhe) também nas OUTRAS clínicas da pessoa', async () => {
     const m = await membroComFator();
     const outra = await api.novaClinica();
@@ -969,6 +991,9 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     await expect(api.membro(tenantId, { userId: p.userId }, 'financeiro')).rejects.toThrow();
     const [depois] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(eq(usuario.id, p.userId));
     expect(depois).toEqual({ ativo: false, motivo: 'anonimizada' });
+    // R3 do código do 3b-3: prova do atendimento na trilha da clínica.
+    const prova = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where actor_id = ${p.userId} and metadata->>'op' = 'account_anonymized'`));
+    expect([...prova][0]?.n).toBe(1);
   });
 
   it('R6 do #152: o fator trancado por pessoa identificada vira aviso aos admins da clínica dela (1 por dia)', async () => {

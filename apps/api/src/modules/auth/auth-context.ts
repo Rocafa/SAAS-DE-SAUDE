@@ -94,7 +94,7 @@ export interface ProvedorDeConvite {
    * Login COMPLETO de conta existente (senha e código TOTP) para o aceite do convite (R1 e R2 do desenho do PR 3; R15:
    * passa pelo bloqueio de login e de fator). Sem fator cadastrado, recusa e apaga a sessão aberta.
    */
-  conferirCredenciais(e: { email: string; senha: string; codigo: string }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado'>;
+  conferirCredenciais(e: { email: string; senha: string; codigo: string; cabecalhos?: Headers }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado' | 'indisponivel'>;
   /** Depois do commit da clínica: nome e origem da conta abandonada que foi reaproveitada. */
   completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void>;
   /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
