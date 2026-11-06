@@ -261,7 +261,7 @@ export class AvisosService {
 }
 
 /** Regras de anomalia que viram aviso (as mesmas do CHECK da 0063). */
-export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas' | 'limite_por_usuario' | 'vinculo_autoagendado' | 'vinculo_cruzado' | 'mfa_recusas_por_usuario';
+export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas' | 'limite_por_usuario' | 'vinculo_autoagendado' | 'vinculo_cruzado' | 'mfa_recusas_por_usuario' | 'fator_bloqueado';
 
 /**
  * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
