@@ -969,13 +969,21 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
 
   it('R6 do #152: o fator trancado por pessoa identificada vira aviso aos admins da clínica dela (1 por dia)', async () => {
     const tenantId = await api.novaClinica();
-    await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
     const p = await novaPessoa(tenantId, ['recepcao']);
     const s = await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
     const segredo = segredos.get(p.userId)?.segredo ?? Buffer.alloc(0);
     for (let k = 0; k < 5; k++) await postar('/two-factor/verify-totp', s, { code: codigoErrado(segredo, 300 + k) }, '7a1b2c3d4e5f6071');
-    const avisos = await withTenant(api.db.db, tenantId, (tx) =>
-      tx.execute<{ n: number }>(sql`select count(*)::int as n from clinical_notices where kind = 'alerta_anomalia' and anomaly_rule = 'fator_bloqueado'`),
+    const alertas = await withTenant(api.db.db, tenantId, (tx) =>
+      tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where action = 'anomaly_alert' and actor_id = ${p.userId} and metadata->>'rule' = 'fator_bloqueado'`),
+    );
+    expect([...alertas][0]?.n).toBe(1);
+    // A caixa de avisos tem RLS por destinatário: lida como o admin avisado.
+    const avisos = await withTenant(
+      api.db.db,
+      tenantId,
+      (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from clinical_notices where kind = 'alerta_anomalia' and anomaly_rule = 'fator_bloqueado'`),
+      adm.userId,
     );
     expect([...avisos][0]?.n).toBeGreaterThanOrEqual(1);
   });
