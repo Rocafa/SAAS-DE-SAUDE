@@ -34,7 +34,9 @@ export const AUDITADAS: readonly string[] = [
   'POST /clinica/membros',
   'POST /clinica/convites',
   'POST /clinica/convites/:id/revogar',
+  'POST /clinica/membros/:usuarioId/desbloqueio',
   'POST /convites/aceitar',
+  'POST /sessao/senha',
   'POST /sessao/clinica',
   'POST /sessao/encerrar-todas',
   'POST /clinica/portal/convites',
@@ -266,6 +268,7 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'PATCH /notas-privadas/:id',
   'POST /clinica/convites',
   'POST /clinica/convites/:id/revogar',
+  'POST /clinica/membros/:usuarioId/desbloqueio',
   'POST /clinica/membros',
   'POST /clinica/portal/convites',
   'POST /clinica/portal/solicitacoes/:id/situacao',
@@ -294,4 +297,5 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'PUT /financeiro/profissionais/:id/perfil-fiscal',
   'PUT /prontuario/configuracao',
   'PUT /whatsapp/configuracao',
+  'POST /sessao/senha',
 ];

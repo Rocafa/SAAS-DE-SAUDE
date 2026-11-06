@@ -22,6 +22,8 @@ export const EVENTOS_DE_SEGURANCA = {
   MFA_CADASTRADO: { severidade: 'aviso', alarme: 'volume', descricao: 'cadastro do TOTP concluído (primeira verificação do código)' },
   MFA_VERIFICADO: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP aceito (login em duas etapas ou reverificação)' },
   MFA_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP ou senha do cadastro recusados' },
+  SENHA_TROCADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha trocada pela própria pessoa; as outras sessões caem (D4 PR 3b-2)' },
+  BLOQUEIO_ZERADO: { severidade: 'alto', alarme: 'volume', descricao: 'admin zerou os contadores de bloqueio de uma pessoa da clínica (D4 PR 3b-2)' },
   SENHA_VAZADA_RECUSADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha nova recusada por aparecer na base de senhas vazadas (k-anonimato)' },
   CONFERENCIA_DE_SENHA_INDISPONIVEL: { severidade: 'alto', alarme: 'volume', descricao: 'base de senhas vazadas fora do ar; a troca seguiu sem a conferência' },
   MFA_BLOQUEADO: { severidade: 'alto', alarme: 'imediato', descricao: 'segundo fator bloqueado por 5 falhas em 15 min' },
@@ -91,6 +93,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   'aguardando_fator',
   'login_em_duas_etapas_sem_clinica',
   'senha_vazada',
+  'pela_pessoa',
+  'desbloqueio_pelo_admin',
   'conferencia_indisponivel',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [

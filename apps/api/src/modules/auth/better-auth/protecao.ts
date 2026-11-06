@@ -16,7 +16,7 @@
  *
  * Os contadores ficam no store do rate limit (Redis em produção), com chaves em HMAC: nenhum e-mail ou id em claro.
  */
-import { createHmac } from 'node:crypto';
+import { chaveDoBloqueio, type TipoDeContador } from './chaves-do-bloqueio';
 import { APIError, createAuthMiddleware, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
@@ -80,8 +80,7 @@ type Situacao = { readonly sessaoId?: string; readonly userId?: string; readonly
 const HEX16 = /^[0-9a-f]{16}$/;
 
 export function criarProtecao(d: DependenciasDaProtecao) {
-  const chave = (tipo: string, valor: string): string =>
-    `bl:v1:${tipo}:${createHmac('sha256', d.chaveHmac).update(`${tipo}:${valor}`).digest('hex').slice(0, 32)}`;
+  const chave = (tipo: TipoDeContador, valor: string): string => chaveDoBloqueio(d.chaveHmac, tipo, valor);
 
   /** Situação da sessão vista no `before`, para o `after` da mesma requisição (cadastro x reverificação). */
   const situacoes = new WeakMap<object, Situacao>();

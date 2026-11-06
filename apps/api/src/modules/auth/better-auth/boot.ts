@@ -26,6 +26,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
   // O provedor nasce depois da instância; os ganchos do fator só rodam em requisição, quando ele já existe.
   const ref: { provedor?: BetterAuthProvider } = {};
   const conferirSenhaVazada = conferidorPorKAnonimato();
+  const chaveHmac = loadRateLimitHashKey(env);
   const doProvedor = (): BetterAuthProvider => {
     if (!ref.provedor) throw new Error('provedor do Better Auth ainda não montado');
     return ref.provedor;
@@ -36,7 +37,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
     baseURL: obrigatoria(env, 'API_BASE_URL'),
     origensConfiaveis,
     producao,
-    chaveHmac: loadRateLimitHashKey(env),
+    chaveHmac,
     store,
     conferirSenhaVazada,
     fator: {
@@ -50,6 +51,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
     dbAuth: dbAuth.db,
     dbClinica: dbClinica.db,
     conferirSenhaVazada,
+    bloqueio: { store, chaveHmac },
     cookieDeEncerramento: `${nomeDoCookie(producao)}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict${producao ? '; Secure' : ''}`,
   });
   ref.provedor = provider;

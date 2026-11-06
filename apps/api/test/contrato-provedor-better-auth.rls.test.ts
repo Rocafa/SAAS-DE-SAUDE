@@ -15,6 +15,7 @@ import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, t
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
 import { ConflitoError, NaoEncontradoError } from '../src/common/erros-dominio';
 import { ConvitesService, TETO_DIARIO_DE_CONVITES } from '../src/modules/auth/convites';
+import { CredenciaisService } from '../src/modules/auth/credenciais';
 import { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 import { codigoErrado, codigoTotp, segredoDoUri } from './apoio-totp';
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
@@ -27,11 +28,16 @@ const SENHA = 'Senha-Ficticia-de-Teste-1';
 const SENHA_NOVA = 'Senha-Ficticia-de-Teste-2';
 /** Dublê da base de senhas vazadas (o teste não sai para a internet): só esta senha "vazou". */
 const SENHA_VAZADA = 'Senha-Vazada-Ficticia-1';
+const SENHA_ERRADA_TROCA = 'Senha-Errada-Ficticia-8';
 const senhaVazadaFicticia = (s: string): Promise<boolean> => Promise.resolve(s === SENHA_VAZADA);
 let api: ApiDeTeste;
 let dbAuth: DatabaseHandle;
 let auth: Autenticacao;
 let provedor: BetterAuthProvider;
+
+/** Store e segredo do bloqueio da bancada: os mesmos na instância e no provedor (o desbloqueio zera as mesmas chaves). */
+const STORE_DA_BANCADA = new MemoryRateLimitStore();
+const CHAVE_HMAC_DA_BANCADA = randomBytes(32);
 
 beforeAll(async () => {
   api = await subirApi();
@@ -44,8 +50,8 @@ beforeAll(async () => {
     baseURL: 'http://localhost:3000',
     origensConfiaveis: ['http://localhost:3000'],
     producao: false,
-    chaveHmac: randomBytes(32),
-    store: new MemoryRateLimitStore(),
+    chaveHmac: CHAVE_HMAC_DA_BANCADA,
+    store: STORE_DA_BANCADA,
     conferirSenhaVazada: senhaVazadaFicticia,
     fator: {
       aoVerificarMfa: (e) => provedor.aposMfaVerificado(e.sessaoId, e.userId, e.motivo),
@@ -53,7 +59,13 @@ beforeAll(async () => {
       podeCadastrarFator: (id) => provedor.cadastroLiberado(id),
     },
   });
-  provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth.db, dbClinica: api.db.db, conferirSenhaVazada: senhaVazadaFicticia });
+  provedor = new BetterAuthProvider({
+    auth,
+    dbAuth: dbAuth.db,
+    dbClinica: api.db.db,
+    conferirSenhaVazada: senhaVazadaFicticia,
+    bloqueio: { store: STORE_DA_BANCADA, chaveHmac: CHAVE_HMAC_DA_BANCADA },
+  });
 }, 120_000);
 
 afterAll(async () => {
@@ -780,6 +792,44 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
     const { ctx } = await clinicaComAdmin();
     for (let i = 0; i < TETO_DIARIO_DE_CONVITES; i++) await convites().criar(ctx, novoEmail(), 'recepcao');
     await expect(convites().criar(ctx, novoEmail(), 'recepcao')).rejects.toBeInstanceOf(ConflitoError);
+  });
+});
+
+describe('PR 3b-2: troca de senha e desbloqueio pelo admin (R16; R4 do #152)', () => {
+  const credenciais = (): CredenciaisService => new CredenciaisService(new TenantDatabase(api.db), provedor);
+
+  it('troca de senha: senha atual errada recusada; vazada recusada; a nova vale, a antiga não, e as outras sessões caem; trilha nas clínicas', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    const outra = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    const base = { headers: c as Record<string, string>, userId: p.userId };
+    await expect(credenciais().trocarSenha({ ...base, atual: SENHA_ERRADA_TROCA, nova: SENHA_NOVA })).rejects.toBeInstanceOf(ConflitoError);
+    await expect(credenciais().trocarSenha({ ...base, atual: SENHA, nova: SENHA_VAZADA })).rejects.toBeInstanceOf(ConflitoError);
+    const cookies = await credenciais().trocarSenha({ ...base, atual: SENHA, nova: SENHA_NOVA });
+    expect(cookies.length).toBeGreaterThan(0);
+    expect(await provedor.sessaoDePessoa({ headers: outra })).toBeNull();
+    expect((await entrar(p.email)).status).not.toBe(200);
+    expect((await entrar(p.email, SENHA_NOVA)).status).toBe(200);
+    const linhas = await withTenant(api.db.db, tenantId, (tx) =>
+      tx.execute<{ op: string }>(sql`select metadata->>'op' as op from audit_log where scope = 'session' and actor_id = ${p.userId}`),
+    );
+    expect(linhas.map((l) => l.op)).toContain('password_changed');
+  });
+
+  it('desbloqueio: o admin zera os contadores de quem é da clínica dele (a senha certa volta a entrar); de outra clínica, 404', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const origem = '5a1b2c3d4e5f6071';
+    for (let i = 0; i < 5; i++) await postar('/sign-in/email', {}, { email: p.email, password: SENHA_ERRADA_TROCA }, origem);
+    expect((await postar('/sign-in/email', {}, { email: p.email, password: SENHA }, '6a1b2c3d4e5f6071')).r.status).toBe(401);
+    await credenciais().desbloquear(ctx, p.userId);
+    expect((await postar('/sign-in/email', {}, { email: p.email, password: SENHA }, '6a1b2c3d4e5f6071')).r.status).toBe(200);
+    const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
+    await expect(credenciais().desbloquear(ctx, estranha.userId)).rejects.toBeInstanceOf(NaoEncontradoError);
   });
 });
 

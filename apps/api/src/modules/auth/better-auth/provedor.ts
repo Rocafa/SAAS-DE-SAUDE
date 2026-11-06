@@ -17,11 +17,14 @@ import { conta, doisFatores, sessao, usuario, verificacao, vinculo } from '../..
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
-import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
+import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
 import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
+import type { RateLimitStore } from '../../../security/rate-limit-store';
+import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { JANELA_DE_BLOQUEIO_MS } from './protecao';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
 export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
@@ -48,12 +51,14 @@ export interface DependenciasDoProvedor {
   readonly cookieDeEncerramento?: string;
   /** Conferência de senha vazada (R15 e R5 do #152): chamada EXPLICITAMENTE nos caminhos nossos que definem senha. */
   readonly conferirSenhaVazada?: ConferirSenhaVazada;
+  /** Store e segredo dos contadores de bloqueio (para o desbloqueio pelo admin zerar as MESMAS chaves). */
+  readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
 }
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -226,6 +231,47 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
       .returning({ id: doisFatores.id });
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
+  }
+
+  async trocarSenhaDaPessoa(e: {
+    headers: RequisicaoParaSessao['headers'];
+    userId: string;
+    atual: string;
+    nova: string;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'> {
+    let r: Response;
+    try {
+      r = await this.d.auth.api.changePassword({
+        body: { currentPassword: e.atual, newPassword: e.nova, revokeOtherSessions: true },
+        headers: fromNodeHeaders(e.headers),
+        asResponse: true,
+      });
+    } catch (err) {
+      // O gancho da senha vazada lança antes do endpoint (R15).
+      if ((err as { body?: { code?: string } }).body?.code === 'PASSWORD_COMPROMISED') return 'senha_vazada';
+      throw err;
+    }
+    if (r.status !== 200) {
+      const corpo = (await r.json().catch(() => ({}))) as { code?: string };
+      return corpo.code === 'PASSWORD_COMPROMISED' ? 'senha_vazada' : 'senha_atual_errada';
+    }
+    registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'pela_pessoa', userId: e.userId });
+    await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed');
+    return r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+  }
+
+  async desbloquear(userId: string): Promise<void> {
+    const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, userId));
+    if (this.d.bloqueio && u) {
+      const { store, chaveHmac } = this.d.bloqueio;
+      for (const chave of [chaveDoBloqueio(chaveHmac, 'login', u.email.trim().toLowerCase()), chaveDoBloqueio(chaveHmac, 'fator', userId)]) {
+        const n = await store.peek(chave, JANELA_DE_BLOQUEIO_MS);
+        for (let i = 0; i < n; i++) await store.release(chave, JANELA_DE_BLOQUEIO_MS);
+      }
+    }
+    // A trava da própria biblioteca no login em duas etapas.
+    await this.d.dbAuth.update(doisFatores).set({ failedVerificationCount: 0, lockedUntil: null }).where(eq(doisFatores.userId, userId));
+    registrarEventoDeSeguranca('BLOQUEIO_ZERADO', { motivo: 'desbloqueio_pelo_admin', userId });
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */

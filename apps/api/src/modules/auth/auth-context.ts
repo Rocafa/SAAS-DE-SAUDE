@@ -94,6 +94,23 @@ export interface ProvedorDeConvite {
   abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
 }
 
+/** Parte OPCIONAL da porta para credenciais (PR 3b-2): só o provedor real. */
+export interface ProvedorDeCredencial {
+  /** Troca de senha pela própria pessoa (R16): apaga as outras sessões; devolve o Set-Cookie da sessão nova. */
+  trocarSenhaDaPessoa(e: {
+    headers: RequisicaoParaSessao['headers'];
+    userId: string;
+    atual: string;
+    nova: string;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'>;
+  /** Desbloqueio pelo admin (R4 do #152): só zera os contadores (e-mail e fator), sem trocar senha nem fator. */
+  desbloquear(userId: string): Promise<void>;
+}
+
+export function ehProvedorDeCredencial(p: AuthProvider): p is AuthProvider & ProvedorDeCredencial {
+  return typeof (p as Partial<ProvedorDeCredencial>).trocarSenhaDaPessoa === 'function';
+}
+
 export function ehProvedorDeConvite(p: AuthProvider): p is AuthProvider & ProvedorDeConvite {
   return typeof (p as Partial<ProvedorDeConvite>).criarContaDoConvite === 'function';
 }
