@@ -22,6 +22,8 @@ export const EVENTOS_DE_SEGURANCA = {
   MFA_CADASTRADO: { severidade: 'aviso', alarme: 'volume', descricao: 'cadastro do TOTP concluído (primeira verificação do código)' },
   MFA_VERIFICADO: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP aceito (login em duas etapas ou reverificação)' },
   MFA_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP ou senha do cadastro recusados' },
+  RECUPERACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'admin emitiu token de recuperação de senha ou de fator (D4 PR 3b-2)' },
+  RECUPERACAO_USADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de recuperação usado: senha trocada ou fator removido (D4 PR 3b-2)' },
   SENHA_TROCADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha trocada pela própria pessoa; as outras sessões caem (D4 PR 3b-2)' },
   BLOQUEIO_ZERADO: { severidade: 'alto', alarme: 'volume', descricao: 'admin zerou os contadores de bloqueio de uma pessoa da clínica (D4 PR 3b-2)' },
   SENHA_VAZADA_RECUSADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha nova recusada por aparecer na base de senhas vazadas (k-anonimato)' },

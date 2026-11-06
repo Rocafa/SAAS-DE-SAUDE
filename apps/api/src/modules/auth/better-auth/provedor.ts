@@ -363,8 +363,9 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
       await this.d.dbAuth.update(conta).set({ password: await gerarHashDeSenha(e.senhaNova) }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
       await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+      // R2 do código do 3b-2: evento próprio, antes da trilha.
+      registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
       await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'senha');
-      registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
       return { tipo: 'senha', cookies: [] };
     }
 
@@ -381,8 +382,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
     await this.d.dbAuth.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+    registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
     await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'fator');
-    registrarEventoDeSeguranca('MFA_CADASTRADO', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
     const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual, cabecalhos: e.cabecalhos });
     return { tipo: 'fator', cookies };
   }
@@ -397,7 +398,20 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     return r.length > 0;
   }
 
+  /**
+   * Trilha da recuperação: com o tipo na clínica que emitiu; nas DEMAIS clínicas da pessoa, só que a credencial mudou
+   * (R1 do código do 3b-2; R2 da reconferência da 3b: a credencial é da pessoa, sem detalhe da outra clínica).
+   */
   private async trilhaDaRecuperacao(clinicaId: string, userId: string, tipo: TipoDeRecuperacao): Promise<void> {
+    for (const outra of (await this.clinicasDoUsuario(userId)).filter((t) => t !== clinicaId)) {
+      await withTenant(
+        this.d.dbClinica,
+        outra as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: outra as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'credential_changed' } }),
+        userId,
+      );
+    }
     await withTenant(
       this.d.dbClinica,
       clinicaId as TenantId,

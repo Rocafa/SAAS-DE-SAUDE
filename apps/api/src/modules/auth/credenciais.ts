@@ -27,7 +27,7 @@ import {
   type ProvedorDeRecuperacao,
   type TipoDeRecuperacao,
 } from './auth-context';
-import { origemDaRequisicao } from '../../security/log-de-seguranca';
+import { origemDaRequisicao, registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { CABECALHO_ORIGEM } from './better-auth/protecao';
 import { exigirPerfilNoBanco } from './membros';
 import { ExigeMfaRecente } from './mfa';
@@ -79,6 +79,7 @@ export class CredenciaisService {
           metadata: { op: 'credential_recovery_issued', user_id: usuarioId, kind: tipo, reason: motivo },
         });
         emitido = await recuperacoes.emitirRecuperacao({ userId: usuarioId, tipo, clinicaId: ctx.tenantId, criadoPor: ctx.userId });
+        registrarEventoDeSeguranca('RECUPERACAO_EMITIDA', { motivo: 'recuperacao_pelo_admin', tenantId: ctx.tenantId, userId: usuarioId });
       });
     } catch (err) {
       if (emitido) await recuperacoes.invalidarRecuperacao(emitido.token);
