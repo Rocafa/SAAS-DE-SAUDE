@@ -90,8 +90,44 @@ export interface ProvedorDeConvite {
   idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'>;
   /** Desfaz a conta de um aceite que não fechou: inativa e sem senha (o app_auth não apaga identidade, R18). */
   desfazerContaDoConvite(userId: string): Promise<void>;
+  /**
+   * Login COMPLETO de conta existente (senha e código TOTP) para o aceite do convite (R1 e R2 do desenho do PR 3; R15:
+   * passa pelo bloqueio de login e de fator). Sem fator cadastrado, recusa e apaga a sessão aberta.
+   */
+  loginCompleto(e: { email: string; senha: string; codigo: string; cabecalhos: Headers }): Promise<{ userId: string; cookies: string[] } | 'falhou' | 'sem_fator'>;
   /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
   abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
+}
+
+/** Parte OPCIONAL da porta para credenciais (PR 3b-2): só o provedor real. */
+export interface ProvedorDeCredencial {
+  /** Troca de senha pela própria pessoa (R16): apaga as outras sessões; devolve o Set-Cookie da sessão nova. */
+  trocarSenhaDaPessoa(e: {
+    headers: RequisicaoParaSessao['headers'];
+    userId: string;
+    atual: string;
+    nova: string;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'>;
+  /** Desbloqueio pelo admin (R4 do #152): só zera os contadores (e-mail e fator), sem trocar senha nem fator. */
+  desbloquear(userId: string): Promise<void>;
+}
+
+export type TipoDeRecuperacao = 'senha' | 'fator';
+export type ResultadoDaRecuperacao = { readonly tipo: TipoDeRecuperacao; readonly cookies: string[] } | 'invalido' | 'credencial_errada' | 'senha_vazada' | 'bloqueado';
+
+/** Recuperação pelo admin (R17; R1 do desenho do PR 3): nenhum token restaura os dois fatores. */
+export interface ProvedorDeRecuperacao {
+  emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }>;
+  invalidarRecuperacao(token: string): Promise<void>;
+  usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao>;
+}
+
+export function ehProvedorDeRecuperacao(p: AuthProvider): p is AuthProvider & ProvedorDeRecuperacao {
+  return typeof (p as Partial<ProvedorDeRecuperacao>).usarRecuperacao === 'function';
+}
+
+export function ehProvedorDeCredencial(p: AuthProvider): p is AuthProvider & ProvedorDeCredencial {
+  return typeof (p as Partial<ProvedorDeCredencial>).trocarSenhaDaPessoa === 'function';
 }
 
 export function ehProvedorDeConvite(p: AuthProvider): p is AuthProvider & ProvedorDeConvite {

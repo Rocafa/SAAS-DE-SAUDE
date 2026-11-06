@@ -6,22 +6,30 @@
  * (clínica ativa, MFA e impressão dos perfis) → perfis SÓ de `clinic_members` (R6) → `mfaEm` só vale se os perfis não
  * mudaram desde o MFA (`perfis_no_mfa`, R13). A clínica nunca vem do cliente (regra 1).
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
-import { conta, doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
-import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
+import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
+import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
 import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
+import type { RateLimitStore } from '../../../security/rate-limit-store';
+import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { symmetricDecrypt } from 'better-auth/crypto';
+import { totpConfere } from './totp';
+import { conferirSenha } from './senha';
+import { JANELA_DE_REUSO_MS, TETO_DE_FALHAS } from './protecao';
+import { JANELA_DE_BLOQUEIO_MS } from './protecao';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
 export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
@@ -48,12 +56,16 @@ export interface DependenciasDoProvedor {
   readonly cookieDeEncerramento?: string;
   /** Conferência de senha vazada (R15 e R5 do #152): chamada EXPLICITAMENTE nos caminhos nossos que definem senha. */
   readonly conferirSenhaVazada?: ConferirSenhaVazada;
+  /** Store e segredo dos contadores de bloqueio (para o desbloqueio pelo admin zerar as MESMAS chaves). */
+  readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
+  /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
+  readonly segredoDaInstancia?: string;
 }
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -228,6 +240,190 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
   }
 
+  async trocarSenhaDaPessoa(e: {
+    headers: RequisicaoParaSessao['headers'];
+    userId: string;
+    atual: string;
+    nova: string;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'> {
+    let r: Response;
+    try {
+      r = await this.d.auth.api.changePassword({
+        body: { currentPassword: e.atual, newPassword: e.nova, revokeOtherSessions: true },
+        headers: fromNodeHeaders(e.headers),
+        asResponse: true,
+      });
+    } catch (err) {
+      // O gancho da senha vazada lança antes do endpoint (R15).
+      if ((err as { body?: { code?: string } }).body?.code === 'PASSWORD_COMPROMISED') return 'senha_vazada';
+      throw err;
+    }
+    if (r.status !== 200) {
+      const corpo = (await r.json().catch(() => ({}))) as { code?: string };
+      return corpo.code === 'PASSWORD_COMPROMISED' ? 'senha_vazada' : 'senha_atual_errada';
+    }
+    registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'pela_pessoa', userId: e.userId });
+    await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed');
+    return r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+  }
+
+  async desbloquear(userId: string): Promise<void> {
+    const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, userId));
+    if (this.d.bloqueio && u) {
+      const { store, chaveHmac } = this.d.bloqueio;
+      for (const chave of [chaveDoBloqueio(chaveHmac, 'login', u.email.trim().toLowerCase()), chaveDoBloqueio(chaveHmac, 'fator', userId)]) {
+        const n = await store.peek(chave, JANELA_DE_BLOQUEIO_MS);
+        for (let i = 0; i < n; i++) await store.release(chave, JANELA_DE_BLOQUEIO_MS);
+      }
+    }
+    // A trava da própria biblioteca no login em duas etapas.
+    await this.d.dbAuth.update(doisFatores).set({ failedVerificationCount: 0, lockedUntil: null }).where(eq(doisFatores.userId, userId));
+    registrarEventoDeSeguranca('BLOQUEIO_ZERADO', { motivo: 'desbloqueio_pelo_admin', userId });
+  }
+
+  async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }> {
+    const token = randomBytes(32).toString('base64url');
+    const [r] = await this.d.dbAuth
+      .insert(recuperacao)
+      .values({
+        id: randomUUID(),
+        usuarioId: e.userId,
+        tipo: e.tipo,
+        tokenHash: createHash('sha256').update(token).digest('hex'),
+        clinicaId: e.clinicaId,
+        criadoPor: e.criadoPor,
+        expiraEm: sql`now() + interval '15 minutes'`,
+      })
+      .returning({ expiraEm: recuperacao.expiraEm });
+    if (!r) throw new Error('falha ao emitir recuperação');
+    return { token, expiraEm: r.expiraEm.toISOString() };
+  }
+
+  async invalidarRecuperacao(token: string): Promise<void> {
+    await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.tokenHash, createHash('sha256').update(token).digest('hex')), isNull(recuperacao.usadoEm)));
+  }
+
+  /**
+   * Usa o token (R17; R1 do desenho do PR 3; R15). Senha: exige o código TOTP atual, pelo bloqueio do fator e pela
+   * marca de reuso. Fator: exige a senha atual, pelo bloqueio de login. O token é consumido de forma atômica DEPOIS de
+   * a credencial conferir. Usar o token apaga TODAS as sessões da pessoa.
+   */
+  async usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao> {
+    const hash = createHash('sha256').update(e.token).digest('hex');
+    const agora = this.agora();
+    const [r] = await this.d.dbAuth
+      .select()
+      .from(recuperacao)
+      .where(and(eq(recuperacao.tokenHash, hash), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, agora)));
+    if (!r) return 'invalido';
+    const [u] = await this.d.dbAuth.select({ email: usuario.email, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, r.usuarioId));
+    if (!u?.ativo) return 'invalido';
+    const bloqueio = this.d.bloqueio;
+    /** Reserva atômica no contador (R15, mesma regra do #152): devolvida se a credencial conferir. */
+    const reservar = async (chave: string): Promise<boolean> => {
+      if (!bloqueio) return true;
+      const n = (await bloqueio.store.hit(chave, JANELA_DE_BLOQUEIO_MS).catch(() => ({ count: 0 }))).count;
+      if (n > TETO_DE_FALHAS) {
+        await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+        return false;
+      }
+      return true;
+    };
+    const devolver = async (chave: string): Promise<void> => {
+      if (bloqueio) await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+    };
+
+    if (r.tipo === 'senha') {
+      if (!e.codigo || !e.senhaNova || e.senhaNova.length < 12 || e.senhaNova.length > 128) return 'credencial_errada';
+      const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'fator', r.usuarioId) : '';
+      if (!(await reservar(chave))) return 'bloqueado';
+      if (bloqueio) {
+        const usado = await bloqueio.store.hit(chaveDoBloqueio(bloqueio.chaveHmac, 'totp-usado', `${r.usuarioId}:${e.codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
+        if (usado.count > 1) return 'credencial_errada';
+      }
+      const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+      let confere = false;
+      if (f?.verificado && this.d.segredoDaInstancia) {
+        const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
+        confere = claro !== null && totpConfere(claro, e.codigo, agora.getTime());
+      }
+      if (!confere) return 'credencial_errada';
+      await devolver(chave);
+      if (this.d.conferirSenhaVazada) {
+        const vazou = await this.d.conferirSenhaVazada(e.senhaNova).catch(() => {
+          registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+          return false;
+        });
+        if (vazou) return 'senha_vazada';
+      }
+      if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
+      await this.d.dbAuth.update(conta).set({ password: await gerarHashDeSenha(e.senhaNova) }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+      await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+      // R2 do código do 3b-2: evento próprio, antes da trilha.
+      registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+      await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'senha');
+      return { tipo: 'senha', cookies: [] };
+    }
+
+    // Fator: exige a senha atual.
+    if (!e.senhaAtual) return 'credencial_errada';
+    const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'login', u.email.trim().toLowerCase()) : '';
+    if (!(await reservar(chave))) return 'bloqueado';
+    const [c] = await this.d.dbAuth.select({ hash: conta.password }).from(conta).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+    const senhaConfere = c?.hash ? await conferirSenha({ hash: c.hash, password: e.senhaAtual }).catch(() => false) : (await gerarHashDeSenha(e.senhaAtual), false);
+    if (!senhaConfere) return 'credencial_errada';
+    await devolver(chave);
+    if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
+    // O fator antigo sai e o cadastro de um novo é obrigatório (a sessão aberta só serve a isso, 15 min, R8).
+    await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+    await this.d.dbAuth.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
+    await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+    registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+    await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'fator');
+    const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual, cabecalhos: e.cabecalhos });
+    return { tipo: 'fator', cookies };
+  }
+
+  /** Consome o token de forma atômica (requisições em paralelo: só uma passa). */
+  private async consumirRecuperacao(id: string): Promise<boolean> {
+    const r = await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.id, id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
+      .returning({ id: recuperacao.id });
+    return r.length > 0;
+  }
+
+  /**
+   * Trilha da recuperação: com o tipo na clínica que emitiu; nas DEMAIS clínicas da pessoa, só que a credencial mudou
+   * (R1 do código do 3b-2; R2 da reconferência da 3b: a credencial é da pessoa, sem detalhe da outra clínica).
+   */
+  private async trilhaDaRecuperacao(clinicaId: string, userId: string, tipo: TipoDeRecuperacao): Promise<void> {
+    for (const outra of (await this.clinicasDoUsuario(userId)).filter((t) => t !== clinicaId)) {
+      await withTenant(
+        this.d.dbClinica,
+        outra as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: outra as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'credential_changed' } }),
+        userId,
+      );
+    }
+    await withTenant(
+      this.d.dbClinica,
+      clinicaId as TenantId,
+      (tx) =>
+        recordAudit(tx, { tenantId: clinicaId as TenantId, userId: userId as UserId, roles: [] }, {
+          action: AuditAction.PermissionChange,
+          scope: 'clinic_members',
+          metadata: { op: 'credential_recovery_used', kind: tipo },
+        }),
+      userId,
+    );
+  }
+
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
   async cadastroLiberado(sessaoId: string): Promise<boolean> {
     const [s] = await this.d.dbAuth.select({ ate: sessao.cadastroPendenteAte }).from(sessao).where(eq(sessao.id, sessaoId));
@@ -302,6 +498,36 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       return 'conta_existente';
     }
     return { userId };
+  }
+
+  async loginCompleto(e: { email: string; senha: string; codigo: string; cabecalhos: Headers }): Promise<{ userId: string; cookies: string[] } | 'falhou' | 'sem_fator'> {
+    const r1 = await this.d.auth.api
+      .signInEmail({ body: { email: e.email.trim().toLowerCase(), password: e.senha }, headers: e.cabecalhos, asResponse: true })
+      .catch(() => null);
+    if (!r1 || r1.status !== 200) return 'falhou';
+    const corpo = (await r1.json().catch(() => ({}))) as { twoFactorRedirect?: boolean };
+    const jarro = r1.headers
+      .getSetCookie()
+      .map((c) => c.split(';')[0] ?? '')
+      .filter((c) => c !== '' && !c.endsWith('='));
+    const comCookie = new Headers(e.cabecalhos);
+    comCookie.set('cookie', jarro.join('; '));
+    if (!corpo.twoFactorRedirect) {
+      // Conta sem TOTP: o aceite exige o fator; a sessão aberta pela senha não fica viva.
+      const aberta = await this.d.auth.api.getSession({ headers: comCookie }).catch(() => null);
+      if (aberta) await this.encerrar(aberta.session.id, 'logout', aberta.user.id);
+      return 'sem_fator';
+    }
+    // O plugin do fator não está no tipo público da instância (Auth): chamada pela API interna, com os ganchos.
+    const api = this.d.auth.api as unknown as { verifyTOTP(a: { body: { code: string }; headers: Headers; asResponse: true }): Promise<Response> };
+    const r2 = await api.verifyTOTP({ body: { code: e.codigo }, headers: comCookie, asResponse: true }).catch(() => null);
+    if (!r2 || r2.status !== 200) return 'falhou';
+    const cookies = r2.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+    const lida = await this.d.auth.api
+      .getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) })
+      .catch(() => null);
+    if (!lida) return 'falhou';
+    return { userId: lida.user.id, cookies };
   }
 
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {

@@ -96,3 +96,16 @@ export const doisFatores = identidade.table('dois_fatores', {
   /** 0066: para o expurgo do cadastro não concluído (a biblioteca não grava; o banco preenche). */
   criadoEm: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Token de recuperação pelo admin (0068, PR 3b-2): uso único, 15 min, só o hash. */
+export const recuperacao = identidade.table('recuperacao', {
+  id: uuid('id').primaryKey(),
+  usuarioId: uuid('usuario_id').notNull(),
+  tipo: text('tipo', { enum: ['senha', 'fator'] }).notNull(),
+  tokenHash: text('token_hash').notNull(),
+  clinicaId: uuid('clinica_id').notNull(),
+  criadoPor: uuid('criado_por').notNull(),
+  criadoEm: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
+  expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
+  usadoEm: timestamp('usado_em', { withTimezone: true }),
+});
