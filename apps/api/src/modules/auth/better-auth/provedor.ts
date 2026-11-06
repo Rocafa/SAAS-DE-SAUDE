@@ -350,6 +350,36 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     return { userId };
   }
 
+  async loginCompleto(e: { email: string; senha: string; codigo: string; cabecalhos: Headers }): Promise<{ userId: string; cookies: string[] } | 'falhou' | 'sem_fator'> {
+    const r1 = await this.d.auth.api
+      .signInEmail({ body: { email: e.email.trim().toLowerCase(), password: e.senha }, headers: e.cabecalhos, asResponse: true })
+      .catch(() => null);
+    if (!r1 || r1.status !== 200) return 'falhou';
+    const corpo = (await r1.json().catch(() => ({}))) as { twoFactorRedirect?: boolean };
+    const jarro = r1.headers
+      .getSetCookie()
+      .map((c) => c.split(';')[0] ?? '')
+      .filter((c) => c !== '' && !c.endsWith('='));
+    const comCookie = new Headers(e.cabecalhos);
+    comCookie.set('cookie', jarro.join('; '));
+    if (!corpo.twoFactorRedirect) {
+      // Conta sem TOTP: o aceite exige o fator; a sessão aberta pela senha não fica viva.
+      const aberta = await this.d.auth.api.getSession({ headers: comCookie }).catch(() => null);
+      if (aberta) await this.encerrar(aberta.session.id, 'logout', aberta.user.id);
+      return 'sem_fator';
+    }
+    // O plugin do fator não está no tipo público da instância (Auth): chamada pela API interna, com os ganchos.
+    const api = this.d.auth.api as unknown as { verifyTOTP(a: { body: { code: string }; headers: Headers; asResponse: true }): Promise<Response> };
+    const r2 = await api.verifyTOTP({ body: { code: e.codigo }, headers: comCookie, asResponse: true }).catch(() => null);
+    if (!r2 || r2.status !== 200) return 'falhou';
+    const cookies = r2.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+    const lida = await this.d.auth.api
+      .getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) })
+      .catch(() => null);
+    if (!lida) return 'falhou';
+    return { userId: lida.user.id, cookies };
+  }
+
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
     const r = await this.d.auth.api.signInEmail({ body: { email: e.email.trim().toLowerCase(), password: e.senha }, headers: e.cabecalhos, asResponse: true });
     const cookies = r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));

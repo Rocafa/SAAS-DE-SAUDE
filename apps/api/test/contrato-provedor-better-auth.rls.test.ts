@@ -741,6 +741,27 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
     expect(await provedor.clinicasDoUsuario(ja.userId)).not.toContain(tenantId);
   });
 
+  it('3b-2: conta existente aceita com senha E código TOTP; código errado ou conta sem fator não criam vínculo', async () => {
+    const { tenantId, ctx } = await clinicaComAdmin();
+    const origemClinica = await api.novaClinica();
+    const ja = await novaPessoa(origemClinica, ['recepcao']);
+    await cadastrarFator(cookieDe(await entrar(ja.email)), ja.userId);
+    const c1 = await convites().criar(ctx, ja.email, 'recepcao');
+    await expect(
+      convites().aceitar({ token: c1.token, email: ja.email, senha: SENHA, codigo: codigoErrado(segredos.get(ja.userId)?.segredo ?? Buffer.alloc(0), 7), cabecalhos: new Headers() }),
+    ).rejects.toBeInstanceOf(ConflitoError);
+    expect(await provedor.clinicasDoUsuario(ja.userId)).not.toContain(tenantId);
+    const cookies = await convites().aceitar({ token: c1.token, email: ja.email, senha: SENHA, codigo: proximoCodigo(ja.userId), cabecalhos: new Headers() });
+    expect(cookies.length).toBeGreaterThan(0);
+    expect(await provedor.clinicasDoUsuario(ja.userId)).toContain(tenantId);
+    // Conta sem TOTP: recusada, sem vínculo e sem sessão viva.
+    const semFator = await novaPessoa(await api.novaClinica(), ['recepcao']);
+    const c2 = await convites().criar(ctx, semFator.email, 'recepcao');
+    await expect(convites().aceitar({ token: c2.token, email: semFator.email, senha: SENHA, codigo: '123456', cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    expect(await provedor.clinicasDoUsuario(semFator.userId)).not.toContain(tenantId);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, semFator.userId))).toEqual([]);
+  });
+
   it('quem convidou deixou de ser admin: o aceite não cria vínculo e a conta nova é desfeita', async () => {
     const { tenantId, adm, ctx } = await clinicaComAdmin();
     const outroAdm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');

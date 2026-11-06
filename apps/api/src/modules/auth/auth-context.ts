@@ -90,6 +90,11 @@ export interface ProvedorDeConvite {
   idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'>;
   /** Desfaz a conta de um aceite que não fechou: inativa e sem senha (o app_auth não apaga identidade, R18). */
   desfazerContaDoConvite(userId: string): Promise<void>;
+  /**
+   * Login COMPLETO de conta existente (senha e código TOTP) para o aceite do convite (R1 e R2 do desenho do PR 3; R15:
+   * passa pelo bloqueio de login e de fator). Sem fator cadastrado, recusa e apaga a sessão aberta.
+   */
+  loginCompleto(e: { email: string; senha: string; codigo: string; cabecalhos: Headers }): Promise<{ userId: string; cookies: string[] } | 'falhou' | 'sem_fator'>;
   /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
   abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
 }
