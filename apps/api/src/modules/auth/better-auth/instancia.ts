@@ -83,6 +83,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
         ativo: { type: 'boolean', input: false, required: false, defaultValue: true },
         clinicaDeOrigem: { type: 'string', input: false, required: false, returned: false },
         conviteDeOrigem: { type: 'string', input: false, required: false, returned: false },
+        inativaPor: { type: 'string', input: false, required: false, returned: false },
       },
     },
     session: {

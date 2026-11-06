@@ -804,7 +804,7 @@ describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2;
     const c = await convites().criar(ctx, email, 'recepcao');
     // Simula o resto de um aceite que falhou depois de criar a conta: inativa, sem senha, sem vínculo.
     const orfa = randomUUID();
-    await dbAuth.db.insert(usuario).values({ id: orfa, name: 'Orfa', email, emailVerified: false, ativo: false, conviteDeOrigem: c.conviteId });
+    await dbAuth.db.insert(usuario).values({ id: orfa, name: 'Orfa', email, emailVerified: false, ativo: false, inativaPor: 'convite_desfeito', conviteDeOrigem: c.conviteId });
     await dbAuth.db.insert(conta).values({ id: randomUUID(), accountId: orfa, providerId: 'credential', userId: orfa, password: null });
     await convites().aceitar({ token: c.token, email, nome: 'Pessoa Ficticia', senha: SENHA, cabecalhos: new Headers() });
     expect(await provedor.clinicasDoUsuario(orfa)).toEqual([tenantId]);
@@ -965,6 +965,10 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
     expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, p.userId))).toEqual([]);
     expect((await entrar(p.email)).status).not.toBe(200);
+    // R1 do código do 3b-3: a clínica conhece o id pelo prontuário, mas a conta anonimizada não recebe perfil.
+    await expect(api.membro(tenantId, { userId: p.userId }, 'recepcao')).rejects.toThrow();
+    const [depois] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(depois).toEqual({ ativo: false, motivo: 'anonimizada' });
   });
 
   it('R6 do #152: o fator trancado por pessoa identificada vira aviso aos admins da clínica dela (1 por dia)', async () => {
