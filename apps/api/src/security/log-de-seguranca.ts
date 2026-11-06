@@ -24,6 +24,7 @@ export const EVENTOS_DE_SEGURANCA = {
   MFA_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'código do TOTP ou senha do cadastro recusados' },
   RECUPERACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'admin emitiu token de recuperação de senha ou de fator (D4 PR 3b-2)' },
   RECUPERACAO_USADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de recuperação usado: senha trocada ou fator removido (D4 PR 3b-2)' },
+  CONTA_ANONIMIZADA: { severidade: 'alto', alarme: 'volume', descricao: 'conta da equipe anonimizada a pedido do titular (D4 PR 3b-3; prova do art. 18 IV)' },
   SENHA_TROCADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha trocada pela própria pessoa; as outras sessões caem (D4 PR 3b-2)' },
   BLOQUEIO_ZERADO: { severidade: 'alto', alarme: 'volume', descricao: 'admin zerou os contadores de bloqueio de uma pessoa da clínica (D4 PR 3b-2)' },
   SENHA_VAZADA_RECUSADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha nova recusada por aparecer na base de senhas vazadas (k-anonimato)' },
@@ -34,6 +35,7 @@ export const EVENTOS_DE_SEGURANCA = {
   MFA_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'rota recusada por falta de MFA ou MFA antigo' },
   MFA_LIMITE_DE_RECUSAS: { severidade: 'alto', alarme: 'imediato', descricao: 'usuário passou do teto de recusas por MFA (429)' },
   RATE_LIMIT_EXCEDIDO: { severidade: 'aviso', alarme: 'volume', descricao: 'origem passou do limite de requisições (429)' },
+  BLOQUEIO_INDISPONIVEL: { severidade: 'alto', alarme: 'imediato', descricao: 'contador de bloqueio fora do ar; recuperação ou aceite recusados (falha fechada, 503)' },
   RATE_LIMIT_FAIL_OPEN: { severidade: 'alto', alarme: 'imediato', descricao: 'contador indisponível; requisição seguiu sem limite' },
   WEBHOOK_ASSINATURA_INVALIDA: { severidade: 'alto', alarme: 'volume', descricao: 'webhook com assinatura inválida' },
   ALERTA_ANOMALIA: { severidade: 'alto', alarme: 'imediato', descricao: 'regra de vigilância disparou (detalhe na trilha)' },
@@ -98,6 +100,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'pela_pessoa',
   'desbloqueio_pelo_admin',
   'recuperacao_pelo_admin',
+  'pedido_do_titular',
   'conferencia_indisponivel',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
