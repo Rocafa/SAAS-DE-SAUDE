@@ -8,10 +8,10 @@
 |---|---|---|
 | 1 | Design system em cinza + estrutura (menu lateral e barra inferior) + camada de dados fake + **Ajudante completo** + Início | 🟢 aberto, pede revisão do Guardião |
 | 2 | Agenda (dia, semana, profissional, encaixe, arrastar, recorrência, espera, check-in, simultâneo) + Pacientes (cadastro, ficha completa, linha do tempo, anexos, inativar) | 🟢 aberto, empilhado sobre o PR 1 |
-| 3 | Atendimento/Prontuário + Documentos | ⬜ |
-| 4 | Financeiro + Guias + Mensagens + Relatórios | ⬜ |
-| 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | ⬜ |
-| 6 | Portal do paciente + PWA + páginas de erro | ⬜ |
+| 3 | Atendimento/Prontuário + Documentos | 🟢 aberto, empilhado sobre o PR 2 |
+| 4 | Financeiro + Guias + Mensagens + Relatórios | 🟢 aberto, empilhado sobre o PR 3 |
+| 5 | Configurações (LGPD e assinatura) + Primeiros passos + Ajuda + Acesso | 🟢 aberto, empilhado sobre o PR 4 |
+| 6 | Portal do paciente + PWA + páginas de erro | 🟢 aberto, empilhado sobre o PR 5 |
 
 ## O que o PR 1 entrega
 
@@ -45,3 +45,42 @@
 - **Atendimento simultâneo** (fisio no ginásio): o profissional tem limite de pacientes ao mesmo tempo; a agenda mostra "2 pacientes ao mesmo tempo".
 - **Pacientes**: cadastro com só nome e telefone obrigatórios, nome social, CPF opcional com dígito verificador, responsável obrigatório para menor; ficha com pacotes (saldo), anexos, linha do tempo e **inativar sem apagar** (texto explica a guarda legal; consultas futuras canceladas; desfazer reativa). Inativos ficam escondidos na lista, com opção de mostrar.
 - Números do PR 2: Vitest 153 no web; Playwright 75 verdes + 1 pulado de propósito (arrastar no celular; lá o caminho é o botão, testado).
+
+## O que o PR 3 entrega
+
+- **Atendimento:** lista do dia do profissional que está usando; tela com evolução pelo modelo do nicho (fisioterapia, terapia ocupacional, psicologia), rascunho salvo sozinho, histórico, "Assinar" com confirmação ("depois de assinada não muda; correção vira adendo") e adendo. Só o profissional do atendimento escreve e assina.
+- **Psicologia em compartimento sigiloso:** separado e marcado na ficha, no prontuário e no histórico; quem não é o autor vê só que o registro existe (o fake nem devolve o conteúdo).
+- **Escriba de IA:** só o aviso, botão desligado ("em breve, com revisão humana").
+- **Documentos:** atestado (1 a 15 dias por extenso; CID só com autorização do paciente), declaração de comparecimento e recibo, com prévia em folha e "Imprimir" (a impressão sai só com a folha). ICP-Brasil marcado como "em breve".
+- **Demonstração:** em Mais › "Demonstração: entrar como", troca entre recepção, fisioterapeuta e psicólogo para ver as permissões.
+- Números do PR 3: Vitest 163 no web; Playwright 93 verdes + 1 pulado de propósito.
+
+## O que o PR 4 entrega
+
+- **Financeiro:** recebido hoje (total e por forma), contas a receber com "Receber" (dinheiro, cartão ou Pix) e desfazer, pacotes e saldo, todos os recibos com "Imprimir". Pix com QR e baixa automática marcado como "em breve" (D5).
+- **Guias de convênio** (controle simples do M1, sem TISS): cadastro com erros que dizem o que fazer; avisos "vence em X dias", "só resta 1 sessão", "guia vencida".
+- **Mensagens:** prévia da caixa do WhatsApp (M2) com conversas fictícias; nada é enviado; campo de resposta desligado.
+- **Relatórios:** atendimentos, faltas, taxa de faltas e recebido em 7 dias, 30 dias ou no mês; gráfico em cinza (atendidos em preto, faltas listradas) e a mesma informação em tabela.
+- Números do PR 4: Vitest 172 no web; Playwright 117 verdes + 1 pulado de propósito.
+
+## O que o PR 5 entrega
+
+- **Configurações:** dados da clínica; usuários e permissões (convidar, tirar acesso com desfazer, nunca sem administrador, tabela "o que cada um pode fazer"); horários; tipos de atendimento; modelos de prontuário.
+- **Privacidade e LGPD:** "Baixar todos os dados da clínica" (G2) com código do autenticador, ciência do sigilo, aprovação do responsável técnico e link pessoal de 24 h com 3 downloads (fluxo de demonstração, aguarda D4 e a API); "Quem acessou o quê" (auditoria, sem conteúdo clínico, com filtro por pessoa). Recepção não pode pedir a exportação.
+- **Plano e assinatura:** cancelar em 3 cliques a partir de "Mais" (G4, testado no E2E), sem multa e sem ligação; depois de cancelar, 90 dias de leitura e exportação (G3) com avisos D-30/D-7/D-1; "Desfazer" e "Voltar a assinar". Preço marcado como valor de exemplo (preço é decisão pendente).
+- **Primeiros passos:** 5 passos (clínica, quem atende, horários, tipos, trazer dados do sistema antigo com simulação e desfazer — em breve).
+- **Ajuda:** "Como faço…" com busca, os mesmos artigos do Ajudante.
+- **Acesso (aguarda D4):** entrar com senha e código do autenticador, esqueci a senha (não revela se o e-mail existe), primeiro acesso por convite (regras de senha visíveis antes de errar + MFA) e escolher clínica.
+- Achado do E2E: no celular o botão flutuante do Ajudante cobria o último botão da página; o rodapé ganhou espaço para rolar.
+- Números do PR 5: Vitest 180 no web; Playwright 163 verdes + 1 pulado de propósito.
+
+## O que o PR 6 entrega
+
+- **Portal do paciente** (celular primeiro, 4 itens no menu): minhas consultas (Confirmar presença, "Não vou conseguir ir" com confirmação e desfazer), meus documentos, meus dados (corrigir vira pedido à clínica), **meus direitos** (ver, corrigir, baixar, apagar com a explicação da guarda legal, saber com quem compartilham), cada pedido com protocolo e prazo de 15 dias; consentimentos em 3 estados ("ainda não respondido" vale como não, ressalva R1). Entrada por celular + código (aguarda D4).
+- **PWA:** manifesto (instala no celular, abre em /inicio), ícones em cinza (gerados por `scripts/gerar-icones.mjs`) e service worker que guarda **só** a tela "sem conexão" e os arquivos estáticos — nunca página com dado de paciente (testado no E2E lendo o cache).
+- **Páginas de erro:** 404 com caminho de volta, sem conexão, sessão expirada ("o rascunho ficou guardado") e erro inesperado sem detalhe técnico.
+- Números do PR 6: Vitest 186 no web; Playwright 197 verdes + 1 pulado de propósito.
+
+## ORDEM-001: estado final
+
+Os 6 PRs estão abertos, em pilha, com CI verde: #42 → #43 → #44 → #45 → #46 → #47. Falta: revisão do Guardião (#42, #44, #46, #47), merge na ordem e, depois, trocar a base de cada um para `main`. O E2E ainda não roda no CI (job novo é da DevOps).

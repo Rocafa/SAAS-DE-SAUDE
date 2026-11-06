@@ -15,8 +15,8 @@ import { paraIsoLocal } from '@/lib/ajudante/datas';
 import { formatarTelefone, validarTelefone } from '@/lib/agenda';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from '@/lib/api/nascimento';
 import type { AlteracaoPaciente, Paciente } from '@/lib/api/tipos';
+import { CAMPO } from '@/components/ui/formulario';
 
-const CAMPO = 'min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg';
 
 export function CorrigirDados({ paciente }: { paciente: Paciente }) {
   const { api, usuario, atualizar } = useDados();
