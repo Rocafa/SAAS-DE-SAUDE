@@ -966,7 +966,7 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, p.userId))).toEqual([]);
     expect((await entrar(p.email)).status).not.toBe(200);
     // R1 do código do 3b-3: a clínica conhece o id pelo prontuário, mas a conta anonimizada não recebe perfil.
-    await expect(api.membro(tenantId, { userId: p.userId }, 'recepcao')).rejects.toThrow();
+    await expect(api.membro(tenantId, { userId: p.userId }, 'financeiro')).rejects.toThrow();
     const [depois] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(eq(usuario.id, p.userId));
     expect(depois).toEqual({ ativo: false, motivo: 'anonimizada' });
   });
