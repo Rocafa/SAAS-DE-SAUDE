@@ -52,6 +52,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
     dbClinica: dbClinica.db,
     conferirSenhaVazada,
     bloqueio: { store, chaveHmac },
+    segredoDaInstancia: obrigatoria(env, 'BETTER_AUTH_SECRET'),
     cookieDeEncerramento: `${nomeDoCookie(producao)}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict${producao ? '; Secure' : ''}`,
   });
   ref.provedor = provider;

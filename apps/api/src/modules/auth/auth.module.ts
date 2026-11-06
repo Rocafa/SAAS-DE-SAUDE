@@ -7,7 +7,7 @@ import { MembrosController, MembrosService } from './membros';
 import { VINCULO_ATENDIMENTO_DIAS_TETO, VinculoDeCuidadoService } from './vinculo-de-cuidado';
 import { SessaoDaPessoaController, SessaoDePessoaGuard } from './sessao-pessoa';
 import { AceiteDeConviteController, ConvitesController, ConvitesService } from './convites';
-import { CredenciaisController, CredenciaisService } from './credenciais';
+import { CredenciaisController, CredenciaisService, UsoDaRecuperacaoController } from './credenciais';
 
 /** `usuarioAtual()` do contrato do front: só ids e perfis, nada de dado pessoal. */
 @Controller('sessao')
@@ -57,7 +57,7 @@ export class AuthModule {
     return {
       module: AuthModule,
       global: true,
-      controllers: [SessaoController, SessaoDaPessoaController, VinculoDeCuidadoController, MembrosController, ConvitesController, AceiteDeConviteController, CredenciaisController],
+      controllers: [SessaoController, SessaoDaPessoaController, VinculoDeCuidadoController, MembrosController, ConvitesController, AceiteDeConviteController, CredenciaisController, UsoDaRecuperacaoController],
       providers: [{ provide: AUTH_PROVIDER, useValue: provider }, SessaoGuard, SessaoDePessoaGuard, ConvitesService, CredenciaisService, VinculoDeCuidadoService, MembrosService],
       exports: [AUTH_PROVIDER, SessaoGuard, VinculoDeCuidadoService, MembrosService],
     };

@@ -6,17 +6,18 @@
  * (clínica ativa, MFA e impressão dos perfis) → perfis SÓ de `clinic_members` (R6) → `mfaEm` só vale se os perfis não
  * mudaram desde o MFA (`perfis_no_mfa`, R13). A clínica nunca vem do cliente (regra 1).
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
-import { conta, doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
+import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
@@ -24,6 +25,10 @@ import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
 import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { symmetricDecrypt } from 'better-auth/crypto';
+import { totpConfere } from './totp';
+import { conferirSenha } from './senha';
+import { JANELA_DE_REUSO_MS, TETO_DE_FALHAS } from './protecao';
 import { JANELA_DE_BLOQUEIO_MS } from './protecao';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
@@ -53,12 +58,14 @@ export interface DependenciasDoProvedor {
   readonly conferirSenhaVazada?: ConferirSenhaVazada;
   /** Store e segredo dos contadores de bloqueio (para o desbloqueio pelo admin zerar as MESMAS chaves). */
   readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
+  /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
+  readonly segredoDaInstancia?: string;
 }
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -272,6 +279,135 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // A trava da própria biblioteca no login em duas etapas.
     await this.d.dbAuth.update(doisFatores).set({ failedVerificationCount: 0, lockedUntil: null }).where(eq(doisFatores.userId, userId));
     registrarEventoDeSeguranca('BLOQUEIO_ZERADO', { motivo: 'desbloqueio_pelo_admin', userId });
+  }
+
+  async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }> {
+    const token = randomBytes(32).toString('base64url');
+    const [r] = await this.d.dbAuth
+      .insert(recuperacao)
+      .values({
+        id: randomUUID(),
+        usuarioId: e.userId,
+        tipo: e.tipo,
+        tokenHash: createHash('sha256').update(token).digest('hex'),
+        clinicaId: e.clinicaId,
+        criadoPor: e.criadoPor,
+        expiraEm: sql`now() + interval '15 minutes'`,
+      })
+      .returning({ expiraEm: recuperacao.expiraEm });
+    if (!r) throw new Error('falha ao emitir recuperação');
+    return { token, expiraEm: r.expiraEm.toISOString() };
+  }
+
+  async invalidarRecuperacao(token: string): Promise<void> {
+    await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.tokenHash, createHash('sha256').update(token).digest('hex')), isNull(recuperacao.usadoEm)));
+  }
+
+  /**
+   * Usa o token (R17; R1 do desenho do PR 3; R15). Senha: exige o código TOTP atual, pelo bloqueio do fator e pela
+   * marca de reuso. Fator: exige a senha atual, pelo bloqueio de login. O token é consumido de forma atômica DEPOIS de
+   * a credencial conferir. Usar o token apaga TODAS as sessões da pessoa.
+   */
+  async usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao> {
+    const hash = createHash('sha256').update(e.token).digest('hex');
+    const agora = this.agora();
+    const [r] = await this.d.dbAuth
+      .select()
+      .from(recuperacao)
+      .where(and(eq(recuperacao.tokenHash, hash), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, agora)));
+    if (!r) return 'invalido';
+    const [u] = await this.d.dbAuth.select({ email: usuario.email, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, r.usuarioId));
+    if (!u?.ativo) return 'invalido';
+    const bloqueio = this.d.bloqueio;
+    /** Reserva atômica no contador (R15, mesma regra do #152): devolvida se a credencial conferir. */
+    const reservar = async (chave: string): Promise<boolean> => {
+      if (!bloqueio) return true;
+      const n = (await bloqueio.store.hit(chave, JANELA_DE_BLOQUEIO_MS).catch(() => ({ count: 0 }))).count;
+      if (n > TETO_DE_FALHAS) {
+        await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+        return false;
+      }
+      return true;
+    };
+    const devolver = async (chave: string): Promise<void> => {
+      if (bloqueio) await bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+    };
+
+    if (r.tipo === 'senha') {
+      if (!e.codigo || !e.senhaNova || e.senhaNova.length < 12 || e.senhaNova.length > 128) return 'credencial_errada';
+      const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'fator', r.usuarioId) : '';
+      if (!(await reservar(chave))) return 'bloqueado';
+      if (bloqueio) {
+        const usado = await bloqueio.store.hit(chaveDoBloqueio(bloqueio.chaveHmac, 'totp-usado', `${r.usuarioId}:${e.codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
+        if (usado.count > 1) return 'credencial_errada';
+      }
+      const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+      let confere = false;
+      if (f?.verificado && this.d.segredoDaInstancia) {
+        const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
+        confere = claro !== null && totpConfere(claro, e.codigo, agora.getTime());
+      }
+      if (!confere) return 'credencial_errada';
+      await devolver(chave);
+      if (this.d.conferirSenhaVazada) {
+        const vazou = await this.d.conferirSenhaVazada(e.senhaNova).catch(() => {
+          registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+          return false;
+        });
+        if (vazou) return 'senha_vazada';
+      }
+      if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
+      await this.d.dbAuth.update(conta).set({ password: await gerarHashDeSenha(e.senhaNova) }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+      await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+      await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'senha');
+      registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+      return { tipo: 'senha', cookies: [] };
+    }
+
+    // Fator: exige a senha atual.
+    if (!e.senhaAtual) return 'credencial_errada';
+    const chave = bloqueio ? chaveDoBloqueio(bloqueio.chaveHmac, 'login', u.email.trim().toLowerCase()) : '';
+    if (!(await reservar(chave))) return 'bloqueado';
+    const [c] = await this.d.dbAuth.select({ hash: conta.password }).from(conta).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+    const senhaConfere = c?.hash ? await conferirSenha({ hash: c.hash, password: e.senhaAtual }).catch(() => false) : (await gerarHashDeSenha(e.senhaAtual), false);
+    if (!senhaConfere) return 'credencial_errada';
+    await devolver(chave);
+    if (!(await this.consumirRecuperacao(r.id))) return 'invalido';
+    // O fator antigo sai e o cadastro de um novo é obrigatório (a sessão aberta só serve a isso, 15 min, R8).
+    await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+    await this.d.dbAuth.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
+    await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+    await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, 'fator');
+    registrarEventoDeSeguranca('MFA_CADASTRADO', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+    const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual, cabecalhos: e.cabecalhos });
+    return { tipo: 'fator', cookies };
+  }
+
+  /** Consome o token de forma atômica (requisições em paralelo: só uma passa). */
+  private async consumirRecuperacao(id: string): Promise<boolean> {
+    const r = await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.id, id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
+      .returning({ id: recuperacao.id });
+    return r.length > 0;
+  }
+
+  private async trilhaDaRecuperacao(clinicaId: string, userId: string, tipo: TipoDeRecuperacao): Promise<void> {
+    await withTenant(
+      this.d.dbClinica,
+      clinicaId as TenantId,
+      (tx) =>
+        recordAudit(tx, { tenantId: clinicaId as TenantId, userId: userId as UserId, roles: [] }, {
+          action: AuditAction.PermissionChange,
+          scope: 'clinic_members',
+          metadata: { op: 'credential_recovery_used', kind: tipo },
+        }),
+      userId,
+    );
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */

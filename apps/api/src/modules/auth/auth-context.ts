@@ -112,6 +112,20 @@ export interface ProvedorDeCredencial {
   desbloquear(userId: string): Promise<void>;
 }
 
+export type TipoDeRecuperacao = 'senha' | 'fator';
+export type ResultadoDaRecuperacao = { readonly tipo: TipoDeRecuperacao; readonly cookies: string[] } | 'invalido' | 'credencial_errada' | 'senha_vazada' | 'bloqueado';
+
+/** Recuperação pelo admin (R17; R1 do desenho do PR 3): nenhum token restaura os dois fatores. */
+export interface ProvedorDeRecuperacao {
+  emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }>;
+  invalidarRecuperacao(token: string): Promise<void>;
+  usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao>;
+}
+
+export function ehProvedorDeRecuperacao(p: AuthProvider): p is AuthProvider & ProvedorDeRecuperacao {
+  return typeof (p as Partial<ProvedorDeRecuperacao>).usarRecuperacao === 'function';
+}
+
 export function ehProvedorDeCredencial(p: AuthProvider): p is AuthProvider & ProvedorDeCredencial {
   return typeof (p as Partial<ProvedorDeCredencial>).trocarSenhaDaPessoa === 'function';
 }

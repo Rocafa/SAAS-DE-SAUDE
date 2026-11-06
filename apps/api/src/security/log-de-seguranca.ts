@@ -95,6 +95,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'senha_vazada',
   'pela_pessoa',
   'desbloqueio_pelo_admin',
+  'recuperacao_pelo_admin',
   'conferencia_indisponivel',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [

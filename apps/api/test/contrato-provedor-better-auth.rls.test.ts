@@ -38,6 +38,7 @@ let provedor: BetterAuthProvider;
 /** Store e segredo do bloqueio da bancada: os mesmos na instância e no provedor (o desbloqueio zera as mesmas chaves). */
 const STORE_DA_BANCADA = new MemoryRateLimitStore();
 const CHAVE_HMAC_DA_BANCADA = randomBytes(32);
+const SEGREDO_DA_BANCADA = randomBytes(32).toString('base64');
 
 beforeAll(async () => {
   api = await subirApi();
@@ -46,7 +47,7 @@ beforeAll(async () => {
   dbAuth = createDatabase(urlAuth, { max: 2 });
   auth = criarAutenticacao({
     db: dbAuth.db,
-    segredo: randomBytes(32).toString('base64'),
+    segredo: SEGREDO_DA_BANCADA,
     baseURL: 'http://localhost:3000',
     origensConfiaveis: ['http://localhost:3000'],
     producao: false,
@@ -65,6 +66,7 @@ beforeAll(async () => {
     dbClinica: api.db.db,
     conferirSenhaVazada: senhaVazadaFicticia,
     bloqueio: { store: STORE_DA_BANCADA, chaveHmac: CHAVE_HMAC_DA_BANCADA },
+    segredoDaInstancia: SEGREDO_DA_BANCADA,
   });
 }, 120_000);
 
@@ -851,6 +853,56 @@ describe('PR 3b-2: troca de senha e desbloqueio pelo admin (R16; R4 do #152)', (
     expect((await postar('/sign-in/email', {}, { email: p.email, password: SENHA }, '6a1b2c3d4e5f6071')).r.status).toBe(200);
     const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
     await expect(credenciais().desbloquear(ctx, estranha.userId)).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+});
+
+describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR 3)', () => {
+  const credenciais = (): CredenciaisService => new CredenciaisService(new TenantDatabase(api.db), provedor);
+
+  async function membroComFator() {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    return { tenantId, ctx, ...p };
+  }
+
+  it('senha: o token exige o código TOTP atual; código errado não troca nada; o certo troca a senha, derruba as sessões e o token não vale de novo', async () => {
+    const m = await membroComFator();
+    const sessaoAntiga = cookieDe(await entrar(m.email));
+    const { token } = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'senha', 'esqueceu_a_senha');
+    const segredo = segredos.get(m.userId)?.segredo ?? Buffer.alloc(0);
+    await expect(credenciais().usarRecuperacao({ token, codigo: codigoErrado(segredo, 11), senhaNova: SENHA_NOVA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    expect((await entrar(m.email)).status).toBe(200);
+    await credenciais().usarRecuperacao({ token, codigo: proximoCodigo(m.userId), senhaNova: SENHA_NOVA, cabecalhos: new Headers() });
+    expect((await entrar(m.email)).status).toBe(401);
+    expect((await entrar(m.email, SENHA_NOVA)).status).toBe(200);
+    expect(await provedor.sessaoDePessoa({ headers: sessaoAntiga })).toBeNull();
+    await expect(credenciais().usarRecuperacao({ token, codigo: proximoCodigo(m.userId), senhaNova: SENHA_NOVA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+    const trilha = await withTenant(api.db.db, m.tenantId, (tx) =>
+      tx.execute<{ op: string; reason: string | null }>(sql`select metadata->>'op' as op, metadata->>'reason' as reason from audit_log where scope = 'clinic_members' and metadata->>'op' like 'credential_recovery%'`),
+    );
+    expect(trilha.map((t) => t.op).sort()).toEqual(['credential_recovery_issued', 'credential_recovery_used']);
+    expect(trilha.find((t) => t.op === 'credential_recovery_issued')?.reason).toBe('esqueceu_a_senha');
+  });
+
+  it('fator: o token exige a senha atual; o TOTP antigo sai e a sessão aberta só serve ao cadastro de um novo', async () => {
+    const m = await membroComFator();
+    const { token } = await credenciais().emitirRecuperacao(m.ctx, m.userId, 'fator', 'perdeu_o_aparelho');
+    await expect(credenciais().usarRecuperacao({ token, senhaAtual: SENHA_ERRADA_TROCA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toHaveLength(1);
+    const cookies = await credenciais().usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() });
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toEqual([]);
+    const sessaoDeCadastro = { cookie: (cookies[0] ?? '').split(';')[0] ?? '' };
+    expect(await provedor.resolver({ headers: sessaoDeCadastro })).toBeNull();
+    expect((await postar('/two-factor/enable', sessaoDeCadastro, { password: SENHA })).r.status).toBe(200);
+  });
+
+  it('R16: o admin não emite recuperação para quem não tem vínculo ativo na clínica dele; motivo fora da lista não passa na rota', async () => {
+    const m = await membroComFator();
+    const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
+    await expect(credenciais().emitirRecuperacao(m.ctx, estranha.userId, 'senha', 'esqueceu_a_senha')).rejects.toBeInstanceOf(NaoEncontradoError);
   });
 });
 
