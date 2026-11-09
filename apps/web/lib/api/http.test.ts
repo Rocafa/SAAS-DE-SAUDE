@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { criarApiHttp, ErroApi, JANELA_PADRAO, MENSAGENS, mensagemDeErro, RETRATO_TTL_MS } from './http';
 import { criarApi, lerConfigApi, paraIndice } from './selecionar';
+import { MODELOS } from '../prontuario';
 
 const BASE = 'http://127.0.0.1:3333';
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -771,6 +772,44 @@ describe('adaptador HTTP: erros', () => {
       expect(chamadas.map((c) => `${c.metodo} ${c.url.pathname}`)).toEqual([`POST /atendimentos/${ATENDIMENTO.id}/adendos`]);
       expect(r.status).toBe('assinado');
       expect(r.adendos).toEqual([{ texto: 'Correção (fictícia)', em: '2026-11-05T11:00:00.000Z', autor: U(50) }]);
+    });
+
+    it('dor vira medida e campo sem lugar na API recusa antes de mandar', async () => {
+      const { chamadas, fetch } = simular((c) =>
+        c.metodo === 'POST' && c.url.pathname === '/atendimentos' ? respostaJson(200, ATENDIMENTO) : respostaJson(200, ATENDIMENTO),
+      );
+      const api = criarApiHttp({ baseUrl: BASE, fetch });
+      await api.salvarRascunho(U(80), { queixa: 'Dor no joelho', dor: '7' });
+      expect(chamadas[1]?.corpo).toEqual({ conteudo: { queixa: 'Dor no joelho', medidas: [{ nome: 'dor', valor: '7' }] } });
+      // `objetivo` é campo da tela de TO que a API não tem: recusa com mensagem própria, não 400 genérico depois.
+      await expect(api.salvarRascunho(U(80), { objetivo: 'Ganho de autonomia' })).rejects.toMatchObject({ status: 501 });
+      // Campo vazio não vira recusa: a tela guarda rascunho sem preencher tudo.
+      await api.salvarRascunho(U(80), { queixa: 'x', objetivo: '' });
+    });
+
+    it('os campos da tela existem no contrato da API (senão o salvar dá 400 campo_desconhecido)', () => {
+      // A API recusa qualquer chave fora da lista do modelo (`validarConteudo` → `campo_desconhecido`).
+      // Esta é a lista que a API aceita hoje, por modelo, copiada de apps/api/src/modules/records/modelos.ts.
+      const daApi: Record<string, string[]> = {
+        fisio: ['queixa', 'avaliacao', 'conduta', 'resposta', 'orientacoes'],
+        to: ['queixa', 'avaliacao', 'conduta', 'resposta', 'orientacoes'],
+        psicologia: ['tema', 'intervencoes', 'evolucao', 'encaminhamentos'],
+      };
+      // Campos da tela que a API ainda NÃO aceita como texto, com o destino de cada um. Enquanto estiverem
+      // aqui, o adaptador os converte (dor → medida, plano → planoDeSessoes) ou recusa com mensagem própria.
+      const traduzidos: Record<string, 'medida' | 'plano' | 'sem_campo_na_api'> = {
+        dor: 'medida',
+        plano: 'plano',
+        objetivo: 'sem_campo_na_api',
+        atividades: 'sem_campo_na_api',
+        desempenho: 'sem_campo_na_api',
+      };
+      for (const [modelo, def] of Object.entries(MODELOS)) {
+        for (const campo of def.campos) {
+          const aceito = daApi[modelo]?.includes(campo.id) === true || traduzidos[campo.id] !== undefined;
+          expect(aceito, `${modelo}.${campo.id}: nem a API aceita nem há tradução declarada`).toBe(true);
+        }
+      }
     });
 
     it('o que não tem rota recusa com 501 e mensagem própria, em vez de cair no fake', async () => {

@@ -98,6 +98,42 @@ function paraRegistro(a: AtendimentoApi): Registro {
   };
 }
 
+/**
+ * Textos que a API aceita por modelo (`validarConteudo` em `modules/records/modelos.ts`): qualquer chave fora da
+ * lista é recusada com `campo_desconhecido`. A tela tem campos que a API ainda não tem como texto, e cada um precisa
+ * de destino DECLARADO — `apps/web/lib/api/http.test.ts` falha se aparecer campo novo sem destino.
+ */
+const TEXTOS_DA_API: ReadonlySet<string> = new Set([
+  'queixa',
+  'avaliacao',
+  'conduta',
+  'resposta',
+  'orientacoes',
+  'tema',
+  'intervencoes',
+  'evolucao',
+  'encaminhamentos',
+]);
+
+/**
+ * Traduz o que a tela preencheu para o conteúdo que a API aceita. `dor` é MEDIDA, não texto. Campo sem lugar na API
+ * (objetivo, atividades e desempenho da terapia ocupacional) recusa aqui, com mensagem própria: melhor dizer que esta
+ * versão não salva aquele campo do que mandar e levar um 400 genérico depois de a pessoa ter escrito a evolução.
+ */
+export function paraConteudoDaApi(campos: Record<string, string>): Record<string, unknown> {
+  const conteudo: Record<string, unknown> = {};
+  const medidas: { nome: string; valor: string }[] = [];
+  const semLugar: string[] = [];
+  for (const [campo, valor] of Object.entries(campos)) {
+    if (TEXTOS_DA_API.has(campo)) conteudo[campo] = valor;
+    else if (campo === 'dor') medidas.push({ nome: 'dor', valor });
+    else if (valor.trim() !== '') semLugar.push(campo);
+  }
+  if (semLugar.length > 0) throw new ErroApi(`${MENSAGENS.campoSemLugar} (${semLugar.join(', ')})`, 501, 'campo_sem_lugar');
+  if (medidas.length > 0) conteudo.medidas = medidas;
+  return conteudo;
+}
+
 /** Parte da ApiClinica que já fala com a API real. */
 export type ApiHttpPacientesAgenda = Pick<
   ApiClinica,
@@ -193,6 +229,7 @@ export const MENSAGENS = {
   semReativar: 'Reativar paciente ainda não está disponível nesta versão. Peça ao suporte.',
   semAnexos: 'A lista de anexos ainda não está disponível nesta versão. Peça ao suporte.',
   semDemonstracao: 'Esta ação existe só na demonstração.',
+  campoSemLugar: 'Esta versão ainda não salva um dos campos preenchidos. Peça ao suporte antes de continuar.',
   semLinhaDoTempo: 'A linha do tempo do paciente ainda não está disponível nesta versão. Peça ao suporte.',
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',
@@ -759,7 +796,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     async salvarRascunho(agendamentoId, campos) {
       // `POST /atendimentos` é idempotente por agendamento: devolve o atendimento aberto, se já existir.
       const aberto = await chamar<AtendimentoApi>('POST', '/atendimentos', { agendamentoId });
-      return paraRegistro(await chamar<AtendimentoApi>('PUT', `/atendimentos/${encodeURIComponent(aberto.id)}/registro`, { conteudo: campos }));
+      return paraRegistro(await chamar<AtendimentoApi>('PUT', `/atendimentos/${encodeURIComponent(aberto.id)}/registro`, { conteudo: paraConteudoDaApi(campos) }));
     },
     async assinarRegistro(id) {
       return paraRegistro(await chamar<AtendimentoApi>('POST', `/atendimentos/${encodeURIComponent(id)}/finalizar`, {}));
