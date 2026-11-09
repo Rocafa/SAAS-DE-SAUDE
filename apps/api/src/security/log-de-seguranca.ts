@@ -68,6 +68,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'origem_nao_permitida',
   'aviso_de_anomalia',
   'erro_na_autenticacao',
+  'escolha_de_clinica',
   'logout',
   'prazo_absoluto',
   'conta_inativa',
