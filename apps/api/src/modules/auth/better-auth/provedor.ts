@@ -162,9 +162,9 @@ export class BetterAuthProvider implements AuthProvider {
       .from(sessao)
       .where(eq(sessao.id, sessaoId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.id, sessaoId));
-    registrarEventoDeSeguranca('LOGOUT', { motivo, ...(userId ?? antes?.userId ? { userId: userId ?? (antes?.userId as string) } : {}) });
-    const tenantId = antes?.clinicaAtiva;
     const ator = antes?.userId ?? userId;
+    registrarEventoDeSeguranca('LOGOUT', { motivo, ...(ator ? { userId: ator } : {}) });
+    const tenantId = antes?.clinicaAtiva;
     if (!tenantId || !ator) return;
     try {
       await withTenant(
