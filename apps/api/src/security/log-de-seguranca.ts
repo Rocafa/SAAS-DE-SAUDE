@@ -67,6 +67,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   'perfil_revogado',
   'origem_nao_permitida',
   'aviso_de_anomalia',
+  /** Trilha do fim da sessão (logout, prazo absoluto, conta inativa) não gravou. */
+  'fim_de_sessao',
   'erro_na_autenticacao',
   'logout',
   'prazo_absoluto',
