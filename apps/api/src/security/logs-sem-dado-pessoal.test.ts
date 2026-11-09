@@ -153,6 +153,54 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
     return achou;
   };
 
+  /**
+   * A expressão DESPEJA um objeto inteiro (`JSON.stringify`, `util.inspect`, `Object.values`…) ou leva o erro dentro de
+   * array/objeto literal? O resultado é uma STRING (ou um invólucro do erro) que carrega o que estiver dentro, inclusive
+   * campo sensível de nome neutro — então a variável que recebe isso fica marcada. Sem esta regra, basta guardar o
+   * despejo numa variável antes do log para passar pela trava (resíduo 1 × resíduo 2 do parecer do #129).
+   *
+   * NÃO cobre `const x = { ...objeto }`: ali o resultado continua um objeto, e marcar a variável inteira reprovaria
+   * acesso a campo de nome inofensivo (`x.finishReason`) — é o caso real de `modules/ai/ai.service.ts`. Fica declarado
+   * como aberto: spread de objeto comum para variável e depois log da variável inteira.
+   */
+  const despejaOuEspalha = (e: ts.Node): boolean => {
+    let achou = false;
+    const ver = (n: ts.Node): void => {
+      if (achou) return;
+      if (ts.isCallExpression(n) && DESPEJOS.has(n.expression.getText(sf))) {
+        const alvo = n.arguments[0];
+        // Literal é inofensivo (`String(42)`); o resto carrega o que estiver dentro.
+        const seguro = alvo !== undefined && (ts.isStringLiteral(alvo) || ts.isNumericLiteral(alvo) || PERMITIDOS[alvo.getText(sf)] !== undefined);
+        if (!seguro) {
+          achou = true;
+          return;
+        }
+      }
+      if ((ts.isArrayLiteralExpression(n) || ts.isObjectLiteralExpression(n)) && erroInteiroEmAlgumLugar(n)) {
+        achou = true;
+        return;
+      }
+      ts.forEachChild(n, ver);
+    };
+    ver(e);
+    return achou;
+  };
+
+  /** Array ou objeto literal que leva o erro inteiro (`[err]`, `{ e: err }`): o log imprime o erro todo. */
+  const erroInteiroEmAlgumLugar = (e: ts.Node): boolean => {
+    let achou = false;
+    const ver = (n: ts.Node): void => {
+      if (achou) return;
+      if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && ehErro(n.text, n)) {
+        achou = true;
+        return;
+      }
+      ts.forEachChild(n, ver);
+    };
+    ts.forEachChild(e, ver);
+    return achou;
+  };
+
   /** `err`, `err as Error`, `(err)`, `err!`: o erro inteiro, sem acesso a propriedade. */
   const erroInteiro = (e: ts.Expression): boolean => {
     let x: ts.Expression = e;
@@ -166,7 +214,7 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
     const nome = chaveDe(alvo, alvo.text);
     const antes = sensiveisRenomeadas.size + apelidosDoErro.size;
     if (erroInteiro(valor)) apelidosDoErro.add(nome);
-    else if (!INICIALIZACAO_SEGURA.test(valor.getText(sf)) && carregaSensivel(valor)) sensiveisRenomeadas.add(nome);
+    else if (!INICIALIZACAO_SEGURA.test(valor.getText(sf)) && (carregaSensivel(valor) || despejaOuEspalha(valor))) sensiveisRenomeadas.add(nome);
     return sensiveisRenomeadas.size + apelidosDoErro.size !== antes;
   };
 
@@ -452,5 +500,31 @@ describe('logs sem dado pessoal (trava de PR)', () => {
     expect(linhas).not.toContain(10);
     // describe continua liberado só no arquivo onde foi conferido.
     expect(violacoesNoFonte('lifecycle/graceful-shutdown.ts', 'const f = (err: Error) => logger.error(describe(err));')).toEqual([]);
+  });
+
+  it('lavagem: o despejo guardado em variável local antes do log (resíduo 1 × resíduo 2)', () => {
+    const fonte = [
+      'class X {',
+      '  f(p: { cpf: string }, o: object, err: Error) {',
+      '    const a = JSON.stringify(p);',
+      '    this.logger.warn(a);',
+      '    const b = util.inspect(o);',
+      '    this.logger.warn(b);',
+      '    const c = Object.values(o).join();',
+      '    this.logger.warn(c);',
+      '    const d = String(err);',
+      '    this.logger.warn(d);',
+      '    const f = [err];',
+      '    this.logger.warn(f);',
+      '    const ok = String(42);',
+      '    this.logger.warn(ok);',
+      '  }',
+      '}',
+    ].join('\n');
+    const linhas = violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha);
+    // Cada despejo é reprovado NA LINHA DO LOG: a variável leva o despejo adiante, mesmo com nome neutro.
+    for (const l of [4, 6, 8, 10, 12]) expect(linhas, `linha ${l}`).toContain(l);
+    // `String` de literal numérico continua inofensivo: a trava não pode virar ruído.
+    expect(linhas).not.toContain(14);
   });
 });
