@@ -45,7 +45,7 @@ export interface OpcoesDaAutenticacao {
   /** Store dos contadores de bloqueio (o do rate limit: Redis em produção). */
   readonly store: RateLimitStore;
   /** Ganchos do provedor para o código aceito ou recusado (mfa_em e trilha). */
-  readonly fator: Pick<DependenciasDaProtecao, 'aoVerificarMfa' | 'aoFalharMfa' | 'podeCadastrarFator'>;
+  readonly fator: Pick<DependenciasDaProtecao, 'aoVerificarMfa' | 'aoFalharMfa' | 'podeCadastrarFator' | 'aoBloquearFator'>;
   /** Conferência de senha vazada (R15): k-anonimato em produção; dublê nos testes. */
   readonly conferirSenhaVazada: DependenciasDaProtecao['conferirSenhaVazada'];
 }
@@ -83,6 +83,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
         ativo: { type: 'boolean', input: false, required: false, defaultValue: true },
         clinicaDeOrigem: { type: 'string', input: false, required: false, returned: false },
         conviteDeOrigem: { type: 'string', input: false, required: false, returned: false },
+        inativaPor: { type: 'string', input: false, required: false, returned: false },
       },
     },
     session: {

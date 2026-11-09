@@ -110,6 +110,7 @@ export const REGRAS_DE_SEGURANCA = [
   'portal_sigilo_transicao',
   'vinculo_autoagendado',
   'mfa_recusas_por_usuario',
+  'fator_bloqueado',
   'vinculo_cruzado',
   'login_por_email',
   'login_por_origem',

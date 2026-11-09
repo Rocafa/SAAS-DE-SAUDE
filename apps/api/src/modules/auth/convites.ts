@@ -181,6 +181,7 @@ export class ConvitesService {
         throw err;
       })
       .catch(naoAdmin);
+    if (reaproveita) await provedor.completarContaReaproveitada({ userId, nome, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
     return provedor.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
   }
 
@@ -199,8 +200,9 @@ export class ConvitesService {
     const provedor = this.provider;
     if (!ehProvedorDeConvite(provedor)) throw new NaoEncontradoError();
     if (!e.codigo || !/^[0-9]{6}$/.test(e.codigo)) throw new ConflitoError('conta_existente_exige_login', ['codigo']);
-    const login = await provedor.loginCompleto({ email: e.email, senha: e.senha, codigo: e.codigo, cabecalhos: e.cabecalhos });
-    if (login === 'falhou') throw new ConflitoError('credenciais_invalidas');
+    // Sem abrir sessão (vale também para a conta desligada que está sendo recontratada); a pessoa entra depois.
+    const login = await provedor.conferirCredenciais({ email: e.email, senha: e.senha, codigo: e.codigo });
+    if (login === 'falhou' || login === 'bloqueado') throw new ConflitoError('credenciais_invalidas');
     if (login === 'sem_fator') throw new ConflitoError('conta_sem_fator');
     const ctx: RequestContext = { tenantId: tenantId as TenantId, userId: convite.createdBy as RequestContext['userId'], roles: [] };
     await escreverNaClinica(this.db, ctx, async (tx) => {
@@ -219,7 +221,7 @@ export class ConvitesService {
     }).catch((err: unknown) => {
       throw err instanceof ProibidoError ? new NaoEncontradoError() : err;
     });
-    return login.cookies;
+    return [];
   }
 }
 

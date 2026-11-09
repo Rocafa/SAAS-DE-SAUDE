@@ -17,6 +17,7 @@ import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo 
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
+import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
@@ -433,17 +434,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
   async idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'> {
     const [ja] = await this.d.dbAuth
-      .select({ id: usuario.id, ativo: usuario.ativo, origem: usuario.conviteDeOrigem, senha: conta.password })
+      .select({ id: usuario.id, ativo: usuario.ativo, inativaPor: usuario.inativaPor, senha: conta.password })
       .from(usuario)
       .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
       .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
     if (!ja) return { userId: randomUUID(), reaproveita: false };
-    const abandonada = !ja.ativo && ja.origem !== null && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    const abandonada = !ja.ativo && ja.inativaPor === 'convite_desfeito' && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
     return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
   }
 
   async desfazerContaDoConvite(userId: string): Promise<void> {
-    await this.d.dbAuth.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    await this.d.dbAuth.update(usuario).set({ ativo: false, inativaPor: 'convite_desfeito' }).where(eq(usuario.id, userId));
     await this.d.dbAuth.update(conta).set({ password: null }).where(eq(conta.userId, userId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, userId));
   }
@@ -472,13 +473,15 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (e.reaproveita) {
       // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
       const hash = await gerarHashDeSenha(e.senha);
+      // A concessão já reativou a conta (trigger da 0069); a marca da conta abandonada é a senha ausente.
       const r = await this.d.dbAuth
-        .update(usuario)
-        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
-        .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
-        .returning({ id: usuario.id });
+        .update(conta)
+        .set({ password: hash })
+        .where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential'), isNull(conta.password)))
+        .returning({ id: conta.id });
       if (r.length === 0) return 'conta_existente';
-      await this.d.dbAuth.update(conta).set({ password: hash }).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+      // Nome e origem vão DEPOIS do commit da clínica (completarContaReaproveitada): a linha de usuario está travada
+      // pelo trigger da concessão nesta transação, e tocá-la por outra conexão travaria as duas.
       return { userId };
     }
     try {
@@ -500,34 +503,109 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     return { userId };
   }
 
-  async loginCompleto(e: { email: string; senha: string; codigo: string; cabecalhos: Headers }): Promise<{ userId: string; cookies: string[] } | 'falhou' | 'sem_fator'> {
-    const r1 = await this.d.auth.api
-      .signInEmail({ body: { email: e.email.trim().toLowerCase(), password: e.senha }, headers: e.cabecalhos, asResponse: true })
-      .catch(() => null);
-    if (!r1 || r1.status !== 200) return 'falhou';
-    const corpo = (await r1.json().catch(() => ({}))) as { twoFactorRedirect?: boolean };
-    const jarro = r1.headers
-      .getSetCookie()
-      .map((c) => c.split(';')[0] ?? '')
-      .filter((c) => c !== '' && !c.endsWith('='));
-    const comCookie = new Headers(e.cabecalhos);
-    comCookie.set('cookie', jarro.join('; '));
-    if (!corpo.twoFactorRedirect) {
-      // Conta sem TOTP: o aceite exige o fator; a sessão aberta pela senha não fica viva.
-      const aberta = await this.d.auth.api.getSession({ headers: comCookie }).catch(() => null);
-      if (aberta) await this.encerrar(aberta.session.id, 'logout', aberta.user.id);
+  /** Reserva atômica no contador de bloqueio (R15, mesma regra do #152); devolvida se a credencial conferir. */
+  private async reservarTentativa(chave: string): Promise<boolean> {
+    const b = this.d.bloqueio;
+    if (!b) return true;
+    const n = (await b.store.hit(chave, JANELA_DE_BLOQUEIO_MS).catch(() => ({ count: 0 }))).count;
+    if (n > TETO_DE_FALHAS) {
+      await b.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+      return false;
+    }
+    return true;
+  }
+
+  private async devolverTentativa(chave: string): Promise<void> {
+    if (this.d.bloqueio) await this.d.bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+  }
+
+  /** Senha conferida contra o hash, com o mesmo custo quando não há credencial. */
+  private async senhaConfere(userId: string, senha: string): Promise<boolean> {
+    const [c] = await this.d.dbAuth.select({ hash: conta.password }).from(conta).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+    if (!c?.hash) {
+      await gerarHashDeSenha(senha);
+      return false;
+    }
+    return conferirSenha({ hash: c.hash, password: senha }).catch(() => false);
+  }
+
+  /** Código TOTP conferido com o segredo decifrado pela biblioteca, com a marca de reuso. */
+  private async totpDaPessoaConfere(userId: string, codigo: string): Promise<boolean | 'sem_fator'> {
+    const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, userId));
+    if (!f?.verificado) return 'sem_fator';
+    const b = this.d.bloqueio;
+    if (b) {
+      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
+      if (usado.count > 1) return false;
+    }
+    if (!this.d.segredoDaInstancia) return false;
+    const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
+    return claro !== null && totpConfere(claro, codigo, this.agora().getTime());
+  }
+
+  /**
+   * Senha e código TOTP de uma conta existente, SEM abrir sessão (aceite de convite, R1 e R2 do desenho do PR 3; R15:
+   * pelos bloqueios de login e de fator). Funciona também para a conta desligada que está sendo recontratada.
+   */
+  async conferirCredenciais(e: { email: string; senha: string; codigo: string }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado'> {
+    const email = e.email.trim().toLowerCase();
+    const [u] = await this.d.dbAuth.select({ id: usuario.id }).from(usuario).where(sql`lower(${usuario.email}) = ${email}`);
+    const b = this.d.bloqueio;
+    const chaveLogin = b ? chaveDoBloqueio(b.chaveHmac, 'login', email) : '';
+    if (!(await this.reservarTentativa(chaveLogin))) return 'bloqueado';
+    if (!u || !(await this.senhaConfere(u.id, e.senha))) return 'falhou';
+    await this.devolverTentativa(chaveLogin);
+    const chaveFator = b ? chaveDoBloqueio(b.chaveHmac, 'fator', u.id) : '';
+    if (!(await this.reservarTentativa(chaveFator))) return 'bloqueado';
+    const totp = await this.totpDaPessoaConfere(u.id, e.codigo);
+    if (totp === 'sem_fator') {
+      await this.devolverTentativa(chaveFator);
       return 'sem_fator';
     }
-    // O plugin do fator não está no tipo público da instância (Auth): chamada pela API interna, com os ganchos.
-    const api = this.d.auth.api as unknown as { verifyTOTP(a: { body: { code: string }; headers: Headers; asResponse: true }): Promise<Response> };
-    const r2 = await api.verifyTOTP({ body: { code: e.codigo }, headers: comCookie, asResponse: true }).catch(() => null);
-    if (!r2 || r2.status !== 200) return 'falhou';
-    const cookies = r2.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
-    const lida = await this.d.auth.api
-      .getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) })
-      .catch(() => null);
-    if (!lida) return 'falhou';
-    return { userId: lida.user.id, cookies };
+    if (!totp) return 'falhou';
+    await this.devolverTentativa(chaveFator);
+    return { userId: u.id };
+  }
+
+  /** R6 do #152: aviso de fator bloqueado aos admins de cada clínica da pessoa (o auxiliar limita a 1 por dia). */
+  async avisarFatorBloqueado(userId: string): Promise<void> {
+    for (const tenantId of await this.clinicasDoUsuario(userId)) {
+      const ctx = { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] };
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        async (tx) => {
+          await recordAudit(tx, ctx, { action: AuditAction.AnomalyAlert, scope: 'mfa', metadata: { rule: 'fator_bloqueado' } });
+          await avisarAdminsDeAnomalia(tx, ctx, 'fator_bloqueado');
+        },
+        userId,
+      );
+    }
+  }
+
+  /**
+   * Anonimização a pedido do titular (R18; R11 do desenho do PR 3): o id fica (o prontuário identifica o autor pela
+   * tabela da clínica); e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; a conta fica inativa.
+   */
+  async anonimizarConta(userId: string): Promise<void> {
+    await this.d.dbAuth.transaction(async (tx) => {
+      await tx
+        .update(usuario)
+        .set({ name: 'Conta anonimizada', email: `anonimizada-${userId}@anonimizada.invalid`, ativo: false, inativaPor: 'anonimizada', image: null })
+        .where(eq(usuario.id, userId));
+      await tx.update(conta).set({ password: null }).where(eq(conta.userId, userId));
+      await tx.delete(doisFatores).where(eq(doisFatores.userId, userId));
+      await tx.delete(sessao).where(eq(sessao.userId, userId));
+      await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, userId), isNull(recuperacao.usadoEm)));
+    });
+    registrarEventoDeSeguranca('LOGOUT', { motivo: 'conta_inativa', userId });
+  }
+
+  async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
+    await this.d.dbAuth
+      .update(usuario)
+      .set({ ativo: true, inativaPor: null, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+      .where(eq(usuario.id, e.userId));
   }
 
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
