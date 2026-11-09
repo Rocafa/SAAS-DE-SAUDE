@@ -77,7 +77,8 @@ export class BetterAuthProvider implements AuthProvider {
       const clinicas = await this.clinicasDoUsuario(userId);
       if (clinicas.length !== 1 || !clinicas[0]) return null;
       tenantId = clinicas[0];
-      await this.definirClinica(sessaoId, userId, tenantId);
+      // Sem a linha na trilha, a escolha não vale: sem contexto, sem acesso.
+      if (!(await this.definirClinica(sessaoId, userId, tenantId))) return null;
     }
     const perfis = await this.perfisNoBanco(tenantId, userId);
     if (perfis.length === 0) {
@@ -114,21 +115,30 @@ export class BetterAuthProvider implements AuthProvider {
   /**
    * Grava a clínica ativa da sessão, se o vínculo existir (gancho `trocarClinica`). Trocar de clínica ZERA o MFA
    * (contrato R6 do #123) e grava `session_tenant_selected` na trilha da clínica nova (R12 do parecer do desenho).
+   *
+   * Ordem (ALTA do parecer do #149): a trilha grava ANTES da clínica ativa. Os dois ficam em bancos diferentes; se
+   * a trilha falhar, a sessão continua sem clínica (sem acesso) e o log alarma. Nunca acesso sem linha na trilha.
+   * O inverso (trilha gravada e update falhou) só deixa uma linha a mais, e a pessoa tenta de novo.
    */
   async definirClinica(sessaoId: string, userId: string, tenantId: string): Promise<boolean> {
     if (!(await this.clinicasDoUsuario(userId)).includes(tenantId)) return false;
+    try {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, {
+            action: AuditAction.Update,
+            scope: 'session',
+            metadata: { op: 'session_tenant_selected' },
+          }),
+        userId,
+      );
+    } catch {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId, motivo: 'escolha_de_clinica' });
+      return false;
+    }
     await this.d.dbAuth.update(sessao).set({ clinicaAtiva: tenantId, mfaEm: null, perfisNoMfa: null }).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
-    await withTenant(
-      this.d.dbClinica,
-      tenantId as TenantId,
-      (tx) =>
-        recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, {
-          action: AuditAction.Update,
-          scope: 'session',
-          metadata: { op: 'session_tenant_selected' },
-        }),
-      userId,
-    );
     return true;
   }
 
