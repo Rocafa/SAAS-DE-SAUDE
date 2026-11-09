@@ -98,4 +98,34 @@ describe('montagem do Better Auth', () => {
     expect(encerrar).toHaveBeenCalledWith('s1', 'prazo_absoluto', 'u1');
     expect(handlerDaBiblioteca).not.toHaveBeenCalled();
   });
+
+  it('R6(a) do #117: o botão "sair" passa pelo provedor (trilha da clínica) ANTES da biblioteca apagar a sessão', async () => {
+    const ordem: string[] = [];
+    const handlerDaBiblioteca = vi.fn(() => {
+      ordem.push('biblioteca');
+      return Promise.resolve();
+    });
+    const encerrar = vi.fn(() => {
+      ordem.push('encerrar');
+      return Promise.resolve();
+    });
+    const valida = { session: { id: 's1', createdAt: new Date() }, user: { id: 'u1' } };
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(valida) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    mw(req('POST', '/api/auth/sign-out', { origin: 'https://app.exemplo.test' }), resposta(), vi.fn());
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    expect(encerrar).toHaveBeenCalledWith('s1', 'logout', 'u1');
+    // A biblioteca ainda roda: é ela que apaga o cookie no navegador.
+    expect(ordem).toEqual(['encerrar', 'biblioteca']);
+  });
+
+  it('"sair" sem sessão válida: não chama o provedor, a biblioteca responde como sempre', async () => {
+    const handlerDaBiblioteca = vi.fn(() => Promise.resolve());
+    const encerrar = vi.fn(() => Promise.resolve());
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(null) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    mw(req('POST', '/api/auth/sign-out', { origin: 'https://app.exemplo.test' }), resposta(), vi.fn());
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    expect(encerrar).not.toHaveBeenCalled();
+  });
 });
