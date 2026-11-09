@@ -55,6 +55,9 @@ O Better Auth cuida da **credencial**: senha, sessão, cookie e, no PR 2, o TOTP
 - **Auditoria pelos ganchos da biblioteca**, em dois registros:
   - **Log de segurança**, sempre: `LOGIN_OK`, `LOGIN_FALHOU`, `LOGOUT` e `CONTA_BLOQUEADA`, com `userId` quando houver e a `origem` em HMAC, **nunca o e-mail**.
   - **Trilha da clínica**, quando há clínica: a seleção da clínica, o logout com clínica ativa e os eventos de MFA. Falha de login sem usuário identificado não tem clínica e fica só no log de segurança.
+  - **Por que login e falha de login não vão para a trilha** (revisão do #149, corrigida no #166): os dois acontecem **antes** da escolha da clínica, e a trilha é por clínica. Não há tenant onde gravar. O vestígio do login na trilha é o `session_tenant_selected`, gravado quando a sessão ganha a clínica (automática com uma clínica só, ou pela rota de escolha).
+  - **Ordem da escolha:** a linha `session_tenant_selected` grava **antes** de `clinica_ativa`. São bancos diferentes; se a trilha falhar, a sessão fica sem clínica (sem acesso) e o log emite `TRILHA_NAO_GRAVADA` com motivo `escolha_de_clinica`. Nunca há acesso sem a linha na trilha. O caso inverso (trilha gravada, `update` falhou) só deixa uma linha a mais.
+  - **Trilha fora × TOTP feito sem clínica** (R4 do desenho do PR 3): com a trilha fora, a escolha não acontece e `mfa_sem_clinica_em` **não** é zerado. O TOTP guardado não dá acesso (sem clínica, sem MFA marcado) e só pode ser aproveitado pela primeira escolha que valer, dentro dos mesmos 5 min (o prazo não renova). A troca atômica zera o campo nessa escolha. Testes (a) e (b) em `provedor.test.ts`.
 - **IP e user-agent na `sessao` em HMAC**, nunca em claro. A guarda do IP em claro exigida pelo Marco Civil fica nos logs do ALB (pendência AWS/D8).
 - **Bloqueio** (PR 2): 5 falhas em 15 min por e-mail em HMAC e por origem, no store do rate limit (Redis), com resposta idêntica para conta existente e inexistente.
 
