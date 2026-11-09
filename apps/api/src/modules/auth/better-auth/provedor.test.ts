@@ -5,6 +5,7 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Autenticacao } from './instancia';
+import { zerarJanelasDoLog } from '../../../security/log-de-seguranca';
 import { BetterAuthProvider } from './provedor';
 
 const SESSAO = 'sessao-ficticia-1';
@@ -64,7 +65,10 @@ function capturarEventos(): () => Record<string, unknown>[] {
       .map((l) => JSON.parse(l) as Record<string, unknown>);
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  zerarJanelasDoLog();
+});
 
 describe('definirClinica: trilha antes da clínica ativa', () => {
   it('caminho feliz: a linha da trilha grava antes de a sessão ganhar a clínica', async () => {
@@ -78,7 +82,7 @@ describe('definirClinica: trilha antes da clínica ativa', () => {
     const { provedor, ordem } = montar({ trilhaFora: true });
     expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
     expect(ordem).not.toContain('clinica_ativa');
-    expect(eventos().some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['motivo'] === 'escolha_de_clinica')).toBe(true);
+    expect(eventos().some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['motivo'] === 'escolha_de_clinica' && e['userId'] === USER)).toBe(true);
   });
 
   it('resolver com clínica única e trilha fora: sem contexto (sem acesso), não segue com a clínica que não gravou', async () => {
@@ -86,5 +90,12 @@ describe('definirClinica: trilha antes da clínica ativa', () => {
     const { provedor, ordem } = montar({ trilhaFora: true });
     expect(await provedor.resolver({ headers: {} })).toBeNull();
     expect(ordem).not.toContain('clinica_ativa');
+  });
+
+  it('trilha fora e requisições seguidas: um alarme por sessão a cada minuto, não um por requisição', async () => {
+    const eventos = capturarEventos();
+    const { provedor } = montar({ trilhaFora: true });
+    for (let i = 0; i < 5; i++) expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
+    expect(eventos().filter((e) => e['evento'] === 'TRILHA_NAO_GRAVADA')).toHaveLength(1);
   });
 });

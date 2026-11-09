@@ -15,7 +15,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers } from '../../../db/schema';
 import { sessao, usuario, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
-import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
 import type { AuthContext, AuthProvider, RequisicaoParaSessao } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
@@ -135,7 +135,8 @@ export class BetterAuthProvider implements AuthProvider {
         userId,
       );
     } catch {
-      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId, motivo: 'escolha_de_clinica' });
+      // Com a trilha fora, cada requisição tenta de novo: um alarme por sessão a cada minuto, não um por requisição.
+      registrarNoMaximoUmaVez(`trilha-clinica:${sessaoId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo: 'escolha_de_clinica' });
       return false;
     }
     await this.d.dbAuth.update(sessao).set({ clinicaAtiva: tenantId, mfaEm: null, perfisNoMfa: null }).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
