@@ -71,9 +71,15 @@ export function montarAutenticacao(auth: Autenticacao, provedor: BetterAuthProvi
         }
         // R6(a) do #117: o "sair" passa pelo provedor, que lê a clínica ativa, apaga a sessão e grava `session_ended`
         // na trilha (e o LOGOUT no log). A biblioteca roda depois só para apagar o cookie no navegador.
+        // Se o provedor falhar, o "sair" segue mesmo assim: a biblioteca ainda apaga a sessão e o cookie. Sair nunca
+        // pode depender da trilha (o alarme avisa que a linha faltou).
         if (rota === 'POST /sign-out' && lida) {
-          await provedor.encerrar(lida.session.id, 'logout', lida.user.id);
-          sessaoEncerrada = true;
+          try {
+            await provedor.encerrar(lida.session.id, 'logout', lida.user.id);
+            sessaoEncerrada = true;
+          } catch {
+            registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { userId: lida.user.id, motivo: 'fim_de_sessao' });
+          }
         }
       }
       res.on('finish', () => {
