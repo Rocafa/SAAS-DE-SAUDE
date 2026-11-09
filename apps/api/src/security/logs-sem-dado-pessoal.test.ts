@@ -163,7 +163,11 @@ export function violacoesNoFonte(arquivo: string, fonte: string): Violacao[] {
    * acesso a campo de nome inofensivo (`x.finishReason`) — é o caso real de `modules/ai/ai.service.ts`. Fica declarado
    * como aberto: spread de objeto comum para variável e depois log da variável inteira.
    */
+  // Pré-filtro de texto antes de andar na AST: o ponto fixo chama `marcar` muitas vezes por arquivo, e varrer a árvore
+  // de toda atribuição estourou o limite de 5 s do teste no CI. Só vale andar se o texto tiver sinal de despejo.
+  const SINAL_DE_DESPEJO = /JSON\.stringify|inspect|format|Object\.(values|entries|keys)|String\s*\(|\[|\{/;
   const despejaOuEspalha = (e: ts.Node): boolean => {
+    if (!SINAL_DE_DESPEJO.test(e.getText(sf))) return false;
     let achou = false;
     const ver = (n: ts.Node): void => {
       if (achou) return;
