@@ -159,3 +159,9 @@ Isolamento por clínica no banco (RLS forçado) com teste automatizado; criptogr
 - Marco Civil, art. 15: <https://www.planalto.gov.br/ccivil_03/_ato2011-2014/2014/lei/l12965.htm>
 - Código Penal, art. 154: <https://www.planalto.gov.br/ccivil_03/decreto-lei/del2848compilado.htm>
 - Res. CFM 2.454/2026: <https://sistemas.cfm.org.br/normas/arquivos/resolucoes/BR/2026/2454_2026.pdf>
+
+## Cláusula: contas da equipe e tokens (D4; R14 e R17 do parecer do desenho do PR 3)
+
+1. O administrador da CLÍNICA informa o e-mail de cada pessoa da equipe que convida e responde pela exatidão dele. Enquanto a plataforma não verificar e-mails, a verificação é feita pela clínica.
+2. Os tokens de convite (72 h) e de recuperação (15 min) aparecem uma única vez ao administrador, que os entrega à pessoa **fora da plataforma**, por um meio que só ela acesse, e não os guarda nem os repassa.
+3. A clínica comunica à plataforma, sem demora, qualquer suspeita de uso indevido de token ou de conta (art. 48 da LGPD).

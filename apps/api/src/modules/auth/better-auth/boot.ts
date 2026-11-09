@@ -8,6 +8,7 @@ import { createDatabase } from '../../../db/tenant-transaction';
 import { AMBIENTES_SESSAO_FICTICIA } from '../auth-provider.factory';
 import { loadRateLimitHashKey, type RateLimitStore } from '../../../security/rate-limit-store';
 import { criarAutenticacao, nomeDoCookie } from './instancia';
+import { configuracaoDoSegredo, lerSegredosVersionados } from './segredos';
 import { montarAutenticacao } from './montagem';
 import { BetterAuthProvider } from './provedor';
 import { conferidorPorKAnonimato } from './senha-vazada';
@@ -26,6 +27,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
   // O provedor nasce depois da instância; os ganchos do fator só rodam em requisição, quando ele já existe.
   const ref: { provedor?: BetterAuthProvider } = {};
   const conferirSenhaVazada = conferidorPorKAnonimato();
+  const segredosVersionados = lerSegredosVersionados(env.BETTER_AUTH_SECRETS);
   const chaveHmac = loadRateLimitHashKey(env);
   const doProvedor = (): BetterAuthProvider => {
     if (!ref.provedor) throw new Error('provedor do Better Auth ainda não montado');
@@ -34,6 +36,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
   const auth = criarAutenticacao({
     db: dbAuth.db,
     segredo: obrigatoria(env, 'BETTER_AUTH_SECRET'),
+    ...(segredosVersionados ? { segredosVersionados } : {}),
     baseURL: obrigatoria(env, 'API_BASE_URL'),
     origensConfiaveis,
     producao,
@@ -53,7 +56,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
     dbClinica: dbClinica.db,
     conferirSenhaVazada,
     bloqueio: { store, chaveHmac },
-    segredoDaInstancia: obrigatoria(env, 'BETTER_AUTH_SECRET'),
+    segredoDaInstancia: configuracaoDoSegredo(obrigatoria(env, 'BETTER_AUTH_SECRET'), segredosVersionados),
     cookieDeEncerramento: `${nomeDoCookie(producao)}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict${producao ? '; Secure' : ''}`,
   });
   ref.provedor = provider;

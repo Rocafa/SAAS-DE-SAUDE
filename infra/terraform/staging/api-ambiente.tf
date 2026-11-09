@@ -64,6 +64,22 @@ resource "aws_iam_role_policy" "api_pseudonimo" {
   policy = data.aws_iam_policy_document.api_pseudonimo.json
 }
 
+# --- Segredos versionados do login (D4; R9 do parecer do código do #152) ----------------------
+# Só na ROTAÇÃO do BETTER_AUTH_SECRET. O segredo nasce VAZIO e é preenchido fora do git, à mão:
+#   aws secretsmanager put-secret-value --secret-id <nome>/better-auth-secrets \
+#     --secret-string '{"segredos":"2:<novo>,1:<antigo>"}'
+# A PRIMEIRA versão cifra o que é novo; as demais só decifram (o TOTP cifrado antes continua legível). O
+# BETTER_AUTH_SECRET atual continua como legado. A versão antiga só sai depois que nada depende dela (runbook).
+resource "aws_secretsmanager_secret" "better_auth_secrets" {
+  #checkov:skip=CKV2_AWS_57:Rotação manual e controlada (runbook do 3c): a ordem das versões importa e não cabe numa Lambda genérica.
+  count = var.better_auth_segredos_versionados ? 1 : 0
+
+  name                    = "${local.nome}/better-auth-secrets"
+  description             = "BETTER_AUTH_SECRETS (versões do segredo do login). PREENCHER à mão na rotação, nunca no git."
+  kms_key_id              = aws_kms_key.this["segredos"].arn
+  recovery_window_in_days = 7
+}
+
 # --- WhatsApp Cloud API (só com whatsapp_provedor = "cloud_api") ----------------------------
 # Credenciais emitidas pela Meta: o Terraform NÃO as gera nem as conhece. O segredo nasce VAZIO
 # (sem versão) e é preenchido fora do git, uma vez, com papel de máquina ou break-glass:

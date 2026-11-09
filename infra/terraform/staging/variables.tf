@@ -252,6 +252,12 @@ variable "pagination_cursor_key_versao" {
   }
 }
 
+variable "better_auth_segredos_versionados" {
+  description = "Liga o segredo BETTER_AUTH_SECRETS (rotação sem perder o TOTP, R9 do #152). Ligar SÓ depois de preencher o segredo (put-secret-value); vazio, a tarefa não sobe."
+  type        = bool
+  default     = false
+}
+
 variable "better_auth_secret_versao" {
   description = "Versão do BETTER_AUTH_SECRET (D4). Incrementar gera segredo novo (write-only); ATENÇÃO: até os segredos versionados (R9 do #152), invalida o TOTP de todos e as sessões. Depois, forçar deploy do ECS."
   type        = number
