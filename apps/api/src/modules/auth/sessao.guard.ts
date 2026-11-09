@@ -72,6 +72,26 @@ export const SCOPE_MFA_RECUSADO = 'mfa_denied';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Alvo da recusa, tirado de QUALQUER parâmetro de rota — não só de um chamado `id`. Rota de poder sem `id` existe:
+ * `DELETE /clinica/membros/:usuarioId/:perfil`, `POST /custodias/:id/notas/:notaId/decisao` e
+ * `POST /pacientes/:id/responsaveis/sigilo/:pedidoId/revogar`. Com `params.id` só, 20 alvos diferentes colapsavam
+ * numa linha por janela e a enumeração ficava invisível na trilha.
+ *
+ * Escolhe o ÚLTIMO parâmetro que é UUID: o Express preenche `params` na ordem do caminho, então o último é o mais
+ * específico (`notaId` sob a custódia, `pedidoId` sob o paciente). Um só id, e não a concatenação, porque o metadata
+ * da trilha tem teto de 64 caracteres por string — dois UUIDs juntos não caberiam.
+ */
+export function alvoDaRota(params: Readonly<Record<string, string | undefined>> | undefined): string | undefined {
+  if (!params) return undefined;
+  let alvo: string | undefined;
+  for (const valor of Object.values(params)) {
+    if (typeof valor === 'string' && UUID_RE.test(valor)) alvo = valor;
+  }
+  return alvo;
+}
+
+
+/**
  * R9 do parecer do #123: recusas por MFA em rota sensível não inundam a trilha. Na janela, 1 linha por usuário, rota
  * e motivo; acima do teto por usuário, 429 e um único alerta de anomalia.
  */
@@ -138,7 +158,7 @@ export class SessaoGuard implements CanActivate {
     if (recusa) {
       registrarNoMaximoUmaVez(`mfa:${auth.tenantId}:${auth.userId}:${nomeDoHandler(context)}:${recusa}`, 60_000, 'MFA_RECUSADO', { tenantId: auth.tenantId, userId: auth.userId, handler: nomeDoHandler(context), motivo: recusa });
       const handler = `${context.getClass().name}.${context.getHandler().name}`;
-      if (janela !== null) await this.registrarRecusa(auth, recusa, handler, req.params?.id);
+      if (janela !== null) await this.registrarRecusa(auth, recusa, handler, alvoDaRota(req.params));
       else await this.registrarRecusaComum(auth, recusa, handler);
       throw new ProibidoError(recusa);
     }

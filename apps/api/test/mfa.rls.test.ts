@@ -113,6 +113,19 @@ describe('issue #106: MFA obrigatório e recente nas rotas sensíveis', () => {
     expect(linhas[0]?.metadata).toMatchObject({ target_id: alvo });
   });
 
+  it('o alvo sai de QUALQUER parâmetro de rota, não só de um chamado `id`', async () => {
+    const userId = randomUUID();
+    const antigo = sessao(['admin'], new Date(Date.now() - MFA_RECENTE_MS - 60_000), userId);
+    // `DELETE /clinica/membros/:usuarioId/:perfil` é rota de poder e NÃO tem parâmetro chamado `id`:
+    // sem tirar o alvo de todos os params, 20 usuários diferentes colapsam numa linha por janela.
+    const alvos = [randomUUID(), randomUUID(), randomUUID()];
+    for (const alvo of alvos) await api.http().delete(`/clinica/membros/${alvo}/profissional`).set(cab(antigo)).expect(403);
+    const linhas = (await recusasDe(userId)).filter((l) => l.action === 'read');
+    const vistos = linhas.map((l) => (l.metadata as { target_id?: string }).target_id);
+    expect(new Set(vistos).size, `uma linha por alvo distinto: ${JSON.stringify(vistos)}`).toBe(alvos.length);
+    for (const alvo of alvos) expect(vistos.some((v) => v?.includes(alvo))).toBe(true);
+  });
+
   it('R8: GET /sessao devolve só até quando o MFA conta como recente', async () => {
     const quando = new Date(Date.now() - 60_000);
     const r = await api.http().get('/sessao').set(cab(sessao(['recepcao'], quando)));
