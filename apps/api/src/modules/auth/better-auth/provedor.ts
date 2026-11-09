@@ -15,7 +15,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
-import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
@@ -128,7 +128,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       const clinicas = await this.clinicasDoUsuario(userId);
       if (clinicas.length !== 1 || !clinicas[0]) return null;
       tenantId = clinicas[0];
-      await this.definirClinica(sessaoId, userId, tenantId);
+      // Sem a linha na trilha, a escolha não vale: sem contexto, sem acesso.
+      if (!(await this.definirClinica(sessaoId, userId, tenantId))) return null;
     }
     const perfis = await this.perfisNoBanco(tenantId, userId);
     if (perfis.length === 0) {
@@ -758,9 +759,32 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /**
    * Grava a clínica ativa da sessão, se o vínculo existir (gancho `trocarClinica`). Trocar de clínica ZERA o MFA
    * (contrato R6 do #123) e grava `session_tenant_selected` na trilha da clínica nova (R12 do parecer do desenho).
+   *
+   * Ordem (ALTA do parecer do #149): a trilha grava ANTES da clínica ativa. Os dois ficam em bancos diferentes; se
+   * a trilha falhar, a sessão continua sem clínica (sem acesso) e o log alarma. Nunca acesso sem linha na trilha.
+   * O inverso (trilha gravada e update falhou) só deixa uma linha a mais, e a pessoa tenta de novo.
    */
   async definirClinica(sessaoId: string, userId: string, tenantId: string): Promise<boolean> {
     if (!(await this.clinicasDoUsuario(userId)).includes(tenantId)) return false;
+    // ALTA do parecer do #149: a trilha grava ANTES de a sessão ganhar a clínica. Sem a linha, a escolha não vale e o
+    // TOTP feito sem clínica continua guardado (a escolha não aconteceu; o prazo de 5 min segue correndo).
+    try {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, {
+            action: AuditAction.Update,
+            scope: 'session',
+            metadata: { op: 'session_tenant_selected' },
+          }),
+        userId,
+      );
+    } catch {
+      // Com a trilha fora, cada requisição tenta de novo: um alarme por sessão a cada minuto, não um por requisição.
+      registrarNoMaximoUmaVez(`trilha-clinica:${sessaoId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo: 'escolha_de_clinica' });
+      return false;
+    }
     // R4 do desenho do PR 3: o TOTP feito sem clínica vale só para ESTA escolha e é zerado nela, valendo ou não.
     // R1 do parecer do código do 3a: leitura do valor anterior e troca na MESMA instrução, com a linha travada; duas
     // escolhas em paralelo não convertem as duas (a segunda espera e já vê o valor zerado).
@@ -776,22 +800,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
        where s.id = antes.id
       returning antes.clinica_ativa as clinica_antes, antes.mfa_sem_clinica_em as sem_clinica_antes`);
     const antesDaTroca = [...linhas][0];
+    // Sessão apagada entre a trilha e a troca: sobra uma linha a mais na trilha, nunca acesso sem linha.
     if (!antesDaTroca) return false;
     const antes = {
       clinicaAtiva: antesDaTroca.clinica_antes,
       semClinica: antesDaTroca.sem_clinica_antes === null ? null : new Date(antesDaTroca.sem_clinica_antes),
     };
-    await withTenant(
-      this.d.dbClinica,
-      tenantId as TenantId,
-      (tx) =>
-        recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, {
-          action: AuditAction.Update,
-          scope: 'session',
-          metadata: { op: 'session_tenant_selected' },
-        }),
-      userId,
-    );
     const aproveita =
       antes.clinicaAtiva === null && antes.semClinica !== null && this.agora().getTime() - antes.semClinica.getTime() <= PRAZO_MFA_SEM_CLINICA_MS;
     if (aproveita && (await this.marcarMfa(sessaoId))) await this.trilhaDoFator(tenantId, userId, ['mfa_verified'], AuditAction.Login);
@@ -830,7 +844,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       }
       if (clinicas.length !== 1 || !clinicas[0]) return 'nada';
       tenantId = clinicas[0];
-      await this.definirClinica(sessaoId, userId, tenantId);
+      // Sem a linha da escolha na trilha, a sessão fica sem clínica: nada de MFA marcado.
+      if (!(await this.definirClinica(sessaoId, userId, tenantId))) return 'nada';
     }
     if (!(await this.marcarMfa(sessaoId))) return 'nada';
     const ops = motivo === 'cadastro_do_fator' ? ['mfa_enrolled', 'mfa_verified'] : ['mfa_verified'];

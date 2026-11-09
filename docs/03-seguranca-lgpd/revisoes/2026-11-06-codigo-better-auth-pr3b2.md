@@ -69,3 +69,11 @@ O núcleo cumpre o desenho e a reconferência da 3b:
 - **R2 corrigida.** Eventos novos: `RECUPERACAO_EMITIDA` (aviso) na emissão e `RECUPERACAO_USADA` (alto, alarme imediato) no uso. O evento sai antes da trilha, e o `MFA_CADASTRADO` incorreto saiu.
 - **R11** deixa de existir no 3b-3 (#160 ou seguinte): o aceite de conta existente passa a conferir senha e TOTP **sem abrir sessão**.
 - **R3 a R8** entram antes do 3c, e **R9, R10, R12 e R13** vão para a fila (registrados em `docs/00-governanca/fila.md`).
+
+## Reconferência (06/11/2026, commit `1dc015e`)
+
+### Veredito: **R1 e R2 resolvidas. APROVADO COM RESSALVAS** (R3 a R8 antes do 3c; R9, R10, R12 e R13 na fila; a R11 sai no 3b-3).
+
+- **R1: resolvida.** `trilhaDaRecuperacao` grava `credential_changed` nas **demais** clínicas da pessoa. A linha vai sem tipo, sem motivo e sem a clínica de origem, e a linha com o tipo fica na clínica que emitiu. O teste com vínculo em duas clínicas confere que a linha existe e que não traz `kind`.
+- **R2: resolvida.** `RECUPERACAO_EMITIDA` (aviso) sai na emissão. `RECUPERACAO_USADA` (alto, alarme imediato) sai nos dois usos, **antes** da trilha, e o `MFA_CADASTRADO` incorreto saiu. Isso também cobre parte da R6: se a trilha falhar, o evento já saiu.
+- **Detalhe sem efeito no veredito:** `RECUPERACAO_EMITIDA` é registrado dentro da transação. Se ela não confirmar, o token é invalidado, mas o evento fica. É um falso positivo inofensivo para a vigilância. Se quiser, mover o evento para depois do `escreverNaClinica`.
