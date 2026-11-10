@@ -29,6 +29,8 @@ import { ExigeMfaRecente } from './mfa';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
 
 export const VALIDADE_DO_CONVITE_MS = 72 * 60 * 60 * 1000;
+/** HMAC "zerado" do convite descartado (formato válido no CHECK, não corresponde a nenhum e-mail). */
+export const EMAIL_DESCARTADO = '0'.repeat(32);
 /** R9: convites por admin por dia (corta abuso sem atrapalhar a montagem de uma equipe). */
 export const TETO_DIARIO_DE_CONVITES = 20;
 const SCOPE = 'team_invites';
@@ -223,6 +225,21 @@ export class ConvitesService {
       throw err instanceof ProibidoError ? new NaoEncontradoError() : err;
     });
     return [];
+  }
+
+  /**
+   * Retenção (R3 do código do 3b-1; RIPD-identidade §3): convite aceito, revogado ou vencido há mais de 30 dias perde o
+   * HMAC do e-mail (pseudônimo) e fica só como histórico (quem convidou, perfil, datas). Job `convites-descarte`.
+   */
+  async descartarEncerradosComoSistema(tenantId: TenantId): Promise<{ descartados: number }> {
+    const r = await this.db.run(tenantId, (tx) =>
+      tx.execute<{ id: string }>(sql`
+        update team_invites set email_hmac = ${EMAIL_DESCARTADO}
+         where tenant_id = ${tenantId} and email_hmac <> ${EMAIL_DESCARTADO}
+           and coalesce(accepted_at, revoked_at, expires_at) < now() - interval '30 days'
+        returning id`),
+    );
+    return { descartados: [...r].length };
   }
 }
 

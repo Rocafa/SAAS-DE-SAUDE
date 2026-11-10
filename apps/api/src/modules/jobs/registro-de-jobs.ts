@@ -31,6 +31,8 @@ export interface ServicosDosJobs {
   readonly retencaoFiscal: Pick<RetencaoFiscalService, 'executarComoSistema'>;
   readonly responsaveis: Pick<ResponsaveisService, 'descartarAnuladosComoSistema'>;
   readonly pacientes: Pick<PatientsService, 'reindexarIndiceCpfComoSistema'>;
+  /** Descarte do pseudônimo dos convites da equipe encerrados (D4, R3 do 3b-1). */
+  readonly convites: { descartarEncerradosComoSistema(tenantId: TenantId): Promise<{ descartados: number }> };
   /** Expurgo do schema `identidade` (D4): no provedor real; com o dev provider, não faz nada. */
   readonly identidade: { expurgarComoSistema(): Promise<ResultadoDeJob> };
 }
@@ -124,6 +126,12 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       nome: 'identidade-expurgo',
       ...diario('20 3 * * *', 'diário, 03:20'),
       daPlataforma: () => s.identidade.expurgarComoSistema(),
+    },
+    {
+      // R3 do código do 3b-1 (RIPD-identidade §3): convite encerrado há mais de 30 dias perde o HMAC do e-mail.
+      nome: 'convites-descarte',
+      ...diario('25 3 * * *', 'diário, 03:25'),
+      porClinica: async (t) => ({ ...(await s.convites.descartarEncerradosComoSistema(t)) }),
     },
   ];
   validarDefinicoes(jobs);

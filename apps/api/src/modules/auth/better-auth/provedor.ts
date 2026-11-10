@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -62,6 +62,9 @@ export interface DependenciasDoProvedor {
   /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
   readonly segredoDaInstancia?: string | SecretConfig;
 }
+
+/** R10 do código do 3b-2: recuperações emitidas por admin por dia. */
+export const TETO_DIARIO_DE_RECUPERACOES = 10;
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
@@ -230,7 +233,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -242,7 +245,24 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias.
     const trintaDias = new Date(agora.getTime() - 30 * 24 * 60 * 60 * 1000);
     const recuperacoes = await this.d.dbAuth.delete(recuperacao).where(lt(recuperacao.expiraEm, trintaDias)).returning({ id: recuperacao.id });
-    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length };
+    // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP; a conta e o
+    // id ficam (R18). A recontratação pelo convite define credencial nova.
+    const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const inativas = await this.d.dbAuth
+      .select({ id: usuario.id })
+      .from(usuario)
+      .where(and(eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo'), lt(usuario.inativaDesde, noventaDias)));
+    let credenciaisDeInativas = 0;
+    for (const { id } of inativas) {
+      const r = await this.d.dbAuth
+        .update(conta)
+        .set({ password: null })
+        .where(and(eq(conta.userId, id), eq(conta.providerId, 'credential'), isNotNull(conta.password)))
+        .returning({ id: conta.id });
+      await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, id));
+      credenciaisDeInativas += r.length;
+    }
+    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length, credenciaisDeInativas };
   }
 
   async trocarSenhaDaPessoa(e: {
@@ -250,7 +270,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     userId: string;
     atual: string;
     nova: string;
-  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'> {
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'bloqueado' | 'indisponivel'> {
+    // R9 do código do 3b-2: a senha atual conferida aqui conta no bloqueio de login (quem tem a sessão não testa senhas).
+    const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, e.userId));
+    const b = this.d.bloqueio;
+    const doLogin = b && u ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login', u.email.trim().toLowerCase()), teto: TETO_DE_FALHAS }] : [];
+    const reserva = await this.reservarVarias(doLogin, 'bloqueio_de_login');
+    if (reserva !== 'ok') return reserva;
     let r: Response;
     try {
       r = await this.d.auth.api.changePassword({
@@ -260,13 +286,23 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       });
     } catch (err) {
       // O gancho da senha vazada lança antes do endpoint (R15).
-      if ((err as { body?: { code?: string } }).body?.code === 'PASSWORD_COMPROMISED') return 'senha_vazada';
+      if ((err as { body?: { code?: string } }).body?.code === 'PASSWORD_COMPROMISED') {
+        await this.devolverVarias(doLogin);
+        return 'senha_vazada';
+      }
+      await this.devolverVarias(doLogin);
       throw err;
     }
     if (r.status !== 200) {
       const corpo = (await r.json().catch(() => ({}))) as { code?: string };
-      return corpo.code === 'PASSWORD_COMPROMISED' ? 'senha_vazada' : 'senha_atual_errada';
+      if (corpo.code === 'PASSWORD_COMPROMISED') {
+        await this.devolverVarias(doLogin);
+        return 'senha_vazada';
+      }
+      registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', userId: e.userId });
+      return 'senha_atual_errada';
     }
+    await this.devolverVarias(doLogin);
     registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'pela_pessoa', userId: e.userId });
     await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed');
     return r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
@@ -286,7 +322,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     registrarEventoDeSeguranca('BLOQUEIO_ZERADO', { motivo: 'desbloqueio_pelo_admin', userId });
   }
 
-  async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }> {
+  async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string } | 'teto'> {
+    // R10 do código do 3b-2: teto de emissões por admin por dia, e o token novo invalida os pendentes da mesma pessoa.
+    const [emitidas] = await this.d.dbAuth
+      .select({ n: sql<number>`count(*)::int` })
+      .from(recuperacao)
+      .where(and(eq(recuperacao.criadoPor, e.criadoPor), gt(recuperacao.criadoEm, new Date(this.agora().getTime() - 24 * 60 * 60 * 1000))));
+    if ((emitidas?.n ?? 0) >= TETO_DIARIO_DE_RECUPERACOES) return 'teto';
+    await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.usuarioId, e.userId), isNull(recuperacao.usadoEm)));
     const token = randomBytes(32).toString('base64url');
     const [r] = await this.d.dbAuth
       .insert(recuperacao)
@@ -503,7 +549,9 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
       .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
     if (!ja) return { userId: randomUUID(), reaproveita: false };
-    const abandonada = !ja.ativo && ja.inativaPor === 'convite_desfeito' && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    // Sem credencial e sem vínculo: convite desfeito (R1 do 3b-1) ou desligada cuja credencial venceu (90 dias).
+    const abandonada =
+      !ja.ativo && (ja.inativaPor === 'convite_desfeito' || ja.inativaPor === 'sem_vinculo') && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
     return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
   }
 
