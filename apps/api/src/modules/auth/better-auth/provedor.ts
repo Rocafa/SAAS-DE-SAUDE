@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -245,22 +245,31 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias.
     const trintaDias = new Date(agora.getTime() - 30 * 24 * 60 * 60 * 1000);
     const recuperacoes = await this.d.dbAuth.delete(recuperacao).where(lt(recuperacao.expiraEm, trintaDias)).returning({ id: recuperacao.id });
-    // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP; a conta e o
-    // id ficam (R18). A recontratação pelo convite define credencial nova.
+    // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP e LIBERA o
+    // e-mail; o id fica, preso ao histórico clínico (R18). B2 do veto do #173: a conta antiga nunca é reaproveitada; quem
+    // volta recebe conta nova pelo convite. B1: tudo numa transação por conta, com o fator desmarcado.
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
       .select({ id: usuario.id })
       .from(usuario)
-      .where(and(eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo'), lt(usuario.inativaDesde, noventaDias)));
+      .where(
+        and(
+          eq(usuario.ativo, false),
+          eq(usuario.inativaPor, 'sem_vinculo'),
+          lt(usuario.inativaDesde, noventaDias),
+          sql`${usuario.email} not like 'desligada-%@desligada.invalid'`,
+        ),
+      );
     let credenciaisDeInativas = 0;
     for (const { id } of inativas) {
-      const r = await this.d.dbAuth
-        .update(conta)
-        .set({ password: null })
-        .where(and(eq(conta.userId, id), eq(conta.providerId, 'credential'), isNotNull(conta.password)))
-        .returning({ id: conta.id });
-      await this.d.dbAuth.delete(doisFatores).where(eq(doisFatores.userId, id));
-      credenciaisDeInativas += r.length;
+      await this.d.dbAuth.transaction(async (tx) => {
+        await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
+        await tx.delete(doisFatores).where(eq(doisFatores.userId, id));
+        await tx.update(usuario).set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid` }).where(eq(usuario.id, id));
+        await tx.delete(sessao).where(eq(sessao.userId, id));
+        await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, id), isNull(recuperacao.usadoEm)));
+      });
+      credenciaisDeInativas += 1;
     }
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length, credenciaisDeInativas };
   }
@@ -549,9 +558,9 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
       .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
     if (!ja) return { userId: randomUUID(), reaproveita: false };
-    // Sem credencial e sem vínculo: convite desfeito (R1 do 3b-1) ou desligada cuja credencial venceu (90 dias).
-    const abandonada =
-      !ja.ativo && (ja.inativaPor === 'convite_desfeito' || ja.inativaPor === 'sem_vinculo') && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    // Só a conta de convite desfeito (R1 do 3b-1). A desligada NUNCA é reaproveitada (B2 do veto do #173): depois de 90
+    // dias o expurgo libera o e-mail e a recontratação cria conta nova.
+    const abandonada = !ja.ativo && ja.inativaPor === 'convite_desfeito' && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
     return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
   }
 

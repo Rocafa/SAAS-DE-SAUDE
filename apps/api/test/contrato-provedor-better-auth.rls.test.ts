@@ -1044,19 +1044,26 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
   const credenciais = (): CredenciaisService => new CredenciaisService(new TenantDatabase(api.db), provedor);
   const convites = (): ConvitesService => new ConvitesService(new TenantDatabase(api.db), provedor);
 
-  it('conta desligada há mais de 90 dias perde senha e TOTP no expurgo; o convite a recontrata com senha nova', async () => {
+  it('veto do #173: conta desligada (com TOTP) há mais de 90 dias perde credencial e fator e libera o e-mail; a recontratação cria conta NOVA', async () => {
     const tenantId = await api.novaClinica();
     const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
     const p = await novaPessoa(tenantId, ['recepcao']);
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
     await api.http().delete(`/clinica/membros/${p.userId}/recepcao`).set({ Authorization: adm.Authorization }).expect(204);
     await dbAuth.db.update(usuario).set({ inativaDesde: new Date(Date.now() - 91 * 24 * 3_600_000) }).where(eq(usuario.id, p.userId));
     expect((await provedor.expurgarComoSistema()).credenciaisDeInativas).toBeGreaterThanOrEqual(1);
-    const [c] = await dbAuth.db.select({ senha: conta.password }).from(conta).where(eq(conta.userId, p.userId));
-    expect(c?.senha).toBeNull();
+    const [velha] = await dbAuth.db.select({ email: usuario.email, fator: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(velha).toEqual({ email: `desligada-${p.userId}@desligada.invalid`, fator: false });
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+    // Segunda passada não reprocessa a mesma conta.
+    const antes = (await provedor.expurgarComoSistema()).credenciaisDeInativas;
+    expect(antes).toBe(0);
     const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, p.email, 'recepcao');
     await convites().aceitar({ token: conv.token, email: p.email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
-    expect(await provedor.clinicasDoUsuario(p.userId)).toEqual([tenantId]);
-    expect((await entrar(p.email, SENHA_NOVA)).status).toBe(200);
+    const [nova] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, p.email));
+    expect(nova?.id).toBeDefined();
+    expect(nova?.id).not.toBe(p.userId);
+    expect(await provedor.clinicasDoUsuario(nova?.id ?? '')).toEqual([tenantId]);
   });
 
   it('R9: senha atual errada na troca conta no bloqueio de login (5 erros travam a 6ª, mesmo certa)', async () => {
