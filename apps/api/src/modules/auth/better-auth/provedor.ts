@@ -233,7 +233,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -248,6 +248,21 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP e LIBERA o
     // e-mail; o id fica, preso ao histórico clínico (R18). B2 do veto do #173: a conta antiga nunca é reaproveitada; quem
     // volta recebe conta nova pelo convite. B1: tudo numa transação por conta, com o fator desmarcado.
+    // R5 do código do 3b-3: duas revogações simultâneas em clínicas diferentes podem deixar a conta ativa sem vínculo.
+    // O expurgo a desliga (o trigger da 0071 grava inativa_desde). Só conta com mais de 1 dia, para não pegar um aceite
+    // de convite em andamento.
+    const semVinculo = await this.d.dbAuth
+      .update(usuario)
+      .set({ ativo: false, inativaPor: 'sem_vinculo' })
+      .where(
+        and(
+          eq(usuario.ativo, true),
+          lt(usuario.createdAt, umDia),
+          sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`,
+        ),
+      )
+      .returning({ id: usuario.id });
+    if (semVinculo.length > 0) await this.d.dbAuth.delete(sessao).where(inArray(sessao.userId, semVinculo.map((x) => x.id)));
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
       .select({ id: usuario.id })
@@ -279,7 +294,14 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       });
       if (expurgou) credenciaisDeInativas += 1;
     }
-    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length, credenciaisDeInativas };
+    return {
+      sessoes: sessoes.length,
+      verificacoes: verificacoes.length,
+      cadastrosNaoConcluidos: cadastros.length,
+      recuperacoes: recuperacoes.length,
+      credenciaisDeInativas,
+      contasSemVinculo: semVinculo.length,
+    };
   }
 
   async trocarSenhaDaPessoa(e: {
@@ -675,14 +697,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   private async totpDaPessoaConfere(userId: string, codigo: string): Promise<boolean | 'sem_fator'> {
     const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, userId));
     if (!f?.verificado) return 'sem_fator';
+    if (!this.d.segredoDaInstancia) return false;
+    const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
+    if (claro === null || !totpConfere(claro, codigo, this.agora().getTime())) return false;
+    // R12 do código do 3b-2 (R7 do 3b-3): a marca de reuso só depois de o código conferir; um código errado não queima
+    // o valor.
     const b = this.d.bloqueio;
     if (b) {
       const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
       if (usado.count > 1) return false;
     }
-    if (!this.d.segredoDaInstancia) return false;
-    const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
-    return claro !== null && totpConfere(claro, codigo, this.agora().getTime());
+    return true;
   }
 
   /**
@@ -786,7 +811,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       await withTenant(
         this.d.dbClinica,
         tenantId as TenantId,
-        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } }),
+        async (tx) => {
+          // Fila do 3b-3: o convite aceito por esta conta perde o pseudônimo do e-mail na hora, sem esperar os 30 dias
+          // do `convites-descarte` (mesmo valor de EMAIL_DESCARTADO).
+          await tx.execute(sql`update team_invites set email_hmac = ${'0'.repeat(32)} where tenant_id = ${tenantId} and accepted_user_id = ${userId}`);
+          await recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } });
+        },
         userId,
       );
     }
@@ -805,10 +835,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (r.status !== 200 || cookies.length === 0) throw new Error('sessao_de_cadastro_nao_abriu');
     const lida = await this.d.auth.api.getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) });
     if (!lida) throw new Error('sessao_de_cadastro_nao_abriu');
-    await this.d.dbAuth
-      .update(sessao)
-      .set({ cadastroPendenteAte: new Date(this.agora().getTime() + PRAZO_DO_CADASTRO_PENDENTE_MS) })
-      .where(eq(sessao.id, lida.session.id));
+    // R7 do código do 3b-1: se a marca não gravar, a sessão (que nunca chegou ao cliente) some na hora.
+    try {
+      await this.d.dbAuth
+        .update(sessao)
+        .set({ cadastroPendenteAte: new Date(this.agora().getTime() + PRAZO_DO_CADASTRO_PENDENTE_MS) })
+        .where(eq(sessao.id, lida.session.id));
+    } catch (err) {
+      await this.d.dbAuth.delete(sessao).where(eq(sessao.id, lida.session.id)).catch(() => undefined);
+      throw err;
+    }
     return cookies;
   }
 

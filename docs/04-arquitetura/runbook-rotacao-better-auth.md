@@ -18,6 +18,16 @@
 5. **Só depois** de nenhum TOTP depender da versão antiga, retirar a versão do fim da lista. Até haver o job de recifragem (fila), isso significa manter as versões antigas.
 6. Registrar a rotação no relatório da rodada, com data e quem fez.
 
+## Rotação da `RATE_LIMIT_HASH_KEY` (R5 do código do 3b-1)
+
+A mesma chave assina três coisas: a origem em HMAC do log de segurança e do rate limit, as chaves do bloqueio 5/15 e o HMAC do e-mail dos convites (`convite-email:`). Trocar a chave tem três efeitos:
+
+- **Convites pendentes deixam de valer.** O aceite compara o HMAC do e-mail digitado com o gravado, e os dois passam a divergir. O aceite responde 404. Antes de trocar, avise os admins e reemita os convites pendentes depois da troca (eles vencem em 72 h de qualquer forma).
+- **Os contadores de bloqueio recomeçam do zero**, porque a chave do contador muda. Não troque a chave durante um ataque em andamento.
+- **A correlação da origem no log** se quebra no momento da troca. Anote o horário da troca no registro de incidentes.
+
+A separação por uso (uma chave derivada por HKDF para cada finalidade), pedida no parecer do PR 1, continua na fila. Quando entrar, cada finalidade poderá ser trocada sem afetar as outras.
+
 ## Vazamento do segredo
 
 Mesmo passo a passo, com urgência. A versão vazada continua só para decifrar até a recifragem; as sessões caem na hora (passo 3).

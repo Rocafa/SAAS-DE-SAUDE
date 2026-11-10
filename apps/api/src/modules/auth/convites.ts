@@ -82,6 +82,8 @@ export class ConvitesService {
   criar(ctx: RequestContext, email: string, perfil: ClinicMemberRole): Promise<ConviteCriado> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await exigirPerfilNoBanco(tx, ctx, 'admin');
+      // R6 do código do 3b-1: criações em paralelo do mesmo admin esperam uma pela outra (o teto não passa numa rajada).
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'convite:' + ctx.userId}, 0))`);
       const desde = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const [hoje] = await tx
         .select({ n: count() })

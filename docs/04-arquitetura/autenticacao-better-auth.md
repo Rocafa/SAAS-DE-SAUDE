@@ -212,3 +212,12 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **Troca de senha**: só o código `INVALID_PASSWORD` da biblioteca gasta tentativa do bloqueio. Outro erro devolve a reserva e responde `troca_recusada`.
 - **Invalidação limitada à clínica**: o token novo invalida só os pendentes emitidos pela mesma clínica (risco residual no RIPD §3).
 - **Testes do trigger da 0071**: o desligamento grava `inativa_desde`, um UPDATE sem mudança não zera a contagem e a recontratação limpa a data.
+
+### 14.7 Ressalvas antigas da fila (3b-1, 3b-2 e 3b-3), 10/11/2026
+
+- **Teto de convites atômico** (R6 do 3b-1): `pg_advisory_xact_lock` por admin na transação da clínica. Teste: rajada de 23 convites gera exatamente 20.
+- **Sessão de cadastro órfã** (R7 do 3b-1): se a marca `cadastro_pendente_ate` não gravar, a sessão aberta é apagada na hora.
+- **Marca de reuso do TOTP só depois de conferir** (R12 do 3b-2, R7 do 3b-3): um código errado não queima o valor por 90 s.
+- **Conta ativa sem vínculo** (R5 do 3b-3): o expurgo diário desliga a conta ativa sem nenhum vínculo há mais de 1 dia (corrida de duas revogações simultâneas) e derruba as sessões dela.
+- **Anonimização**: o convite aceito pela conta perde o HMAC do e-mail na hora.
+- **Runbook**: efeitos da rotação da `RATE_LIMIT_HASH_KEY` (R5 do 3b-1). **RIPD §5**: procedimento de suporte para quem não tem vínculo em nenhuma clínica (R13 do 3b-2).

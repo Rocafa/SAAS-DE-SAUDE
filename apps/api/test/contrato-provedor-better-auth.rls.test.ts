@@ -1171,6 +1171,44 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     expect(depois).toEqual([]);
   });
 
+  it('R6 do 3b-1: rajada de convites do mesmo admin não passa do teto diário', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const r = await Promise.allSettled(
+      Array.from({ length: TETO_DIARIO_DE_CONVITES + 3 }, (_, k) => convites().criar(ctx, `rajada-${k}-${randomUUID().slice(0, 6)}@exemplo.test`, 'recepcao')),
+    );
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(TETO_DIARIO_DE_CONVITES);
+    const n = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from team_invites`), adm.userId);
+    expect([...n][0]?.n).toBe(TETO_DIARIO_DE_CONVITES);
+  });
+
+  it('R5 do 3b-3: conta ativa sem vínculo há mais de 1 dia vira inativa no expurgo; a recém-criada fica', async () => {
+    const velha = randomUUID();
+    const nova = randomUUID();
+    const ontem = new Date(Date.now() - 2 * 24 * 3_600_000);
+    await dbAuth.db.insert(usuario).values([
+      { id: velha, name: 'Sem Vinculo Ficticia', email: `sem-vinculo-${velha.slice(0, 8)}@exemplo.test`, emailVerified: false, createdAt: ontem },
+      { id: nova, name: 'Recem Ficticia', email: `recem-${nova.slice(0, 8)}@exemplo.test`, emailVerified: false },
+    ]);
+    expect((await provedor.expurgarComoSistema()).contasSemVinculo).toBeGreaterThanOrEqual(1);
+    const linhas = await dbAuth.db.select({ id: usuario.id, ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(sql`${usuario.id} in (${velha}, ${nova})`);
+    expect(linhas.find((l) => l.id === velha)).toEqual({ id: velha, ativo: false, motivo: 'sem_vinculo' });
+    expect(linhas.find((l) => l.id === nova)).toEqual({ id: nova, ativo: true, motivo: null });
+  });
+
+  it('fila do 3b-3: anonimizar zera na hora o HMAC do e-mail do convite que a conta aceitou', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const email = `anon-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: conv.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    await provedor.anonimizarConta(u?.id ?? '');
+    const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${conv.conviteId}`), adm.userId);
+    expect([...linhas][0]?.email_hmac).toBe('0'.repeat(32));
+  });
+
   it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {
     const tenantId = await api.novaClinica();
     const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
