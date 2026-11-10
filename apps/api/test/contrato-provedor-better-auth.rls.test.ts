@@ -11,6 +11,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Logger } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
+import { tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
@@ -1222,6 +1223,38 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await provedor.anonimizarConta(u?.id ?? '');
     const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${conv.conviteId}`), adm.userId);
     expect([...linhas][0]?.email_hmac).toBe('0'.repeat(32));
+  });
+
+  it('R3 do 3a: clínica cancelada fora da janela de saída some da lista e da escolha; dentro da janela, fica', async () => {
+    const fora = await api.novaClinica();
+    const dentro = await api.novaClinica();
+    const p = await novaPessoa(fora, ['recepcao']);
+    await api.membro(dentro, { userId: p.userId }, 'recepcao');
+    const dias = (n: number) => new Date(Date.now() - n * 24 * 3_600_000);
+    await withTenant(api.db.db, fora, (tx) => tx.update(tenants).set({ subscriptionStatus: 'cancelled', cancelledAt: dias(200) }).where(eq(tenants.id, fora)), p.userId);
+    await withTenant(api.db.db, dentro, (tx) => tx.update(tenants).set({ subscriptionStatus: 'cancelled', cancelledAt: dias(10) }).where(eq(tenants.id, dentro)), p.userId);
+    expect((await provedor.clinicasDaPessoa(p.userId)).map((c) => c.id)).toEqual([dentro]);
+    const c = cookieDe(await entrar(p.email));
+    const pessoa = await provedor.sessaoDePessoa({ headers: c });
+    if (!pessoa) throw new Error('sem sessão');
+    expect(await provedor.escolherClinica(pessoa, fora)).toBe(false);
+    expect(await provedor.escolherClinica(pessoa, dentro)).toBe(true);
+  });
+
+  it('R5 do 3a: a troca de sessão no fim do cadastro do fator sai como LOGIN_OK com motivo cadastro_do_fator', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const c = cookieDe(await entrar(p.email));
+    zerarJanelasDoLog();
+    const aviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      await cadastrarFator(c, p.userId);
+      const logins = aviso.mock.calls.map((x) => String(x[0])).filter((l) => l.includes('"evento":"LOGIN_OK"') && l.includes(p.userId));
+      expect(logins).toHaveLength(1);
+      expect(logins[0]).toContain('"motivo":"cadastro_do_fator"');
+    } finally {
+      aviso.mockRestore();
+    }
   });
 
   it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {

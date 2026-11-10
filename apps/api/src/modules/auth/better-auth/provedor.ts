@@ -13,6 +13,7 @@ import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
+import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
@@ -174,14 +175,30 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   async clinicasDaPessoa(userId: string): Promise<ClinicaDaPessoa[]> {
     const saida: ClinicaDaPessoa[] = [];
     for (const id of await this.clinicasDoUsuario(userId)) {
-      const [t] = await withTenant(this.d.dbClinica, id as TenantId, (tx) => tx.select({ nome: tenants.displayName }).from(tenants).where(eq(tenants.id, id)), userId);
+      const t = await this.clinicaLiberada(id, userId);
       if (t) saida.push({ id, nome: t.nome });
     }
     return saida;
   }
 
-  escolherClinica(s: SessaoDePessoa, clinicaId: string): Promise<boolean> {
+  async escolherClinica(s: SessaoDePessoa, clinicaId: string): Promise<boolean> {
+    if (!(await this.clinicaLiberada(clinicaId, s.userId))) return false;
     return this.definirClinica(s.sessaoId, s.userId, clinicaId);
+  }
+
+  /**
+   * R3 do código do 3a: a mesma regra de leitura das rotas da clínica (`canRead`). A clínica cancelada aparece e pode
+   * ser escolhida só dentro da janela de saída (portabilidade); fora dela some da lista e da escolha.
+   */
+  private async clinicaLiberada(id: string, userId: string): Promise<{ nome: string } | null> {
+    const [t] = await withTenant(
+      this.d.dbClinica,
+      id as TenantId,
+      (tx) => tx.select({ nome: tenants.displayName, status: tenants.subscriptionStatus, canceladaEm: tenants.cancelledAt }).from(tenants).where(eq(tenants.id, id)),
+      userId,
+    );
+    if (!t || !canRead(t.status, t.canceladaEm, this.agora(), EXIT_WINDOW_DAYS)) return null;
+    return { nome: t.nome };
   }
 
   /** Só as sessões da própria pessoa, sem IP, user-agent nem clínica (R20). */

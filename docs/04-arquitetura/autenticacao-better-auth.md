@@ -222,3 +222,6 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **Anonimização**: o convite aceito pela conta perde o HMAC do e-mail na hora, nas clínicas com vínculo e na clínica de origem (G3). Nas demais, em até 30 dias pelo `convites-descarte`.
 - **Marca de reuso do TOTP com o contador fora do ar** conta como reuso (falha fechada, G5).
 - **Runbook**: efeitos da rotação da `RATE_LIMIT_HASH_KEY` (R5 do 3b-1). **RIPD §5**: procedimento de suporte para quem não tem vínculo em nenhuma clínica (R13 do 3b-2).
+- **Clínica cancelada** (R3 do 3a): a lista de clínicas da pessoa e a escolha seguem a mesma regra de leitura das rotas da clínica (`canRead`). A clínica cancelada aparece só dentro da janela de saída.
+- **`LOGIN_OK` do cadastro do fator** (R5 do 3a): a troca de sessão no fim do cadastro do TOTP sai com `motivo: cadastro_do_fator`, separada do login.
+- **Já resolvida antes:** R7 do 3a (a sessão de cadastro pendente não usa as rotas da pessoa). **Fica na fila:** R4 do 3a (teste pela HTTP do `Set-Cookie` só da sessão, também no polling).
