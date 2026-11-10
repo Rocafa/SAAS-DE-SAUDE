@@ -11,7 +11,7 @@
  * - Teto diário de convites por admin (R9).
  */
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, eq, gt, isNull, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
@@ -201,7 +201,8 @@ export class ConvitesService {
     if (!ehProvedorDeConvite(provedor)) throw new NaoEncontradoError();
     if (!e.codigo || !/^[0-9]{6}$/.test(e.codigo)) throw new ConflitoError('conta_existente_exige_login', ['codigo']);
     // Sem abrir sessão (vale também para a conta desligada que está sendo recontratada); a pessoa entra depois.
-    const login = await provedor.conferirCredenciais({ email: e.email, senha: e.senha, codigo: e.codigo });
+    const login = await provedor.conferirCredenciais({ email: e.email, senha: e.senha, codigo: e.codigo, cabecalhos: e.cabecalhos });
+    if (login === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
     if (login === 'falhou' || login === 'bloqueado') throw new ConflitoError('credenciais_invalidas');
     if (login === 'sem_fator') throw new ConflitoError('conta_sem_fator');
     const ctx: RequestContext = { tenantId: tenantId as TenantId, userId: convite.createdBy as RequestContext['userId'], roles: [] };

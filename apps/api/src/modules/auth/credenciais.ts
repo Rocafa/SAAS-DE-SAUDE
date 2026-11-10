@@ -7,7 +7,7 @@
  * - Desbloqueio: o admin zera SÓ os contadores de bloqueio (e-mail e fator) de quem tem vínculo ativo na clínica dele;
  *   não troca senha nem fator. Fora da clínica: 404.
  */
-import { Body, Controller, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
@@ -93,6 +93,8 @@ export class CredenciaisService {
     const r = await this.recuperacoes.usarRecuperacao(e);
     if (r === 'invalido') throw new NaoEncontradoError();
     if (r === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senhaNova']);
+    // R4: contador fora do ar = recuperação indisponível (falha fechada), nunca sem bloqueio.
+    if (r === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
     // Credencial errada e bloqueio respondem igual (sem dizer qual).
     if (r === 'credencial_errada' || r === 'bloqueado') throw new ConflitoError('credencial_invalida');
     return r.cookies;
