@@ -257,7 +257,6 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
           eq(usuario.ativo, false),
           eq(usuario.inativaPor, 'sem_vinculo'),
           lt(usuario.inativaDesde, noventaDias),
-          sql`${usuario.email} not like 'desligada-%@desligada.invalid'`,
         ),
       );
     let credenciaisDeInativas = 0;
@@ -265,7 +264,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       await this.d.dbAuth.transaction(async (tx) => {
         await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
         await tx.delete(doisFatores).where(eq(doisFatores.userId, id));
-        await tx.update(usuario).set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid` }).where(eq(usuario.id, id));
+        // Ressalvas 7 e 8 da reconferência do #173: a marca 'expurgada' recusa nova concessão (0072) e o nome sai junto com
+        // o e-mail (art. 16); a autoria clínica está em `professionals` da clínica.
+        await tx
+          .update(usuario)
+          .set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid`, name: 'Conta desligada', image: null, inativaPor: 'expurgada' })
+          .where(eq(usuario.id, id));
         await tx.delete(sessao).where(eq(sessao.userId, id));
         await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, id), isNull(recuperacao.usadoEm)));
       });
@@ -279,7 +283,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     userId: string;
     atual: string;
     nova: string;
-  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'bloqueado' | 'indisponivel'> {
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'recusada' | 'bloqueado' | 'indisponivel'> {
     // R9 do código do 3b-2: a senha atual conferida aqui conta no bloqueio de login (quem tem a sessão não testa senhas).
     const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, e.userId));
     const b = this.d.bloqueio;
@@ -308,6 +312,11 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         await this.devolverVarias(doLogin);
         return 'senha_vazada';
       }
+      // Ressalva 4 da reconferência do #173: só a senha atual errada gasta tentativa; outro erro devolve a reserva.
+      if (corpo.code !== 'INVALID_PASSWORD') {
+        await this.devolverVarias(doLogin);
+        return 'recusada';
+      }
       registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', userId: e.userId });
       return 'senha_atual_errada';
     }
@@ -333,30 +342,35 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
 
   async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string } | 'teto'> {
     // R10 do código do 3b-2: teto de emissões por admin por dia, e o token novo invalida os pendentes da mesma pessoa.
-    const [emitidas] = await this.d.dbAuth
-      .select({ n: sql<number>`count(*)::int` })
-      .from(recuperacao)
-      .where(and(eq(recuperacao.criadoPor, e.criadoPor), gt(recuperacao.criadoEm, new Date(this.agora().getTime() - 24 * 60 * 60 * 1000))));
-    if ((emitidas?.n ?? 0) >= TETO_DIARIO_DE_RECUPERACOES) return 'teto';
-    await this.d.dbAuth
-      .update(recuperacao)
-      .set({ usadoEm: new Date() })
-      .where(and(eq(recuperacao.usuarioId, e.userId), isNull(recuperacao.usadoEm)));
+    // Ressalva 2 da reconferência do #173: contagem, invalidação e inserção numa transação, serializadas por admin
+    // (trava consultiva), para uma rajada não passar do teto. Ressalva 5: só os pendentes emitidos nesta clínica.
     const token = randomBytes(32).toString('base64url');
-    const [r] = await this.d.dbAuth
-      .insert(recuperacao)
-      .values({
-        id: randomUUID(),
-        usuarioId: e.userId,
-        tipo: e.tipo,
-        tokenHash: createHash('sha256').update(token).digest('hex'),
-        clinicaId: e.clinicaId,
-        criadoPor: e.criadoPor,
-        expiraEm: sql`now() + interval '15 minutes'`,
-      })
-      .returning({ expiraEm: recuperacao.expiraEm });
-    if (!r) throw new Error('falha ao emitir recuperação');
-    return { token, expiraEm: r.expiraEm.toISOString() };
+    return this.d.dbAuth.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'recuperacao:' + e.criadoPor}, 0))`);
+      const [emitidas] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(recuperacao)
+        .where(and(eq(recuperacao.criadoPor, e.criadoPor), gt(recuperacao.criadoEm, sql`now() - interval '24 hours'`)));
+      if ((emitidas?.n ?? 0) >= TETO_DIARIO_DE_RECUPERACOES) return 'teto' as const;
+      await tx
+        .update(recuperacao)
+        .set({ usadoEm: new Date() })
+        .where(and(eq(recuperacao.usuarioId, e.userId), eq(recuperacao.clinicaId, e.clinicaId), isNull(recuperacao.usadoEm)));
+      const [r] = await tx
+        .insert(recuperacao)
+        .values({
+          id: randomUUID(),
+          usuarioId: e.userId,
+          tipo: e.tipo,
+          tokenHash: createHash('sha256').update(token).digest('hex'),
+          clinicaId: e.clinicaId,
+          criadoPor: e.criadoPor,
+          expiraEm: sql`now() + interval '15 minutes'`,
+        })
+        .returning({ expiraEm: recuperacao.expiraEm });
+      if (!r) throw new Error('falha ao emitir recuperação');
+      return { token, expiraEm: r.expiraEm.toISOString() };
+    });
   }
 
   async invalidarRecuperacao(token: string): Promise<void> {

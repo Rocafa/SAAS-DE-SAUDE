@@ -1,0 +1,54 @@
+
+ RUN  v5.0.5 C:/Users/Rocaf/Projetos/plataforma-saude/.claude/worktrees/fila173/apps/api
+
+[31m[Nest] 27584  - [39m10/11/2026, 08:07:04 [31m  ERROR[39m [38;5;3m[erro] [39m[31merro não tratado: FieldDecryptionError code=-[39m
+[31m[Nest] 27584  - [39m10/11/2026, 08:07:04 [31m  ERROR[39m [38;5;3m[erro] [39m[31merro não tratado: KeyUnavailableError code=-[39m
+[31m[Nest] 27584  - [39m10/11/2026, 08:07:04 [31m  ERROR[39m [38;5;3m[erro] [39m[31merro não tratado: KeyUnavailableError code=-[39m
+[33m[Nest] 23296  - [39m10/11/2026, 08:07:04 [33m   WARN[39m [38;5;3m[rate-limit] [39m[33mprodução sem Redis por opção explícita: rate limit só por instância[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=outra_clinica[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=outro_usuario[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=assinatura[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=formato[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=vencido[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=ancora_sumiu[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=ancora_mudou[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=ancora_mudou[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=ancora_mudou[39m
+[33m[Nest] 20032  - [39m10/11/2026, 08:07:05 [33m   WARN[39m [38;5;3m[cursor] [39m[33mCURSOR_INVALIDO motivo=ancora_mudou[39m
+[32m[Nest] 24428  - [39m10/11/2026, 08:07:07 [32m    LOG[39m [38;5;3m[jobs] [39m[32magendador BullMQ: 2 job(s) agendado(s)[39m
+[33m[Nest] 24428  - [39m10/11/2026, 08:07:07 [33m   WARN[39m [38;5;3m[jobs] [39m[33mJOB_REMOVIDO job=antigo: aposentado no registro[39m
+[32m[Nest] 24428  - [39m10/11/2026, 08:07:07 [32m    LOG[39m [38;5;3m[jobs] [39m[32magendador BullMQ: 1 job(s) agendado(s)[39m
+[32m[Nest] 24428  - [39m10/11/2026, 08:07:07 [32m    LOG[39m [38;5;3m[jobs] [39m[32magendador BullMQ: 1 job(s) agendado(s)[39m
+[32m[Nest] 24428  - [39m10/11/2026, 08:07:07 [32m    LOG[39m [38;5;3m[jobs] [39m[32magendador BullMQ: 0 job(s) agendado(s)[39m
+[33m[Nest] 7112  - [39m10/11/2026, 08:07:07 [33m   WARN[39m [38;5;3m[AiService] [39m[33mrota br-quebrada falhou (Error); tentando a próxima[39m
+[33m[Nest] 7112  - [39m10/11/2026, 08:07:07 [33m   WARN[39m [38;5;3m[AiService] [39m[33mrota br-quebrada falhou (Error); tentando a próxima[39m
+[33m[Nest] 7112  - [39m10/11/2026, 08:07:07 [33m   WARN[39m [38;5;3m[AiService] [39m[33mrota br-lenta falhou (AbortError); tentando a próxima[39m
+[33m[Nest] 7112  - [39m10/11/2026, 08:07:07 [33m   WARN[39m [38;5;3m[AiService] [39m[33mrota br-filtro terminou com content_filter; tentando a próxima[39m
+[31m[Nest] 18900  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[seguranca] [39m[31m{"tipo":"seguranca","evento":"EXPORTACAO_FALHOU","severidade":"alto","alarme":"imediato","em":"2026-11-10T11:07:09.120Z","tenantId":"00000000-0000-4000-8000-000000000001","userId":"00000000-0000-4000-8000-000000000002","motivo":"erro_interno"}[39m
+[31m[Nest] 18900  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[seguranca] [39m[31m{"tipo":"seguranca","evento":"EXPORTACAO_FALHOU","severidade":"alto","alarme":"imediato","em":"2026-11-10T11:07:09.124Z","tenantId":"00000000-0000-4000-8000-000000000001","userId":"00000000-0000-4000-8000-000000000002","motivo":"janela_de_saida_encerrada"}[39m
+[31m[Nest] 18900  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[ExportsService] [39m[31mEXPORTACAO_FALHA_NAO_AUDITADA tenant=00000000-0000-4000-8000-000000000001[39m
+[31m[Nest] 18900  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[seguranca] [39m[31m{"tipo":"seguranca","evento":"TRILHA_NAO_GRAVADA","severidade":"critico","alarme":"imediato","em":"2026-11-10T11:07:09.125Z","tenantId":"00000000-0000-4000-8000-000000000001","motivo":"exportacao_falhou"}[39m
+[31m[Nest] 8428  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[seguranca] [39m[31m{"tipo":"seguranca","evento":"CSRF_RECUSADO","severidade":"alto","alarme":"volume","em":"2026-11-10T11:07:09.349Z","motivo":"origem_nao_permitida","origem":"445ba6cfd72a9382"}[39m
+[33m[Nest] 19840  - [39m10/11/2026, 08:07:09 [33m   WARN[39m [38;5;3m[erro] [39m[33mbanco indisponível/lento: Error code=25006[39m
+[31m[Nest] 19840  - [39m10/11/2026, 08:07:09 [31m  ERROR[39m [38;5;3m[erro] [39m[31merro não tratado: Error code=23505[39m
+
+ Test Files  58 passed (58)
+      Tests  1133 passed | 6 skipped (1139)
+   Start at  08:07:03
+   Duration  37.05s (import 49%, tests 37%, transform 13%)
+

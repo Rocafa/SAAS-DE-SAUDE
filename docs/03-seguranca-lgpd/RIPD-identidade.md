@@ -37,11 +37,15 @@
 | Token de recuperação | 30 dias depois de vencer | expurgo diário |
 | Convite da equipe (`team_invites`, na clínica) | 30 dias depois do estado final (aceito, revogado ou vencido) | job `convites-descarte` zera o HMAC do e-mail |
 | Contadores de bloqueio (Redis) | até 15 min | TTL da janela |
-| Senha e TOTP de conta **inativa** (ressalva 4 do parecer do 3c) | **90 dias** depois de a conta ficar inativa | `identidade-expurgo`: apaga senha e TOTP e libera o e-mail; o id fica (histórico clínico) e a recontratação cria conta nova |
+| Senha e TOTP de conta **inativa** (ressalva 4 do parecer do 3c) | **90 dias** depois de a conta ficar inativa | `identidade-expurgo`: apaga senha, TOTP, sessões e tokens pendentes, libera o e-mail e **tira o nome** (art. 16; a autoria está em `professionals` da clínica); marca a conta como `expurgada`. O id fica (histórico clínico), não recebe perfil novo (migração 0072) e a recontratação cria conta nova |
 | Conta (`identidade.usuario`) | **nunca apagada** (R18): o id identifica o autor do prontuário por 20 anos | a pedido do titular, **anonimizada**: e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; evento `CONTA_ANONIMIZADA` e trilha `account_anonymized` como prova (art. 18 IV e art. 37) |
 | Log de segurança | 180 dias | já definido (Marco Civil) |
 
 A identificação do autor do prontuário (nome e registro profissional) fica na tabela da **clínica** (`professionals`), com a retenção do prontuário, e não depende da conta.
+
+**Decisão (10/11/2026, ressalva 8 da reconferência do #173):** o nome não fica no id expurgado. Ele não é necessário à autoria, que está em `professionals`, e por isso sai junto com o e-mail no expurgo de 90 dias (art. 16). Contas já processadas pelo expurgo antes da decisão perdem o nome na migração 0072.
+
+**Risco residual aceito (ressalva 5 da mesma reconferência):** o token novo de recuperação invalida só os pendentes emitidos pela **mesma** clínica. Assim, o admin de uma clínica não anula o token que outra clínica emitiu para a mesma pessoa. Uma pessoa com vínculo em duas clínicas pode ter, no máximo, um token pendente por clínica, cada um de 15 minutos e de uso único.
 
 ## 4. Riscos e mitigação
 
