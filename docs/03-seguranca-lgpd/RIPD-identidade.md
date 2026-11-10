@@ -35,9 +35,9 @@
 | Token de uso único da biblioteca (`verificacao`) | 24 h depois de vencer | expurgo diário |
 | Cadastro de TOTP não concluído | 24 h | expurgo diário |
 | Token de recuperação | 30 dias depois de vencer | expurgo diário |
-| Convite da equipe (`team_invites`, na clínica) | **a definir (R3 do 3b-1):** proposta de 30 dias depois do estado final | job por clínica (fila) |
+| Convite da equipe (`team_invites`, na clínica) | 30 dias depois do estado final (aceito, revogado ou vencido) | job `convites-descarte` zera o HMAC do e-mail |
 | Contadores de bloqueio (Redis) | até 15 min | TTL da janela |
-| Senha e TOTP de conta **inativa** (ressalva 4 do parecer do 3c) | **90 dias** depois de a conta ficar inativa | proposta: job que apaga a credencial (a conta e o id ficam); fila, com prazo antes do primeiro desligamento real |
+| Senha e TOTP de conta **inativa** (ressalva 4 do parecer do 3c) | **90 dias** depois de a conta ficar inativa | `identidade-expurgo`: apaga senha e TOTP e libera o e-mail; o id fica (histórico clínico) e a recontratação cria conta nova |
 | Conta (`identidade.usuario`) | **nunca apagada** (R18): o id identifica o autor do prontuário por 20 anos | a pedido do titular, **anonimizada**: e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; evento `CONTA_ANONIMIZADA` e trilha `account_anonymized` como prova (art. 18 IV e art. 37) |
 | Log de segurança | 180 dias | já definido (Marco Civil) |
 
