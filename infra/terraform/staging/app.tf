@@ -233,6 +233,8 @@ locals {
     # R4: a API monta o HumanoNaoDecifra da key policy de cada chave de clínica com os 3 padrões
     # fixos + estes extras (politicaDaChaveDaClinica, #73 15e3303). Mesma lista do Deny do Terraform.
     length(var.papeis_humanos_extra) > 0 ? [{ name = "KMS_PAPEIS_HUMANOS_EXTRA", value = join(",", var.papeis_humanos_extra) }] : [],
+    # 3c da D4: o login real só liga com a variável (depois do checklist B1–B8 e do parecer final do Guardião).
+    var.login_real_habilitado ? [{ name = "AUTH_PROVIDER", value = "better-auth" }] : [],
     var.whatsapp_provedor == "cloud_api" ? [{ name = "WHATSAPP_WABA_ID", value = var.whatsapp_waba_id }] : [],
     var.whatsapp_provedor == "cloud_api" && var.whatsapp_clausulas_padrao_assinadas ? [{ name = "WHATSAPP_R17_CLAUSULAS_PADRAO", value = "assinadas" }] : [],
   )
@@ -244,7 +246,7 @@ locals {
       REDIS_URL             = { segredo = aws_secretsmanager_secret.app["redis"].arn, campo = "url" }
       PAGINATION_CURSOR_KEY = { segredo = aws_secretsmanager_secret.app["pagination-cursor-key"].arn, campo = "chave" }
       RATE_LIMIT_HASH_KEY   = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
-      # D4 (3c): o provedor real só sobe com estes; AUTH_PROVIDER continua proibido até o parecer final do 3c.
+      # D4 (3c): segredos do provedor real; obrigatórios quando login_real_habilitado = true.
       DATABASE_AUTH_URL  = { segredo = aws_secretsmanager_secret.app["banco-app-auth"].arn, campo = "url" }
       BETTER_AUTH_SECRET = { segredo = aws_secretsmanager_secret.app["better-auth-secret"].arn, campo = "chave" }
     },
@@ -262,13 +264,17 @@ locals {
   api_segredos_arns = distinct([for s in local.api_segredos_origem : s.segredo])
 
   # Contrato com a API (branch eng/integracao-r19): sem estes, a API não sobe com NODE_ENV=production.
-  api_segredos_obrigatorios = ["DATABASE_URL", "REDIS_URL", "PAGINATION_CURSOR_KEY", "RATE_LIMIT_HASH_KEY"]
+  # Ressalva 8 do parecer do 3c: com o login real ligado, os segredos dele são obrigatórios.
+  api_segredos_obrigatorios = concat(
+    ["DATABASE_URL", "REDIS_URL", "PAGINATION_CURSOR_KEY", "RATE_LIMIT_HASH_KEY"],
+    var.login_real_habilitado ? ["DATABASE_AUTH_URL", "BETTER_AUTH_SECRET"] : [],
+  )
   api_ambiente_obrigatorio  = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID", "AWS_REGION"]
   # Nunca na tarefa da API: credencial de migração/admin, segredo local de dev, chave do pseudônimo
   # fora do KMS, rate limit por instância, jobs desligados (§4.4), TLS sem validação.
   api_variaveis_proibidas = [
     "DATABASE_ADMIN_URL", "DATABASE_MIGRATOR_URL", "SUPPORT_PSEUDONYM_KEY", "FIELD_KEYS_DEV_ROOT_SECRET",
-    "RATE_LIMIT_ALLOW_SINGLE_INSTANCE", "JOBS_HABILITADOS", "NODE_TLS_REJECT_UNAUTHORIZED", "AUTH_PROVIDER", "PORTAL_AUTH_PROVIDER",
+    "RATE_LIMIT_ALLOW_SINGLE_INSTANCE", "JOBS_HABILITADOS", "NODE_TLS_REJECT_UNAUTHORIZED", "PORTAL_AUTH_PROVIDER",
   ]
   # K-a/K-b (revisoes/2026-10-25-pr76.md, "Conferência cursor v2 e boot KMS"): a tarefa usa SÓ a
   # role (cadeia padrão do SDK via AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, que o ECS injeta e fica
@@ -375,7 +381,7 @@ resource "aws_ecs_task_definition" "api" {
     }
     precondition {
       condition     = length(setintersection(local.api_variaveis_proibidas, concat(local.api_nomes_ambiente, local.api_nomes_segredos))) == 0
-      error_message = "Variável proibida na tarefa da API (DATABASE_ADMIN_URL, DATABASE_MIGRATOR_URL, SUPPORT_PSEUDONYM_KEY, FIELD_KEYS_DEV_ROOT_SECRET, RATE_LIMIT_ALLOW_SINGLE_INSTANCE, JOBS_HABILITADOS, NODE_TLS_REJECT_UNAUTHORIZED, AUTH_PROVIDER, PORTAL_AUTH_PROVIDER). Ver infra-staging.md §4.5."
+      error_message = "Variável proibida na tarefa da API (DATABASE_ADMIN_URL, DATABASE_MIGRATOR_URL, SUPPORT_PSEUDONYM_KEY, FIELD_KEYS_DEV_ROOT_SECRET, RATE_LIMIT_ALLOW_SINGLE_INSTANCE, JOBS_HABILITADOS, NODE_TLS_REJECT_UNAUTHORIZED, PORTAL_AUTH_PROVIDER). AUTH_PROVIDER só pela variável login_real_habilitado. Ver infra-staging.md §4.5."
     }
     precondition {
       condition     = var.whatsapp_provedor != "cloud_api" || (var.whatsapp_clausulas_padrao_assinadas && var.whatsapp_waba_id != "" && length(setsubtract(["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN"], local.api_nomes_segredos)) == 0)

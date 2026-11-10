@@ -252,6 +252,12 @@ variable "pagination_cursor_key_versao" {
   }
 }
 
+variable "login_real_habilitado" {
+  description = "Liga o login real (Better Auth) na API. SÓ depois do checklist da abertura (prontidao-producao.md, B1–B8) e do parecer final do Guardião."
+  type        = bool
+  default     = false
+}
+
 variable "better_auth_segredos_versionados" {
   description = "Liga o segredo BETTER_AUTH_SECRETS (rotação sem perder o TOTP, R9 do #152). Ligar SÓ depois de preencher o segredo (put-secret-value); vazio, a tarefa não sobe."
   type        = bool
