@@ -113,7 +113,8 @@ export class CredenciaisService {
     if (r === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
     if (r === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senhaNova']);
     // Ressalva 4: erro que não é de senha (sessão vencida, senha nova recusada pela biblioteca) não gasta tentativa.
-    if (r === 'recusada') throw new ConflitoError('troca_recusada', ['senhaNova']);
+    if (r === 'senha_nova_invalida') throw new ConflitoError('senha_nova_invalida', ['senhaNova']);
+    if (r === 'recusada') throw new ConflitoError('troca_recusada');
     return r;
   }
 

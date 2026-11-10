@@ -1145,7 +1145,7 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const c = cookieDe(await entrar(p.email));
     await provedor.resolver({ headers: c });
     for (let k = 0; k < 6; k++) {
-      expect(await provedor.trocarSenhaDaPessoa({ headers: c, userId: p.userId, atual: SENHA, nova: 'curta' })).toBe('recusada');
+      expect(await provedor.trocarSenhaDaPessoa({ headers: c, userId: p.userId, atual: SENHA, nova: 'curta' })).toBe('senha_nova_invalida');
     }
     const r = await provedor.trocarSenhaDaPessoa({ headers: c, userId: p.userId, atual: SENHA, nova: SENHA_NOVA });
     expect(Array.isArray(r)).toBe(true);
@@ -1166,6 +1166,9 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
       .where(and(eq(recuperacao.usuarioId, p.userId), sql`${recuperacao.usadoEm} is null`));
     expect(pendentes.map((x) => x.clinica).sort()).toEqual([a, b].sort());
     expect(await credenciais().usarRecuperacao({ token: deA.token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBeInstanceOf(Array);
+    // F2 do #175: usado o token de A, o pendente de B também cai.
+    const depois = await dbAuth.db.select({ id: recuperacao.id }).from(recuperacao).where(and(eq(recuperacao.usuarioId, p.userId), sql`${recuperacao.usadoEm} is null`));
+    expect(depois).toEqual([]);
   });
 
   it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {

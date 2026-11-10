@@ -45,7 +45,7 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 
 **Decisão (10/11/2026, ressalva 8 da reconferência do #173):** o nome não fica no id expurgado. Ele não é necessário à autoria, que está em `professionals`, e por isso sai junto com o e-mail no expurgo de 90 dias (art. 16). Contas já processadas pelo expurgo antes da decisão perdem o nome na migração 0072.
 
-**Risco residual aceito (ressalva 5 da mesma reconferência):** o token novo de recuperação invalida só os pendentes emitidos pela **mesma** clínica. Assim, o admin de uma clínica não anula o token que outra clínica emitiu para a mesma pessoa. Uma pessoa com vínculo em duas clínicas pode ter, no máximo, um token pendente por clínica, cada um de 15 minutos e de uso único.
+**Risco residual aceito (ressalva 5 da mesma reconferência):** o token novo de recuperação invalida só os pendentes emitidos pela **mesma** clínica. Assim, o admin de uma clínica não anula o token que outra clínica emitiu para a mesma pessoa. Uma pessoa com vínculo em duas clínicas pode ter, no máximo, um token pendente por clínica, cada um de 15 minutos e de uso único. Quando a pessoa usa um deles, todos os outros pendentes caem.
 
 ## 4. Riscos e mitigação
 

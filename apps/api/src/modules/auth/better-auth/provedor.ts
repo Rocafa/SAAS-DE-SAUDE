@@ -261,19 +261,23 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       );
     let credenciaisDeInativas = 0;
     for (const { id } of inativas) {
-      await this.d.dbAuth.transaction(async (tx) => {
-        await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
-        await tx.delete(doisFatores).where(eq(doisFatores.userId, id));
+      const expurgou = await this.d.dbAuth.transaction(async (tx) => {
         // Ressalvas 7 e 8 da reconferência do #173: a marca 'expurgada' recusa nova concessão (0072) e o nome sai junto com
-        // o e-mail (art. 16); a autoria clínica está em `professionals` da clínica.
-        await tx
+        // o e-mail (art. 16); a autoria clínica está em `professionals` da clínica. F1 do #175: a marca vai PRIMEIRO, com a
+        // condição repetida; se a pessoa foi recontratada entre a seleção e aqui, a conta fica como está.
+        const marcada = await tx
           .update(usuario)
           .set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid`, name: 'Conta desligada', image: null, inativaPor: 'expurgada' })
-          .where(eq(usuario.id, id));
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo')))
+          .returning({ id: usuario.id });
+        if (marcada.length === 0) return false;
+        await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
+        await tx.delete(doisFatores).where(eq(doisFatores.userId, id));
         await tx.delete(sessao).where(eq(sessao.userId, id));
         await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, id), isNull(recuperacao.usadoEm)));
+        return true;
       });
-      credenciaisDeInativas += 1;
+      if (expurgou) credenciaisDeInativas += 1;
     }
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length, credenciaisDeInativas };
   }
@@ -283,7 +287,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     userId: string;
     atual: string;
     nova: string;
-  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'recusada' | 'bloqueado' | 'indisponivel'> {
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'senha_nova_invalida' | 'recusada' | 'bloqueado' | 'indisponivel'> {
     // R9 do código do 3b-2: a senha atual conferida aqui conta no bloqueio de login (quem tem a sessão não testa senhas).
     const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, e.userId));
     const b = this.d.bloqueio;
@@ -315,7 +319,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       // Ressalva 4 da reconferência do #173: só a senha atual errada gasta tentativa; outro erro devolve a reserva.
       if (corpo.code !== 'INVALID_PASSWORD') {
         await this.devolverVarias(doLogin);
-        return 'recusada';
+        // F4 do #175: senha nova fora do tamanho aponta o campo; o resto (sessão vencida, reautenticação) não.
+        return corpo.code === 'PASSWORD_TOO_SHORT' || corpo.code === 'PASSWORD_TOO_LONG' ? 'senha_nova_invalida' : 'recusada';
       }
       registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', userId: e.userId });
       return 'senha_atual_errada';
@@ -457,6 +462,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         .where(and(eq(recuperacao.id, r.id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
         .returning({ id: recuperacao.id });
       if (usado.length === 0) return false;
+      // F2 do #175: credencial trocada, os outros pendentes da pessoa (de qualquer clínica) perdem o sentido.
+      await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, r.usuarioId), isNull(recuperacao.usadoEm)));
       if (hashNovo) {
         await tx.update(conta).set({ password: hashNovo }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
       } else {

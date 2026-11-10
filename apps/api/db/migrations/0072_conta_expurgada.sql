@@ -11,7 +11,7 @@ ALTER TABLE identidade.usuario ADD CONSTRAINT usuario_inativa_por_check
   CHECK (inativa_por IS NULL OR inativa_por IN ('sem_vinculo', 'anonimizada', 'convite_desfeito', 'expurgada'));
 
 -- Contas que o expurgo já processou (e-mail trocado pelo marcador) passam a ter a marca, e o nome sai (art. 16).
-UPDATE identidade.usuario SET inativa_por = 'expurgada', name = 'Conta desligada'
+UPDATE identidade.usuario SET inativa_por = 'expurgada', nome = 'Conta desligada', imagem = NULL
  WHERE ativo = false AND email LIKE 'desligada-%@desligada.invalid';
 
 CREATE OR REPLACE FUNCTION app_espelhar_vinculo() RETURNS trigger
@@ -31,6 +31,12 @@ BEGIN
       ON CONFLICT DO NOTHING;
     -- Recontratação: só a conta desligada por falta de vínculo volta a valer (a credencial continua sendo da pessoa).
     UPDATE identidade.usuario SET ativo = true, inativa_por = NULL WHERE id = NEW.user_id AND ativo = false AND inativa_por = 'sem_vinculo';
+    -- F1 do #175: o UPDATE acima espera o expurgo que já travou a linha. Se ele marcou a conta nesse meio-tempo, este
+    -- comando (foto nova, READ COMMITTED) vê a marca e recusa. Sem FOR UPDATE: a trava extra reabriria o deadlock
+    -- entre conexões do 3b-1.
+    IF EXISTS (SELECT 1 FROM identidade.usuario u WHERE u.id = NEW.user_id AND u.inativa_por IN ('anonimizada', 'expurgada')) THEN
+      RAISE EXCEPTION 'conta encerrada não recebe perfil' USING ERRCODE = '42501';
+    END IF;
   ELSE
     -- Só some do espelho se não houver OUTRA linha ativa do mesmo papel (revogado e concedido de novo).
     DELETE FROM identidade.vinculo v
