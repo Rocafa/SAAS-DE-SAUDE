@@ -1,11 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-
-function proximaQuinta(): string {
-  const d = new Date();
-  const delta = ((4 - d.getDay() + 7) % 7) || 7;
-  d.setDate(d.getDate() + delta);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+import { proximaQuinta } from './datas';
 
 async function abrirAjudante(page: Page) {
   await page.getByTestId('abrir-ajudante').click();
