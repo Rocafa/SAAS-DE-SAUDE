@@ -1195,6 +1195,21 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const linhas = await dbAuth.db.select({ id: usuario.id, ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(sql`${usuario.id} in (${velha}, ${nova})`);
     expect(linhas.find((l) => l.id === velha)).toEqual({ id: velha, ativo: false, motivo: 'sem_vinculo' });
     expect(linhas.find((l) => l.id === nova)).toEqual({ id: nova, ativo: true, motivo: null });
+    const [desde] = await dbAuth.db.select({ d: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, velha));
+    expect(desde?.d).toBeInstanceOf(Date);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, velha))).toEqual([]);
+  });
+
+  it('G1 do #176: conta inativa por corrida mas COM vínculo é reativada e não perde a credencial no expurgo', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    await dbAuth.db.update(usuario).set({ ativo: false, inativaPor: 'sem_vinculo' }).where(eq(usuario.id, p.userId));
+    await dbAuth.db.update(usuario).set({ inativaDesde: new Date(Date.now() - 91 * 24 * 3_600_000) }).where(eq(usuario.id, p.userId));
+    expect((await provedor.expurgarComoSistema()).contasReativadas).toBeGreaterThanOrEqual(1);
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor, email: usuario.email }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(u).toEqual({ ativo: true, motivo: null, email: p.email });
+    const [c] = await dbAuth.db.select({ senha: conta.password }).from(conta).where(eq(conta.userId, p.userId));
+    expect(c?.senha).not.toBeNull();
   });
 
   it('fila do 3b-3: anonimizar zera na hora o HMAC do e-mail do convite que a conta aceitou', async () => {

@@ -218,6 +218,7 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **Teto de convites atômico** (R6 do 3b-1): `pg_advisory_xact_lock` por admin na transação da clínica. Teste: rajada de 23 convites gera exatamente 20.
 - **Sessão de cadastro órfã** (R7 do 3b-1): se a marca `cadastro_pendente_ate` não gravar, a sessão aberta é apagada na hora.
 - **Marca de reuso do TOTP só depois de conferir** (R12 do 3b-2, R7 do 3b-3): um código errado não queima o valor por 90 s.
-- **Conta ativa sem vínculo** (R5 do 3b-3): o expurgo diário desliga a conta ativa sem nenhum vínculo há mais de 1 dia (corrida de duas revogações simultâneas) e derruba as sessões dela.
-- **Anonimização**: o convite aceito pela conta perde o HMAC do e-mail na hora.
+- **Conta ativa sem vínculo** (R5 do 3b-3): o expurgo diário desliga a conta ativa sem nenhum vínculo há mais de 1 dia (corrida de duas revogações simultâneas), derruba as sessões na mesma transação e registra `CONTA_DESLIGADA_SEM_VINCULO` (G4 do #176). A conta inativa `sem_vinculo` que tem vínculo (corrida com uma concessão) é reativada pelo mesmo job, e o expurgo de 90 dias nunca marca quem tem vínculo (G1).
+- **Anonimização**: o convite aceito pela conta perde o HMAC do e-mail na hora, nas clínicas com vínculo e na clínica de origem (G3). Nas demais, em até 30 dias pelo `convites-descarte`.
+- **Marca de reuso do TOTP com o contador fora do ar** conta como reuso (falha fechada, G5).
 - **Runbook**: efeitos da rotação da `RATE_LIMIT_HASH_KEY` (R5 do 3b-1). **RIPD §5**: procedimento de suporte para quem não tem vínculo em nenhuma clínica (R13 do 3b-2).

@@ -233,7 +233,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number; contasReativadas: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -251,18 +251,42 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // R5 do código do 3b-3: duas revogações simultâneas em clínicas diferentes podem deixar a conta ativa sem vínculo.
     // O expurgo a desliga (o trigger da 0071 grava inativa_desde). Só conta com mais de 1 dia, para não pegar um aceite
     // de convite em andamento.
-    const semVinculo = await this.d.dbAuth
+    // G4 do parecer do #176: uma transação por conta (desliga e derruba as sessões juntas) e evento de cada uma.
+    const candidatas = await this.d.dbAuth
+      .select({ id: usuario.id })
+      .from(usuario)
+      .where(and(eq(usuario.ativo, true), lt(usuario.createdAt, umDia), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`));
+    const semVinculo: string[] = [];
+    for (const { id } of candidatas) {
+      const desligou = await this.d.dbAuth.transaction(async (tx) => {
+        const r = await tx
+          .update(usuario)
+          .set({ ativo: false, inativaPor: 'sem_vinculo' })
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, true), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
+          .returning({ id: usuario.id });
+        if (r.length === 0) return false;
+        await tx.delete(sessao).where(eq(sessao.userId, id));
+        return true;
+      });
+      if (desligou) {
+        semVinculo.push(id);
+        registrarEventoDeSeguranca('CONTA_DESLIGADA_SEM_VINCULO', { motivo: 'conta_sem_vinculo', userId: id });
+      }
+    }
+    // G1 do parecer do #176: uma concessão que corre junto com o passo acima (o vínculo ainda sem commit) deixa a conta
+    // inativa COM vínculo. O job a reativa no dia seguinte (o trigger da 0071 limpa inativa_desde), antes que os 90 dias
+    // apaguem a credencial de quem está trabalhando.
+    const reativadas = await this.d.dbAuth
       .update(usuario)
-      .set({ ativo: false, inativaPor: 'sem_vinculo' })
+      .set({ ativo: true, inativaPor: null })
       .where(
         and(
-          eq(usuario.ativo, true),
-          lt(usuario.createdAt, umDia),
-          sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`,
+          eq(usuario.ativo, false),
+          eq(usuario.inativaPor, 'sem_vinculo'),
+          sql`exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`,
         ),
       )
       .returning({ id: usuario.id });
-    if (semVinculo.length > 0) await this.d.dbAuth.delete(sessao).where(inArray(sessao.userId, semVinculo.map((x) => x.id)));
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
       .select({ id: usuario.id })
@@ -283,7 +307,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         const marcada = await tx
           .update(usuario)
           .set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid`, name: 'Conta desligada', image: null, inativaPor: 'expurgada' })
-          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo')))
+          // G1 do #176: nunca expurgar quem tem vínculo (conta inativa por corrida com uma concessão).
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo'), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
           .returning({ id: usuario.id });
         if (marcada.length === 0) return false;
         await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
@@ -301,6 +326,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       recuperacoes: recuperacoes.length,
       credenciaisDeInativas,
       contasSemVinculo: semVinculo.length,
+      contasReativadas: reativadas.length,
     };
   }
 
@@ -701,10 +727,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
     if (claro === null || !totpConfere(claro, codigo, this.agora().getTime())) return false;
     // R12 do código do 3b-2 (R7 do 3b-3): a marca de reuso só depois de o código conferir; um código errado não queima
-    // o valor.
+    // o valor. G5 do parecer do #176: contador fora do ar conta como reuso (falha fechada).
     const b = this.d.bloqueio;
     if (b) {
-      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
+      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 2 }));
       if (usado.count > 1) return false;
     }
     return true;
@@ -807,6 +833,18 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     });
     // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
     registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
+    // G3 do parecer do #176: a clínica de origem (onde a conta aceitou o convite) também perde o HMAC, mesmo sem
+    // vínculo ativo; a trilha da anonimização fica nas clínicas com vínculo.
+    const [origem] = await this.d.dbAuth.select({ clinica: usuario.clinicaDeOrigem }).from(usuario).where(eq(usuario.id, userId));
+    if (origem?.clinica && !clinicasAntes.includes(origem.clinica)) {
+      const clinica = origem.clinica;
+      await withTenant(
+        this.d.dbClinica,
+        clinica as TenantId,
+        (tx) => tx.execute(sql`update team_invites set email_hmac = ${'0'.repeat(32)} where tenant_id = ${clinica} and accepted_user_id = ${userId}`),
+        userId,
+      );
+    }
     for (const tenantId of clinicasAntes) {
       await withTenant(
         this.d.dbClinica,
