@@ -1209,6 +1209,8 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     expect((await provedor.expurgarComoSistema()).contasReativadas).toBeGreaterThanOrEqual(1);
     const [u] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor, email: usuario.email }).from(usuario).where(eq(usuario.id, p.userId));
     expect(u).toEqual({ ativo: true, motivo: null, email: p.email });
+    const [d] = await dbAuth.db.select({ d: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(d?.d).toBeNull();
     const [c] = await dbAuth.db.select({ senha: conta.password }).from(conta).where(eq(conta.userId, p.userId));
     expect(c?.senha).not.toBeNull();
   });
@@ -1252,6 +1254,16 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
       const logins = aviso.mock.calls.map((x) => String(x[0])).filter((l) => l.includes('"evento":"LOGIN_OK"') && l.includes(p.userId));
       expect(logins).toHaveLength(1);
       expect(logins[0]).toContain('"motivo":"cadastro_do_fator"');
+      // H2 da reconferência do #176: o login em duas etapas de quem já tem TOTP sai como login (sem motivo).
+      aviso.mockClear();
+      zerarJanelasDoLog();
+      const senha = await postar('/sign-in/email', {}, { email: p.email, password: SENHA });
+      expect((await postar('/two-factor/verify-totp', senha.cabecalhos, { code: proximoCodigo(p.userId) })).r.status).toBe(200);
+      const linhas = aviso.mock.calls.map((x) => String(x[0])).filter((l) => l.includes(p.userId));
+      expect(linhas.filter((l) => l.includes('"evento":"LOGIN_SENHA_OK"'))).toHaveLength(1);
+      const ok = linhas.filter((l) => l.includes('"evento":"LOGIN_OK"'));
+      expect(ok).toHaveLength(1);
+      expect(ok[0]).not.toContain('"motivo"');
     } finally {
       aviso.mockRestore();
     }

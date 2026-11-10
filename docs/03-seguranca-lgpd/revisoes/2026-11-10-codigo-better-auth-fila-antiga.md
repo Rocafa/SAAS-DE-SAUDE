@@ -69,3 +69,67 @@ O que está certo:
 - **G4:** cada conta é desligada numa transação própria, junto com as sessões, e gera o evento `CONTA_DESLIGADA_SEM_VINCULO` (aviso, motivo `conta_sem_vinculo`). Fica para o desenho do provisionamento a conta do fundador criada antes da clínica.
 - **G5:** com o contador fora do ar, a marca de reuso conta como reuso (falha fechada).
 - **Menores:** o teste da R5 confere `inativa_desde` e as sessões. O comentário de `criarContaDoConvite` não mudou.
+
+## Reconferência (10/11/2026)
+
+> Commits `5a1b707` (G1 a G5) e `52b6480` (R3 e R5 de `2026-11-05-codigo-better-auth-pr3a.md`). Revisão estática de `git show 5a1b707` e `git diff 8962b07..HEAD`, com leitura do código da biblioteca instalada (`better-auth` 1.7.12: `plugins/two-factor/totp/index.mjs`, `verify-two-factor.mjs`, `api/routes/session.mjs`). A bancada RLS não rodou aqui; o veredito vale com o CI verde nos testes novos do `describe` "Fila do 3b".
+
+### Veredito: **APROVADO COM RESSALVAS.** G1, G2, G3 (mínima) e G4 estão certas. R3 e R5 do 3a estão resolvidas. **G5 ficou pela metade** (H1). **H1 e H2 entram antes do merge** (pequenas); H3 e H4 vão para a fila.
+
+O que está certo:
+
+- **G1 ✅.** O `UPDATE` da marca `'expurgada'` tem o `not exists` em `identidade.vinculo`, e o job reativa a conta `ativo = false, 'sem_vinculo'` que tem vínculo, **antes** do passo de 90 dias. Os outros motivos (`anonimizada`, `expurgada`, `convite_desfeito`) ficam de fora pelo filtro. O teste cobre o quadro e confere que a senha fica.
+  - Corrida inversa (reativação junto com a revogação do último vínculo): no `READ COMMITTED`, a rechecagem da linha usa o `exists` com o retrato do início do comando, então a conta pode voltar ativa sem vínculo. É o quadro da R5, que o próprio job desliga no dia seguinte, e sem acesso nesse meio-tempo (`resolver` exige perfil). Aceitável.
+- **G2 ✅.** O RIPD §5 tem um item 4 só, e o texto separa o antes e o depois dos 90 dias como pedido.
+- **G3 (mínima) ✅.** A clínica de origem é lida **depois** da anonimização, mas a transação não mexe em `clinica_de_origem`, então o valor está lá. O `update` roda sob `withTenant` e filtra `tenant_id` e `accepted_user_id`. O RIPD e a §14.7 dizem "nas demais, em até 30 dias". (Menor: usar a constante `EMAIL_DESCARTADO` em vez de `'0'.repeat(32)` nos dois `update`.)
+- **G4 ✅.** Uma transação por conta, com o `UPDATE` (condição repetida) e o `delete` das sessões juntos; o evento só sai se a linha mudou. `CONTA_DESLIGADA_SEM_VINCULO` leva só o `userId` e o motivo `conta_sem_vinculo`, que entrou na lista fechada.
+- **R3 do 3a ✅ (clínica cancelada).** `clinicaLiberada` usa `canRead` com `EXIT_WINDOW_DAYS`, a mesma regra de `transacao-clinica.ts` e do `portal.service.ts`: `cancelled` só dentro da janela de 90 dias, qualquer status desconhecido fecha. A lista e a escolha seguem a regra; a escolha fora da janela responde 404, igual à clínica sem vínculo (não confirma que a clínica existe). Teste com uma clínica a 200 dias e outra a 10. Ver H3 para a escolha automática.
+- **R5 do 3a ✅ (`LOGIN_OK` do cadastro).** A detecção não marca errado um login em duas etapas. Na 1.7.12, o `/two-factor/verify-totp` só cria sessão em dois casos:
+  - **Login em duas etapas:** `verifyTwoFactor` chama `getSessionFromCtx`, que, sem sessão, grava `ctx.context.session = null`. A sessão nova nasce no `valid()` do caminho do cookie `two_factor`. `!!null` é falso, então sai `LOGIN_OK` sem motivo. ✅
+  - **Cadastro:** só no caminho com sessão, e só se `twoFactor.verified !== true` e `twoFactorEnabled` falso. Aí `ctx.context.session` está preenchida. ✅
+  - **Cookie de sessão válido junto com o `two_factor`** (cliente forjado): a biblioteca vai pelo caminho com sessão; com o fator já verificado, **não cria sessão**, então não há `LOGIN_OK` nenhum para marcar errado. ✅
+  - O `protecao.ts` também usa `getSessionFromCtx` (mesmo cache em `ctx.context.session`), então o gancho e a biblioteca enxergam o mesmo estado. O login em duas etapas com cadastro não existe (`isSignIn && verified === false` é recusado).
+
+### Ressalvas
+
+**H1 (antes do merge). G5 só valeu para o caminho do provedor; a rota de login segue com falha aberta na marca de reuso.** A mudança para `count: 2` está em `totpDaPessoaConfere` (`provedor.ts`), usado na recuperação por token e no aceite com conta existente. A rota `/two-factor/verify-totp` (login em duas etapas, reverificação e cadastro) passa pelo `antes` do `protecao.ts`, que no `catch` do `hit` de `totp-usado` mantém `usado = false` e só registra `RATE_LIMIT_FAIL_OPEN`. Com o Redis fora, o mesmo código serve duas vezes no login. A arquitetura diz, sem restrição, que a marca "com o contador fora do ar conta como reuso".
+- **Correção:** no `catch` do `protecao.ts`, `usado = true` e registrar `BLOQUEIO_INDISPONIVEL` (motivo `codigo_reutilizado`), como no provedor; ou, se a decisão for manter o login aberto até a decisão do bloqueio 5/15, restringir a frase da arquitetura ao provedor e deixar a rota na fila com o bloqueio. O provedor também não registra evento no `catch` (o login para por "código inválido" sem sinal para a operação): acrescentar `BLOQUEIO_INDISPONIVEL`.
+- Observação (fila, já existia): no `protecao.ts` a marca de reuso continua **antes** da conferência, então um código errado na rota de login queima o valor por 90 s. Só afeta quem tem o cookie `two_factor` ou a sessão (a própria pessoa); o R12 do 3b-2 foi resolvido no provedor.
+
+**H2 (antes do merge). Teste negativo da R5.** O teste cobre só o cadastro. Acrescentar o login em duas etapas de quem já tem TOTP: exatamente um `LOGIN_OK` para o `userId`, **sem** `"motivo"`, e um `LOGIN_SENHA_OK`. Protege contra mudança da biblioteca: o critério depende de `ctx.context.session` estar vazia no caminho do cookie `two_factor`.
+
+**H3 (fila). A escolha automática da clínica não passa pela regra de leitura.** No `resolver`, com uma clínica só, `definirClinica` é chamada direto: a clínica cancelada fora da janela vira `clinicaAtiva` e recebe `session_tenant_selected` na trilha, embora suma da lista. Não vaza dado (a `transacao-clinica` barra a leitura com `ExitWindowClosedError`), mas a regra fica em dois lugares. Além disso, `escolherClinica` lê a linha de `tenants` de uma clínica **antes** de conferir o vínculo.
+- **Correção:** levar a checagem de `canRead` para dentro de `definirClinica`, **depois** da conferência do vínculo. Cobre a escolha manual, a automática e evita ler a clínica alheia.
+
+**H4 (fila). Reativação pelo job sem evento.** O passo da G1 muda o estado da conta (`ativo = true`) sem registro, ao contrário do desligamento (G4). Registrar `CONTA_REATIVADA_COM_VINCULO` (só `userId`, motivo na lista fechada), pelo mesmo motivo do art. 37: quem mudou o estado da conta e quando.
+
+**Menores (sem número):**
+- Teste da G1: conferir `inativa_desde` nulo depois da reativação (trigger da 0071). O `not exists` do passo de 90 dias não é exercitado sozinho, porque a reativação roda antes; aceitável como defesa em profundidade.
+- O comentário de `criarContaDoConvite` ("a concessão já reativou a conta (trigger da 0069)") continua errado (a Nota do Maestro registra que não mudou). Corrigir quando passar por ali.
+
+### Checklist
+
+| Item | Situação |
+|---|---|
+| Base legal | Sem tratamento novo. ✅ |
+| Minimização | HMAC do convite sai também na clínica de origem. ⚠️ H3 (lê `tenants` antes do vínculo). |
+| Consentimento | Não se aplica. |
+| Criptografia | Sem mudança. ✅ |
+| Isolamento por tenant | `withTenant` com `tenant_id` nos `update`; leitura de `tenants` sob RLS. ✅ |
+| Controle de acesso | Clínica cancelada fora da janela fora da lista e da escolha. ⚠️ H1 (reuso aberto no login com Redis fora), H3. |
+| Log de auditoria | `CONTA_DESLIGADA_SEM_VINCULO` ✅; `LOGIN_OK` do cadastro separado ✅. ⚠️ H4. |
+| Prontuário (20 anos) | O id fica em todos os caminhos; o expurgo nunca toca quem tem vínculo. ✅ |
+| Segredos e dados reais | Nada no git; testes com dados fictícios. ✅ |
+| CFM, ANS e ICP-Brasil | Sem mudança. |
+
+### Nota do Maestro sobre a reconferência (10/11/2026)
+
+- **H1:** segui a segunda saída. O texto da arquitetura ficou restrito aos caminhos do provedor, e o `catch` do provedor agora registra `BLOQUEIO_INDISPONIVEL` (motivo `codigo_reutilizado`). A rota de login fica na fila junto com a decisão do bloqueio 5/15, que também abre com o contador fora: fechar só o reuso derrubaria todo login com TOTP numa queda do Redis, e essa escolha de disponibilidade é dos sócios.
+- **H2:** o teste da R5 cobre também o login em duas etapas de quem já tem TOTP: um `LOGIN_SENHA_OK` e um `LOGIN_OK` sem `motivo`.
+- **H3:** o `canRead` foi para dentro do `definirClinica`, depois da conferência do vínculo. Assim vale também para a escolha automática do `resolver`. Os testes de unidade do provedor simulam a clínica liberada.
+- **H4:** `CONTA_REATIVADA_COM_VINCULO` (aviso, motivo `conta_com_vinculo`).
+- **Menores:**
+  - O teste da G1 confere que `inativa_desde` volta a nulo.
+  - `EMAIL_DESCARTADO` foi para `convites-retencao.ts` (sem ciclo de import) e é usado pelo provedor.
+  - O comentário do `criarContaDoConvite` foi corrigido.
+  - A marca de reuso antes da conferência no login vai para a fila.

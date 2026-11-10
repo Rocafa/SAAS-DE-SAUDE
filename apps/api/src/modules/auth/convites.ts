@@ -27,10 +27,11 @@ import { AUTH_PROVIDER, ehProvedorDeConvite, paraRequestContext, type AuthContex
 import { ehPerfilDoBanco, exigirPerfilNoBanco, gravarConcessao } from './membros';
 import { ExigeMfaRecente } from './mfa';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
+import { EMAIL_DESCARTADO } from './convites-retencao';
 
-export const VALIDADE_DO_CONVITE_MS = 72 * 60 * 60 * 1000;
 /** HMAC "zerado" do convite descartado (formato válido no CHECK, não corresponde a nenhum e-mail). */
-export const EMAIL_DESCARTADO = '0'.repeat(32);
+export { EMAIL_DESCARTADO };
+export const VALIDADE_DO_CONVITE_MS = 72 * 60 * 60 * 1000;
 /** R9: convites por admin por dia (corta abuso sem atrapalhar a montagem de uma equipe). */
 export const TETO_DIARIO_DE_CONVITES = 20;
 const SCOPE = 'team_invites';
