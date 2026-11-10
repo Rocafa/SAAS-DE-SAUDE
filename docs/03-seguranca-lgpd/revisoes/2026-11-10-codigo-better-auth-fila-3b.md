@@ -63,3 +63,23 @@ O que está certo:
 - **B2 corrigido, pela opção (b).** A conta desligada **nunca** é reaproveitada. Aos 90 dias, o expurgo **libera o e-mail** (`desligada-<id>@desligada.invalid`), e a recontratação pelo convite cria uma **conta nova**, com outro id. O id antigo fica só como autor no histórico clínico. O teste usa uma pessoa **com TOTP** e confere o id novo.
 - **Ressalva 6:** o RIPD §3 passa a ter os prazos definitivos de 30 e 90 dias.
 - **Ressalvas 1 a 5** vão para a fila: teste do trigger da 0071, teto atômico e com evento, erro não-senha na troca, invalidação limitada à própria clínica.
+
+## Reconferência (10/11/2026, commit `a10da1a`)
+
+Revisão estática do diff `5d439e8...a10da1a`, que mexe em `provedor.ts`, no teste `Fila do 3b` e no `RIPD-identidade.md` §3. O CI passou (16/16), segundo o pedido.
+
+### Veredito: **APROVADO COM RESSALVAS.** B1 e B2 estão resolvidos. As ressalvas 1 a 5 seguem na fila, com as duas abaixo. Nada disso bloqueia o merge.
+
+- **B1 ✅** O expurgo trata cada conta numa transação do `app_auth`: apaga a senha, a linha de `doisFatores` e as sessões, zera `twoFactorEnabled` e invalida as recuperações pendentes. A conta já liberada sai do `select`, e o teste confere que a segunda passada processa 0 contas. O teste usa uma pessoa **com TOTP cadastrado**, e confere que o fator foi desmarcado e que não sobra linha em `doisFatores`.
+- **B2 ✅ (opção b)** `idParaContaDoConvite` só reaproveita a conta de `convite_desfeito`. A conta desligada dá `conta_existente` antes dos 90 dias (o aceite pede a senha e o TOTP da própria pessoa). Depois dos 90 dias, o e-mail vira `desligada-<id>@desligada.invalid`, e o convite cria um **id novo**, o que o teste confere. Ninguém consegue mais assumir o id que é autor no prontuário pelo convite.
+  - **Concessão direta ao id expurgado:** o trigger da 0069 ainda reativa a conta `sem_vinculo` quando a clínica concede um perfil a ela. Mesmo assim, não há tomada de conta, porque a conta reativada não tem como entrar:
+    - o e-mail não é real;
+    - não há senha;
+    - não há TOTP;
+    - a recuperação do tipo `senha` exige o TOTP, e a do tipo `fator` exige a senha atual.
+- **Ressalva 6 ✅ no RIPD** O §3 passa a ter os prazos de 30 e 90 dias como vigentes, com o job de cada um e a regra da conta nova.
+
+### Fila (somam-se às ressalvas 1 a 5)
+
+7. **Concessão a conta expurgada.** O trigger da 0069 reativa uma conta que ninguém consegue usar, e a clínica pensa que recontratou a pessoa. Recusar a concessão ao id com e-mail `desligada-…@desligada.invalid`, como já se faz com a anonimizada (42501). Uma alternativa é uma marca `inativa_por = 'expurgada'` gravada pelo expurgo, que também dispensa o filtro por `like` no e-mail. Teste: conceder um perfil à conta expurgada dá 42501.
+8. **A matriz de retenção ainda diz "proposta".** A linha de 08/11 da `matriz-retencao.md` fala em "proposta de 30 dias" para o `team_invites`. Acrescentar uma linha de histórico com os prazos vigentes. Também falta decidir, e registrar no RIPD, se o **nome** fica no esqueleto do id expurgado. Ele não é necessário à autoria, que está em `professionals` da clínica. Se não for, sai junto com o e-mail (art. 16).
