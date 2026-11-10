@@ -71,16 +71,30 @@ interface AtendimentoApi {
   motivoOculto?: Registro['motivoOculto'];
 }
 
+/** EVA sem rótulo (`tipo: 'eva'`, 0 a 10 inteiro) é o campo `dor` da tela. */
+function dorDasMedidas(medidas: unknown): string | undefined {
+  if (!Array.isArray(medidas)) return undefined;
+  for (const m of medidas as unknown[]) {
+    if (typeof m !== 'object' || m === null) continue;
+    const { tipo, valor, rotulo } = m as { tipo?: unknown; valor?: unknown; rotulo?: unknown };
+    if (tipo === 'eva' && rotulo === undefined && typeof valor === 'number') return String(valor);
+  }
+  return undefined;
+}
+
 /**
  * O servidor é quem decide o sigilo: o adaptador só traduz nomes e NUNCA recalcula visibilidade.
- * `conteudo` do servidor aceita medida e plano de sessões; a tela de hoje só sabe campo de texto, então
- * só texto entra em `campos` — medida e plano ficam de fora de propósito, em vez de virar string torta.
+ * `conteudo` do servidor aceita medida e plano de sessões; a tela de hoje só sabe campo de texto e a dor. Texto entra
+ * em `campos`, e a EVA volta como `dor`: o PUT grava a versão inteira, então o que não volta para a tela some no
+ * próximo salvar. Plano de sessões e outras medidas ficam de fora (a tela ainda não os tem).
  */
 function paraRegistro(a: AtendimentoApi): Registro {
   const campos: Record<string, string> = {};
   for (const [chave, valor] of Object.entries(a.conteudo ?? {})) {
     if (typeof valor === 'string') campos[chave] = valor;
   }
+  const dor = dorDasMedidas(a.conteudo?.['medidas']);
+  if (dor !== undefined) campos['dor'] = dor;
   return {
     id: a.id,
     pacienteId: a.pacienteId,
@@ -122,12 +136,18 @@ const TEXTOS_DA_API: ReadonlySet<string> = new Set([
  */
 export function paraConteudoDaApi(campos: Record<string, string>): Record<string, unknown> {
   const conteudo: Record<string, unknown> = {};
-  const medidas: { nome: string; valor: string }[] = [];
+  // Formato de `validarMedidas` na API: só `tipo`, `rotulo` e `valor` numérico; outra chave dá 400 no registro inteiro.
+  const medidas: { tipo: 'eva'; valor: number }[] = [];
   const semLugar: string[] = [];
   for (const [campo, valor] of Object.entries(campos)) {
     if (TEXTOS_DA_API.has(campo)) conteudo[campo] = valor;
-    else if (campo === 'dor') medidas.push({ nome: 'dor', valor });
-    else if (valor.trim() !== '') semLugar.push(campo);
+    else if (campo === 'dor') {
+      const texto = valor.trim();
+      if (texto === '') continue;
+      // EVA: inteiro de 0 a 10. Fora disso recusa aqui, com mensagem própria (sem o valor), em vez do 400 genérico.
+      if (!/^\d{1,2}$/.test(texto) || Number(texto) > 10) throw new ErroApi(MENSAGENS.dorForaDaEscala, 400, 'dor_fora_da_escala');
+      medidas.push({ tipo: 'eva', valor: Number(texto) });
+    } else if (valor.trim() !== '') semLugar.push(campo);
   }
   if (semLugar.length > 0) throw new ErroApi(`${MENSAGENS.campoSemLugar} (${semLugar.join(', ')})`, 501, 'campo_sem_lugar');
   if (medidas.length > 0) conteudo.medidas = medidas;
@@ -230,6 +250,7 @@ export const MENSAGENS = {
   semAnexos: 'A lista de anexos ainda não está disponível nesta versão. Peça ao suporte.',
   semDemonstracao: 'Esta ação existe só na demonstração.',
   campoSemLugar: 'Esta versão ainda não salva um dos campos preenchidos. Peça ao suporte antes de continuar.',
+  dorForaDaEscala: 'A dor vai de 0 a 10, em número inteiro. Confira o valor e salve de novo.',
   semLinhaDoTempo: 'A linha do tempo do paciente ainda não está disponível nesta versão. Peça ao suporte.',
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',

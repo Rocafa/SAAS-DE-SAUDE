@@ -692,7 +692,7 @@ describe('adaptador HTTP: erros', () => {
       status: 'aberto',
       versao: 1,
       versaoModelo: 3,
-      conteudo: { queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento', medidas: [{ nome: 'dor', valor: '7' }] },
+      conteudo: { queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento', medidas: [{ tipo: 'eva', valor: 7 }] },
       adendos: [],
       consentimentoIa: 'nao_perguntado',
       abertoEm: '2026-11-05T09:00:00.000Z',
@@ -721,8 +721,8 @@ describe('adaptador HTTP: erros', () => {
         data: '2026-11-05',
         restrito: false,
       });
-      // Só campo de texto entra em `campos`: medida e plano não têm tela ainda e não podem virar string torta.
-      expect(registros[0]?.campos).toEqual({ queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento' });
+      // A EVA volta para o campo `dor` da tela; sem isso, salvar de novo (o PUT grava a versão inteira) apagava a dor.
+      expect(registros[0]?.campos).toEqual({ queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento', dor: '7' });
     });
 
     it('registro oculto vem do servidor com o motivo, inclusive MFA recente', async () => {
@@ -780,11 +780,32 @@ describe('adaptador HTTP: erros', () => {
       );
       const api = criarApiHttp({ baseUrl: BASE, fetch });
       await api.salvarRascunho(U(80), { queixa: 'Dor no joelho', dor: '7' });
-      expect(chamadas[1]?.corpo).toEqual({ conteudo: { queixa: 'Dor no joelho', medidas: [{ nome: 'dor', valor: '7' }] } });
+      // Formato de `validarMedidas` (apps/api/src/modules/records/modelos.ts): só tipo, rotulo e valor NUMÉRICO.
+      expect(chamadas[1]?.corpo).toEqual({ conteudo: { queixa: 'Dor no joelho', medidas: [{ tipo: 'eva', valor: 7 }] } });
       // `objetivo` é campo da tela de TO que a API não tem: recusa com mensagem própria, não 400 genérico depois.
       await expect(api.salvarRascunho(U(80), { objetivo: 'Ganho de autonomia' })).rejects.toMatchObject({ status: 501 });
       // Campo vazio não vira recusa: a tela guarda rascunho sem preencher tudo.
       await api.salvarRascunho(U(80), { queixa: 'x', objetivo: '' });
+      // Dor vazia não vira medida (a API recusaria valor que não é número).
+      await api.salvarRascunho(U(80), { queixa: 'x', dor: '' });
+      expect(chamadas.at(-1)?.corpo).toEqual({ conteudo: { queixa: 'x' } });
+      // Dor fora da EVA (0 a 10, inteiro) recusa antes de mandar, com mensagem própria e sem o valor.
+      for (const ruim of ['11', '-1', '7.5', 'sete']) {
+        await expect(api.salvarRascunho(U(80), { dor: ruim })).rejects.toMatchObject({ status: 400, codigo: 'dor_fora_da_escala' });
+      }
+    });
+
+    it('dor salva, lida e salva de novo continua lá (o PUT grava a versão inteira)', async () => {
+      const { chamadas, fetch } = simular((c) =>
+        c.metodo === 'PUT'
+          ? respostaJson(200, { ...ATENDIMENTO, conteudo: (c.corpo as { conteudo: unknown }).conteudo })
+          : respostaJson(200, ATENDIMENTO),
+      );
+      const api = criarApiHttp({ baseUrl: BASE, fetch });
+      const primeiro = await api.salvarRascunho(U(80), { queixa: 'Dor no joelho', dor: '4' });
+      expect(primeiro.campos).toMatchObject({ dor: '4' });
+      await api.salvarRascunho(U(80), { ...primeiro.campos, queixa: 'Dor no joelho, melhorou' });
+      expect(chamadas.at(-1)?.corpo).toEqual({ conteudo: { queixa: 'Dor no joelho, melhorou', medidas: [{ tipo: 'eva', valor: 4 }] } });
     });
 
     it('os campos da tela existem no contrato da API (senão o salvar dá 400 campo_desconhecido)', () => {
