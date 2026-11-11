@@ -59,3 +59,21 @@ A derivação está certa e todos os usos foram migrados. O veto existe porque d
 - **N2:** a trava também recusa `RATE_LIMIT_HASH_KEY` em `src`, fora do store e do cursor.
 - **N3:** comentários de `protecao.ts`, `instancia.ts`, `log-de-seguranca.ts` e a abertura da seção do runbook corrigidos.
 - **N4:** a nota de deploy do runbook avisa que os convites fictícios pendentes no staging precisam ser reemitidos.
+
+## Reconferência (11/11/2026)
+
+> Commit `92ae2ac`. Conferido localmente: `vitest` de `src/security` e `src/modules/auth` (110 passando, 6 pulados, que são Redis e RLS e rodam só no CI) e `tsc --noEmit -p tsconfig.json` sem erro. O `tsconfig` inclui `src` e `test`, e o CI roda `typecheck`.
+
+### Veredito: **APROVADO**
+
+| Item | Resultado |
+|---|---|
+| V1 | ok. O teste usa `vi.resetModules()`, `NODE_ENV=production` e `RATE_LIMIT_HASH_KEY` vazia (o `trim` a trata como ausente), com `import()` dinâmico, e espera `undefined`. Sem o `try/catch`, o HKDF lançaria e o teste falharia, então ele prova o R9. O `finally` desfaz o stub e o cache do módulo. |
+| V2 | ok. O `// @ts-expect-error` vale porque o `tsc` cobre os testes no CI: se o rótulo passar a compilar, o `typecheck` acusa a diretiva sem uso. A recusa em tempo de execução (`Object.hasOwn`) é uma defesa a mais. |
+| V3 | ok. `chaveDoUserAgent` é obrigatória e não há mais `?? o.chaveHmac`. O único chamador de produção (`boot.ts:33/46`) passa `chaveDeHmac('sessao-ua')`, e as duas chamadas da bancada passam `randomBytes(32)`. |
+| N1 | ok. O teste compara a chave com `rateLimitKey('ip\u001f…')` e confirma que ela é diferente da chave sem o prefixo. |
+| N2 | ok. Fora dos testes, `RATE_LIMIT_HASH_KEY` aparece só em `rate-limit-store.ts` e `cursor-de-paginacao.ts` (C1), que é a lista permitida. |
+| N3 | ok. Os comentários de `protecao.ts`, `instancia.ts` e `log-de-seguranca.ts` e a abertura da seção do runbook foram corrigidos. |
+| N4 | ok. A nota de deploy do runbook avisa que os convites fictícios pendentes no staging precisam ser reemitidos. |
+
+Nada novo nas checagens LGPD: nenhum dado novo coletado, nenhum segredo ou dado real no git, e base legal, retenção e isolamento continuam como estão no parecer.
