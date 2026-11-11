@@ -79,3 +79,12 @@ Rodei a versão do `791a61f` da trava: 14/14, inclusive a varredura de todo o `s
 - **R6:** na fila.
 
 **Resíduo para a fila:** no **mesmo** método, `const erro = codigoDoErro(e)` e um `catch (erro)` cru compartilham a chave. A liberação vence, e o `${erro}` do `catch` passa. É raro e não ocorre hoje. A correção é dar precedência à marca de erro sobre a liberação quando as duas existirem na mesma chave, ou tratar o `catch` como um escopo próprio.
+
+## Adendo do Guardião (11/11/2026, commit `192c707`)
+
+**Veredito: APROVADO, com uma ressalva para a fila.**
+
+- Conferi `contagensParaTrilha` em `origin/eng/hmac-por-uso`. Ela só deixa passar número finito com |v| < 10⁷ ou booleano. A chave precisa casar com `^[a-zA-Z][a-zA-Z0-9_]{0,39}$`, as chaves reservadas ficam de fora e o limite é 12. O teste em `executor-de-jobs.test.ts` cobre NaN, o teto, chave inválida, chave reservada e o limite. O log `JOB_OK` não leva dado pessoal.
+- A mudança na regra de despejo é mínima: o `doArquivo` só entra como mais uma alternativa de "seguro". O autoteste mostra que o mesmo código continua reprovado (linha 3) fora de `executor-de-jobs.ts`. Rodei a trava: 9/9.
+- No mesmo arquivo, `resultado` sempre vem de `contagensParaTrilha` (linhas 133 e 154), então a liberação está correta.
+- **Ressalva (não bloqueia):** liberar `v` no arquivo inteiro é largo. Hoje `v` só aparece dentro de `contagensParaTrilha`/`teveEfeito`, sem log. Mas um `${v}` futuro em outro laço do arquivo passaria calado. Prefiro extrair `contagensParaLog(resultado: ResultadoDeJob): string`, que chama `contagensParaTrilha` por dentro, e liberar só esse nome (ou `contagens`). Assim `v` e `resultado` saem da lista. Pode ser feito em PR de acompanhamento depois do merge da pilha.
