@@ -57,3 +57,15 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - **Código do B9 (eng/hmac-por-uso):** `chaveDeHmac(uso)` por HKDF com cinco rótulos; todos os usos passaram a ela; o IP do rate limit ganhou prefixo próprio e a chave `rl:v3`; o user-agent da sessão tem chave própria. Testes: chaves distintas, vetor conhecido, produção sem raiz e nenhum arquivo de `src` importando a raiz. Runbook, `logs-de-seguranca.md` e checklist atualizados. 1137 testes de unidade passando.
 - **Guardião vetou o #179:** faltavam dois testes (origem em produção sem raiz; rótulo fora da lista) e o user-agent podia cair em silêncio na chave do bloqueio. Corrigido, junto com N1 a N4. 1139 testes de unidade passando.
 - **#179:** reconferência aprovada e CI 16/16. Revisão pedida ao @Lopesloro. O B9 do checklist fica pronto quando a pilha for mesclada.
+
+## Resumo da continuação (até cerca de 03:30)
+
+| PR | O que faz | Situação |
+|---|---|---|
+| #177 | Anonimização nas clínicas onde a pessoa saiu e teste HTTP do cookie | Vetado, corrigido e aprovado; CI 16/16 |
+| #178 | Espelho dos convites aceitos (0073), que tira a varredura de todas as clínicas | Vetado (retenção), corrigido e aprovado; CI 16/16 |
+| #179 | Chave dos HMACs separada por uso com HKDF (item B9 do checklist) | Desenho aprovado; código vetado, corrigido e aprovado; CI 16/16 |
+
+- O memorando D15 e o desenho do HKDF estão prontos. O checklist ganhou o item B9.
+- Uso do limite ficou em 67%. Parei de empilhar código e atualizei a retomada das 04:20: ela só faz merges, se houver aprovação, e confere conflitos.
+- **Para os sócios:** o @Lopesloro revisa a pilha a partir do #149, e os dois decidem o D15.
