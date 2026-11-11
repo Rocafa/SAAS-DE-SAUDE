@@ -158,6 +158,15 @@ export class SlotLimiter {
 export const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
 
 /**
+ * Ids das clínicas pela `app_job_tenants()` (0043): só fora de contexto de clínica e só ids. Consumidores: o agendador
+ * de jobs e a anonimização da conta (G3 do #176), que precisa alcançar clínicas onde a pessoa já não tem vínculo.
+ */
+export async function listarClinicasDoAgendador(db: Database): Promise<TenantId[]> {
+  const linhas = await db.execute<{ t: string }>(sql`select t from app_job_tenants() as t`);
+  return linhas.map((r) => r.t).filter(isTenantId);
+}
+
+/**
  * Executa `fn` dentro de uma transação com o contexto do tenant definido.
  *
  * Usa `app_set_tenant($1)` (migração 0003): grava o tenant numa tabela inacessível ao runtime,
@@ -175,15 +184,6 @@ export const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
  * migração 0019): um `app_set_user` posterior, inclusive vindo de SQL injetado, dá 42501, e nenhum
  * trigger aceita o sistema como autor (R10 do #61).
  */
-/**
- * Ids das clínicas pela `app_job_tenants()` (0043): só fora de contexto de clínica e só ids. Consumidores: o agendador
- * de jobs e a anonimização da conta (G3 do #176), que precisa alcançar clínicas onde a pessoa já não tem vínculo.
- */
-export async function listarClinicasDoAgendador(db: Database): Promise<TenantId[]> {
-  const linhas = await db.execute<{ t: string }>(sql`select t from app_job_tenants() as t`);
-  return linhas.map((r) => r.t).filter(isTenantId);
-}
-
 export async function withTenant<T>(
   db: Database,
   tenantId: TenantId,

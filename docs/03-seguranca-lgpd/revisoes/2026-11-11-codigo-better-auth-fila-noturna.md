@@ -77,3 +77,42 @@ Acrescentar um teste em que a anonimização **não lança** quando há outras c
 - **V1:** o `withTenant` deixa de receber o 4º argumento e usa `app_set_system_user()`, como os jobs; o import de `USUARIO_SISTEMA` saiu. O teste da G3 roda a anonimização duas vezes numa base com muitas clínicas: a segunda não lança e não repete a trilha. O CI do commit anterior confirmou o veto (falha no RLS).
 - **V2:** cada clínica que falha gera `TRILHA_NAO_GRAVADA` (motivo novo `anonimizacao_incompleta`, com `tenantId`), e o resumo sai com a `contagem`. O código do erro não entra, porque o log tem lista fechada de campos e o erro pode trazer texto. Onde houve mudança, a trilha da clínica grava `invite_pseudonym_dropped` com ator sistema e a contagem. A lista vem de `listarClinicasDoAgendador`, a mesma do `ClinicasDoAgendador`, e o `api-dominio.md` registra o segundo consumidor.
 - **V3:** a §14.8 foi reescrita com o motivo real e a função estreita entrou na fila.
+
+## Reconferência (11/11/2026)
+
+> Commit `afa742a`. Revisão estática do diff. A bancada RLS não rodou aqui. No momento desta reconferência, os jobs "Isolamento entre tenants (RLS)" e "Lint, typecheck e testes" do #177 estavam pendentes.
+
+### Veredito: **APROVADO, condicionado ao CI verde** (RLS e testes). O veto da V1 está levantado. A V2 foi atendida. A V3 está atendida no texto e a função estreita está na fila. Uma ressalva pequena (R1) entra antes do merge, mas não bloqueia.
+
+- **V1 ✅.** O laço chama `withTenant(this.d.dbClinica, id, fn)` sem 4º argumento. Assim cai no `app_set_system_user()` (0019), o mesmo caminho dos jobs, e o import de `USUARIO_SISTEMA` saiu de `provedor.ts`. O teste da G3 chama `anonimizarConta` duas vezes numa bancada com várias clínicas. Se alguma clínica falhasse, a chamada lançaria e o teste quebraria. Por isso o teste cobre o "não lança" sem precisar de `resolves`.
+- **V2, trilha ✅.** `invite_pseudonym_dropped` só é gravado quando o `UPDATE ... returning id` afetou linhas, e o ator é `SYSTEM_ACTOR_ID`. Isso bate com o contrato da 0005/0008:
+  - `actor_kind` é deduzido como `sistema`, e o CHECK `(actor_kind = 'sistema') = (actor_id = zero)` é satisfeito;
+  - o metadata tem 3 chaves válidas: `op` (texto curto, sem dígitos), `user_id` (UUID, aceito) e `count` (inteiro pequeno);
+  - nenhuma chave proibida e nenhum valor com cara de dado pessoal;
+  - a trilha fica na transação da própria clínica, então se ela falhar o `UPDATE` volta junto (não há descarte sem registro).
+
+  O teste confere que existe 1 registro e que não aparece um segundo na reexecução (idempotência).
+- **V2, evento ✅.** `TRILHA_NAO_GRAVADA` com `motivo: 'anonimizacao_incompleta'` (acrescentado à lista fechada `MOTIVOS_DE_SEGURANCA`). Cada clínica que falha gera um evento com `tenantId` e `userId`, que são UUIDs da lista fechada de campos. Depois sai um resumo com `contagem`, e só então o erro sobe. Aceito deixar o código do erro de fora, porque a lista de campos é fechada e a mensagem pode trazer texto. O evento é crítico e tem alarme imediato, o que é proporcional: é um pedido do titular que ficou incompleto.
+- **V2, lista ✅.** `listarClinicasDoAgendador` em `apps/api/src/db/tenant-transaction.ts` é o único ponto que chama `app_job_tenants()`. `ClinicasDoAgendador.listar()` delega para ela, e o filtro `isTenantId` vale para os dois consumidores. O segundo consumidor está registrado em `api-dominio.md` (0043) e na §14.8.
+- **V3, §14.8 ✅.** O motivo agora é o real: a sessão é emitida antes do gancho "depois", e o `hit` atômico no "antes" deixa passar só a primeira requisição. O custo está descrito corretamente. A função estreita está na fila.
+
+### Ressalvas
+
+- **R1 (antes do merge, trivial).** `listarClinicasDoAgendador` foi inserida **entre** o JSDoc do `withTenant` e a função. O bloco que descreve `userId`/sentinela/`app_set_system_user` agora fica preso à função nova, e o `withTenant` perdeu a documentação justamente da regra que a V1 tratou. Correção: mover a função nova para antes do JSDoc do `withTenant` (ou para depois da função).
+- **R2 (fila).** Com o banco fora, cada clínica gera um `TRILHA_NAO_GRAVADA` crítico, ou seja, N alarmes imediatos para um único pedido. Quando a função estreita da V3 entrar, o N cai para as clínicas com convite aceito. Até lá, vale avaliar `registrarNoMaximoUmaVez` por `userId` nos eventos de cada clínica, mantendo o resumo com `contagem`.
+- **Observação.** No caminho sem falha não há evento-resumo com a contagem de clínicas. Aceito: a prova do art. 37 fica na trilha de cada clínica afetada, e isso é mais forte que um evento de log.
+
+### Checklist (delta)
+
+| Item | Situação |
+|---|---|
+| Minimização e retenção | O HMAC das clínicas sem vínculo é zerado na hora (com o CI verde). ✅ |
+| Controle de acesso | Sentinela de sistema pelo caminho previsto (`app_set_system_user`). ✅ |
+| Isolamento por tenant | Uma transação por clínica, RLS e filtro por `tenant_id`. Os ids não saem do servidor. ✅ |
+| Trilha | Trilha da clínica com ator sistema, e evento em cada falha. ✅ |
+| Segredos e dados reais | Nenhum. ✅ |
+
+### Nota do Maestro sobre a reconferência (11/11/2026)
+
+- **R1:** a `listarClinicasDoAgendador` foi para antes do comentário de documentação do `withTenant`, que voltou a ficar colado na função que ele descreve.
+- **R2:** o evento por clínica passou a usar `registrarNoMaximoUmaVez`, com no máximo um evento por pessoa e clínica a cada minuto. Assim, uma queda do banco não vira uma rajada de alarmes a cada nova tentativa do suporte. O resumo com a contagem continua saindo sempre.

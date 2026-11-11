@@ -886,7 +886,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         }
       }).catch(() => {
         falhas += 1;
-        registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', tenantId: id, userId });
+        registrarNoMaximoUmaVez(`anonimizacao:${userId}:${id}`, 60_000, 'TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', tenantId: id, userId });
       });
     }
     if (falhas > 0) {
