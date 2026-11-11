@@ -78,13 +78,16 @@ export const verificacao = identidade.table('verificacao', {
   updatedAt: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** Espelho dos vínculos ATIVOS (só ids e papel de sessão), mantido por trigger em clinic_members (R7). Só leitura. */
-/** 0073 (V3 do #177): clínicas onde a conta aceitou convite (só ids), espelho de `team_invites` para a anonimização. */
+/**
+ * 0073 (V3 do #177): clínicas onde a conta aceitou convite que ainda guarda o HMAC do e-mail (só ids), espelho de
+ * `team_invites` para a anonimização. A linha sai quando o HMAC é descartado (V1 do #178).
+ */
 export const conviteAceito = identidade.table('convite_aceito', {
   usuarioId: uuid('usuario_id').notNull(),
   clinicaId: uuid('clinica_id').notNull(),
 });
 
+/** Espelho dos vínculos ATIVOS (só ids e papel de sessão), mantido por trigger em clinic_members (R7). Só leitura. */
 export const vinculo = identidade.table('vinculo', {
   usuarioId: uuid('usuario_id').notNull(),
   clinicaId: uuid('clinica_id').notNull(),

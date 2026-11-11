@@ -47,3 +47,4 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 
 - Deixei uma retomada agendada para 04:20 (`retomar-plataforma-saude-madrugada`), salva no modo sem pedir permissão, para não travar como a das 03:45 de ontem.
 - **V3 do #177 (função estreita):** migração 0073 com o espelho `identidade.convite_aceito` (só ids, trigger em `team_invites`, padrão da 0064). A anonimização lê daí só as clínicas da pessoa e apaga as linhas no fim; a varredura de todas as clínicas saiu. Fica num PR separado em cima do #177, que já estava aprovado.
+- **Guardião vetou o #178 (V1):** o espelho ficava guardado enquanto a conta existisse, mas só tem uso por 30 dias. Corrigido: o trigger apaga a linha quando o HMAC é zerado, e entraram os testes de retenção, de falha no meio e de que o `app_user` não lê o espelho (V2).

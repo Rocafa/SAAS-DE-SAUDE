@@ -896,7 +896,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', userId, contagem: falhas });
       throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
     }
-    await this.d.dbAuth.delete(conviteAceito).where(eq(conviteAceito.usuarioId, userId));
+    // V2 do #178: só as clínicas lidas no início (o trigger já tira a linha quando o HMAC é zerado; isto cobre a clínica
+    // que, por corrida, não tinha mais convite a zerar).
+    const lidas = aceitas.map((a) => a.clinica);
+    if (lidas.length > 0) await this.d.dbAuth.delete(conviteAceito).where(and(eq(conviteAceito.usuarioId, userId), inArray(conviteAceito.clinicaId, lidas)));
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {

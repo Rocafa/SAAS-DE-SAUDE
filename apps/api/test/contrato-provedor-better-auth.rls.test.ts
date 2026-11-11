@@ -1329,6 +1329,8 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await provedor.anonimizarConta(userId);
     const de2 = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
     expect([...de2][0]?.n).toBe(1);
+    // V2 do #178: a clínica de onde a pessoa saiu passa pelo espelho e ele termina vazio.
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
 
   it('V3 do #177: o espelho guarda as clínicas onde a conta aceitou convite (só ids) e a anonimização o esvazia', async () => {
@@ -1340,6 +1342,51 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
     const userId = u?.id ?? '';
     expect(await dbAuth.db.select({ c: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([{ c: tenantId }]);
+    await provedor.anonimizarConta(userId);
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
+  });
+
+  it('V1 do #178: o descarte do HMAC em 30 dias tira a clínica do espelho; o app_user não lê o espelho', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const email = `retencao-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: conv.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    const userId = u?.id ?? '';
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toHaveLength(1);
+    await withTenant(api.db.db, tenantId, (tx) => tx.execute(sql`update team_invites set accepted_at = now() - interval '31 days' where id = ${conv.conviteId}`), adm.userId);
+    expect((await convites().descartarEncerradosComoSistema(tenantId)).descartados).toBeGreaterThanOrEqual(1);
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
+    await expect(api.db.db.execute(sql`select clinica_id from identidade.convite_aceito limit 1`)).rejects.toThrow();
+  });
+
+  it('V2 do #178: se a clínica falha no meio da anonimização, o espelho fica para a nova tentativa', async () => {
+    const origem = await api.novaClinica();
+    const outra = await api.novaClinica();
+    const admO = await api.membro(origem, api.sessao(origem, 'admin'), 'admin');
+    const admX = await api.membro(outra, api.sessao(outra, 'admin'), 'admin');
+    const email = `falha-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const c1 = await convites().criar({ tenantId: origem, userId: admO.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: c1.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    const userId = u?.id ?? '';
+    await api.membro(outra, { userId }, 'recepcao');
+    const c2 = await convites().criar({ tenantId: outra, userId: admX.userId, roles: ['admin'] } as never, `outro-${email}`, 'recepcao');
+    await withTenant(api.db.db, outra, (tx) => tx.execute(sql`update team_invites set accepted_at = now(), accepted_user_id = ${userId} where id = ${c2.conviteId}`), admX.userId);
+    await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: admX.Authorization }).expect(204);
+    // Provedor com o banco da clínica fora do ar.
+    const falho = new BetterAuthProvider({
+      auth,
+      dbAuth: dbAuth.db,
+      dbClinica: { transaction: () => Promise.reject(new Error('banco da clínica fora')) } as never,
+      bloqueio: { store: STORE_DA_BANCADA, chaveHmac: CHAVE_HMAC_DA_BANCADA },
+      segredoDaInstancia: SEGREDO_DA_BANCADA,
+    });
+    // A pessoa ainda tem vínculo na origem: a trilha dela falha também, então a anonimização inteira falha.
+    await expect(falho.anonimizarConta(userId)).rejects.toThrow();
+    expect((await dbAuth.db.select({ c: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).map((x) => x.c)).toContain(outra);
+    // Com o banco de volta, a nova tentativa completa.
     await provedor.anonimizarConta(userId);
     expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
