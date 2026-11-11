@@ -69,3 +69,10 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - O memorando D15 e o desenho do HKDF estão prontos. O checklist ganhou o item B9.
 - Uso do limite ficou em 67%. Parei de empilhar código e atualizei a retomada das 04:20: ela só faz merges, se houver aprovação, e confere conflitos.
 - **Para os sócios:** o @Lopesloro revisa a pilha a partir do #149, e os dois decidem o D15.
+
+## Retomada das 04:20
+
+- Conferi os 17 PRs (pilha #149 → #179, os avulsos #153, #154 e #172, o #174 e o #166). Nenhum foi aprovado pelo @Lopesloro, então não houve merge.
+- Todos estão `MERGEABLE`, sem conflito com a base. Não precisei mexer em nenhuma branch.
+- O #166 (do sócio) continua aprovado por nós; o merge é dele. O #174 segue travado até o checklist B1–B9.
+- Não empilhei código novo. A fila que sobrou depende do D15, de AWS ou do advogado.
