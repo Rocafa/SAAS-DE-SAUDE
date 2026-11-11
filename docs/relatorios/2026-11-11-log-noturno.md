@@ -99,3 +99,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - V3: os mocks aceitam corpos que a API recusa (verde falso).
   Os detalhes foram para o PR.
 - **#116 (postgres.js 4.0.0, aprovado pelo sócio, liberado a partir de 12/11): fica para depois da pilha do login.** Ele troca o driver e mexe no `pnpm-lock.yaml`, como o #149. Mesclar o #116 antes obrigaria a refazer o lockfile e o CI nas 12 branches da pilha, e misturaria duas mudanças grandes no mesmo intervalo. O patch da 3.4.9 continua cobrindo o bug.
+- **Retomada agendada para 12/11 às 07:00** (`retomar-plataforma-saude-12-11`). Ela mescla só o que o @Lopesloro aprovar, resolve conflitos nos nossos PRs e reconfere o #143, o #157 e o #158 se ele tiver respondido. Desta vez a tarefa ficou no modo de permissão padrão e pode parar pedindo aprovação. Para rodar sem pausas, ajuste o modo na tarefa, no app.
+- Nenhum código novo empilhado. Uso: 2% da janela de 5 h no início desta rodada; 26% na semana.
