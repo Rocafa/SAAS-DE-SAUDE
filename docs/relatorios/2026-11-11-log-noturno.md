@@ -98,3 +98,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - V2: o `PUT` vai sem `versaoBase`, então todo salvamento leva 400;
   - V3: os mocks aceitam corpos que a API recusa (verde falso).
   Os detalhes foram para o PR.
+- **#116 (postgres.js 4.0.0, aprovado pelo sócio, liberado a partir de 12/11): fica para depois da pilha do login.** Ele troca o driver e mexe no `pnpm-lock.yaml`, como o #149. Mesclar o #116 antes obrigaria a refazer o lockfile e o CI nas 12 branches da pilha, e misturaria duas mudanças grandes no mesmo intervalo. O patch da 3.4.9 continua cobrindo o bug.
