@@ -5,10 +5,11 @@
  * app_auth isolado, função de clínicas e prazo absoluto. Dados fictícios.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { conta, sessao, usuario } from '../src/db/identidade';
-import { createDatabase, type DatabaseHandle } from '../src/db/tenant-transaction';
+import { auditLog } from '../src/db/schema';
+import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { criarAutenticacao, nomeDoCookie, type Autenticacao } from '../src/modules/auth/better-auth/instancia';
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
@@ -219,6 +220,27 @@ describe('Better Auth: o que o desenho promete (R1, R3, R5, R7, R8 do parecer)',
     const adm = await api.membro(t1, api.sessao(t1, 'admin'), 'admin');
     await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: adm.Authorization }).expect(204);
     expect(await provedor.clinicasDoUsuario(userId)).toEqual([]);
+  });
+
+  it('o logout deixa linha na trilha da clínica, não só no log de segurança', async () => {
+    const tenantId = await api.novaClinica();
+    const { userId, email } = await novaPessoa(tenantId, ['recepcao']);
+    const c = cookieDe(await entrar(email));
+    expect(await provedor.resolver({ headers: c })).toMatchObject({ tenantId, userId });
+    await provedor.encerrar(await sessaoId(c), 'logout', userId);
+    const linhas = await withTenant(api.db.db, tenantId, (tx) =>
+      tx
+        .select({ action: auditLog.action, metadata: auditLog.metadata })
+        .from(auditLog)
+        .where(and(eq(auditLog.tenantId, tenantId), eq(auditLog.actorId, userId), eq(auditLog.scope, 'session'))),
+    );
+    // A trilha é a prova; o log de segurança é para alarmar. O fim da sessão tem de aparecer na trilha da clínica.
+    const ops = linhas.map((l) => (l.metadata as { op?: string }).op);
+    expect(new Set(ops)).toEqual(new Set(['session_tenant_selected', 'session_ended']));
+    expect(linhas.find((l) => (l.metadata as { op?: string }).op === 'session_ended')?.metadata).toMatchObject({
+      op: 'session_ended',
+      reason: 'logout',
+    });
   });
 
   it('R6: sem vínculo ativo, a sessão vale null e perde a clínica', async () => {

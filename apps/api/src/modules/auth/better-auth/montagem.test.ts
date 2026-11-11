@@ -4,7 +4,8 @@
  * biblioteca é substituída por um dublê.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { origemDaRequisicao } from '../../../security/log-de-seguranca';
 import { CABECALHO_ORIGEM } from './instancia';
 import { ENDPOINTS_PERMITIDOS, montarAutenticacao } from './montagem';
@@ -32,6 +33,8 @@ function montar() {
 
 const req = (method: string, url: string, headers: Record<string, string> = {}): IncomingMessage =>
   ({ method, url, headers: { ...headers }, ip: '203.0.113.50', socket: {} }) as never;
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('montagem do Better Auth', () => {
   it('fora do prefixo /api/auth: passa adiante sem tocar em nada', () => {
@@ -97,5 +100,49 @@ describe('montagem do Better Auth', () => {
     await vi.waitFor(() => expect(r.statusCode).toBe(401));
     expect(encerrar).toHaveBeenCalledWith('s1', 'prazo_absoluto', 'u1');
     expect(handlerDaBiblioteca).not.toHaveBeenCalled();
+  });
+
+  it('R6(a) do #117: o botão "sair" passa pelo provedor (trilha da clínica) ANTES da biblioteca apagar a sessão', async () => {
+    const ordem: string[] = [];
+    const handlerDaBiblioteca = vi.fn(() => {
+      ordem.push('biblioteca');
+      return Promise.resolve();
+    });
+    const encerrar = vi.fn(() => {
+      ordem.push('encerrar');
+      return Promise.resolve();
+    });
+    const valida = { session: { id: 's1', createdAt: new Date() }, user: { id: 'u1' } };
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(valida) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    mw(req('POST', '/api/auth/sign-out', { origin: 'https://app.exemplo.test' }), resposta(), vi.fn());
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    expect(encerrar).toHaveBeenCalledWith('s1', 'logout', 'u1');
+    // A biblioteca ainda roda: é ela que apaga o cookie no navegador.
+    expect(ordem).toEqual(['encerrar', 'biblioteca']);
+  });
+
+  it('"sair" com o provedor falhando: a biblioteca roda mesmo assim (apaga sessão e cookie), sem 500', async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const handlerDaBiblioteca = vi.fn(() => Promise.resolve());
+    const encerrar = vi.fn(() => Promise.reject(new Error('banco app_auth fora')));
+    const valida = { session: { id: 's1', createdAt: new Date() }, user: { id: 'u1' } };
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(valida) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    const next = vi.fn();
+    mw(req('POST', '/api/auth/sign-out', { origin: 'https://app.exemplo.test' }), resposta(), next);
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    // O erro do provedor não escapa para o `next` (que daria 500 sem apagar o cookie).
+    expect(next.mock.calls.flat()).not.toContainEqual(expect.objectContaining({ message: 'banco app_auth fora' }));
+  });
+
+  it('"sair" sem sessão válida: não chama o provedor, a biblioteca responde como sempre', async () => {
+    const handlerDaBiblioteca = vi.fn(() => Promise.resolve());
+    const encerrar = vi.fn(() => Promise.resolve());
+    const auth = { handler: handlerDaBiblioteca, api: { getSession: () => Promise.resolve(null) }, options: {} } as never;
+    const mw = montarAutenticacao(auth, { encerrar } as never);
+    mw(req('POST', '/api/auth/sign-out', { origin: 'https://app.exemplo.test' }), resposta(), vi.fn());
+    await vi.waitFor(() => expect(handlerDaBiblioteca).toHaveBeenCalled());
+    expect(encerrar).not.toHaveBeenCalled();
   });
 });

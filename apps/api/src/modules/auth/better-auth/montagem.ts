@@ -60,6 +60,7 @@ export function montarAutenticacao(auth: Autenticacao, provedor: BetterAuthProvi
       return;
     }
     void (async () => {
+      let sessaoEncerrada = false;
       if (rota !== 'POST /sign-in/email') {
         // R3: prazo absoluto também nos endpoints da biblioteca (a sessão vencida é apagada).
         const lida = await auth.api.getSession({ headers: fromNodeHeaders(req.headers), query: { disableRefresh: true } }).catch(() => null);
@@ -68,12 +69,27 @@ export function montarAutenticacao(auth: Autenticacao, provedor: BetterAuthProvi
           responder(res, 401, 'Unauthorized');
           return;
         }
+        // R6(a) do #117: o "sair" passa pelo provedor, que lê a clínica ativa, apaga a sessão e grava `session_ended`
+        // na trilha (e o LOGOUT no log). A biblioteca roda depois só para apagar o cookie no navegador.
+        // Se o provedor falhar, o "sair" segue mesmo assim: a biblioteca ainda apaga a sessão e o cookie. Sair nunca
+        // pode depender da trilha (o alarme avisa que a linha faltou).
+        if (rota === 'POST /sign-out' && lida) {
+          try {
+            await provedor.encerrar(lida.session.id, 'logout', lida.user.id);
+            sessaoEncerrada = true;
+          } catch {
+            registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { userId: lida.user.id, motivo: 'fim_de_sessao' });
+          }
+        }
       }
       res.on('finish', () => {
         if (rota === 'POST /sign-in/email' && res.statusCode !== 200) {
           registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', status: res.statusCode, ...(origem ? { origem } : {}) });
         }
-        if (rota === 'POST /sign-out' && res.statusCode === 200) registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout', ...(origem ? { origem } : {}) });
+        // Com sessão, o LOGOUT já saiu pelo provedor (com o usuário); aqui só o "sair" sem sessão do provedor.
+        if (rota === 'POST /sign-out' && res.statusCode === 200 && !sessaoEncerrada) {
+          registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout', ...(origem ? { origem } : {}) });
+        }
       });
       await handler(req, res);
     })().catch(next);
