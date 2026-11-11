@@ -50,3 +50,5 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - **Guardião vetou o #178 (V1):** o espelho ficava guardado enquanto a conta existisse, mas só tem uso por 30 dias. Corrigido: o trigger apaga a linha quando o HMAC é zerado, e entraram os testes de retenção, de falha no meio e de que o `app_user` não lê o espelho (V2).
 - **#178:** reconferência aprovada e CI 16/16. Revisão pedida ao @Lopesloro. Fila: teste em que só uma clínica do espelho falha; apagar o espelho quando a clínica for eliminada.
 - **Fila do #178 (teste):** só uma das clínicas do espelho falha. A outra é limpa, a que falhou continua no espelho e a nova tentativa esvazia.
+- **V3 do #178:** a eliminação de clínica ainda não existe no código (depende do D8). O requisito de apagar os espelhos `identidade.convite_aceito` e `identidade.vinculo` entrou na `fila.md`, ao lado do G4.
+- CI do #178 verde (16/16) com o teste novo.
