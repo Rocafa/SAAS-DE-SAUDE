@@ -226,3 +226,11 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **Clínica cancelada** (R3 do 3a): a lista de clínicas da pessoa e a escolha seguem a mesma regra de leitura das rotas da clínica (`canRead`). A clínica cancelada aparece só dentro da janela de saída.
 - **`LOGIN_OK` do cadastro do fator** (R5 do 3a): a troca de sessão no fim do cadastro do TOTP sai com `motivo: cadastro_do_fator`, separada do login.
 - **Já resolvida antes:** R7 do 3a (a sessão de cadastro pendente não usa as rotas da pessoa). **Fica na fila:** R4 do 3a (teste pela HTTP do `Set-Cookie` só da sessão, também no polling).
+
+### 14.8 Fila noturna (11/11/2026)
+
+- **Anonimização em todas as clínicas** (G3 completa do #176): depois das clínicas com vínculo, a anonimização percorre a lista de clínicas do agendador (`app_job_tenants()`, só ids, fora de contexto de clínica). Em cada uma, numa transação própria com o usuário de sistema, zera o HMAC dos convites aceitos pela conta. Uma clínica que falha não para as outras; no fim, o erro sobe e o suporte roda de novo, porque a operação é idempotente.
+- **Teste pela HTTP do cookie** (R4 do 3a): na bancada, um controlador de teste atrás do `SessaoGuard` real.
+  - A rota comum devolve um único `Set-Cookie`, o da sessão, com `HttpOnly`, `SameSite=Strict` e `Path=/`, e estende a sessão.
+  - A rota com `@SemRenovarSessao` não devolve nenhum e não estende.
+- **Marca de reuso no login, gravada antes da conferência: fica como está.** Na rota `/two-factor/verify-totp` só há o gancho "antes", porque a conferência é feita pela biblioteca. Gravar a marca depois abriria a corrida em que duas requisições com o mesmo código passam juntas, e essa corrida é o que a RFC 6238 §5.2 pede para fechar. O custo é que um código errado gasta o valor dele por 90 s. Como esse valor está errado, o código certo da pessoa não é afetado. Só um código certo seguido de outro erro na mesma requisição obriga a esperar o próximo.

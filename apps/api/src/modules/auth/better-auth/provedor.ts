@@ -16,7 +16,7 @@ import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { EMAIL_DESCARTADO } from '../convites-retencao';
 import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
-import { withTenant, type Database } from '../../../db/tenant-transaction';
+import { USUARIO_SISTEMA, withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
@@ -856,18 +856,6 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     });
     // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
     registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
-    // G3 do parecer do #176: a clínica de origem (onde a conta aceitou o convite) também perde o HMAC, mesmo sem
-    // vínculo ativo; a trilha da anonimização fica nas clínicas com vínculo.
-    const [origem] = await this.d.dbAuth.select({ clinica: usuario.clinicaDeOrigem }).from(usuario).where(eq(usuario.id, userId));
-    if (origem?.clinica && !clinicasAntes.includes(origem.clinica)) {
-      const clinica = origem.clinica;
-      await withTenant(
-        this.d.dbClinica,
-        clinica as TenantId,
-        (tx) => tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${clinica} and accepted_user_id = ${userId}`),
-        userId,
-      );
-    }
     for (const tenantId of clinicasAntes) {
       await withTenant(
         this.d.dbClinica,
@@ -881,6 +869,24 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         userId,
       );
     }
+    // G3 do parecer do #176 (completa): a conta pode ter aceitado convite em clínica onde já foi desligada. Todas as
+    // clínicas (a mesma lista do agendador, só ids, fora de contexto de clínica) perdem o HMAC do convite aceito por
+    // ela, cada uma na própria transação e com o usuário de sistema. Uma falha não para as outras; no fim, o erro sobe e
+    // o suporte roda de novo (idempotente).
+    const todas = await this.d.dbClinica.execute<{ id: string }>(sql`select app_job_tenants() as id`);
+    let falhas = 0;
+    for (const { id } of todas) {
+      if (clinicasAntes.includes(id)) continue;
+      await withTenant(
+        this.d.dbClinica,
+        id as TenantId,
+        (tx) => tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${id} and accepted_user_id = ${userId} and email_hmac <> ${EMAIL_DESCARTADO}`),
+        USUARIO_SISTEMA,
+      ).catch(() => {
+        falhas += 1;
+      });
+    }
+    if (falhas > 0) throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
