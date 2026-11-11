@@ -52,3 +52,4 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - **Fila do #178 (teste):** só uma das clínicas do espelho falha. A outra é limpa, a que falhou continua no espelho e a nova tentativa esvazia.
 - **V3 do #178:** a eliminação de clínica ainda não existe no código (depende do D8). O requisito de apagar os espelhos `identidade.convite_aceito` e `identidade.vinculo` entrou na `fila.md`, ao lado do G4.
 - CI do #178 verde (16/16) com o teste novo.
+- **Desenho para o Guardião:** `docs/04-arquitetura/derivacao-da-chave-de-hmac.md`, sobre a separação por uso da `RATE_LIMIT_HASH_KEY` com HKDF. Inclui o plano de migração, com leitura dupla de 72 h para os convites, e três perguntas. Ainda sem código.
