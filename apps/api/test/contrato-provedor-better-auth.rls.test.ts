@@ -15,7 +15,7 @@ import request from 'supertest';
 import { AUTH_PROVIDER } from '../src/modules/auth/auth-context';
 import { Permissao, SemRenovarSessao, SessaoGuard } from '../src/modules/auth/sessao.guard';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
+import { conta, conviteAceito, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
 import { tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
@@ -1329,6 +1329,19 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await provedor.anonimizarConta(userId);
     const de2 = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
     expect([...de2][0]?.n).toBe(1);
+  });
+
+  it('V3 do #177: o espelho guarda as clínicas onde a conta aceitou convite (só ids) e a anonimização o esvazia', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const email = `espelho-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: conv.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    const userId = u?.id ?? '';
+    expect(await dbAuth.db.select({ c: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([{ c: tenantId }]);
+    await provedor.anonimizarConta(userId);
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
 
   it('R3 do 3a: clínica cancelada fora da janela de saída some da lista e da escolha; dentro da janela, fica', async () => {

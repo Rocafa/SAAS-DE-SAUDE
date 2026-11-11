@@ -101,6 +101,7 @@ A matriz vira **um** requisito, com sete propriedades. Nenhuma é opcional, e qu
 
 | Data | Mudança |
 |---|---|
+| 2026-11-11 | D4, V3 do #177: espelho `identidade.convite_aceito` (só ids de pessoa e clínica, migração 0073), mantido enquanto a conta existir e apagado na anonimização. Detalhe no `RIPD-identidade.md` §3. |
 | 2026-11-10 | D4, reconferência do #173: prazos de 30 dias (`team_invites`) e 90 dias (credencial de conta inativa) **vigentes**. O expurgo de 90 dias também tira o **nome** do id e marca a conta como `expurgada`, que não recebe perfil novo (migração 0072). Decisão no `RIPD-identidade.md` §3. |
 | 2026-11-08 | D4 (login real), ressalva 5 do parecer do 3c: schema `identidade` (sessão, `verificacao`, cadastro de TOTP não concluído, tokens de recuperação, credencial de conta inativa em 90 dias, conta anonimizada e nunca apagada) e `team_invites` (30 dias depois do estado final, job `convites-descarte`); credencial da conta desligada some em 90 dias e o e-mail é liberado. Prazos e mecanismos no `RIPD-identidade.md` §3. |
 | 2026-10-22 | Rodada 19 (#69, R3): prazos do WhatsApp — conteúdo 30 dias, linhas presas, metadado com o cadastro, resposta livre não guardada, opt-in vigente + 5 anos (proposta ⚖️). |

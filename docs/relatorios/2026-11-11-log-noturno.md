@@ -42,3 +42,8 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 
 1. @Lopesloro: revisar a pilha de baixo para cima (#149 primeiro), além do #153, do #154 e do #172. Mesclar o #166.
 2. Os dois: decidir o D15 (`docs/00-governanca/memos/D15-login-real-egresso-e-falha-do-redis.md`).
+
+## Continuação (pedido de seguir até o reset)
+
+- Deixei uma retomada agendada para 04:20 (`retomar-plataforma-saude-madrugada`), salva no modo sem pedir permissão, para não travar como a das 03:45 de ontem.
+- **V3 do #177 (função estreita):** migração 0073 com o espelho `identidade.convite_aceito` (só ids, trigger em `team_invites`, padrão da 0064). A anonimização lê daí só as clínicas da pessoa e apaga as linhas no fim; a varredura de todas as clínicas saiu. Fica num PR separado em cima do #177, que já estava aprovado.

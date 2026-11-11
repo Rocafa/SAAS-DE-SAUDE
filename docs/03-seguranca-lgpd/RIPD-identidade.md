@@ -36,6 +36,7 @@
 | Cadastro de TOTP não concluído | 24 h | expurgo diário |
 | Token de recuperação | 30 dias depois de vencer | expurgo diário |
 | Convite da equipe (`team_invites`, na clínica) | 30 dias depois do estado final (aceito, revogado ou vencido) | job `convites-descarte` zera o HMAC do e-mail |
+| Espelho dos convites aceitos (`identidade.convite_aceito`, só ids, 0073) | enquanto a conta existir | apagado na anonimização, depois de o HMAC dos convites ser zerado em cada clínica |
 | Contadores de bloqueio (Redis) | até 15 min | TTL da janela |
 | Senha e TOTP de conta **inativa** (ressalva 4 do parecer do 3c) | **90 dias** depois de a conta ficar inativa | `identidade-expurgo`: apaga senha, TOTP, sessões e tokens pendentes, libera o e-mail e **tira o nome** (art. 16; a autoria está em `professionals` da clínica); marca a conta como `expurgada`. O id fica (histórico clínico), não recebe perfil novo (migração 0072) e a recontratação cria conta nova |
 | Conta (`identidade.usuario`) | **nunca apagada** (R18): o id identifica o autor do prontuário por 20 anos | a pedido do titular, **anonimizada**: e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; o convite aceito pela conta perde o HMAC do e-mail na hora nas clínicas com vínculo e na de origem (nas demais, em até 30 dias, pelo `convites-descarte`); evento `CONTA_ANONIMIZADA` e trilha `account_anonymized` como prova (art. 18 IV e art. 37) |
