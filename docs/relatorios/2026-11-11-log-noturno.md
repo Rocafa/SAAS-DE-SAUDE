@@ -53,3 +53,4 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - **V3 do #178:** a eliminação de clínica ainda não existe no código (depende do D8). O requisito de apagar os espelhos `identidade.convite_aceito` e `identidade.vinculo` entrou na `fila.md`, ao lado do G4.
 - CI do #178 verde (16/16) com o teste novo.
 - **Desenho para o Guardião:** `docs/04-arquitetura/derivacao-da-chave-de-hmac.md`, sobre a separação por uso da `RATE_LIMIT_HASH_KEY` com HKDF. Inclui o plano de migração, com leitura dupla de 72 h para os convites, e três perguntas. Ainda sem código.
+- **Desenho do HKDF:** aprovado com ressalvas. A tabela de usos foi corrigida (a vigilância usa ids; o IP da sessão é o pseudônimo do log), ficaram cinco rótulos com a versão no `info`, e a leitura dupla só vale para rotações futuras. Virou o item **B9** do checklist, antes do B8. O código fica para a próxima rodada.
