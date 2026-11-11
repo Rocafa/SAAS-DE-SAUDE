@@ -98,42 +98,6 @@ function paraRegistro(a: AtendimentoApi): Registro {
   };
 }
 
-/**
- * Textos que a API aceita por modelo (`validarConteudo` em `modules/records/modelos.ts`): qualquer chave fora da
- * lista é recusada com `campo_desconhecido`. A tela tem campos que a API ainda não tem como texto, e cada um precisa
- * de destino DECLARADO — `apps/web/lib/api/http.test.ts` falha se aparecer campo novo sem destino.
- */
-const TEXTOS_DA_API: ReadonlySet<string> = new Set([
-  'queixa',
-  'avaliacao',
-  'conduta',
-  'resposta',
-  'orientacoes',
-  'tema',
-  'intervencoes',
-  'evolucao',
-  'encaminhamentos',
-]);
-
-/**
- * Traduz o que a tela preencheu para o conteúdo que a API aceita. `dor` é MEDIDA, não texto. Campo sem lugar na API
- * (objetivo, atividades e desempenho da terapia ocupacional) recusa aqui, com mensagem própria: melhor dizer que esta
- * versão não salva aquele campo do que mandar e levar um 400 genérico depois de a pessoa ter escrito a evolução.
- */
-export function paraConteudoDaApi(campos: Record<string, string>): Record<string, unknown> {
-  const conteudo: Record<string, unknown> = {};
-  const medidas: { nome: string; valor: string }[] = [];
-  const semLugar: string[] = [];
-  for (const [campo, valor] of Object.entries(campos)) {
-    if (TEXTOS_DA_API.has(campo)) conteudo[campo] = valor;
-    else if (campo === 'dor') medidas.push({ nome: 'dor', valor });
-    else if (valor.trim() !== '') semLugar.push(campo);
-  }
-  if (semLugar.length > 0) throw new ErroApi(`${MENSAGENS.campoSemLugar} (${semLugar.join(', ')})`, 501, 'campo_sem_lugar');
-  if (medidas.length > 0) conteudo.medidas = medidas;
-  return conteudo;
-}
-
 /** Parte da ApiClinica que já fala com a API real. */
 export type ApiHttpPacientesAgenda = Pick<
   ApiClinica,
@@ -230,6 +194,10 @@ export const MENSAGENS = {
   semAnexos: 'A lista de anexos ainda não está disponível nesta versão. Peça ao suporte.',
   semDemonstracao: 'Esta ação existe só na demonstração.',
   campoSemLugar: 'Esta versão ainda não salva um dos campos preenchidos. Peça ao suporte antes de continuar.',
+  semRegistroPorAgendamento: 'Abrir a evolução por este caminho ainda não está disponível nesta versão. Abra pelo prontuário do paciente.',
+  semSalvarEvolucao: 'Esta versão ainda não salva a evolução contra o servidor. Use a demonstração até a próxima versão.',
+  mfaRecente: 'Para abrir este conteúdo, confirme o código de verificação outra vez.',
+  registroMudou: 'Este registro mudou enquanto você escrevia. Recarregue a tela antes de salvar de novo.',
   semLinhaDoTempo: 'A linha do tempo do paciente ainda não está disponível nesta versão. Peça ao suporte.',
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',
@@ -282,10 +250,13 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
     if (codigo === 'assinatura_bloqueia_escrita' || codigo === 'janela_de_saida_encerrada') return new ErroApi(MENSAGENS.assinatura, 403, codigo);
     if (codigo === 'conferencia_exige_perfil') return new ErroApi(MENSAGENS.conferenciaPerfil, 403, codigo);
     if (codigo === 'perfil_nao_registrado') return new ErroApi(MENSAGENS.perfilNaoRegistrado, 403, codigo);
+    // A API recusa psicologia sem MFA recente com 403 e este código: é PEDIDO de código, não falta de permissão.
+    if (codigo === 'mfa_recente_obrigatorio' || codigo === 'mfa_obrigatorio') return new ErroApi(MENSAGENS.mfaRecente, 403, codigo);
     return new ErroApi(MENSAGENS.proibido, 403, codigo);
   }
   if (status === 404) return new ErroApi(MENSAGENS.naoEncontrado, 404);
   if (status === 409) {
+    if (codigo === 'versao_desatualizada') return new ErroApi(MENSAGENS.registroMudou, 409, codigo);
     if (codigo === 'registro_incompleto') {
       // Ordem do servidor, rótulo da tela. Só nome de campo entra na mensagem; valor nunca.
       const faltas = Array.isArray(c.campos)
@@ -784,20 +755,14 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       const pagina = await chamar<{ itens: AtendimentoApi[] }>('GET', `/pacientes/${encodeURIComponent(pacienteId)}/prontuario`);
       return pagina.itens.map(paraRegistro);
     },
-    async obterRegistroDoAgendamento(agendamentoId) {
-      try {
-        return paraRegistro(await chamar<AtendimentoApi>('GET', `/atendimentos/${encodeURIComponent(agendamentoId)}`));
-      } catch (e) {
-        // 404 aqui é "este agendamento ainda não tem evolução", não falha: a tela abre o formulário vazio.
-        if (e instanceof ErroApi && e.status === 404) return null;
-        throw e;
-      }
-    },
-    async salvarRascunho(agendamentoId, campos) {
-      // `POST /atendimentos` é idempotente por agendamento: devolve o atendimento aberto, se já existir.
-      const aberto = await chamar<AtendimentoApi>('POST', '/atendimentos', { agendamentoId });
-      return paraRegistro(await chamar<AtendimentoApi>('PUT', `/atendimentos/${encodeURIComponent(aberto.id)}/registro`, { conteudo: paraConteudoDaApi(campos) }));
-    },
+    // V1 do parecer do PR 158: NÃO existe rota de leitura por agendamento. `GET /atendimentos/:id` procura pelo id do
+    // ATENDIMENTO, então passar o id do agendamento dava 404 sempre, e o 404 virava "não existe" — a tela abria vazia
+    // uma evolução que já existe, e a pessoa reescrevia sobre uma versão que não viu. Recusa explícita até a rota existir.
+    obterRegistroDoAgendamento: () => Promise.reject(new ErroApi(MENSAGENS.semRegistroPorAgendamento, 501)),
+    // V2 do parecer: `PUT /atendimentos/:id/registro` exige `versaoBase`, que tem de ser a versão que A TELA LEU —
+    // copiar da resposta do POST anularia a trava de integridade e sobrescreveria o que outra aba gravou. Enquanto o
+    // contrato do front não carregar a versão, salvar aqui seria pior que não salvar.
+    salvarRascunho: () => Promise.reject(new ErroApi(MENSAGENS.semSalvarEvolucao, 501)),
     async assinarRegistro(id) {
       return paraRegistro(await chamar<AtendimentoApi>('POST', `/atendimentos/${encodeURIComponent(id)}/finalizar`, {}));
     },
