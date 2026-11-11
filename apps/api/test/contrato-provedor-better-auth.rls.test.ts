@@ -699,7 +699,8 @@ describe('R4 do 3a: pela HTTP, a resposta leva SÓ o Set-Cookie da sessão; o po
       controllers: [AlvoDoCookie],
       providers: [
         { provide: AUTH_PROVIDER, useValue: provedor },
-        { provide: TenantDatabase, useValue: new TenantDatabase(api.db) },
+        // O TenantDatabase fecha o handle no shutdown do app: um handle só deste teste, nunca o compartilhado.
+        { provide: TenantDatabase, useValue: new TenantDatabase(createDatabase(process.env.DATABASE_URL ?? '', { max: 2 })) },
       ],
     }).compile();
     app = ref.createNestApplication({ logger: false });
