@@ -78,3 +78,34 @@ Nas duas opções:
   - **Apagamento final:** limitado às clínicas lidas no início.
   - **Docs:** a §14.8 e a linha "Conta" do RIPD foram corrigidas, e o JSDoc do `vinculo` voltou para o lugar.
 - **V3:** entrou na fila, na §14.8: apagar as linhas do espelho quando a clínica for eliminada.
+
+## Reconferência (11/11/2026)
+
+> Commit `994cac1`. Revisão estática do diff. A bancada RLS não rodou aqui. No momento da reconferência, os jobs "Isolamento entre tenants (RLS)" e "Lint, typecheck e testes" do PR estavam pendentes.
+
+### Veredito: **APROVADO**, com uma condição: o CI do PR precisa ficar verde, em especial os jobs "Isolamento entre tenants (RLS)" e "Lint, typecheck e testes", que rodam os testes novos.
+
+**V1 ✅**
+
+- **Trigger.** Agora dispara em `AFTER INSERT OR UPDATE OF accepted_user_id, email_hmac`. Com `accepted_user_id` nulo, sai sem fazer nada. Por isso o descarte em lote de `convites.ts`, que também atinge convites não aceitos, não toca o espelho.
+- **HMAC vivo.** Só nesse caso há `INSERT ... ON CONFLICT DO NOTHING`.
+- **Ramo ELSE.** Com o HMAC zerado, apaga `(pessoa, clínica)`, salvo se existir outro convite aceito da mesma pessoa na mesma clínica com HMAC vivo (`i.id <> NEW.id`). Segue o padrão da 0064.
+- **Coluna `email_hmac`.** É `NOT NULL` com `CHECK` (0067), então a comparação `<>` nunca dá nulo.
+- **Contexto da clínica.** Os três caminhos que zeram o HMAC rodam com contexto de clínica: o `convites-descarte`, o laço das clínicas com vínculo e o laço do espelho. Assim, o `NOT EXISTS` enxerga as linhas da clínica pela policy.
+- **Sem contexto.** O `FORCE RLS` faria o `UPDATE` não atingir nenhuma linha, e o trigger nem dispararia. Não existe caminho que apague por engano uma linha que ainda tem HMAC vivo.
+- **Carga inicial.** Filtra `email_hmac <> repeat('0', 32)`.
+- **Docs.** RIPD §3 e matriz trazem "enquanto houver convite aceito com HMAC vivo (≤ 30 dias) ou até a anonimização", com o mecanismo descrito.
+- **Teste de retenção.** O aceite tem a data forçada para 31 dias atrás. O `descartarEncerradosComoSistema` então tira a clínica do espelho.
+
+**V2 ✅**
+
+- **Caminho desligado.** O teste da G3 confere que o espelho termina vazio. Esse é o caso que motivou a V3.
+- **Falha no meio ⚠️ (não bloqueia).** O teste prova que, com o banco da clínica fora, o espelho mantém a clínica e a nova tentativa o esvazia. A falha, porém, acontece no laço das clínicas com vínculo, antes do laço do espelho. O ramo `catch` → `falhas > 0` → `throw` antes do `DELETE` não é exercitado. Pela leitura do código, a garantia vale. Na fila, fica um teste com um `dbClinica` que falha só para uma clínica do espelho.
+- **Acesso.** O teste negativo confirma que o `app_user` não lê `identidade.convite_aceito`.
+- **`DELETE` final.** Ficou limitado a `inArray(clinicaId, <clínicas lidas>)` e só roda sem falhas.
+- **Documentação.** A §14.8 foi reescrita no presente certo. A linha "Conta" do RIPD fala em descarte imediato "em toda clínica onde ele ainda existir". O JSDoc do `vinculo` voltou para o lugar.
+- **Deadlock.** Nada mudou. O `DELETE` do trigger roda dentro da transação da clínica, e nenhuma conexão do `app_auth` segura lock no espelho enquanto isso.
+
+**V3 (fila) ✅.** Ficou registrada na §14.8: apagar as linhas do espelho quando a clínica for eliminada.
+
+**Checklist.** A retenção passou de ❌ para ✅. O controle de acesso passou de ⚠️ para ✅. Os demais itens seguem como no parecer.
