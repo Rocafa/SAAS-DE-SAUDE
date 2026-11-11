@@ -76,3 +76,15 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 - Todos estão `MERGEABLE`, sem conflito com a base. Não precisei mexer em nenhuma branch.
 - O #166 (do sócio) continua aprovado por nós; o merge é dele. O #174 segue travado até o checklist B1–B9.
 - Não empilhei código novo. A fila que sobrou depende do D15, de AWS ou do advogado.
+
+## Rodada da tarde (11/11, a partir das 18:57)
+
+O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código na pilha do login e uso o tempo para destravar o sócio.
+
+- **Pilha (#149 → #179) e avulsos (#153, #154, #172):** nenhum aprovado pelo @Lopesloro; todos `MERGEABLE`. Nada a mesclar.
+- **#169 (nosso, sobre a branch do #166):** o CI falhou no Trivy por duas CVEs do zlib (76844 e 85091). A correção (#163) entrou na `main` depois que a base do #169 foi criada. O Trivy do #179 passou hoje, então resolve sozinho quando o #166 for mesclado e o #169 apontar para `eng/better-auth-base`. Não mexi na branch do sócio.
+- **#170 (nosso, sobre a branch do #158):** o e2e "horário ocupado" falhou às 22:31 de Brasília, quando a data em UTC já é o dia seguinte. É o bug de fuso que o #172 corrige. Pedi nova execução só do job que falhou, num horário em que as duas datas coincidem.
+- **#143 (do sócio), revisão comentada, sem aprovar:** os casos (b) e (d) da R5 passam sem provar nada. O helper `avisos()` lê `clinical_notices` sem `userId`, e desde a 0040 essa leitura só mostra os avisos endereçados a quem está na sessão (`notices_recipient_select`), então o resultado é sempre `[]`. O caso (a), que ficou como `todo`, provavelmente tem a mesma causa: o fundador também é admin. Mandei a correção: conferir o número que a função devolve e ler os avisos como cada destinatário.
+- **#157 (do sócio), revisão comentada, sem aprovar:** o plano do E4 está pronto. A leitura da concorrência precisa de URL e data nos preços e de fonte para os números do Reclame Aqui (regra 6 do `AGENTS.md`); sugeri também arredondar o valor do caso individual da Feegow.
+- **#158 (do sócio, prontuário no front):** enviado ao Guardião (dado de saúde).
+- **#151 (Dependabot, 11 atualizações menores, CI verde):** entra **depois** da pilha do login. Os dois mexem no lockfile, e mesclar o #151 antes obrigaria a refazer o lockfile da pilha inteira.
