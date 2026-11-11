@@ -1321,6 +1321,13 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await provedor.anonimizarConta(userId);
     const hmac = await withTenant(api.db.db, outra, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${c2.conviteId}`), admX.userId);
     expect([...hmac][0]?.email_hmac).toBe('0'.repeat(32));
+    // V2 do #177: a clínica sem vínculo registra o descarte na trilha, com ator sistema (art. 37).
+    const prova = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
+    expect([...prova][0]?.n).toBe(1);
+    // V1 do #177: rodar de novo (com muitas clínicas na base) não lança e não grava trilha repetida.
+    await provedor.anonimizarConta(userId);
+    const de2 = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
+    expect([...de2][0]?.n).toBe(1);
   });
 
   it('R3 do 3a: clínica cancelada fora da janela de saída some da lista e da escolha; dentro da janela, fica', async () => {

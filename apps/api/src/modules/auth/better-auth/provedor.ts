@@ -16,9 +16,9 @@ import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { EMAIL_DESCARTADO } from '../convites-retencao';
 import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
-import { USUARIO_SISTEMA, withTenant, type Database } from '../../../db/tenant-transaction';
+import { listarClinicasDoAgendador, withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
-import { recordAudit } from '../../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
@@ -870,23 +870,29 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       );
     }
     // G3 do parecer do #176 (completa): a conta pode ter aceitado convite em clínica onde já foi desligada. Todas as
-    // clínicas (a mesma lista do agendador, só ids, fora de contexto de clínica) perdem o HMAC do convite aceito por
-    // ela, cada uma na própria transação e com o usuário de sistema. Uma falha não para as outras; no fim, o erro sobe e
-    // o suporte roda de novo (idempotente).
-    const todas = await this.d.dbClinica.execute<{ id: string }>(sql`select app_job_tenants() as id`);
+    // clínicas (lista do agendador, só ids, fora de contexto de clínica) perdem o HMAC do convite aceito por ela, cada
+    // uma na própria transação com o usuário de SISTEMA (sem 4º argumento: app_set_system_user, como os jobs; V1 do
+    // #177). Onde algo mudou, a trilha da clínica registra com ator sistema (art. 37). Uma falha não para as outras:
+    // cada uma gera evento, e no fim o erro sobe para o suporte rodar de novo (idempotente).
     let falhas = 0;
-    for (const { id } of todas) {
+    for (const id of await listarClinicasDoAgendador(this.d.dbClinica)) {
       if (clinicasAntes.includes(id)) continue;
-      await withTenant(
-        this.d.dbClinica,
-        id as TenantId,
-        (tx) => tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${id} and accepted_user_id = ${userId} and email_hmac <> ${EMAIL_DESCARTADO}`),
-        USUARIO_SISTEMA,
-      ).catch(() => {
+      await withTenant(this.d.dbClinica, id, async (tx) => {
+        const zerados = await tx.execute<{ id: string }>(
+          sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${id} and accepted_user_id = ${userId} and email_hmac <> ${EMAIL_DESCARTADO} returning id`,
+        );
+        if (zerados.length > 0) {
+          await recordAudit(tx, { tenantId: id, userId: SYSTEM_ACTOR_ID, roles: [] }, { action: AuditAction.Update, scope: 'clinic_members', metadata: { op: 'invite_pseudonym_dropped', user_id: userId, count: zerados.length } });
+        }
+      }).catch(() => {
         falhas += 1;
+        registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', tenantId: id, userId });
       });
     }
-    if (falhas > 0) throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
+    if (falhas > 0) {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', userId, contagem: falhas });
+      throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
+    }
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
