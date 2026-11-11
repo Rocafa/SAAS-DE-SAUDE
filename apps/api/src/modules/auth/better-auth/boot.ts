@@ -6,7 +6,7 @@
  */
 import { createDatabase } from '../../../db/tenant-transaction';
 import { AMBIENTES_SESSAO_FICTICIA } from '../auth-provider.factory';
-import { loadRateLimitHashKey, type RateLimitStore } from '../../../security/rate-limit-store';
+import { chaveDeHmac, type RateLimitStore } from '../../../security/rate-limit-store';
 import { criarAutenticacao, nomeDoCookie } from './instancia';
 import { configuracaoDoSegredo, lerSegredosVersionados } from './segredos';
 import { montarAutenticacao } from './montagem';
@@ -28,7 +28,9 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
   const ref: { provedor?: BetterAuthProvider } = {};
   const conferirSenhaVazada = conferidorPorKAnonimato();
   const segredosVersionados = lerSegredosVersionados(env.BETTER_AUTH_SECRETS);
-  const chaveHmac = loadRateLimitHashKey(env);
+  // B9: o bloqueio e o user-agent da sessão têm chaves próprias, derivadas da raiz.
+  const chaveHmac = chaveDeHmac('bloqueio', env);
+  const chaveDoUserAgent = chaveDeHmac('sessao-ua', env);
   const doProvedor = (): BetterAuthProvider => {
     if (!ref.provedor) throw new Error('provedor do Better Auth ainda não montado');
     return ref.provedor;
@@ -41,6 +43,7 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
     origensConfiaveis,
     producao,
     chaveHmac,
+    chaveDoUserAgent,
     store,
     conferirSenhaVazada,
     fator: {

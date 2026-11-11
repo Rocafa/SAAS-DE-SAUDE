@@ -26,7 +26,10 @@ A mesma chave assina três coisas: a origem em HMAC do log de segurança e do ra
 - **Os contadores de bloqueio recomeçam do zero**, porque a chave do contador muda. Não troque a chave durante um ataque em andamento.
 - **A correlação da origem no log** se quebra no momento da troca. Anote o horário da troca no registro de incidentes.
 
-A separação por uso (uma chave derivada por HKDF para cada finalidade), pedida no parecer do PR 1, continua na fila. Quando entrar, cada finalidade poderá ser trocada sem afetar as outras.
+**Desde o B9 (11/11/2026), há separação por uso.** Cada finalidade usa uma chave derivada da raiz por HKDF-SHA256 (`chaveDeHmac`, em `rate-limit-store.ts`), com cinco rótulos: `rate-limit`, `origem`, `bloqueio`, `sessao-ua` e `convite-email`.
+- **Rotacionar UM uso:** subir a versão dele em `VERSOES_DE_HMAC` num PR, por exemplo `origem: 2`. Só aquele uso muda, e os efeitos acima valem só para ele. Para `convite-email`, siga a leitura dupla do desenho (`derivacao-da-chave-de-hmac.md`).
+- **Vazamento da raiz ou da API:** rotação em bloco, ou seja, trocar a `RATE_LIMIT_HASH_KEY`, com os três efeitos acima ao mesmo tempo.
+- **No deploy do B9:** os contadores do Redis recomeçam (as chaves passam a `rl:v3`), a correlação da origem no log quebra e as sessões vivas ficam com o HMAC antigo até vencerem (no máximo 12 h). Anote o horário no registro de incidentes.
 
 ## Vazamento do segredo
 

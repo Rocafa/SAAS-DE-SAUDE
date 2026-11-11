@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
-import { loadRateLimitHashKey } from './rate-limit-store';
+import { chaveDeHmac } from './rate-limit-store';
 
 /**
  * Log de segurança estruturado (produção: uma linha JSON por evento, para filtro e alarme no CloudWatch).
@@ -172,7 +172,7 @@ export function origemDaRequisicao(ip: string | undefined, segredo?: Uint8Array)
   if (!segredo) {
     if (segredoDaOrigem === undefined) {
       try {
-        segredoDaOrigem = loadRateLimitHashKey();
+        segredoDaOrigem = chaveDeHmac('origem');
       } catch {
         segredoDaOrigem = null;
       }

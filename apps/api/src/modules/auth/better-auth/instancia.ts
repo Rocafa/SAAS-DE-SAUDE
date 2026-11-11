@@ -44,6 +44,8 @@ export interface OpcoesDaAutenticacao {
   readonly producao: boolean;
   /** Segredo do HMAC de origem e user-agent (R10). */
   readonly chaveHmac: Uint8Array;
+  /** B9: chave do HMAC do user-agent da sessão (`sessao-ua`); sem ela, a do bloqueio (só bancada). */
+  readonly chaveDoUserAgent?: Uint8Array;
   /** Store dos contadores de bloqueio (o do rate limit: Redis em produção). */
   readonly store: RateLimitStore;
   /** Ganchos do provedor para o código aceito ou recusado (mfa_em e trilha). */
@@ -160,7 +162,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
               data: {
                 ...s,
                 ipAddress: typeof s.ipAddress === 'string' && HEX16.test(s.ipAddress) ? s.ipAddress : null,
-                userAgent: typeof s.userAgent === 'string' && s.userAgent !== '' ? hmacCurto(o.chaveHmac, `ua:${s.userAgent}`) : null,
+                userAgent: typeof s.userAgent === 'string' && s.userAgent !== '' ? hmacCurto(o.chaveDoUserAgent ?? o.chaveHmac, `ua:${s.userAgent}`) : null,
               },
             };
           },

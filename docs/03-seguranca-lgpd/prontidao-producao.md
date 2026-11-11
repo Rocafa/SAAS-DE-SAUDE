@@ -71,7 +71,7 @@ Cada linha precisa de evidência e do PR. A produção só abre com todas as lin
 | B5 | RIPD e contrato: base legal confirmada pelo advogado, cláusula no DPA, §8 assinada pelo encarregado | antes | RIPD e DPA escritos; faltam o advogado e a assinatura | #162 |
 | B6 | Este checklist | antes | em andamento | #162 |
 | B7 | Pilha na `main` (#149 a #161) e #153 | antes | **aguarda a aprovação do @Lopesloro** | — |
-| B9 | Chave dos HMACs separada por uso (HKDF, cinco rótulos), antes do B8 (`docs/04-arquitetura/derivacao-da-chave-de-hmac.md`) | antes | desenho aprovado com ressalvas, falta o código | — |
+| B9 | Chave dos HMACs separada por uso (HKDF, cinco rótulos), antes do B8 (`docs/04-arquitetura/derivacao-da-chave-de-hmac.md`) | antes | código no PR da separação da chave (eng/hmac-por-uso), aguardando o Guardião | — |
 | B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS | — |
 | C1 | CSRF com a sessão real (#132) | antes | coberto pela montagem (403 sem Origin) e pelo `protecaoCsrf`; conferir no B8 | #149 |
 | C2 | Eventos do fator (#123 R5) | antes | feito | #152, #156, #159 |
