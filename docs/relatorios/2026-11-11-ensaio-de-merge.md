@@ -52,3 +52,4 @@ Quando o #166 entrar na base, o conflito aparece no primeiro PR da pilha que tra
 2. Pilha #149 → #179, propagando o conflito do achado 2.
 3. Avulsos #153, #154 e #172 (qualquer ordem).
 4. #116 (postgres.js 4) e #151 (Dependabot) por último, por causa do lockfile.
+5. PR de acompanhamento: `contagensParaLog` no `executor-de-jobs.ts`, no lugar da liberação de `v` e `resultado` (ressalva do Guardião ao `192c707`).

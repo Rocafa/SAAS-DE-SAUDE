@@ -105,3 +105,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Ensaio do merge completo** ([relatório](2026-11-11-ensaio-de-merge.md)). Juntei sobre a `main` a pilha inteira, os avulsos #153, #154 e #172, o #166 e o #169. Tipos, lint e testes de unidade da API (1147) e do front (412) estão verdes. Dois achados:
   - a trava de logs do #154 reprovava o log do job da plataforma, que vem da pilha. Corrigi no próprio #154 (`192c707`) e mandei para conferência do Guardião;
   - o #166 conflita com a pilha em dois arquivos. O conflito é simples, e a resolução está no relatório e foi comentada no #166.
+- **Guardião aprovou o ajuste da trava no #154**, com uma ressalva que não bloqueia: liberar `v` no arquivo inteiro é largo demais. **Pendência para depois da pilha:** extrair `contagensParaLog(resultado): string` no `executor-de-jobs.ts`, liberar só esse nome e tirar `v` e `resultado` da lista. O adendo do Guardião foi commitado no parecer do #154.
