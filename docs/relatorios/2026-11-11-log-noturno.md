@@ -88,3 +88,13 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#157 (do sócio), revisão comentada, sem aprovar:** o plano do E4 está pronto. A leitura da concorrência precisa de URL e data nos preços e de fonte para os números do Reclame Aqui (regra 6 do `AGENTS.md`); sugeri também arredondar o valor do caso individual da Feegow.
 - **#158 (do sócio, prontuário no front):** enviado ao Guardião (dado de saúde).
 - **#151 (Dependabot, 11 atualizações menores, CI verde):** entra **depois** da pilha do login. Os dois mexem no lockfile, e mesclar o #151 antes obrigaria a refazer o lockfile da pilha inteira.
+- **#170:** a nova execução passou. A falha era só o fuso, e o #172 corrige a causa.
+- **Conferência extra do #143:** o teste da `main` (`vinculo-cruzado.rls.test.ts`) lê os avisos pela rota `GET /avisos` como o admin, então a funcionalidade da 0063 está provada. O verde falso é só do teste novo do #143.
+- **#104 (do sócio, só documentação): aprovado.** A aprovação de 03/11 tinha caído quando a branch foi atualizada, e o pedido dele de 05/11 estava sem resposta. Duas notas sem bloqueio (a S1 já foi decidida pelo #142; uma frase antiga sobrou). O merge é dele.
+- **#55 (do sócio, relatório histórico da rodada 8): aprovado**, com uma nota (o item 4 da §5 contradiz a tabela).
+- **Pedidos do sócio que dependem do Matheus:** fechar o #36 (PoC da D4, já decidida) e os #45, #46 e #47 (superados pelo #86, já na `main`). Não fechei, porque o pedido veio num comentário do PR e não de você.
+- **#158 (do sócio, prontuário no front): o Guardião VETOU** (`revisoes/2026-11-11-codigo-front-prontuario-158.md`). O sigilo está certo, mas duas rotas não funcionam contra a API real, e conferi as duas no código:
+  - V1: `obterRegistroDoAgendamento` chama `GET /atendimentos/:id` com o id do agendamento, recebe sempre 404 e abre vazio um registro que já existe;
+  - V2: o `PUT` vai sem `versaoBase`, então todo salvamento leva 400;
+  - V3: os mocks aceitam corpos que a API recusa (verde falso).
+  Os detalhes foram para o PR.
