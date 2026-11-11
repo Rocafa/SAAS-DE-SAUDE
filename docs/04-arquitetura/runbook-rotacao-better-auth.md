@@ -20,7 +20,7 @@
 
 ## Rotação da `RATE_LIMIT_HASH_KEY` (R5 do código do 3b-1)
 
-A mesma chave assina três coisas: a origem em HMAC do log de segurança e do rate limit, as chaves do bloqueio 5/15 e o HMAC do e-mail dos convites (`convite-email:`). Trocar a chave tem três efeitos:
+Antes do B9, a mesma chave assinava três coisas: a origem em HMAC do log de segurança e do rate limit, as chaves do bloqueio 5/15 e o HMAC do e-mail dos convites (`convite-email:`). Hoje cada uma tem chave derivada própria (veja abaixo). Trocar a **raiz** continua tendo os três efeitos:
 
 - **Convites pendentes deixam de valer.** O aceite compara o HMAC do e-mail digitado com o gravado, e os dois passam a divergir. O aceite responde 404. Antes de trocar, avise os admins e reemita os convites pendentes depois da troca (eles vencem em 72 h de qualquer forma).
 - **Os contadores de bloqueio recomeçam do zero**, porque a chave do contador muda. Não troque a chave durante um ataque em andamento.
@@ -29,7 +29,7 @@ A mesma chave assina três coisas: a origem em HMAC do log de segurança e do ra
 **Desde o B9 (11/11/2026), há separação por uso.** Cada finalidade usa uma chave derivada da raiz por HKDF-SHA256 (`chaveDeHmac`, em `rate-limit-store.ts`), com cinco rótulos: `rate-limit`, `origem`, `bloqueio`, `sessao-ua` e `convite-email`.
 - **Rotacionar UM uso:** subir a versão dele em `VERSOES_DE_HMAC` num PR, por exemplo `origem: 2`. Só aquele uso muda, e os efeitos acima valem só para ele. Para `convite-email`, siga a leitura dupla do desenho (`derivacao-da-chave-de-hmac.md`).
 - **Vazamento da raiz ou da API:** rotação em bloco, ou seja, trocar a `RATE_LIMIT_HASH_KEY`, com os três efeitos acima ao mesmo tempo.
-- **No deploy do B9:** os contadores do Redis recomeçam (as chaves passam a `rl:v3`), a correlação da origem no log quebra e as sessões vivas ficam com o HMAC antigo até vencerem (no máximo 12 h). Anote o horário no registro de incidentes.
+- **No deploy do B9:** os contadores do Redis recomeçam (as chaves passam a `rl:v3`), a correlação da origem no log quebra e as sessões vivas ficam com o HMAC antigo até vencerem (no máximo 12 h). Anote o horário no registro de incidentes. Os convites fictícios pendentes no staging deixam de ser aceitos e precisam ser reemitidos (N4 do parecer do #179).
 
 ## Vazamento do segredo
 

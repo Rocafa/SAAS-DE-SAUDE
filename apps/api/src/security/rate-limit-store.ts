@@ -147,6 +147,7 @@ const SAL_DO_HMAC = 'plataforma-saude/hmac';
 
 /** Chave do uso, derivada da raiz (`RATE_LIMIT_HASH_KEY`). Único caminho do código de domínio até a raiz (R4). */
 export function chaveDeHmac(uso: UsoDeHmac, env: NodeJS.ProcessEnv = process.env): Buffer {
+  if (!Object.hasOwn(VERSOES_DE_HMAC, uso)) throw new Error('uso de HMAC fora da lista fechada');
   return Buffer.from(hkdfSync('sha256', loadRateLimitHashKey(env), SAL_DO_HMAC, `${uso}/v${VERSOES_DE_HMAC[uso]}`, 32));
 }
 

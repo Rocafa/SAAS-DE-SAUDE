@@ -45,7 +45,7 @@ export type MotivoDaVerificacao = 'login_em_duas_etapas' | 'reverificacao' | 'ca
 
 export interface DependenciasDaProtecao {
   readonly store: RateLimitStore;
-  /** Mesmo segredo do HMAC de origem (RATE_LIMIT_HASH_KEY). */
+  /** B9: chave do uso `bloqueio`, derivada da raiz por `chaveDeHmac`. */
   readonly chaveHmac: Uint8Array;
   /** Gasta o mesmo tempo de uma conferência de senha (resposta do bloqueio igual à da senha errada). */
   readonly gastarTempoDeSenha: (senha: string) => Promise<unknown>;
