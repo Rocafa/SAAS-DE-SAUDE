@@ -1361,6 +1361,46 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await expect(api.db.db.execute(sql`select clinica_id from identidade.convite_aceito limit 1`)).rejects.toThrow();
   });
 
+  it('reconferência do #178: só uma clínica do espelho falha; a outra é limpa e a que falhou fica para a nova tentativa', async () => {
+    const a1 = await api.novaClinica();
+    const a2 = await api.novaClinica();
+    const adm1 = await api.membro(a1, api.sessao(a1, 'admin'), 'admin');
+    const adm2 = await api.membro(a2, api.sessao(a2, 'admin'), 'admin');
+    const email = `uma-falha-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const c1 = await convites().criar({ tenantId: a1, userId: adm1.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: c1.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    const userId = u?.id ?? '';
+    await api.membro(a2, { userId }, 'recepcao');
+    const c2 = await convites().criar({ tenantId: a2, userId: adm2.userId, roles: ['admin'] } as never, `outro-${email}`, 'recepcao');
+    await withTenant(api.db.db, a2, (tx) => tx.execute(sql`update team_invites set accepted_at = now(), accepted_user_id = ${userId} where id = ${c2.conviteId}`), adm2.userId);
+    // Sai das duas: nenhuma clínica com vínculo, as duas só no espelho.
+    await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: adm1.Authorization }).expect(204);
+    await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: adm2.Authorization }).expect(204);
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toHaveLength(2);
+    // Banco da clínica que falha SÓ na primeira transação.
+    let chamadas = 0;
+    const real = api.db.db;
+    const umaFalha = {
+      transaction: (fn: never) => {
+        chamadas += 1;
+        return chamadas === 1 ? Promise.reject(new Error('banco da clínica fora')) : real.transaction(fn);
+      },
+    };
+    const falho = new BetterAuthProvider({
+      auth,
+      dbAuth: dbAuth.db,
+      dbClinica: umaFalha as never,
+      bloqueio: { store: STORE_DA_BANCADA, chaveHmac: CHAVE_HMAC_DA_BANCADA },
+      segredoDaInstancia: SEGREDO_DA_BANCADA,
+    });
+    await expect(falho.anonimizarConta(userId)).rejects.toThrow();
+    // A clínica que passou perdeu a linha (trigger do HMAC zerado); a que falhou continua.
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toHaveLength(1);
+    await provedor.anonimizarConta(userId);
+    expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
+  });
+
   it('V2 do #178: se a clínica falha no meio da anonimização, o espelho fica para a nova tentativa', async () => {
     const origem = await api.novaClinica();
     const outra = await api.novaClinica();
