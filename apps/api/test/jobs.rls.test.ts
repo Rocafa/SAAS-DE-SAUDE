@@ -59,6 +59,7 @@ describe('agendador em teste', () => {
       'retencao-fiscal',
       'responsaveis-descarte',
       'cpf-indice-reindexacao',
+      'identidade-expurgo',
     ]);
   });
 });
@@ -127,8 +128,9 @@ describe('job por clínica, com RLS e trilha', () => {
     for (const t of [clinicaA, clinicaB]) {
       for (const j of jobs.jobs) {
         const linhas = await trilhaDosJobs(t, j.nome);
-        // Lembretes com o canal desligado = só zeros: trilha `com_efeito` não grava (o envio já audita).
-        expect(linhas, j.nome).toHaveLength(j.trilha === 'sempre' ? 2 : 0);
+        // Lembretes com o canal desligado = só zeros: trilha `com_efeito` não grava (o envio já audita). Job da
+        // plataforma (identidade-expurgo) não tem trilha de clínica.
+        expect(linhas, j.nome).toHaveLength(j.daPlataforma ? 0 : j.trilha === 'sempre' ? 2 : 0);
         for (const l of linhas) {
           expect(l).toMatchObject({ actorKind: 'sistema', actorId: USUARIO_SISTEMA });
           expect((l.metadata as Record<string, unknown>).status).toBe('ok');

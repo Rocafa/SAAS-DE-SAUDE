@@ -57,6 +57,7 @@ O Better Auth cuida da **credencial**: senha, sessão, cookie e, no PR 2, o TOTP
   - **Trilha da clínica**, quando há clínica: a seleção da clínica, o logout com clínica ativa e os eventos de MFA. Falha de login sem usuário identificado não tem clínica e fica só no log de segurança.
   - **Por que login e falha de login não vão para a trilha** (revisão do #149, corrigida no #166): os dois acontecem **antes** da escolha da clínica, e a trilha é por clínica. Não há tenant onde gravar. O vestígio do login na trilha é o `session_tenant_selected`, gravado quando a sessão ganha a clínica (automática com uma clínica só, ou pela rota de escolha).
   - **Ordem da escolha:** a linha `session_tenant_selected` grava **antes** de `clinica_ativa`. São bancos diferentes; se a trilha falhar, a sessão fica sem clínica (sem acesso) e o log emite `TRILHA_NAO_GRAVADA` com motivo `escolha_de_clinica`. Nunca há acesso sem a linha na trilha. O caso inverso (trilha gravada, `update` falhou) só deixa uma linha a mais.
+  - **Trilha fora × TOTP feito sem clínica** (R4 do desenho do PR 3): com a trilha fora, a escolha não acontece e `mfa_sem_clinica_em` **não** é zerado. O TOTP guardado não dá acesso (sem clínica, sem MFA marcado) e só pode ser aproveitado pela primeira escolha que valer, dentro dos mesmos 5 min (o prazo não renova). A troca atômica zera o campo nessa escolha. Testes (a) e (b) em `provedor.test.ts`.
 - **IP e user-agent na `sessao` em HMAC**, nunca em claro. A guarda do IP em claro exigida pelo Marco Civil fica nos logs do ALB (pendência AWS/D8).
 - **Bloqueio** (PR 2): 5 falhas em 15 min por e-mail em HMAC e por origem, no store do rate limit (Redis), com resposta idêntica para conta existente e inexistente.
 
@@ -122,3 +123,77 @@ Atende às R14 (parte do fator) e R15 do parecer do desenho e à R5 do #123 na p
 | **Trilha da clínica (R5 do #123)** | Com clínica ativa: `mfa_enrolled` e `mfa_verified` (ação `login`), `mfa_failed` e `mfa_locked` (ação `login_failed`), escopo `mfa`, sem nenhum dado além do `op`. Falha no login em duas etapas não tem clínica: fica só no log de segurança. A recusa por MFA em rota comum com os alvos distintos (nota da R9 do #123) vai num PR à parte, no guard. Reset e remoção com justificativa e alerta ao admin: PR 3 (R17). |
 | **Rotação do segredo** | O segredo do TOTP é cifrado com o `BETTER_AUTH_SECRET`: trocar esse segredo exige o recadastro do TOTP de todos, até migrarmos para os segredos versionados da biblioteca (R9 do parecer, PR 3). |
 | **`LOGIN_OK`** | Continua significando "senha aceita". Com TOTP, a biblioteca abre e apaga uma sessão provisória antes do desafio; o `MFA_VERIFICADO` completa o login. |
+
+## 14. PR 3: clínica, equipe e produção (desenho para o Guardião, antes do código)
+
+Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos pareceres do código do #149 e do #152 (R3 a R9), e libera o provedor real em produção. É grande demais para um PR só, então vai em **três**, cada um com parecer próprio. A produção só abre no 3c.
+
+### 14.1 PR 3a: sessão e clínica
+
+| Tema | Decisão |
+|---|---|
+| **Rotas da sessão sem clínica** | Quem tem várias clínicas fica sem clínica ativa depois do login, e o `SessaoGuard` (que exige clínica) devolve 401. Por isso as rotas abaixo usam um guard próprio, `SessaoDePessoaGuard`. Ele só aceita a sessão do provedor real (com o dev provider, 404), não lê nenhuma clínica e entrega só `{ sessaoId, userId }`. A porta `AuthProvider` não muda. |
+| **`GET /sessao/clinicas`** | Clínicas com vínculo ativo (pelo espelho `identidade.vinculo`): id e nome da clínica. O nome da clínica não é dado pessoal. Sem perfis nem contagens. |
+| **`POST /sessao/clinica {clinicaId}`** | Usa `definirClinica`: confere o vínculo no espelho e devolve 404 sem vínculo (não 403, para não confirmar que a clínica existe). Grava `session_tenant_selected` na trilha da clínica escolhida e zera o MFA (regra que já existe). |
+| **MFA sem clínica (R7 do #152)** | Hoje o código aceito sem clínica escolhida não marca nada. Proposta: o TOTP aceito sem clínica grava `sessao.mfa_sem_clinica_em`. A **primeira** escolha de clínica feita até **5 min** depois converte esse valor em `mfa_em`, com a impressão dos perfis da clínica escolhida, e grava `mfa_verified` na trilha **dela**. Depois disso, ou fora do prazo, a troca de clínica zera o MFA como hoje. `MFA_VERIFICADO` sem clínica sai com `motivo: 'login_em_duas_etapas_sem_clinica'`. |
+| **Lista de sessões (R20)** | `GET /sessao/sessoes` mostra só as sessões da própria pessoa: id curto (8 hex do id), criada em, última atividade e se é a atual. **Sem IP, sem user-agent** (nem em HMAC) e sem clínica. |
+| **Encerrar sessões** | `DELETE /sessao/sessoes/:id` encerra uma sessão da própria pessoa (outra pessoa recebe 404). `POST /sessao/encerrar-todas` encerra todas, inclusive a atual. Eventos `LOGOUT` com `motivo: 'logout_global'` e trilha nas clínicas do vínculo. |
+| **Cookie renovado (pendência do #149)** | Quando o `getSession` estende a sessão (inatividade de 15 min), o `Set-Cookie` novo volta ao navegador. O provedor devolve os cabeçalhos da biblioteca (`returnHeaders`), e o guard os aplica na resposta. Sem isso, o cookie morreria em 15 min mesmo com a sessão em uso. |
+| **Polling sem renovar (R19)** | O decorador `@SemRenovarSessao()` nas rotas de polling (contagem de avisos, estado de importação) faz o provedor ler com `disableRefresh`. Teste: 20 chamadas de polling não mudam o `expira_em`. O front passa a usar essas rotas no polling. |
+| **`LOGIN_SENHA_OK` (R3 do #152)** | A sessão provisória do login em duas etapas gera `LOGIN_SENHA_OK` com `motivo: 'aguardando_fator'`. `LOGIN_OK` passa a sair só na sessão definitiva. |
+| **Expurgo (R11)** | Job diário apaga sessões vencidas e `verificacao` usadas ou vencidas há mais de 24 h. Conta só quantas apagou (sem ids). |
+
+### 14.2 PR 3b: equipe (convite, recuperação e desligamento), revisto depois do veto
+
+**Ainda não existe provedor de e-mail** (§9). Por isso todo token de uso único é mostrado **uma vez** ao admin, para ele entregar **fora da plataforma** (R17). Isso faz do admin alguém que **vê o token**. O veto do parecer do desenho (R1 e R2) mostrou que nenhum token pode, sozinho, dar a conta inteira ao admin nem abrir outra clínica. As regras abaixo partem disso.
+
+**Princípios**
+- **(R1) Nenhum token restaura os dois fatores.**
+  - O token de senha exige o TOTP atual.
+  - O token de fator exige a senha atual.
+  - Quem perdeu os dois passa pelo suporte da plataforma, com conferência de identidade, fora deste PR.
+- **(R2) O que um admin faz vale só na clínica dele.**
+  - Antes do aceite, a clínica não vê nada de `identidade.usuario`.
+  - Vínculos que a pessoa tem em outras clínicas não mudam por ação deste admin.
+
+| Tema | Decisão |
+|---|---|
+| **Convite** | `POST /clinica/convites {email, perfil}` (admin, MFA recente, teto diário por admin, R9). Grava só em `convites_da_clinica` (tabela da clínica, com RLS): e-mail cifrado, perfil, SHA-256 do token, prazo de 72 h e quem convidou. **Não** concede perfil e **não** toca em `identidade.usuario`. A resposta é a mesma exista ou não conta com esse e-mail. A lista de membros só mostra quem aceitou. |
+| **Aceite: pessoa nova** | `POST /convites/aceitar {token, senha}` define a senha (com a conferência de senha vazada chamada explicitamente) e cria `identidade.usuario` e a credencial. O vínculo em `clinic_members` nasce **agora**, com `op: member_invite_accepted` e aviso aos admins. A sessão nasce marcada `cadastro_do_fator_pendente`, dura **no máximo 15 min** (R8) e só serve às rotas do cadastro do TOTP (R3). O admin que viu o token poderia aceitar no lugar da pessoa, mas teria apenas uma conta **nova**, sem histórico e só nesta clínica. Isso equivale a o próprio admin criar uma conta falsa, o que ele já pode fazer hoje. Fica registrado no RIPD e no contrato (R14). |
+| **Aceite: conta existente** | O mesmo endpoint pede **login completo**: a senha atual e o código TOTP. Ver o token não basta. As falhas contam no bloqueio de login (R9). Só então o vínculo nesta clínica nasce. |
+| **Recuperação de senha pelo admin** | `POST /clinica/membros/:usuarioId/recuperacao {tipo: 'senha', justificativa}` (admin, MFA recente, justificativa só na trilha). Gera um token de **15 min**. Usá-lo exige o **código TOTP atual** da pessoa (R1) e define a senha nova (com a conferência de senha vazada). Apaga todas as sessões. Trilha na clínica do admin. Os admins das outras clínicas da pessoa recebem só um aviso de que a credencial mudou, sem detalhe. |
+| **Recuperação de fator pelo admin** | `tipo: 'fator'`: o token de 15 min exige a **senha atual** e abre uma sessão de 15 min só para o cadastro de um TOTP novo. O TOTP antigo é apagado **somente** quando o novo é confirmado. |
+| **Perdeu os dois** | Fora deste PR: suporte da plataforma com conferência de identidade (processo de suporte da 0059, com autorização da clínica e trilha). Até lá, a pessoa recebe um convite novo e vira uma conta nova. O histórico clínico continua com o id antigo. |
+| **Desbloqueio pelo admin (R4 do #152)** | Zera só os contadores de bloqueio da pessoa (e-mail e fator), sem trocar senha nem fator. Fica na trilha. |
+| **Troca de senha pela própria pessoa (R16)** | `POST /sessao/senha` (MFA recente): conferência de senha vazada explícita, apaga as outras sessões, `mfa_em` zerado na atual, trilha nas clínicas da pessoa. |
+| **Desligamento (R10)** | Revogar o último perfil da pessoa numa clínica apaga as sessões dela **com essa clínica ativa**, pelo trigger de espelho. As sessões em outras clínicas ficam intactas, com teste RLS. Sem vínculo em nenhuma clínica, a conta fica `ativo = false`, e um convite aceito reativa. |
+| **Autor do prontuário por 20 anos (R18)** | `identidade.usuario` nunca é apagada. A exclusão a pedido do titular **anonimiza** o e-mail e o nome e apaga a senha, o TOTP, as sessões e os convites (R11). A identificação do autor fica em `professionals`, na clínica, com a retenção do prontuário. |
+| **`MFA_BLOQUEADO` no login em duas etapas (R6 do #152)** | A pessoa está identificada, então o bloqueio vira aviso aos admins das clínicas dela, no máximo 1 por dia. |
+
+### 14.3 PR 3c: produção
+
+| Tema | Decisão |
+|---|---|
+| **Segredos** | `BETTER_AUTH_SECRET`, `DATABASE_AUTH_URL` e `APP_AUTH_PASSWORD` no Secrets Manager, escritos em Terraform (o `apply` depende da AWS). A rotação usa os **segredos versionados** da biblioteca, para não perder o TOTP de todos (R9 do #152). |
+| **Egresso** | Saída liberada só para `api.pwnedpasswords.com:443` (R5 do #152). |
+| **Proxy** | `HTTP_TRUST_PROXY_HOPS` conferido no staging (R4 do #152; com valor errado, 30 falhas trancam a plataforma inteira). |
+| **RIPD e retenção** | Schema `identidade`, segredo do TOTP, contadores de bloqueio, prefixo do SHA-1 enviado para fora e anonimização (R18). |
+| **Abertura** | `AMBIENTES_POR_TIPO['better-auth']` passa a incluir `production`, e o dev provider continua proibido em produção. Teste de fumaça no staging com o fluxo completo: convite, aceite, TOTP, escolha de clínica, rota sensível com reverificação e logout global. |
+
+### 14.4 Ressalvas do parecer do desenho do PR 3 incorporadas
+
+- **3a:**
+  - **R3:** o guard das rotas sem clínica aplica as mesmas travas do provedor (prazo absoluto, conta ativa), e a sessão com cadastro pendente só acessa o cadastro do fator.
+  - **R4:** `mfa_sem_clinica_em` é zerado ao converter e nunca é lido como `mfa_em`, com teste dos três casos.
+  - **R5:** o guard repassa só o `Set-Cookie` da sessão; nas rotas de polling, nenhum `Set-Cookie` sai.
+  - **R6:** encerrar uma sessão confere o dono no banco pelo id completo.
+  - **R7:** o expurgo inclui o cadastro de TOTP não concluído, os convites e os tokens vencidos.
+- **3c:**
+  - **R12:** TLS verificado no banco e no Redis, a chave do HMAC no Secrets Manager, e a rotação testada no staging.
+  - **R13:** checklist assinado e parecer final antes de abrir produção; teste de fumaça só com contas fictícias.
+  - **R14:** e-mail da conta não verificado no RIPD; responsabilidade do admin pela entrega dos tokens no contrato.
+- **3b, depois da reconferência:**
+  - **R15:** os fluxos de token entram no bloqueio 5/15 com reserva atômica. O TOTP pedido na recuperação conta no bloqueio do fator, com a marca de reuso. A senha pedida na recuperação de fator e no aceite de conta existente conta no bloqueio de login. O token é consumido de forma atômica.
+  - **R16:** no aceite de conta existente, o e-mail da conta autenticada precisa ser o do convite. Na recuperação, `:usuarioId` precisa ter vínculo ativo na clínica do admin; senão, 404.
+  - **R17:** a conta guarda a clínica e o convite de origem; a pessoa vê as próprias clínicas; há procedimento de disputa de e-mail no suporte; a verificação de e-mail fica obrigatória quando houver provedor (inclusive para contas antigas); RIPD e contrato registram que o e-mail é declarado pelo admin.
+  - **R18:** quem perdeu os dois fatores recebe a conta nova com **outro** e-mail, até o suporte liberar o antigo pelo procedimento de disputa. O RIPD registra que quem usa o token percebe se a conta já existe.

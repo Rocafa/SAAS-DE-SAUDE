@@ -67,6 +67,13 @@ export function perfisVigentes(perfis: readonly Perfil[], linhas: readonly { rol
   return perfis.filter((p) => ativos.has(p));
 }
 
+/**
+ * Rota de polling (R19 do parecer do desenho da D4): a chamada automática do front não estende a sessão, para a
+ * inatividade de 15 min ser real, e não devolve cookie.
+ */
+export const SEM_RENOVAR_SESSAO_KEY = 'sem_renovar_sessao';
+export const SemRenovarSessao = () => SetMetadata(SEM_RENOVAR_SESSAO_KEY, true);
+
 /** Escopo da linha da trilha de uma recusa por MFA em rota sensível (B2 do parecer de 03/11 sobre o #123). */
 export const SCOPE_MFA_RECUSADO = 'mfa_denied';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -110,7 +117,15 @@ export class SessaoGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequisicaoComSessao>();
-    let auth = await this.provider.resolver(req);
+    const semRenovar = this.reflector.getAllAndOverride<boolean | undefined>(SEM_RENOVAR_SESSAO_KEY, [context.getHandler(), context.getClass()]) === true;
+    const http = context.switchToHttp();
+    // Contexto sem resposta (dublê de teste, contexto não HTTP): sem cookie a devolver.
+    const res = typeof http.getResponse === 'function' ? http.getResponse<{ append?: (nome: string, valor: string[]) => void }>() : undefined;
+    let auth = await this.provider.resolver({
+      headers: req.headers,
+      semRenovar,
+      aoRenovarCookie: (cookies) => res?.append?.('Set-Cookie', cookies),
+    });
     if (!auth) {
       registrarEventoDeSeguranca('SESSAO_INVALIDA', { rota: rotaDoTemplate(req), origem: origemDaRequisicao(req.ip) });
       throw new UnauthorizedException({ statusCode: 401, message: 'Não autenticado' });

@@ -39,6 +39,7 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | Evento | Severidade | Alarme | Onde nasce |
 |---|---|---|---|
 | `LOGIN_OK` | aviso | volume | login com senha aceito (D4, gancho da sessão, com `userId` e `origem`; nunca o e-mail) |
+| `LOGIN_SENHA_OK` | aviso | volume | senha aceita com TOTP cadastrado: sessão provisória aguardando o código (`motivo: aguardando_fator`); muitos sem `MFA_VERIFICADO` em seguida indicam senha vazada (D4 PR 3a) |
 | `LOGIN_FALHOU` | aviso | volume | login recusado (montagem do Better Auth; sem dizer se a conta existe) |
 | `LOGOUT` | aviso | volume | sessão encerrada no servidor (logout, prazo absoluto de 12 h ou conta inativa) |
 | `LOGIN_BLOQUEADO` | alto | imediato | login recusado pelo bloqueio de 5 falhas em 15 min por e-mail (30 por origem); resposta igual à da senha errada (D4 PR 2) |

@@ -24,6 +24,7 @@ import { ResponsaveisService } from '../patients/responsaveis.service';
 import { PortalClinicaService } from '../portal/portal-clinica.service';
 import { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
 import { ClinicasDoAgendador, TenantDatabase } from '../tenancy/tenancy.module';
+import { AUTH_PROVIDER } from '../auth/auth-context';
 import { AgendadorBullMQ, fabricasReais, RegistroRedis, TravaRedis } from './agendador-bullmq';
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
 import { codigoDoErro, type AgendadorPort, type DefinicaoDeJob, type ModoDoAgendador, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
@@ -98,6 +99,18 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
     return this.infra.agendador?.modo ?? 'desligado';
   }
 
+  /**
+   * Expurgo do schema identidade (D4): o provedor real sabe fazer; com o dev provider (sem schema identidade em uso),
+   * o job roda e não faz nada. O provedor vem do AuthModule global.
+   */
+  private expurgoDaIdentidade(): { expurgarComoSistema(): Promise<Record<string, number>> } {
+    const provedor: unknown = this.moduleRef.get(AUTH_PROVIDER, { strict: false });
+    const temExpurgo = (p: unknown): p is { expurgarComoSistema(): Promise<Record<string, number>> } =>
+      typeof (p as { expurgarComoSistema?: unknown } | null)?.expurgarComoSistema === 'function';
+    if (temExpurgo(provedor)) return { expurgarComoSistema: () => provedor.expurgarComoSistema() };
+    return { expurgarComoSistema: () => Promise.resolve({}) };
+  }
+
   get jobs(): readonly DefinicaoDeJob[] {
     return this.executor?.jobs ?? [];
   }
@@ -113,6 +126,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
       retencaoFiscal: get(RetencaoFiscalService),
       responsaveis: get(ResponsaveisService),
       pacientes: get(PatientsService),
+      identidade: this.expurgoDaIdentidade(),
     });
     this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;

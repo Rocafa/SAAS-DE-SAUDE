@@ -35,6 +35,11 @@ function montar(opcoes: { trilhaFora: boolean }) {
       return cadeia(undefined);
     },
     delete: () => cadeia(undefined),
+    // Troca atômica da clínica (R1 do parecer do 3a): uma instrução só, devolvendo o valor anterior.
+    execute: () => {
+      ordem.push('clinica_ativa');
+      return Promise.resolve([{ clinica_antes: null, sem_clinica_antes: null }]);
+    },
   };
   const dbClinica = {
     transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -97,5 +102,61 @@ describe('definirClinica: trilha antes da clínica ativa', () => {
     const { provedor } = montar({ trilhaFora: true });
     for (let i = 0; i < 5; i++) expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
     expect(eventos().filter((e) => e['evento'] === 'TRILHA_NAO_GRAVADA')).toHaveLength(1);
+  });
+});
+
+/**
+ * Ressalva do parecer da resolução 3a × #168: trilha fora × TOTP feito sem clínica (R4 do desenho do PR 3). Sessão com
+ * estado no banco falso: `execute` faz a troca atômica (devolve o valor anterior e zera `mfa_sem_clinica_em`).
+ */
+function montarComTotp(agora: Date) {
+  const estado = { trilhaFora: true, clinicaAtiva: null as string | null, mfaSemClinicaEm: new Date(agora.getTime() - 60_000) as Date | null };
+  const dbAuth = {
+    selectDistinct: () => cadeia([{ clinicaId: CLINICA }]),
+    execute: () => {
+      const antes = { clinica_antes: estado.clinicaAtiva, sem_clinica_antes: estado.mfaSemClinicaEm };
+      estado.clinicaAtiva = CLINICA;
+      estado.mfaSemClinicaEm = null;
+      return Promise.resolve([antes]);
+    },
+  };
+  const dbClinica = {
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      if (estado.trilhaFora) throw new Error('banco da trilha fora');
+      return fn({ execute: () => Promise.resolve(undefined), insert: () => cadeia(undefined) });
+    },
+  };
+  const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
+  const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never, agora: () => agora });
+  const marcarMfa = vi.spyOn(provedor, 'marcarMfa').mockResolvedValue(true);
+  const comFator = provedor as unknown as { trilhaDoFator: (...a: unknown[]) => Promise<void> };
+  const trilhaDoFator = vi.spyOn(comFator, 'trilhaDoFator').mockResolvedValue(undefined);
+  return { provedor, estado, marcarMfa, trilhaDoFator };
+}
+
+describe('definirClinica: trilha fora × TOTP feito sem clínica', () => {
+  it('(a) trilha fora: o TOTP sem clínica continua guardado e nenhum MFA é marcado', async () => {
+    capturarEventos();
+    const { provedor, estado, marcarMfa, trilhaDoFator } = montarComTotp(new Date());
+    const guardado = estado.mfaSemClinicaEm;
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
+    expect(estado.clinicaAtiva).toBeNull();
+    expect(estado.mfaSemClinicaEm).toBe(guardado);
+    expect(marcarMfa).not.toHaveBeenCalled();
+    expect(trilhaDoFator).not.toHaveBeenCalled();
+  });
+
+  it('(b) a trilha volta dentro dos 5 min: a escolha aproveita o TOTP uma vez só e zera o campo', async () => {
+    capturarEventos();
+    const { provedor, estado, marcarMfa, trilhaDoFator } = montarComTotp(new Date());
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
+    estado.trilhaFora = false;
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(true);
+    expect(estado.mfaSemClinicaEm).toBeNull();
+    expect(marcarMfa).toHaveBeenCalledTimes(1);
+    expect(trilhaDoFator).toHaveBeenCalledWith(CLINICA, USER, ['mfa_verified'], expect.anything());
+    // Segunda escolha: o TOTP já foi gasto.
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(true);
+    expect(marcarMfa).toHaveBeenCalledTimes(1);
   });
 });

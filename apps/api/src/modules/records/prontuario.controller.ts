@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Put, Query
 import { exigirUuid } from '../../common/validacao';
 import type { PsychCompartmentMode } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
-import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { Permissao, SemRenovarSessao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { ExigeMfaRecente } from '../auth/mfa';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
 import { AvisosService, type AvisoDto } from './avisos';
@@ -310,6 +310,8 @@ export class AvisosController {
 
   @Get()
   @Permissao('prontuario:acessar')
+  // R19: a caixa de avisos é a candidata a polling do front; a consulta não estende a sessão.
+  @SemRenovarSessao()
   listar(@Sessao() auth: AuthContext, @Query() query: unknown): Promise<AvisoDto[]> {
     validarQueryVaziaClinica(query);
     return this.avisos.listar(paraRequestContext(auth));

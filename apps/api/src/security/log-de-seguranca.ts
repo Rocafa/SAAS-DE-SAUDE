@@ -15,6 +15,7 @@ import { loadRateLimitHashKey } from './rate-limit-store';
  */
 export const EVENTOS_DE_SEGURANCA = {
   LOGIN_OK: { severidade: 'aviso', alarme: 'volume', descricao: 'login com senha aceito (D4)' },
+  LOGIN_SENHA_OK: { severidade: 'aviso', alarme: 'volume', descricao: 'senha aceita; sessão provisória aguardando o código do TOTP (D4)' },
   LOGIN_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'login recusado (sem dizer se a conta existe)' },
   LOGOUT: { severidade: 'aviso', alarme: 'volume', descricao: 'sessão encerrada no servidor (logout, prazo absoluto ou conta inativa)' },
   LOGIN_BLOQUEADO: { severidade: 'alto', alarme: 'imediato', descricao: 'login recusado pelo bloqueio de 5 falhas em 15 min (resposta igual à senha errada)' },
@@ -79,6 +80,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'erro_na_autenticacao',
   'escolha_de_clinica',
   'logout',
+  'logout_global',
   'prazo_absoluto',
   'conta_inativa',
   'senha_errada',
@@ -89,6 +91,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   'cadastro_do_fator',
   'login_em_duas_etapas',
   'reverificacao',
+  'aguardando_fator',
+  'login_em_duas_etapas_sem_clinica',
   'senha_vazada',
   'conferencia_indisponivel',
 ] as const;
