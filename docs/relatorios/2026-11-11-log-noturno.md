@@ -140,3 +140,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Propaguei pela pilha (um conflito de justaposição no #156, resolvido). O topo passa em tipos e lint, e só esse arquivo usa o gerador de TOTP.
 - **Avulsos #153, #154 e #172 atualizados com a `main`** (que já tem o #149). Sem conflito. Tipos, lint e testes passam nos três (1122, 1127 e 1122). Estão prontos para quando o sócio aprovar.
+- **#152:** CI 16/16 verde com a correção do TOTP. Continua esperando a reaprovação.
+- **#159 falhou de novo, agora por um caso que a minha correção abriu.** Num teste com três verificações seguidas, quando a terceira caía nos últimos 3 s da janela, o helper recusava o código do período anterior e ficava sem código livre. Corrigido no #152: nesse caso o helper espera a janela virar (no máximo 3 s), e no período seguinte o +1 está livre. Propaguei pela pilha sem conflito, e o topo passa no typecheck.
