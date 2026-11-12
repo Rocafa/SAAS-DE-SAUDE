@@ -40,7 +40,7 @@ com_banco_descartavel() {
     -c "CREATE DATABASE plataforma_saude OWNER rds_master"
 
   export PATH="$PG_BIN:$PATH" PGHOST=127.0.0.1 PGPORT="$PORTA" PGDATABASE=plataforma_saude PGSSLMODE=disable
-  PGUSER=rds_master PGPASSWORD="$MASTER_PW" APP_MIGRATOR_PASSWORD="$MIG_PW" APP_USER_PASSWORD="$USER_PW" \
+  PGUSER=rds_master PGPASSWORD="$MASTER_PW" APP_MIGRATOR_PASSWORD="$MIG_PW" APP_USER_PASSWORD="$USER_PW" APP_AUTH_PASSWORD="$USER_PW" \
     sh "$DIR/bootstrap.sh" >/dev/null
 
   export PGUSER=app_migrator PGPASSWORD="$MIG_PW"

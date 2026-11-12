@@ -34,6 +34,8 @@ export function applyHttpSecurity(
   config: HttpSecurityConfig = loadHttpSecurityConfig(),
   store: RateLimitStore = new MemoryRateLimitStore(),
   hashKey: Uint8Array = loadRateLimitHashKey(),
+  /** D4: handler do Better Auth, depois das travas da borda e ANTES do parser JSON (a biblioteca lê o corpo cru). */
+  montagemDaAutenticacao?: (req: Req, res: ServerResponse, next: Next) => void,
 ): void {
   const expressApp = app as NestExpressApplication;
   expressApp.disable('x-powered-by');
@@ -69,6 +71,7 @@ export function applyHttpSecurity(
   // E6: antes dos parsers. Só o parser JSON: a API é só JSON (o CSV do importador lê o corpo cru). A app precisa ser
   // criada com `bodyParser: false` (main.ts), senão o Nest registra urlencoded de novo no init (R2 do parecer do #132).
   app.use(protecaoCsrf(allowed));
+  if (montagemDaAutenticacao) app.use(montagemDaAutenticacao);
   expressApp.useBodyParser('json', { limit: config.bodyLimit });
   app.use(safeErrorHandler);
 }
