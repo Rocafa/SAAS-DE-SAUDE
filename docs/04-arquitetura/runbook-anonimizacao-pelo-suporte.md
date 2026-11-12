@@ -36,7 +36,7 @@ Tarefa avulsa do ECS na definição `<ambiente>-ops-anonimizacao`, iniciada pelo
 ```bash
 aws ecs run-task --cluster <cluster> --task-definition <ambiente>-ops-anonimizacao --launch-type FARGATE \
   --network-configuration '<a mesma da API>' \
-  --overrides '{"containerOverrides":[{"name":"ops","command":["--usuario","<uuid>","--chamado","LGPD-<n>","--operador","<uuid do executor>"],"environment":[{"name":"CONFIRMA_ANONIMIZACAO","value":"<uuid>"}]}]}'
+  --overrides '{"containerOverrides":[{"name":"ops-anonimizacao","command":["--usuario","<uuid>","--chamado","LGPD-<n>","--operador","<uuid do executor>"],"environment":[{"name":"CONFIRMA_ANONIMIZACAO","value":"<uuid>"}]}]}'
 ```
 
 O programa é fixo no `entryPoint` da tarefa; o override leva **só os argumentos** e a variável `CONFIRMA_ANONIMIZACAO`. O `containerOverrides` fica no CloudTrail: só uuid e número do chamado, **nunca** nome ou e-mail.
