@@ -10,11 +10,12 @@
 \set ON_ERROR_STOP on
 \getenv app_migrator_password APP_MIGRATOR_PASSWORD
 \getenv app_user_password APP_USER_PASSWORD
+\getenv app_auth_password APP_AUTH_PASSWORD
 \getenv dbname PGDATABASE
 
-SELECT :'app_migrator_password' = '' OR :'app_user_password' = '' AS senha_vazia \gset
+SELECT :'app_migrator_password' = '' OR :'app_user_password' = '' OR :'app_auth_password' = '' AS senha_vazia \gset
 \if :senha_vazia
-  \echo 'APP_MIGRATOR_PASSWORD e APP_USER_PASSWORD precisam estar definidas'
+  \echo 'APP_MIGRATOR_PASSWORD, APP_USER_PASSWORD e APP_AUTH_PASSWORD precisam estar definidas'
   \quit 3
 \endif
 
@@ -40,6 +41,13 @@ SELECT format('CREATE ROLE app_user LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NO
               :'app_user_password')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') \gexec
 
+-- app_auth (D4; R1 do parecer do desenho Better Auth): só a autenticação usa; único com acesso ao schema identidade.
+SELECT format('CREATE ROLE app_auth LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L',
+              :'app_auth_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_auth') \gexec
+SELECT format('ALTER ROLE app_auth LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
+              :'app_auth_password') \gexec
+
 SELECT format('ALTER ROLE app_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
               :'app_migrator_password') \gexec
 -- app_user NÃO é dono das tabelas e NÃO tem BYPASSRLS (RLS sempre aplicado).
@@ -50,7 +58,9 @@ SELECT format('ALTER ROLE app_user LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
 SET LOCAL pgaudit.log TO DEFAULT;
 
 -- 2. Acesso ao banco e ao schema (GRANT é idempotente).
-SELECT format('GRANT CONNECT ON DATABASE %I TO app_migrator, app_user', :'dbname') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO app_migrator, app_user, app_auth', :'dbname') \gexec
+-- USAGE em public para o EXECUTE da função de clínicas do usuário (o GRANT da função vem da migração 0064).
+GRANT USAGE ON SCHEMA public TO app_auth;
 GRANT ALL ON SCHEMA public TO app_migrator;
 GRANT USAGE ON SCHEMA public TO app_user;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
@@ -60,14 +70,20 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 -- O RDS cria o banco com o default do Postgres (TEMPORARY para PUBLIC); por isso o REVOKE é
 -- repetido aqui. Também tira de app_user/app_migrator caso alguém tenha concedido direto.
 SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', :'dbname') \gexec
-SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM app_user, app_migrator', :'dbname') \gexec
+SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM app_user, app_migrator, app_auth', :'dbname') \gexec
 
 -- 4. Privilégios padrão: tabelas que o app_migrator criar ficam legíveis/graváveis pelo app_user.
 -- ALTER DEFAULT PRIVILEGES FOR ROLE exige ser membro do papel; o master do RDS tem ADMIN OPTION
 -- sobre o que criou (PG16), então se concede SET e executa como app_migrator.
 SELECT format('GRANT app_migrator TO %I WITH INHERIT FALSE, SET TRUE', current_user)
  WHERE NOT pg_has_role(current_user, 'app_migrator', 'SET') \gexec
+-- Schema da identidade (D4): dono é o app_migrator (as migrações criam as tabelas); só o app_auth usa. Fica aqui,
+-- depois do GRANT ... SET acima: AUTHORIZATION app_migrator exige poder agir como ele.
+CREATE SCHEMA IF NOT EXISTS identidade AUTHORIZATION app_migrator;
 SET LOCAL ROLE app_migrator;
+-- Permissões no schema identidade: só o dono (app_migrator) concede.
+REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
+GRANT USAGE ON SCHEMA identidade TO app_auth;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
 RESET ROLE;
@@ -78,7 +94,9 @@ COMMIT;
 SELECT
   has_database_privilege('app_user', :'dbname', 'TEMPORARY')     AS user_temp,
   has_database_privilege('app_migrator', :'dbname', 'TEMPORARY') AS migrator_temp,
-  (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'app_user') AS user_privilegiado
+  (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'app_user') AS user_privilegiado,
+  (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'app_auth') AS auth_privilegiado,
+  has_schema_privilege('app_user', 'identidade', 'USAGE') AS user_na_identidade
 \gset
 \if :user_temp
   \echo 'FALHA: app_user ainda tem TEMPORARY'
@@ -90,6 +108,14 @@ SELECT
 \endif
 \if :user_privilegiado
   \echo 'FALHA: app_user tem BYPASSRLS ou SUPERUSER'
+  \quit 4
+\endif
+\if :auth_privilegiado
+  \echo 'FALHA: app_auth tem BYPASSRLS ou SUPERUSER'
+  \quit 4
+\endif
+\if :user_na_identidade
+  \echo 'FALHA: app_user tem acesso ao schema identidade'
   \quit 4
 \endif
 -- pgaudit, onde instalado: precisa auditar DDL e ROLE e NUNCA leitura/escrita (dado de paciente).

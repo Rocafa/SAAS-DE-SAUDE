@@ -5,25 +5,46 @@ import { DevSessionProvider } from './dev-session.provider';
 export const AMBIENTES_SESSAO_FICTICIA: ReadonlySet<string> = new Set(['development', 'test']);
 
 /**
- * Tipos de provedor aceitos em `AUTH_PROVIDER`. Todo tipo novo precisa de bancada no teste de contrato
- * (`contrato-provedor.test.ts`, R6 do parecer do #123): o registro de bancadas é tipado por esta lista.
+ * Tipos de provedor aceitos em `AUTH_PROVIDER`. Todo tipo novo precisa de bancada no contrato
+ * (`contrato-provedor.test.ts` declara onde ela roda; R6 do parecer do #123 e R2 do #128).
  */
-export const TIPOS_DE_PROVEDOR = ['dev'] as const;
+export const TIPOS_DE_PROVEDOR = ['dev', 'better-auth'] as const;
 export type TipoDeProvedor = (typeof TIPOS_DE_PROVEDOR)[number];
 
 /**
- * Escolhe o provedor de autenticação no boot. Hoje só existe o de dev (sessão fictícia), que só
- * sobe com NODE_ENV explicitamente `development` ou `test`. Produção, staging, NODE_ENV vazio ou
- * qualquer outro valor: sem provedor real (D4 pendente), a API NÃO SOBE — melhor fora do ar do que
- * aberta. `AUTH_PROVIDER` (opcional) só aceita `dev` por enquanto; o adaptador real entra depois da D4.
+ * Ambientes em que cada tipo pode subir. `better-auth` (D4) fica restrito a development/test ATÉ o PR 3 da
+ * autenticação (R13 do parecer do desenho): antes disso faltam a escolha de clínica, o convite e o desligamento.
+ * O PR 3 abre `production` para ele; a sessão fictícia nunca sobe fora de dev/test.
  */
-export function createAuthProvider(env: NodeJS.ProcessEnv = process.env): AuthProvider {
-  if (!AMBIENTES_SESSAO_FICTICIA.has(env.NODE_ENV ?? '')) {
-    throw new Error(
-      `Nenhum provedor de autenticação real configurado: a sessão fictícia só existe em development/test, nunca em produção ou staging (NODE_ENV=${env.NODE_ENV ?? 'vazio'}; D4)`,
-    );
-  }
+export const AMBIENTES_POR_TIPO: Readonly<Record<TipoDeProvedor, ReadonlySet<string>>> = {
+  dev: AMBIENTES_SESSAO_FICTICIA,
+  'better-auth': AMBIENTES_SESSAO_FICTICIA,
+};
+
+/** O que só o boot sabe montar (pools e instância da biblioteca); ver main.ts. */
+export interface DependenciasDaFabrica {
+  readonly betterAuth?: () => AuthProvider;
+}
+
+/**
+ * Escolhe o provedor no boot (R4 do parecer do #128: mapa por tipo). Produção, staging, NODE_ENV vazio ou qualquer
+ * ambiente fora da lista do tipo: a API NÃO SOBE — melhor fora do ar do que aberta.
+ */
+export function createAuthProvider(env: NodeJS.ProcessEnv = process.env, deps: DependenciasDaFabrica = {}): AuthProvider {
   const tipo = env.AUTH_PROVIDER ?? 'dev';
   if (!(TIPOS_DE_PROVEDOR as readonly string[]).includes(tipo)) throw new Error('AUTH_PROVIDER desconhecido');
-  return new DevSessionProvider(env.NODE_ENV);
+  const t = tipo as TipoDeProvedor;
+  if (!AMBIENTES_POR_TIPO[t].has(env.NODE_ENV ?? '')) {
+    throw new Error(
+      `Provedor de autenticação "${t}" não sobe em NODE_ENV=${env.NODE_ENV ?? 'vazio'}: a sessão fictícia só existe em development/test, e o Better Auth só sobe em produção depois do PR 3 da D4`,
+    );
+  }
+  const fabricas: Record<TipoDeProvedor, () => AuthProvider> = {
+    dev: () => new DevSessionProvider(env.NODE_ENV),
+    'better-auth': () => {
+      if (!deps.betterAuth) throw new Error('AUTH_PROVIDER=better-auth exige a instância montada no boot (main.ts)');
+      return deps.betterAuth();
+    },
+  };
+  return fabricas[t]();
 }

@@ -233,6 +233,8 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
   'src/security/http-security.ts use(helmet)': 'cabeçalhos de segurança (CSP, HSTS, frame); não toca dado',
   'src/security/http-security.ts use(noStore)': 'Cache-Control: no-store em toda resposta; não toca dado',
   'src/security/http-security.ts use(rateLimiter)': 'limite de requisições por chave com hash (sem IP em claro); não toca dado de paciente',
+  'src/security/http-security.ts use(montagemDaAutenticacao)':
+    'login da D4 (Better Auth, src/modules/auth/better-auth/montagem.ts): lista fechada de endpoints (entrar, sair, ler sessão); login aceito, recusado e logout no log de segurança; troca de clínica e MFA na trilha da clínica pelas nossas funções (R6 do #117; parecer do desenho de 05/11)',
   'src/security/http-security.ts use(protecaoCsrf)': 'CSRF (E6 de 04/11): recusa escrita de origem fora da allowlist e corpo que não é JSON; não lê o corpo nem toca dado',
   'src/security/http-security.ts use(safeErrorHandler)': 'erro sem detalhe interno nem dado na resposta; não toca dado',
 };
