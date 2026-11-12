@@ -157,3 +157,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#174 estava vermelho no `terraform fmt`**: espaço a mais no alinhamento de `api_ambiente_obrigatorio` no `staging/app.tf`. Corrigi só o espaço (`1b3f34c`). O #174 continua fora da ordem até o checklist B1–B9.
 - **D15, voto do Matheus (12/11):** pergunta 1, opção **D** (abrir o piloto sem a conferência de senha vazada, com a decisão escrita; A ou C antes da venda aberta); pergunta 2, sem preferência. Registrei no memorando e no item B2 do checklist. Falta o voto do @Lopesloro.
 - **Roteiro do teste de fumaça do login no staging (B8)** em `docs/04-arquitetura/roteiro-fumaca-login-staging.md`. São 14 passos, com as rotas reais da pilha, o resultado esperado e a evidência de cada um, só com contas fictícias e sem segredo em print ou log. Fica um ponto em aberto: como o convite e a recuperação chegam no staging depende do provedor de e-mail. O checklist aponta para o roteiro. Vou mandar o Guardião conferir.
+- **O Guardião conferiu o roteiro do B8: aprovado com ressalvas** (vale como roteiro; não aprova a abertura). Ele corrigiu no próprio roteiro o que não batia com o código:
+  - nomes da trilha: `member_invite`, `member_grant` e `session_logout_global`;
+  - depois do logout global, a rota responde 401;
+  - o evento de conta sem vínculo só sai no job;
+  - o convite e a recuperação **não dependem de e-mail**: o token volta para o admin.
+  
+  Ele também acrescentou passos: o job de expurgo, a troca da versão do segredo (B1), o `verify-full` nos dois papéis, os atributos do cookie e os convites reemitidos depois do B9. E proibiu print, HAR e PR com token ou `totpURI`. Ficam em aberto: a anonimização (só pelo procedimento de suporte), o voto do D15, a queda do Redis (opcional) e uma segunda clínica fictícia.
