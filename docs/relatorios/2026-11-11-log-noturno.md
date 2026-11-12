@@ -106,3 +106,14 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - a trava de logs do #154 reprovava o log do job da plataforma, que vem da pilha. Corrigi no próprio #154 (`192c707`) e mandei para conferência do Guardião;
   - o #166 conflita com a pilha em dois arquivos. O conflito é simples, e a resolução está no relatório e foi comentada no #166.
 - **Guardião aprovou o ajuste da trava no #154**, com uma ressalva que não bloqueia: liberar `v` no arquivo inteiro é largo demais. **Pendência para depois da pilha:** extrair `contagensParaLog(resultado): string` no `executor-de-jobs.ts`, liberar só esse nome e tirar `v` e `resultado` da lista. O adendo do Guardião foi commitado no parecer do #154.
+
+## Retomada de 12/11 (a partir das 13:40)
+
+- A tarefa agendada das 07:00 não deixou registro: não rodou (app fechado ou parada em pedido de permissão).
+- **O @Lopesloro revisou a pilha na noite de 11/11:** aprovou o #149, #152, #159, #171, #175, #176 e #179, e mesclou o #166 e o #169 na base.
+- **#149 MESCLADO na `main`** (`fe98353`, 12/11 13:41). É a base do login real com Better Auth. Antes do merge, redirecionei o #152 para a `main`; a branch não foi apagada.
+- **#152 em conflito com a `main`**, como o ensaio tinha previsto (o #166 e o PR 2 mexem no mesmo ponto). Resolvi com a mesma solução do ensaio (`a2661f1`): tipos, lint e 1128 testes de unidade verdes. Como a `main` descarta a aprovação quando entra commit novo, **o #152 precisa ser reaprovado**.
+- **Propagação pela pilha:** levei a correção de branch em branch, até o #179 e também o #174. Dois tropeços, os dois corrigidos:
+  - no #159 o conflito era só de import;
+  - o script que juntava os imports descartou o `auditLog` onde a branch já importava `tenants` do mesmo módulo (#176 a #179). O typecheck do topo pegou o erro, que corrigi no #176 (`import { auditLog, tenants }`) e propaguei.
+  - No topo: tipos e lint limpos, 1142 testes de unidade verdes. Nenhuma branch ficou com marcador de conflito.
