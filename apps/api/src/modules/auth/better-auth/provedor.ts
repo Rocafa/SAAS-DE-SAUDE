@@ -229,10 +229,31 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
   }
 
-  /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
+  /**
+   * R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo — OU de quem ainda não tem
+   * fator verificado nenhum.
+   *
+   * A segunda metade é a correção da ALTA do parecer do #156: `cadastro_pendente_ate` é gravado SÓ pelo aceite do
+   * convite (`abrirSessaoDeCadastro`). Sem ela, quem não nasceu de um convite — o admin fundador da clínica e quem
+   * é adicionado por `POST /clinica/membros` — nunca consegue cadastrar o fator, e como o MFA é obrigatório em todo
+   * perfil, fica em 403 permanente, sem caminho de volta.
+   *
+   * Não abre nada: quem JÁ tem fator verificado continua precisando da sessão de convite ou de recuperação para
+   * trocar o fator (é o que a R8 protege). Quem não tem fator ainda não tem segundo fator a proteger, e a sessão
+   * aqui já passou pela senha.
+   */
   async cadastroLiberado(sessaoId: string): Promise<boolean> {
-    const [s] = await this.d.dbAuth.select({ ate: sessao.cadastroPendenteAte }).from(sessao).where(eq(sessao.id, sessaoId));
-    return s?.ate != null && s.ate.getTime() > this.agora().getTime();
+    const [s] = await this.d.dbAuth
+      .select({ ate: sessao.cadastroPendenteAte, usuarioId: sessao.userId })
+      .from(sessao)
+      .where(eq(sessao.id, sessaoId));
+    if (!s) return false;
+    if (s.ate != null && s.ate.getTime() > this.agora().getTime()) return true;
+    const [fator] = await this.d.dbAuth
+      .select({ id: doisFatores.id })
+      .from(doisFatores)
+      .where(and(eq(doisFatores.userId, s.usuarioId), eq(doisFatores.verified, true)));
+    return fator === undefined;
   }
 
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
@@ -277,13 +298,28 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (e.reaproveita) {
       // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
       const hash = await gerarHashDeSenha(e.senha);
-      const r = await this.d.dbAuth
-        .update(usuario)
-        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
-        .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
-        .returning({ id: usuario.id });
-      if (r.length === 0) return 'conta_existente';
-      await this.d.dbAuth.update(conta).set({ password: hash }).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+      // Parecer do #156: a conta abandonada pode NÃO ter linha de credencial — o `senha === null` que a marca como
+      // abandonada também é o resultado do `leftJoin` sem linha. O UPDATE pegava 0 linhas e o aceite devolvia
+      // sucesso: conta ativa, pessoa dentro da clínica e nenhuma senha com que entrar. Agora as duas escritas vão na
+      // mesma transação, e o UPDATE que não achou a linha vira INSERT.
+      const reativada = await this.d.dbAuth.transaction(async (tx) => {
+        const r = await tx
+          .update(usuario)
+          .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+          .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
+          .returning({ id: usuario.id });
+        if (r.length === 0) return false;
+        const c = await tx
+          .update(conta)
+          .set({ password: hash })
+          .where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')))
+          .returning({ id: conta.id });
+        if (c.length === 0) {
+          await tx.insert(conta).values({ id: randomUUID(), accountId: userId, providerId: 'credential', userId, password: hash });
+        }
+        return true;
+      });
+      if (!reativada) return 'conta_existente';
       return { userId };
     }
     try {
