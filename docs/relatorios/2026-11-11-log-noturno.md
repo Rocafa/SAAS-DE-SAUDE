@@ -142,3 +142,9 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Avulsos #153, #154 e #172 atualizados com a `main`** (que já tem o #149). Sem conflito. Tipos, lint e testes passam nos três (1122, 1127 e 1122). Estão prontos para quando o sócio aprovar.
 - **#152:** CI 16/16 verde com a correção do TOTP. Continua esperando a reaprovação.
 - **#159 falhou de novo, agora por um caso que a minha correção abriu.** Num teste com três verificações seguidas, quando a terceira caía nos últimos 3 s da janela, o helper recusava o código do período anterior e ficava sem código livre. Corrigido no #152: nesse caso o helper espera a janela virar (no máximo 3 s), e no período seguinte o +1 está livre. Propaguei pela pilha sem conflito, e o topo passa no typecheck.
+- **15:01 — CI verde em todos os 14 PRs** (pilha #152 → #179 e avulsos #153, #154 e #172), inclusive o RLS do #159 com a correção do TOTP. Nenhuma falha. Tudo está pronto para mesclar e só falta a aprovação do @Lopesloro:
+  - reaprovar o #152;
+  - aprovar o #153, o #154 e o #172;
+  - revisar o #155, o #156, o #173, o #177 e o #178.
+  
+  A checagem a cada 2 h mescla o que ele aprovar.
