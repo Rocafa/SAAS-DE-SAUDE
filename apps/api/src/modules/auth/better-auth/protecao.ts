@@ -53,6 +53,8 @@ export interface DependenciasDaProtecao {
   readonly conferirSenhaVazada: ConferirSenhaVazada;
   /** Código aceito pela biblioteca: grava `mfa_em` e a trilha (provedor). Erro aqui derruba a resposta (falha fechada). */
   readonly aoVerificarMfa: (e: { sessaoId: string; userId: string; motivo: MotivoDaVerificacao }) => Promise<unknown>;
+  /** R8 do desenho do PR 3: o cadastro do TOTP só numa sessão aberta pelo convite ou pela recuperação, no prazo. */
+  readonly podeCadastrarFator: (sessaoId: string) => Promise<boolean>;
   /** Código ou senha do cadastro recusados, com sessão aberta: trilha da clínica (provedor). */
   readonly aoFalharMfa: (e: { sessaoId: string; userId: string; bloqueou: boolean }) => Promise<void>;
 }
@@ -232,6 +234,9 @@ export function criarProtecao(d: DependenciasDaProtecao) {
       throw new APIError('BAD_REQUEST', { message: 'Only TOTP with the default issuer is allowed', code: 'TOTP_ONLY' });
     }
     const lida = await getSessionFromCtx(ctx).catch(() => null);
+    if (ctx.path === ROTA_CADASTRO_DO_FATOR && !(lida && (await d.podeCadastrarFator(lida.session.id)))) {
+      throw new APIError('FORBIDDEN', { message: 'Two-factor enrollment only from an invitation or recovery session', code: 'CADASTRO_SO_PELO_CONVITE' });
+    }
     const userId = lida?.user.id ?? (ctx.path === ROTA_VERIFICACAO_DO_FATOR ? await pessoaDoDesafio(ctx) : undefined);
     const { reserva, travou } = await reservarOuConsultar(k, contadoresDoFator(userId, origem), 'bloqueio_do_fator');
     if (travou) {

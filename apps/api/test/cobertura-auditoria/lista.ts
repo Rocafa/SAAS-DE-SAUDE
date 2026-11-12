@@ -32,6 +32,9 @@ export const AUDITADAS: readonly string[] = [
   'POST /atendimentos/:id/finalizar',
   'POST /avisos/:id/lido',
   'POST /clinica/membros',
+  'POST /clinica/convites',
+  'POST /clinica/convites/:id/revogar',
+  'POST /convites/aceitar',
   'POST /sessao/clinica',
   'POST /sessao/encerrar-todas',
   'POST /clinica/portal/convites',
@@ -213,6 +216,8 @@ export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
     'texto e versão do termo de migração e limites do arquivo; constantes, sem dado',
   'GET /profissionais':
     'cadastro da agenda: nome, especialidade, capacidade e marca de área sensível de cada profissional (dado da equipe exibido ao agendar), sem dado de paciente',
+  'GET /clinica/convites':
+    'convites pendentes da clínica: perfil, datas e o id de quem convidou; sem e-mail (a clínica guarda só o HMAC) nem dado de paciente',
   'GET /sessao/clinicas':
     'clínicas da própria pessoa (id e nome da clínica, que não é dado pessoal); sem perfis, contagens nem dado de paciente',
   'GET /sessao/sessoes':
@@ -259,6 +264,8 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'GET /notas-privadas/:id',
   'GET /pacientes/:id/notas-privadas',
   'PATCH /notas-privadas/:id',
+  'POST /clinica/convites',
+  'POST /clinica/convites/:id/revogar',
   'POST /clinica/membros',
   'POST /clinica/portal/convites',
   'POST /clinica/portal/solicitacoes/:id/situacao',

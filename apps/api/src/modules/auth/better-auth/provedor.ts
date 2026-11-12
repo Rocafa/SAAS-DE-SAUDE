@@ -6,20 +6,22 @@
  * (clínica ativa, MFA e impressão dos perfis) → perfis SÓ de `clinic_members` (R6) → `mfaEm` só vale se os perfis não
  * mudaram desde o MFA (`perfis_no_mfa`, R13). A clínica nunca vem do cliente (regra 1).
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
-import { doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { conta, doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
-import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
+import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
+import { gerarHashDeSenha } from './senha';
+import type { ConferirSenhaVazada } from './senha-vazada';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
 export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
@@ -44,9 +46,14 @@ export interface DependenciasDoProvedor {
   readonly agora?: () => Date;
   /** `Set-Cookie` que expira o cookie de sessão (nome e atributos do ambiente), para o logout (R2 do código do 3a). */
   readonly cookieDeEncerramento?: string;
+  /** Conferência de senha vazada (R15 e R5 do #152): chamada EXPLICITAMENTE nos caminhos nossos que definem senha. */
+  readonly conferirSenhaVazada?: ConferirSenhaVazada;
 }
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
+/** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
+export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
+
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -81,6 +88,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
         clinicaAtiva: sessao.clinicaAtiva,
         mfaEm: sessao.mfaEm,
         perfisNoMfa: sessao.perfisNoMfa,
+        cadastroPendenteAte: sessao.cadastroPendenteAte,
         usuarioId: sessao.userId,
         ativo: usuario.ativo,
       })
@@ -98,6 +106,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       await this.encerrar(sessaoId, 'conta_inativa', linha.usuarioId);
       return null;
     }
+    // R8: a sessão do aceite só serve ao cadastro do TOTP; nenhuma rota de negócio.
+    if (linha.cadastroPendenteAte !== null) return null;
     const userId = linha.usuarioId;
     let tenantId = linha.clinicaAtiva;
     if (!tenantId) {
@@ -126,7 +136,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
     const lida = await this.lerSessao(req);
     if (!lida) return null;
     const [linha] = await this.d.dbAuth
-      .select({ criadaEm: sessao.createdAt, usuarioId: sessao.userId, ativo: usuario.ativo })
+      .select({ criadaEm: sessao.createdAt, usuarioId: sessao.userId, ativo: usuario.ativo, cadastroPendenteAte: sessao.cadastroPendenteAte })
       .from(sessao)
       .innerJoin(usuario, eq(usuario.id, sessao.userId))
       .where(eq(sessao.id, lida.session.id));
@@ -139,6 +149,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       await this.encerrar(lida.session.id, 'conta_inativa', linha.usuarioId);
       return null;
     }
+    // R7 do código do 3a: a sessão de cadastro pendente não usa as rotas da pessoa.
+    if (linha.cadastroPendenteAte !== null) return null;
     return { sessaoId: lida.session.id, userId: linha.usuarioId };
   }
 
@@ -215,6 +227,95 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
       .returning({ id: doisFatores.id });
     return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
+  }
+
+  /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
+  async cadastroLiberado(sessaoId: string): Promise<boolean> {
+    const [s] = await this.d.dbAuth.select({ ate: sessao.cadastroPendenteAte }).from(sessao).where(eq(sessao.id, sessaoId));
+    return s?.ate != null && s.ate.getTime() > this.agora().getTime();
+  }
+
+  /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
+  async idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'> {
+    const [ja] = await this.d.dbAuth
+      .select({ id: usuario.id, ativo: usuario.ativo, origem: usuario.conviteDeOrigem, senha: conta.password })
+      .from(usuario)
+      .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
+      .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
+    if (!ja) return { userId: randomUUID(), reaproveita: false };
+    const abandonada = !ja.ativo && ja.origem !== null && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
+  }
+
+  async desfazerContaDoConvite(userId: string): Promise<void> {
+    await this.d.dbAuth.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    await this.d.dbAuth.update(conta).set({ password: null }).where(eq(conta.userId, userId));
+    await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, userId));
+  }
+
+  async criarContaDoConvite(e: {
+    userId: string;
+    reaproveita: boolean;
+    email: string;
+    nome: string;
+    senha: string;
+    clinicaDeOrigem: string;
+    conviteDeOrigem: string;
+  }): Promise<{ userId: string } | 'conta_existente' | 'senha_vazada'> {
+    const email = e.email.trim().toLowerCase();
+    if (this.d.conferirSenhaVazada) {
+      try {
+        if (await this.d.conferirSenhaVazada(e.senha)) {
+          registrarEventoDeSeguranca('SENHA_VAZADA_RECUSADA', { motivo: 'senha_vazada' });
+          return 'senha_vazada';
+        }
+      } catch {
+        registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+      }
+    }
+    const userId = e.userId;
+    if (e.reaproveita) {
+      // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
+      const hash = await gerarHashDeSenha(e.senha);
+      const r = await this.d.dbAuth
+        .update(usuario)
+        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+        .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
+        .returning({ id: usuario.id });
+      if (r.length === 0) return 'conta_existente';
+      await this.d.dbAuth.update(conta).set({ password: hash }).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+      return { userId };
+    }
+    try {
+      await this.d.dbAuth.transaction(async (tx) => {
+        await tx.insert(usuario).values({
+          id: userId,
+          name: e.nome.trim().slice(0, 200),
+          email,
+          emailVerified: false,
+          clinicaDeOrigem: e.clinicaDeOrigem,
+          conviteDeOrigem: e.conviteDeOrigem,
+        });
+        await tx.insert(conta).values({ id: randomUUID(), accountId: userId, providerId: 'credential', userId, password: await gerarHashDeSenha(e.senha) });
+      });
+    } catch {
+      // Índice único do e-mail: outra pessoa criou a conta no meio do caminho.
+      return 'conta_existente';
+    }
+    return { userId };
+  }
+
+  async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
+    const r = await this.d.auth.api.signInEmail({ body: { email: e.email.trim().toLowerCase(), password: e.senha }, headers: e.cabecalhos, asResponse: true });
+    const cookies = r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+    if (r.status !== 200 || cookies.length === 0) throw new Error('sessao_de_cadastro_nao_abriu');
+    const lida = await this.d.auth.api.getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) });
+    if (!lida) throw new Error('sessao_de_cadastro_nao_abriu');
+    await this.d.dbAuth
+      .update(sessao)
+      .set({ cadastroPendenteAte: new Date(this.agora().getTime() + PRAZO_DO_CADASTRO_PENDENTE_MS) })
+      .where(eq(sessao.id, lida.session.id));
+    return cookies;
   }
 
   /** Clínicas com vínculo ativo, pelo espelho `identidade.vinculo` (0064, só ids). */
@@ -316,6 +417,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
   async aposMfaVerificado(sessaoId: string, userId: string, motivo: 'login_em_duas_etapas' | 'reverificacao' | 'cadastro_do_fator'): Promise<ResultadoDoMfa> {
     const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
     if (!s) return 'nada';
+    await this.d.dbAuth.update(sessao).set({ cadastroPendenteAte: null }).where(eq(sessao.id, sessaoId));
     let tenantId = s.clinicaAtiva;
     if (!tenantId) {
       const clinicas = await this.clinicasDoUsuario(userId);

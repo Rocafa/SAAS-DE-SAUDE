@@ -14,6 +14,9 @@ import { auditLog } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
+import { ConflitoError, NaoEncontradoError } from '../src/common/erros-dominio';
+import { ConvitesService, TETO_DIARIO_DE_CONVITES } from '../src/modules/auth/convites';
+import { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 import { codigoErrado, codigoTotp, segredoDoUri } from './apoio-totp';
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
@@ -48,9 +51,10 @@ beforeAll(async () => {
     fator: {
       aoVerificarMfa: (e) => provedor.aposMfaVerificado(e.sessaoId, e.userId, e.motivo),
       aoFalharMfa: (e) => provedor.aposMfaRecusado(e.sessaoId, e.userId, e.bloqueou),
+      podeCadastrarFator: (id) => provedor.cadastroLiberado(id),
     },
   });
-  provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth.db, dbClinica: api.db.db });
+  provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth.db, dbClinica: api.db.db, conferirSenhaVazada: senhaVazadaFicticia });
 }, 120_000);
 
 afterAll(async () => {
@@ -66,7 +70,7 @@ function cookieDe(resposta: Response): Cabecalhos {
 }
 
 /** Ganchos do fator que não fazem nada (instâncias extras da bancada). */
-const SEM_FATOR: OpcoesDaAutenticacao['fator'] = { aoVerificarMfa: () => Promise.resolve(), aoFalharMfa: () => Promise.resolve() };
+const SEM_FATOR: OpcoesDaAutenticacao['fator'] = { aoVerificarMfa: () => Promise.resolve(), aoFalharMfa: () => Promise.resolve(), podeCadastrarFator: () => Promise.resolve(false) };
 
 /** Junta os cookies vivos de uma resposta aos de antes (o que o navegador faria). */
 function juntarCookies(antes: Cabecalhos, r: Response): Cabecalhos {
@@ -104,6 +108,14 @@ function soSessao(c: Cabecalhos): Cabecalhos {
 }
 
 /**
+ * R8 do PR 3b: o cadastro do TOTP só vale numa sessão de cadastro pendente (aberta pelo convite ou pela recuperação).
+ * As pessoas da bancada nascem direto no banco, então a bancada libera a sessão como o aceite faria.
+ */
+async function liberarCadastro(c: Cabecalhos): Promise<void> {
+  await dbAuth.db.update(sessao).set({ cadastroPendenteAte: new Date(Date.now() + 15 * 60_000) }).where(eq(sessao.id, await sessaoId(c)));
+}
+
+/**
  * Segredo do TOTP por pessoa, os PERÍODOS já usados (contador absoluto de 30 s) e o último código entregue. Guardar o
  * período, e não o deslocamento, evita o teste instável de 12/11: com "0, +1, -1" relativos à hora da chamada, se a
  * janela virava entre duas chamadas, o "-1" caía no código já usado e a proteção contra reuso (correta) recusava.
@@ -137,6 +149,7 @@ function proximoCodigo(userId: string): string {
 
 /** Cadastro real do TOTP (senha + primeiro código). A biblioteca troca a sessão: devolve o cookie novo. */
 async function cadastrarFator(c: Cabecalhos, userId: string, senha = SENHA): Promise<Cabecalhos> {
+  await liberarCadastro(c);
   const inicio = await postar('/two-factor/enable', c, { password: senha });
   expect(inicio.r.status, JSON.stringify(inicio.json)).toBe(200);
   segredos.set(userId, { segredo: segredoDoUri(String(inicio.json['totpURI'])), usados: new Set() });
@@ -379,6 +392,7 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
 
   it('cadastro: senha errada recusada; o URI volta sem códigos de reserva; o segredo fica cifrado; o primeiro código troca a sessão, grava mfa_em e a trilha', async () => {
     const { userId, tenantId, c } = await pessoaLogada();
+    await liberarCadastro(c);
     expect((await postar('/two-factor/enable', c, { password: SENHA_ERRADA })).r.status).toBe(400);
     const inicio = await postar('/two-factor/enable', c, { password: SENHA });
     expect(inicio.r.status).toBe(200);
@@ -390,8 +404,8 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
     expect(linha?.verified).toBe(false);
     expect(linha?.secret).not.toContain(new URL(uri).searchParams.get('secret') ?? '-');
     expect(linha?.secret).not.toContain(segredo.toString('utf8'));
-    // Cadastro iniciado e não concluído: ainda sem MFA.
-    expect((await provedor.resolver({ headers: c }))?.mfaEm).toBeNull();
+    // Cadastro iniciado e não concluído: a sessão de cadastro não acessa nenhuma rota de negócio (R8).
+    expect(await provedor.resolver({ headers: c })).toBeNull();
     const fim = await postar('/two-factor/verify-totp', c, { code: codigoTotp(segredo) });
     expect(fim.r.status).toBe(200);
     const nova = soSessao(fim.cabecalhos);
@@ -688,6 +702,7 @@ describe('PR 3a: expurgo diário do schema identidade (R11 do desenho, R7 do des
     const idViva = await sessaoId(viva);
     await dbAuth.db.update(sessao).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(sessao.id, idVencida));
     // Cadastro iniciado e abandonado há 2 dias.
+    await liberarCadastro(viva);
     expect((await postar('/two-factor/enable', viva, { password: SENHA })).r.status).toBe(200);
     await dbAuth.db.update(doisFatores).set({ criadoEm: new Date(Date.now() - 48 * 3_600_000) }).where(eq(doisFatores.userId, p.userId));
     const r = await provedor.expurgarComoSistema();
@@ -696,6 +711,115 @@ describe('PR 3a: expurgo diário do schema identidade (R11 do desenho, R7 do des
     expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idVencida))).toEqual([]);
     expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idViva))).toHaveLength(1);
     expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+  });
+});
+
+describe('PR 3b: convite da equipe e cadastro do fator preso ao convite (§14.2; R1, R2, R8, R9 e R16)', () => {
+  const convites = (): ConvitesService => new ConvitesService(new TenantDatabase(api.db), provedor);
+
+  async function clinicaComAdmin() {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    return { tenantId, adm, ctx };
+  }
+
+  const novoEmail = (): string => `convidado-${randomUUID().slice(0, 8)}@exemplo.test`;
+
+  it('o convite não cria conta nem perfil (R2); a lista não traz e-mail; o aceite cria a conta e o vínculo, e a sessão só serve ao cadastro do TOTP (R8)', async () => {
+    const { tenantId, ctx } = await clinicaComAdmin();
+    const email = novoEmail();
+    const c = await convites().criar(ctx, email, 'recepcao');
+    expect(c.token).toMatch(/^[A-Za-z0-9_-]{64}$/);
+    expect(await dbAuth.db.select().from(usuario).where(eq(usuario.email, email))).toEqual([]);
+    const lista = await convites().listar(ctx);
+    expect(lista.map((x) => x.id)).toContain(c.conviteId);
+    expect(JSON.stringify(lista)).not.toContain(email);
+    // E-mail diferente do convidado: mesmo 404 de token inválido (R16).
+    await expect(convites().aceitar({ token: c.token, email: novoEmail(), nome: 'Pessoa Ficticia', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+    const cookies = await convites().aceitar({ token: c.token, email: email.toUpperCase(), nome: 'Pessoa Ficticia', senha: SENHA, cabecalhos: new Headers() });
+    const sessaoNova = { cookie: (cookies[0] ?? '').split(';')[0] ?? '' };
+    const [u] = await dbAuth.db.select().from(usuario).where(eq(usuario.email, email));
+    expect(u?.clinicaDeOrigem).toBe(tenantId);
+    expect(u?.conviteDeOrigem).toBe(c.conviteId);
+    expect(await provedor.clinicasDoUsuario(u?.id ?? '')).toEqual([tenantId]);
+    // Sessão de cadastro: nenhuma rota de negócio nem rota da pessoa, mas o cadastro do TOTP vale.
+    expect(await provedor.resolver({ headers: sessaoNova })).toBeNull();
+    expect(await provedor.sessaoDePessoa({ headers: sessaoNova })).toBeNull();
+    const inicio = await postar('/two-factor/enable', sessaoNova, { password: SENHA });
+    expect(inicio.r.status, JSON.stringify(inicio.json)).toBe(200);
+    // Token de uso único.
+    await expect(convites().aceitar({ token: c.token, email, nome: 'Outra', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+
+  it('R8: fora da sessão do convite, o cadastro do TOTP é recusado (quem tem só a senha não cadastra o próprio autenticador)', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    const r = await postar('/two-factor/enable', c, { password: SENHA });
+    expect(r.r.status).toBe(403);
+    expect(r.json['code']).toBe('CADASTRO_SO_PELO_CONVITE');
+  });
+
+  it('conta já existente: o aceite pede login completo (3b-2) e não cria nada', async () => {
+    const { tenantId, ctx } = await clinicaComAdmin();
+    const ja = await novaPessoa(await api.novaClinica(), ['recepcao']);
+    const c = await convites().criar(ctx, ja.email, 'recepcao');
+    await expect(convites().aceitar({ token: c.token, email: ja.email, nome: 'X', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    expect(await provedor.clinicasDoUsuario(ja.userId)).not.toContain(tenantId);
+  });
+
+  it('quem convidou deixou de ser admin: o aceite não cria vínculo e a conta nova é desfeita', async () => {
+    const { tenantId, adm, ctx } = await clinicaComAdmin();
+    const outroAdm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const email = novoEmail();
+    const c = await convites().criar(ctx, email, 'recepcao');
+    await api.http().delete(`/clinica/membros/${adm.userId}/admin`).set({ Authorization: outroAdm.Authorization }).expect(204);
+    await expect(convites().aceitar({ token: c.token, email, nome: 'X', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+    expect(await dbAuth.db.select().from(usuario).where(eq(usuario.email, email))).toEqual([]);
+  });
+
+  it('convite revogado não é aceito; senha vazada é recusada no aceite (R5 do #152)', async () => {
+    const { ctx } = await clinicaComAdmin();
+    const email = novoEmail();
+    const c = await convites().criar(ctx, email, 'recepcao');
+    await expect(convites().aceitar({ token: c.token, email, nome: 'X', senha: SENHA_VAZADA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(ConflitoError);
+    await convites().revogar(ctx, c.conviteId);
+    await expect(convites().aceitar({ token: c.token, email, nome: 'X', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+
+  it('isolamento: a clínica B não lê nem altera o convite da clínica A (team_invites com RLS)', async () => {
+    const a = await clinicaComAdmin();
+    const b = await clinicaComAdmin();
+    const c = await convites().criar(a.ctx, novoEmail(), 'recepcao');
+    const vistos = await withTenant(api.db.db, b.tenantId, (tx) => tx.execute<{ id: string }>(sql`select id from team_invites where id = ${c.conviteId}`));
+    expect([...vistos]).toEqual([]);
+    const mudou = await withTenant(api.db.db, b.tenantId, (tx) =>
+      tx.execute<{ id: string }>(sql`update team_invites set revoked_at = now(), revoked_by = ${b.adm.userId} where id = ${c.conviteId} returning id`),
+    );
+    expect([...mudou]).toEqual([]);
+    await expect(convites().revogar(b.ctx, c.conviteId)).rejects.toBeInstanceOf(NaoEncontradoError);
+    expect((await convites().listar(a.ctx)).map((x) => x.id)).toContain(c.conviteId);
+  });
+
+  it('R1 do código do 3b-1: conta abandonada por um aceite que falhou é reaproveitada pelo mesmo convite (o e-mail não fica preso)', async () => {
+    const { tenantId, ctx } = await clinicaComAdmin();
+    const email = novoEmail();
+    const c = await convites().criar(ctx, email, 'recepcao');
+    // Simula o resto de um aceite que falhou depois de criar a conta: inativa, sem senha, sem vínculo.
+    const orfa = randomUUID();
+    await dbAuth.db.insert(usuario).values({ id: orfa, name: 'Orfa', email, emailVerified: false, ativo: false, conviteDeOrigem: c.conviteId });
+    await dbAuth.db.insert(conta).values({ id: randomUUID(), accountId: orfa, providerId: 'credential', userId: orfa, password: null });
+    await convites().aceitar({ token: c.token, email, nome: 'Pessoa Ficticia', senha: SENHA, cabecalhos: new Headers() });
+    expect(await provedor.clinicasDoUsuario(orfa)).toEqual([tenantId]);
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, orfa));
+    expect(u?.ativo).toBe(true);
+  });
+
+  it('R9: teto diário de convites por admin', async () => {
+    const { ctx } = await clinicaComAdmin();
+    for (let i = 0; i < TETO_DIARIO_DE_CONVITES; i++) await convites().criar(ctx, novoEmail(), 'recepcao');
+    await expect(convites().criar(ctx, novoEmail(), 'recepcao')).rejects.toBeInstanceOf(ConflitoError);
   });
 });
 

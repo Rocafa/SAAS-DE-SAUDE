@@ -19,6 +19,9 @@ export const usuario = identidade.table('usuario', {
   ativo: boolean('ativo').notNull().default(true),
   /** Cadastro do TOTP concluído (0065): o login passa a pedir o código. */
   twoFactorEnabled: boolean('dois_fatores_ativo').notNull().default(false),
+  /** 0067 (R17): clínica e convite de onde a conta veio. */
+  clinicaDeOrigem: uuid('clinica_de_origem'),
+  conviteDeOrigem: uuid('convite_de_origem'),
   createdAt: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -40,6 +43,8 @@ export const sessao = identidade.table(
     perfisNoMfa: text('perfis_no_mfa'),
     /** TOTP aceito sem clínica ativa (0066): só a escolha de clínica em até 5 min o converte em `mfaEm`. */
     mfaSemClinicaEm: timestamp('mfa_sem_clinica_em', { withTimezone: true }),
+    /** 0067 (R8): sessão aberta no aceite do convite; só serve ao cadastro do TOTP até esta hora. */
+    cadastroPendenteAte: timestamp('cadastro_pendente_ate', { withTimezone: true }),
   },
   (t) => [index('sessao_usuario_idx').on(t.userId)],
 );
