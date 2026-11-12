@@ -2,7 +2,7 @@ import type { TenantId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
 import { codigoDoErro, FalhaDeJobError, validarDefinicoes, type DefinicaoDeJob, type JobPorClinica, type ResultadoDeJob } from './agendador.port';
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
-import { contagensParaTrilha, ExecutorDeJobs, type LinhaDeTrilhaDoJob } from './executor-de-jobs';
+import { contagensParaLog, contagensParaTrilha, ExecutorDeJobs, type LinhaDeTrilhaDoJob } from './executor-de-jobs';
 
 const A = '00000000-0000-4000-8000-00000000000a' as TenantId;
 const B = '00000000-0000-4000-8000-00000000000b' as TenantId;
@@ -160,6 +160,11 @@ describe('contrato da trilha e do erro', () => {
     const muitos = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, i]));
     expect(Object.keys(contagensParaTrilha(muitos))).toHaveLength(12);
     expect(contagensParaTrilha({ a: 1, b: true, c: Number.NaN, d: 10_000_000, job: 1, status: 2, 'x-y': 3 })).toEqual({ a: 1, b: true });
+  });
+
+  it('contagensParaLog: o texto do log passa pelo mesmo filtro da trilha (nada fora de número/booleano)', () => {
+    expect(contagensParaLog({ a: 1, b: true, c: 'texto' as unknown as number, job: 9, 'x y': 2 })).toBe('a=1 b=true');
+    expect(contagensParaLog({})).toBe('');
   });
 
   it('codigoDoErro: SQLSTATE (também dentro de cause), nome da classe ou desconhecido; nunca a mensagem', () => {
