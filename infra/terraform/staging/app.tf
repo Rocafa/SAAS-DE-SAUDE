@@ -309,7 +309,9 @@ resource "aws_ecs_task_definition" "api" {
     essential              = true
     readonlyRootFilesystem = true
     user                   = "1000:1000"
-    command                = ["node", "dist/main.js"]
+    # Imagem distroless: o entrypoint já é o node (Dockerfile: CMD ["dist/main.js"]). Com "node" aqui, o
+    # contêiner rodava `node node dist/main.js` e a API não subia (achado R-A do parecer do código do #190).
+    command                = ["dist/main.js"]
     stopTimeout            = 30
     linuxParameters        = { initProcessEnabled = true }
     portMappings           = [{ containerPort = local.api_porta, protocol = "tcp" }]

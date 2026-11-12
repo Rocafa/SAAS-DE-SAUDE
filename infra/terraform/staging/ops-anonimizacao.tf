@@ -9,8 +9,9 @@
 #   - sem break-glass.
 #
 # Execução (runbook docs/04-arquitetura/runbook-anonimizacao-pelo-suporte.md): RunTask com
-#   containerOverrides[0].command     = ["node", "dist/ops/anonimizar-conta.js", "--usuario", "<uuid>",
-#                                        "--chamado", "LGPD-<n>", "--operador", "<uuid>"]
+#   containerOverrides[0].command     = ["--usuario", "<uuid>", "--chamado", "LGPD-<n>", "--operador", "<uuid>"]
+# O programa fica no entryPoint (R-A e R-B do parecer do código do #190): o RunTask troca o `command`
+# (só os argumentos), mas não o entryPoint, então quem roda não consegue executar outro programa.
 #   containerOverrides[0].environment = [{ name = "CONFIRMA_ANONIMIZACAO", value = "<o mesmo uuid>" }]
 # Os overrides vão para o CloudTrail: só uuid e número do chamado, nunca nome ou e-mail (R5).
 
@@ -42,12 +43,15 @@ locals {
   ops_anon_nomes_ambiente     = [for v in local.ops_anon_ambiente : v.name]
   ops_anon_nomes_segredos     = [for s in local.ops_anon_segredos : s.name]
 
-  ops_anon_comando = ["node", "dist/ops/anonimizar-conta.js"]
+  # A imagem é distroless (gcr.io/distroless/nodejs22): o entrypoint da imagem já é o node. Aqui ele
+  # é fixado junto com o script; os argumentos vêm só pelo override.
+  ops_anon_entrypoint = ["/nodejs/bin/node", "dist/ops/anonimizar-conta.js"]
 }
 
 # --- Rede: grupo de segurança próprio (só banco e VPC endpoints; sem Redis, sem entrada) -------
 
 resource "aws_security_group" "ops_anonimizacao" {
+  #checkov:skip=CKV2_AWS_5:Usado só no RunTask avulso (networkConfiguration da execução), não por um serviço; ver o runbook da anonimização.
   name        = local.ops_anon_nome
   description = "Tarefa avulsa da anonimizacao: so PostgreSQL e VPC endpoints, sem entrada"
   vpc_id      = aws_vpc.this.id
@@ -165,7 +169,8 @@ resource "aws_ecs_task_definition" "ops_anonimizacao" {
     essential              = true
     readonlyRootFilesystem = true
     user                   = "1000:1000"
-    command                = local.ops_anon_comando
+    entryPoint             = local.ops_anon_entrypoint
+    command                = []
     stopTimeout            = 30
     linuxParameters        = { initProcessEnabled = true }
     mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
