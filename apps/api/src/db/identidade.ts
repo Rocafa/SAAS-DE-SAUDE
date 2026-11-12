@@ -6,7 +6,7 @@
  * gravados pelas nossas funções (R5). Nada aqui é dado de clínica: o vínculo pessoa×clínica continua em
  * `clinic_members`.
  */
-import { boolean, index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const identidade = pgSchema('identidade');
 
@@ -17,6 +17,8 @@ export const usuario = identidade.table('usuario', {
   emailVerified: boolean('email_verificado').notNull().default(false),
   image: text('imagem'),
   ativo: boolean('ativo').notNull().default(true),
+  /** Cadastro do TOTP concluído (0065): o login passa a pedir o código. */
+  twoFactorEnabled: boolean('dois_fatores_ativo').notNull().default(false),
   createdAt: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('atualizado_em', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -70,4 +72,18 @@ export const vinculo = identidade.table('vinculo', {
   usuarioId: uuid('usuario_id').notNull(),
   clinicaId: uuid('clinica_id').notNull(),
   papel: text('papel').notNull(),
+});
+
+/**
+ * Segundo fator (0065, PR 2). `secret` e `backupCodes` chegam CIFRADOS pela biblioteca. `failedVerificationCount` e
+ * `lockedUntil` são o bloqueio da biblioteca no login em duas etapas; a reverificação com sessão aberta usa o nosso.
+ */
+export const doisFatores = identidade.table('dois_fatores', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('usuario_id').notNull(),
+  secret: text('segredo').notNull(),
+  backupCodes: text('codigos_reserva').notNull(),
+  verified: boolean('verificado').notNull().default(false),
+  failedVerificationCount: integer('falhas').notNull().default(0),
+  lockedUntil: timestamp('bloqueado_ate', { withTimezone: true }),
 });

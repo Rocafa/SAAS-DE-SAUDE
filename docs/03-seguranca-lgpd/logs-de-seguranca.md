@@ -41,6 +41,13 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | `LOGIN_OK` | aviso | volume | login com senha aceito (D4, gancho da sessão, com `userId` e `origem`; nunca o e-mail) |
 | `LOGIN_FALHOU` | aviso | volume | login recusado (montagem do Better Auth; sem dizer se a conta existe) |
 | `LOGOUT` | aviso | volume | sessão encerrada no servidor (logout, prazo absoluto de 12 h ou conta inativa) |
+| `LOGIN_BLOQUEADO` | alto | imediato | login recusado pelo bloqueio de 5 falhas em 15 min por e-mail (30 por origem); resposta igual à da senha errada (D4 PR 2) |
+| `MFA_CADASTRADO` | aviso | volume | cadastro do TOTP concluído (primeiro código aceito) |
+| `MFA_VERIFICADO` | aviso | volume | código do TOTP aceito (`motivo`: login em duas etapas, reverificação ou cadastro) |
+| `MFA_FALHOU` | aviso | volume | código errado, código reutilizado ou senha errada no cadastro do fator |
+| `MFA_BLOQUEADO` | alto | imediato | segundo fator bloqueado por 5 falhas em 15 min por pessoa (30 por origem) |
+| `SENHA_VAZADA_RECUSADA` | aviso | volume | senha nova recusada por aparecer na base de senhas vazadas (k-anonimato, R15) |
+| `CONFERENCIA_DE_SENHA_INDISPONIVEL` | alto | volume | base de senhas vazadas fora do ar; a troca seguiu sem a conferência |
 | `SESSAO_INVALIDA` | aviso | volume | guard de sessão (401) |
 | `ACESSO_NEGADO_PERFIL` | aviso | volume | guard de sessão (403 por perfil) |
 | `MFA_RECUSADO` | aviso | volume | guard de sessão (sem MFA ou MFA antigo) |

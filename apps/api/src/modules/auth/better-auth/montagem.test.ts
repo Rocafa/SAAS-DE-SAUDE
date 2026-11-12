@@ -44,7 +44,7 @@ describe('montagem do Better Auth', () => {
     expect(next).toHaveBeenCalled();
   });
 
-  it('R4: endpoint fora da lista fechada dá 404 (cadastro, troca de e-mail, exclusão, atualização de usuário)', () => {
+  it('R4: endpoint fora da lista fechada dá 404 (cadastro, troca de e-mail, exclusão, atualização de usuário, desligar o fator, códigos de reserva)', () => {
     const { mw, handlerDaBiblioteca } = montar();
     for (const [m, u] of [
       ['POST', '/api/auth/sign-up/email'],
@@ -53,13 +53,20 @@ describe('montagem do Better Auth', () => {
       ['POST', '/api/auth/update-user'],
       ['POST', '/api/auth/request-password-reset'],
       ['GET', '/api/auth/list-sessions'],
+      // PR 2: o que o plugin do fator traz e fica fechado (recuperação pelo admin, R17).
+      ['POST', '/api/auth/two-factor/disable'],
+      ['POST', '/api/auth/two-factor/get-totp-uri'],
+      ['POST', '/api/auth/two-factor/verify-backup-code'],
+      ['POST', '/api/auth/two-factor/generate-backup-codes'],
+      ['POST', '/api/auth/two-factor/send-otp'],
+      ['POST', '/api/auth/two-factor/verify-otp'],
     ] as const) {
       const r = resposta();
       mw(req(m, u, { origin: 'https://app.exemplo.test' }), r, vi.fn());
       expect(r.statusCode, `${m} ${u}`).toBe(404);
     }
     expect(handlerDaBiblioteca).not.toHaveBeenCalled();
-    expect([...ENDPOINTS_PERMITIDOS].sort()).toEqual(['GET /get-session', 'POST /sign-in/email', 'POST /sign-out']);
+    expect([...ENDPOINTS_PERMITIDOS].sort()).toEqual(['GET /get-session', 'POST /sign-in/email', 'POST /sign-out', 'POST /two-factor/enable', 'POST /two-factor/verify-totp']);
   });
 
   it('R1 do #132: escrita sem Origin dá 403 e não chega à biblioteca', () => {
