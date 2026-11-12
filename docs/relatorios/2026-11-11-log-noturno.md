@@ -155,3 +155,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - #158, #143 e #157: o sócio não subiu commit novo. Nada a aprovar.
 - **#151 foi fechado pelo próprio Dependabot** (12/11 10:29): "as dependências podem ser atualizadas de outro jeito". Sai da fila do lockfile. Ficam o #189 e depois o #116 (que está DIRTY e vai precisar da `main`).
 - **#174 estava vermelho no `terraform fmt`**: espaço a mais no alinhamento de `api_ambiente_obrigatorio` no `staging/app.tf`. Corrigi só o espaço (`1b3f34c`). O #174 continua fora da ordem até o checklist B1–B9.
+- **D15, voto do Matheus (12/11):** pergunta 1, opção **D** (abrir o piloto sem a conferência de senha vazada, com a decisão escrita; A ou C antes da venda aberta); pergunta 2, sem preferência. Registrei no memorando e no item B2 do checklist. Falta o voto do @Lopesloro.

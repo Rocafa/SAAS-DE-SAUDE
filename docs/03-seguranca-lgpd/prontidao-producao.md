@@ -65,7 +65,7 @@ Cada linha precisa de evidência e do PR. A produção só abre com todas as lin
 | # | Item | Quando | Situação | PR / evidência |
 |---|---|---|---|---|
 | B1 | Segredos versionados, runbook e Terraform | antes | **feito no código**; falta provar no staging | #162 (`segredos.ts`, `segredos.test.ts`, `runbook-rotacao-better-auth.md`) |
-| B2 | Saída para a base de senhas vazadas filtrada por domínio, ou decisão escrita dos sócios | antes | **decisão dos sócios** | — |
+| B2 | Saída para a base de senhas vazadas filtrada por domínio, ou decisão escrita dos sócios | antes | **decisão dos sócios** — voto do @Rocafa (12/11): opção D no piloto (D15); falta o @Lopesloro | — |
 | B3 | `HTTP_TRUST_PROXY_HOPS` provado atrás do ALB real (duas origens contam separado) | antes | depende da AWS | — |
 | B4 | TLS `verify-full` para `app_user` e `app_auth`, e Redis `rediss://` com AUTH | antes | caminho da CA corrigido; falta provar no staging | #162 |
 | B5 | RIPD e contrato: base legal confirmada pelo advogado, cláusula no DPA, §8 assinada pelo encarregado | antes | RIPD e DPA escritos; faltam o advogado e a assinatura | #162 |
