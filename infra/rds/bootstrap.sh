@@ -17,6 +17,7 @@ set -eu
 : "${PGUSER:?defina PGUSER (master)}"
 : "${APP_MIGRATOR_PASSWORD:?defina APP_MIGRATOR_PASSWORD}"
 : "${APP_USER_PASSWORD:?defina APP_USER_PASSWORD}"
+: "${APP_AUTH_PASSWORD:?defina APP_AUTH_PASSWORD}"
 export PGSSLMODE="${PGSSLMODE:-verify-full}"
 
 exec psql --no-psqlrc -X -q -f "$(dirname "$0")/bootstrap.sql"
