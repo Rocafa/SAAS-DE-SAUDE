@@ -18,7 +18,8 @@ export type TipoDeProvedor = (typeof TIPOS_DE_PROVEDOR)[number];
  */
 export const AMBIENTES_POR_TIPO: Readonly<Record<TipoDeProvedor, ReadonlySet<string>>> = {
   dev: AMBIENTES_SESSAO_FICTICIA,
-  'better-auth': AMBIENTES_SESSAO_FICTICIA,
+  // 3c da D4: o provedor real sobe também em produção (e staging). O dev provider continua SÓ em development/test.
+  'better-auth': new Set([...AMBIENTES_SESSAO_FICTICIA, 'production', 'staging']),
 };
 
 /** O que só o boot sabe montar (pools e instância da biblioteca); ver main.ts. */
@@ -36,7 +37,7 @@ export function createAuthProvider(env: NodeJS.ProcessEnv = process.env, deps: D
   const t = tipo as TipoDeProvedor;
   if (!AMBIENTES_POR_TIPO[t].has(env.NODE_ENV ?? '')) {
     throw new Error(
-      `Provedor de autenticação "${t}" não sobe em NODE_ENV=${env.NODE_ENV ?? 'vazio'}: a sessão fictícia só existe em development/test, e o Better Auth só sobe em produção depois do PR 3 da D4`,
+      `Provedor de autenticação "${t}" não sobe em NODE_ENV=${env.NODE_ENV ?? 'vazio'}: a sessão fictícia só existe em development/test; em produção, o login é o real da D4 (AUTH_PROVIDER=better-auth)`,
     );
   }
   const fabricas: Record<TipoDeProvedor, () => AuthProvider> = {
