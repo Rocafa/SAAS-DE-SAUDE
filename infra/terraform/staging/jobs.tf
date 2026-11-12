@@ -135,6 +135,7 @@ locals {
     "retencao-fiscal",
     "responsaveis-descarte",
     "portal-representacoes",
+    "identidade-expurgo", # D4: sessões, tokens e cadastros de TOTP vencidos (ressalva 7 do parecer do 3c)
   ]
 
   jobs_retencao_filtros = {

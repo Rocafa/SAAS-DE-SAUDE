@@ -34,6 +34,8 @@ export interface OpcoesDaAutenticacao {
   readonly db: Database;
   /** BETTER_AUTH_SECRET: 32 bytes ou mais, do Secrets Manager (R2). */
   readonly segredo: string;
+  /** BETTER_AUTH_SECRETS (R9 do #152): a primeira cifra; as demais só decifram. O `segredo` vira o legado. */
+  readonly segredosVersionados?: readonly { readonly version: number; readonly value: string }[];
   /** URL pública fixa da API (R2): nunca derivada do Host da requisição. */
   readonly baseURL: string;
   /** A mesma allowlist do CORS, sem curinga (R8). */
@@ -74,6 +76,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
     baseURL: o.baseURL,
     basePath: '/api/auth',
     secret: o.segredo,
+    ...(o.segredosVersionados?.length ? { secrets: o.segredosVersionados.map((s) => ({ version: s.version, value: s.value })) } : {}),
     telemetry: { enabled: false },
     trustedOrigins: [...o.origensConfiaveis],
     database: drizzleAdapter(o.db, { provider: 'pg', schema: { usuario, sessao, conta, verificacao, doisFatores } }),
