@@ -11,7 +11,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Logger } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
-import { tenants } from '../src/db/schema';
+import { auditLog, tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
