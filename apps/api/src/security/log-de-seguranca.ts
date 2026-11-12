@@ -95,6 +95,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'login_em_duas_etapas_sem_clinica',
   'senha_vazada',
   'conferencia_indisponivel',
+  'trilha_do_fator',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
