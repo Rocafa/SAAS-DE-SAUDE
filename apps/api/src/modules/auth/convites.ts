@@ -27,10 +27,11 @@ import { AUTH_PROVIDER, ehProvedorDeConvite, paraRequestContext, type AuthContex
 import { ehPerfilDoBanco, exigirPerfilNoBanco, gravarConcessao } from './membros';
 import { ExigeMfaRecente } from './mfa';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
+import { EMAIL_DESCARTADO } from './convites-retencao';
 
-export const VALIDADE_DO_CONVITE_MS = 72 * 60 * 60 * 1000;
 /** HMAC "zerado" do convite descartado (formato válido no CHECK, não corresponde a nenhum e-mail). */
-export const EMAIL_DESCARTADO = '0'.repeat(32);
+export { EMAIL_DESCARTADO };
+export const VALIDADE_DO_CONVITE_MS = 72 * 60 * 60 * 1000;
 /** R9: convites por admin por dia (corta abuso sem atrapalhar a montagem de uma equipe). */
 export const TETO_DIARIO_DE_CONVITES = 20;
 const SCOPE = 'team_invites';
@@ -82,6 +83,8 @@ export class ConvitesService {
   criar(ctx: RequestContext, email: string, perfil: ClinicMemberRole): Promise<ConviteCriado> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
       await exigirPerfilNoBanco(tx, ctx, 'admin');
+      // R6 do código do 3b-1: criações em paralelo do mesmo admin esperam uma pela outra (o teto não passa numa rajada).
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${'convite:' + ctx.userId}, 0))`);
       const desde = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const [hoje] = await tx
         .select({ n: count() })

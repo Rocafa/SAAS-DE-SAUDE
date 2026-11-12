@@ -176,7 +176,9 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
                 return;
               }
             }
-            registrarEventoDeSeguranca('LOGIN_OK', { userId: s.userId, ...origem });
+            // R5 do código do 3a: a troca de sessão no fim do CADASTRO do fator (havia sessão aberta) não é um login.
+            const cadastro = ctx?.path === '/two-factor/verify-totp' && !!(ctx.context as { session?: unknown } | undefined)?.session;
+            registrarEventoDeSeguranca('LOGIN_OK', { userId: s.userId, ...(cadastro ? { motivo: 'cadastro_do_fator' } : {}), ...origem });
           },
         },
       },

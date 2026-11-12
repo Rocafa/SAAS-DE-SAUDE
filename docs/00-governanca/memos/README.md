@@ -19,5 +19,6 @@
 | D12 | Certificação SBIS | Média | Desenho da auditoria e da assinatura no M0 | [D12](D12-certificacao-sbis.md) |
 | D13 | Orçamento de nuvem e pentest | **Alta** | Portões A e B (staging, piloto) | [D13](D13-orcamento-infra-pentest.md) |
 | D14 | Receita Saúde no MVP | Média | Promessa de venda para psicólogo PF | [D14](D14-receita-saude-mvp.md) |
+| D15 | Login real: saída para senhas vazadas (B2) e queda do Redis | **Alta** | Ligar o login real no staging | [D15](D15-login-real-egresso-e-falha-do-redis.md) |
 
 **Ordem sugerida para a próxima reunião:** D4, D8 e D13 (destravam o M0 e o Portão A), depois D1 com D2 e D14 (dependem das entrevistas).

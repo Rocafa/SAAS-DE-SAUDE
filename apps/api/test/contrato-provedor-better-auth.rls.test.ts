@@ -11,7 +11,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Logger } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
-import { auditLog } from '../src/db/schema';
+import { auditLog, tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao, type OpcoesDaAutenticacao } from '../src/modules/auth/better-auth/instancia';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
@@ -1209,6 +1209,103 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     // F2 do #175: usado o token de A, o pendente de B também cai.
     const depois = await dbAuth.db.select({ id: recuperacao.id }).from(recuperacao).where(and(eq(recuperacao.usuarioId, p.userId), sql`${recuperacao.usadoEm} is null`));
     expect(depois).toEqual([]);
+  });
+
+  it('R6 do 3b-1: rajada de convites do mesmo admin não passa do teto diário', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const r = await Promise.allSettled(
+      Array.from({ length: TETO_DIARIO_DE_CONVITES + 3 }, (_, k) => convites().criar(ctx, `rajada-${k}-${randomUUID().slice(0, 6)}@exemplo.test`, 'recepcao')),
+    );
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(TETO_DIARIO_DE_CONVITES);
+    const n = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from team_invites`), adm.userId);
+    expect([...n][0]?.n).toBe(TETO_DIARIO_DE_CONVITES);
+  });
+
+  it('R5 do 3b-3: conta ativa sem vínculo há mais de 1 dia vira inativa no expurgo; a recém-criada fica', async () => {
+    const velha = randomUUID();
+    const nova = randomUUID();
+    const ontem = new Date(Date.now() - 2 * 24 * 3_600_000);
+    await dbAuth.db.insert(usuario).values([
+      { id: velha, name: 'Sem Vinculo Ficticia', email: `sem-vinculo-${velha.slice(0, 8)}@exemplo.test`, emailVerified: false, createdAt: ontem },
+      { id: nova, name: 'Recem Ficticia', email: `recem-${nova.slice(0, 8)}@exemplo.test`, emailVerified: false },
+    ]);
+    expect((await provedor.expurgarComoSistema()).contasSemVinculo).toBeGreaterThanOrEqual(1);
+    const linhas = await dbAuth.db.select({ id: usuario.id, ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(sql`${usuario.id} in (${velha}, ${nova})`);
+    expect(linhas.find((l) => l.id === velha)).toEqual({ id: velha, ativo: false, motivo: 'sem_vinculo' });
+    expect(linhas.find((l) => l.id === nova)).toEqual({ id: nova, ativo: true, motivo: null });
+    const [desde] = await dbAuth.db.select({ d: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, velha));
+    expect(desde?.d).toBeInstanceOf(Date);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, velha))).toEqual([]);
+  });
+
+  it('G1 do #176: conta inativa por corrida mas COM vínculo é reativada e não perde a credencial no expurgo', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    await dbAuth.db.update(usuario).set({ ativo: false, inativaPor: 'sem_vinculo' }).where(eq(usuario.id, p.userId));
+    await dbAuth.db.update(usuario).set({ inativaDesde: new Date(Date.now() - 91 * 24 * 3_600_000) }).where(eq(usuario.id, p.userId));
+    expect((await provedor.expurgarComoSistema()).contasReativadas).toBeGreaterThanOrEqual(1);
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor, email: usuario.email }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(u).toEqual({ ativo: true, motivo: null, email: p.email });
+    const [d] = await dbAuth.db.select({ d: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(d?.d).toBeNull();
+    const [c] = await dbAuth.db.select({ senha: conta.password }).from(conta).where(eq(conta.userId, p.userId));
+    expect(c?.senha).not.toBeNull();
+  });
+
+  it('fila do 3b-3: anonimizar zera na hora o HMAC do e-mail do convite que a conta aceitou', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const email = `anon-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: conv.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    await provedor.anonimizarConta(u?.id ?? '');
+    const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${conv.conviteId}`), adm.userId);
+    expect([...linhas][0]?.email_hmac).toBe('0'.repeat(32));
+  });
+
+  it('R3 do 3a: clínica cancelada fora da janela de saída some da lista e da escolha; dentro da janela, fica', async () => {
+    const fora = await api.novaClinica();
+    const dentro = await api.novaClinica();
+    const p = await novaPessoa(fora, ['recepcao']);
+    await api.membro(dentro, { userId: p.userId }, 'recepcao');
+    const dias = (n: number) => new Date(Date.now() - n * 24 * 3_600_000);
+    await withTenant(api.db.db, fora, (tx) => tx.update(tenants).set({ subscriptionStatus: 'cancelled', cancelledAt: dias(200) }).where(eq(tenants.id, fora)), p.userId);
+    await withTenant(api.db.db, dentro, (tx) => tx.update(tenants).set({ subscriptionStatus: 'cancelled', cancelledAt: dias(10) }).where(eq(tenants.id, dentro)), p.userId);
+    expect((await provedor.clinicasDaPessoa(p.userId)).map((c) => c.id)).toEqual([dentro]);
+    const c = cookieDe(await entrar(p.email));
+    const pessoa = await provedor.sessaoDePessoa({ headers: c });
+    if (!pessoa) throw new Error('sem sessão');
+    expect(await provedor.escolherClinica(pessoa, fora)).toBe(false);
+    expect(await provedor.escolherClinica(pessoa, dentro)).toBe(true);
+  });
+
+  it('R5 do 3a: a troca de sessão no fim do cadastro do fator sai como LOGIN_OK com motivo cadastro_do_fator', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const c = cookieDe(await entrar(p.email));
+    zerarJanelasDoLog();
+    const aviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      await cadastrarFator(c, p.userId);
+      const logins = aviso.mock.calls.map((x) => String(x[0])).filter((l) => l.includes('"evento":"LOGIN_OK"') && l.includes(p.userId));
+      expect(logins).toHaveLength(1);
+      expect(logins[0]).toContain('"motivo":"cadastro_do_fator"');
+      // H2 da reconferência do #176: o login em duas etapas de quem já tem TOTP sai como login (sem motivo).
+      aviso.mockClear();
+      zerarJanelasDoLog();
+      const senha = await postar('/sign-in/email', {}, { email: p.email, password: SENHA });
+      expect((await postar('/two-factor/verify-totp', senha.cabecalhos, { code: proximoCodigo(p.userId) })).r.status).toBe(200);
+      const linhas = aviso.mock.calls.map((x) => String(x[0])).filter((l) => l.includes(p.userId));
+      expect(linhas.filter((l) => l.includes('"evento":"LOGIN_SENHA_OK"'))).toHaveLength(1);
+      const ok = linhas.filter((l) => l.includes('"evento":"LOGIN_OK"'));
+      expect(ok).toHaveLength(1);
+      expect(ok[0]).not.toContain('"motivo"');
+    } finally {
+      aviso.mockRestore();
+    }
   });
 
   it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {

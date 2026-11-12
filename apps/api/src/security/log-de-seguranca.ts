@@ -25,6 +25,8 @@ export const EVENTOS_DE_SEGURANCA = {
   RECUPERACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'admin emitiu token de recuperação de senha ou de fator (D4 PR 3b-2)' },
   RECUPERACAO_TETO: { severidade: 'alto', alarme: 'imediato', descricao: 'admin bateu no teto diário de tokens de recuperação (sinal de abuso)' },
   RECUPERACAO_USADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de recuperação usado: senha trocada ou fator removido (D4 PR 3b-2)' },
+  CONTA_DESLIGADA_SEM_VINCULO: { severidade: 'aviso', alarme: 'volume', descricao: 'expurgo desligou conta ativa sem vínculo em nenhuma clínica (corrida no desligamento)' },
+  CONTA_REATIVADA_COM_VINCULO: { severidade: 'aviso', alarme: 'volume', descricao: 'expurgo reativou conta inativa que tem vínculo (corrida com uma concessão)' },
   CONTA_ANONIMIZADA: { severidade: 'alto', alarme: 'volume', descricao: 'conta da equipe anonimizada a pedido do titular (D4 PR 3b-3; prova do art. 18 IV)' },
   SENHA_TROCADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha trocada pela própria pessoa; as outras sessões caem (D4 PR 3b-2)' },
   BLOQUEIO_ZERADO: { severidade: 'alto', alarme: 'volume', descricao: 'admin zerou os contadores de bloqueio de uma pessoa da clínica (D4 PR 3b-2)' },
@@ -107,6 +109,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   'pedido_do_titular',
   'conferencia_indisponivel',
   'teto_diario',
+  'conta_sem_vinculo',
+  'conta_com_vinculo',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

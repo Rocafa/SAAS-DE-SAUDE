@@ -13,6 +13,8 @@ import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
+import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
+import { EMAIL_DESCARTADO } from '../convites-retencao';
 import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
@@ -174,7 +176,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   async clinicasDaPessoa(userId: string): Promise<ClinicaDaPessoa[]> {
     const saida: ClinicaDaPessoa[] = [];
     for (const id of await this.clinicasDoUsuario(userId)) {
-      const [t] = await withTenant(this.d.dbClinica, id as TenantId, (tx) => tx.select({ nome: tenants.displayName }).from(tenants).where(eq(tenants.id, id)), userId);
+      const t = await this.clinicaLiberada(id, userId);
       if (t) saida.push({ id, nome: t.nome });
     }
     return saida;
@@ -182,6 +184,21 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
 
   escolherClinica(s: SessaoDePessoa, clinicaId: string): Promise<boolean> {
     return this.definirClinica(s.sessaoId, s.userId, clinicaId);
+  }
+
+  /**
+   * R3 do código do 3a: a mesma regra de leitura das rotas da clínica (`canRead`). A clínica cancelada aparece e pode
+   * ser escolhida só dentro da janela de saída (portabilidade); fora dela some da lista e da escolha.
+   */
+  private async clinicaLiberada(id: string, userId: string): Promise<{ nome: string } | null> {
+    const [t] = await withTenant(
+      this.d.dbClinica,
+      id as TenantId,
+      (tx) => tx.select({ nome: tenants.displayName, status: tenants.subscriptionStatus, canceladaEm: tenants.cancelledAt }).from(tenants).where(eq(tenants.id, id)),
+      userId,
+    );
+    if (!t || !canRead(t.status, t.canceladaEm, this.agora(), EXIT_WINDOW_DAYS)) return null;
+    return { nome: t.nome };
   }
 
   /** Só as sessões da própria pessoa, sem IP, user-agent nem clínica (R20). */
@@ -233,7 +250,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number; contasReativadas: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -248,6 +265,46 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP e LIBERA o
     // e-mail; o id fica, preso ao histórico clínico (R18). B2 do veto do #173: a conta antiga nunca é reaproveitada; quem
     // volta recebe conta nova pelo convite. B1: tudo numa transação por conta, com o fator desmarcado.
+    // R5 do código do 3b-3: duas revogações simultâneas em clínicas diferentes podem deixar a conta ativa sem vínculo.
+    // O expurgo a desliga (o trigger da 0071 grava inativa_desde). Só conta com mais de 1 dia, para não pegar um aceite
+    // de convite em andamento.
+    // G4 do parecer do #176: uma transação por conta (desliga e derruba as sessões juntas) e evento de cada uma.
+    const candidatas = await this.d.dbAuth
+      .select({ id: usuario.id })
+      .from(usuario)
+      .where(and(eq(usuario.ativo, true), lt(usuario.createdAt, umDia), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`));
+    const semVinculo: string[] = [];
+    for (const { id } of candidatas) {
+      const desligou = await this.d.dbAuth.transaction(async (tx) => {
+        const r = await tx
+          .update(usuario)
+          .set({ ativo: false, inativaPor: 'sem_vinculo' })
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, true), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
+          .returning({ id: usuario.id });
+        if (r.length === 0) return false;
+        await tx.delete(sessao).where(eq(sessao.userId, id));
+        return true;
+      });
+      if (desligou) {
+        semVinculo.push(id);
+        registrarEventoDeSeguranca('CONTA_DESLIGADA_SEM_VINCULO', { motivo: 'conta_sem_vinculo', userId: id });
+      }
+    }
+    // G1 do parecer do #176: uma concessão que corre junto com o passo acima (o vínculo ainda sem commit) deixa a conta
+    // inativa COM vínculo. O job a reativa no dia seguinte (o trigger da 0071 limpa inativa_desde), antes que os 90 dias
+    // apaguem a credencial de quem está trabalhando.
+    const reativadas = await this.d.dbAuth
+      .update(usuario)
+      .set({ ativo: true, inativaPor: null })
+      .where(
+        and(
+          eq(usuario.ativo, false),
+          eq(usuario.inativaPor, 'sem_vinculo'),
+          sql`exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`,
+        ),
+      )
+      .returning({ id: usuario.id });
+    for (const { id } of reativadas) registrarEventoDeSeguranca('CONTA_REATIVADA_COM_VINCULO', { motivo: 'conta_com_vinculo', userId: id });
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
       .select({ id: usuario.id })
@@ -268,7 +325,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         const marcada = await tx
           .update(usuario)
           .set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid`, name: 'Conta desligada', image: null, inativaPor: 'expurgada' })
-          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo')))
+          // G1 do #176: nunca expurgar quem tem vínculo (conta inativa por corrida com uma concessão).
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo'), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
           .returning({ id: usuario.id });
         if (marcada.length === 0) return false;
         await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
@@ -279,7 +337,15 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       });
       if (expurgou) credenciaisDeInativas += 1;
     }
-    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length, credenciaisDeInativas };
+    return {
+      sessoes: sessoes.length,
+      verificacoes: verificacoes.length,
+      cadastrosNaoConcluidos: cadastros.length,
+      recuperacoes: recuperacoes.length,
+      credenciaisDeInativas,
+      contasSemVinculo: semVinculo.length,
+      contasReativadas: reativadas.length,
+    };
   }
 
   async trocarSenhaDaPessoa(e: {
@@ -615,7 +681,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (e.reaproveita) {
       // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
       const hash = await gerarHashDeSenha(e.senha);
-      // A concessão já reativou a conta (trigger da 0069); a marca da conta abandonada é a senha ausente.
+      // O trigger da 0069 só reativa conta 'sem_vinculo'; esta ('convite_desfeito') volta a valer no
+      // completarContaReaproveitada, depois do commit da clínica. A marca da conta abandonada é a senha ausente.
       const r = await this.d.dbAuth
         .update(conta)
         .set({ password: hash })
@@ -675,14 +742,21 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   private async totpDaPessoaConfere(userId: string, codigo: string): Promise<boolean | 'sem_fator'> {
     const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, userId));
     if (!f?.verificado) return 'sem_fator';
-    const b = this.d.bloqueio;
-    if (b) {
-      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
-      if (usado.count > 1) return false;
-    }
     if (!this.d.segredoDaInstancia) return false;
     const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
-    return claro !== null && totpConfere(claro, codigo, this.agora().getTime());
+    if (claro === null || !totpConfere(claro, codigo, this.agora().getTime())) return false;
+    // R12 do código do 3b-2 (R7 do 3b-3): a marca de reuso só depois de o código conferir; um código errado não queima
+    // o valor. G5 do parecer do #176: contador fora do ar conta como reuso (falha fechada).
+    const b = this.d.bloqueio;
+    if (b) {
+      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => {
+        // H1 da reconferência do #176: a recusa por contador fora do ar avisa a operação.
+        registrarEventoDeSeguranca('BLOQUEIO_INDISPONIVEL', { motivo: 'codigo_reutilizado', userId });
+        return { count: 2 };
+      });
+      if (usado.count > 1) return false;
+    }
+    return true;
   }
 
   /**
@@ -782,11 +856,28 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     });
     // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
     registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
+    // G3 do parecer do #176: a clínica de origem (onde a conta aceitou o convite) também perde o HMAC, mesmo sem
+    // vínculo ativo; a trilha da anonimização fica nas clínicas com vínculo.
+    const [origem] = await this.d.dbAuth.select({ clinica: usuario.clinicaDeOrigem }).from(usuario).where(eq(usuario.id, userId));
+    if (origem?.clinica && !clinicasAntes.includes(origem.clinica)) {
+      const clinica = origem.clinica;
+      await withTenant(
+        this.d.dbClinica,
+        clinica as TenantId,
+        (tx) => tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${clinica} and accepted_user_id = ${userId}`),
+        userId,
+      );
+    }
     for (const tenantId of clinicasAntes) {
       await withTenant(
         this.d.dbClinica,
         tenantId as TenantId,
-        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } }),
+        async (tx) => {
+          // Fila do 3b-3: o convite aceito por esta conta perde o pseudônimo do e-mail na hora, sem esperar os 30 dias
+          // do `convites-descarte`.
+          await tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${tenantId} and accepted_user_id = ${userId}`);
+          await recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } });
+        },
         userId,
       );
     }
@@ -805,10 +896,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (r.status !== 200 || cookies.length === 0) throw new Error('sessao_de_cadastro_nao_abriu');
     const lida = await this.d.auth.api.getSession({ headers: new Headers({ cookie: cookies.map((c) => c.split(';')[0]).join('; ') }) });
     if (!lida) throw new Error('sessao_de_cadastro_nao_abriu');
-    await this.d.dbAuth
-      .update(sessao)
-      .set({ cadastroPendenteAte: new Date(this.agora().getTime() + PRAZO_DO_CADASTRO_PENDENTE_MS) })
-      .where(eq(sessao.id, lida.session.id));
+    // R7 do código do 3b-1: se a marca não gravar, a sessão (que nunca chegou ao cliente) some na hora.
+    try {
+      await this.d.dbAuth
+        .update(sessao)
+        .set({ cadastroPendenteAte: new Date(this.agora().getTime() + PRAZO_DO_CADASTRO_PENDENTE_MS) })
+        .where(eq(sessao.id, lida.session.id));
+    } catch (err) {
+      await this.d.dbAuth.delete(sessao).where(eq(sessao.id, lida.session.id)).catch(() => undefined);
+      throw err;
+    }
     return cookies;
   }
 
@@ -844,6 +941,9 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    */
   async definirClinica(sessaoId: string, userId: string, tenantId: string): Promise<boolean> {
     if (!(await this.clinicasDoUsuario(userId)).includes(tenantId)) return false;
+    // H3 da reconferência do #176: clínica cancelada fora da janela de saída não vira a clínica ativa (nem na escolha
+    // automática do resolver); a leitura vem depois da conferência do vínculo.
+    if (!(await this.clinicaLiberada(tenantId, userId))) return false;
     // ALTA do parecer do #149: a trilha grava ANTES de a sessão ganhar a clínica. Sem a linha, a escolha não vale e o
     // TOTP feito sem clínica continua guardado (a escolha não aconteceu; o prazo de 5 min segue correndo).
     try {
