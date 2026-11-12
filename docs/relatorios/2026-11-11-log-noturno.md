@@ -199,3 +199,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - R-B (alarme a cada execução) e R-C (papel com MFA e `SourceIdentity` no lugar do grupo IAM) estão com o agente de devops.
 - **#190:** o agente de devops fez a R-B (alertas por execução do `RunTask`, crítico se o override trouxer outra variável, troca de papel ou ECS Exec) e a R-C (o grupo virou o papel `ops-lgpd`, com MFA e `SourceIdentity`). O runbook foi atualizado. O fmt do Terraform pegou o alinhamento no `app.tf`, que corrigi. **CI do #190: 16/16 verde.**
 - **18:10 — 92% do limite de 5 h.** Tudo commitado e enviado (16 worktrees conferidos). Relatório da rodada: [2026-11-12-rodada-36.md](2026-11-12-rodada-36.md). Retomada agendada para depois do reset.
+
+## Checagem de 12/11 18:15
+
+- Nada mudou: nenhum PR aprovado (#152, #153, #154, #172, #189 em REVIEW_REQUIRED, CI verde); o sócio não subiu commit no #158, #143 nem #157.
