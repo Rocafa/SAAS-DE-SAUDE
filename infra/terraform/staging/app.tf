@@ -311,13 +311,13 @@ resource "aws_ecs_task_definition" "api" {
     user                   = "1000:1000"
     # Imagem distroless: o entrypoint já é o node (Dockerfile: CMD ["dist/main.js"]). Com "node" aqui, o
     # contêiner rodava `node node dist/main.js` e a API não subia (achado R-A do parecer do código do #190).
-    command                = ["dist/main.js"]
-    stopTimeout            = 30
-    linuxParameters        = { initProcessEnabled = true }
-    portMappings           = [{ containerPort = local.api_porta, protocol = "tcp" }]
-    mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
-    environment            = local.api_ambiente
-    secrets                = local.api_segredos
+    command         = ["dist/main.js"]
+    stopTimeout     = 30
+    linuxParameters = { initProcessEnabled = true }
+    portMappings    = [{ containerPort = local.api_porta, protocol = "tcp" }]
+    mountPoints     = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
+    environment     = local.api_ambiente
+    secrets         = local.api_segredos
     logConfiguration = {
       logDriver = "awslogs"
       options = {
