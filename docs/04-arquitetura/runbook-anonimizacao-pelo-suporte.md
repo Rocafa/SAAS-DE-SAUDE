@@ -34,7 +34,8 @@ Executor e conferente são pessoas diferentes, e os dois nomes vão no chamado o
 Tarefa avulsa do ECS na definição `<ambiente>-ops-anonimizacao`. O executor assume o papel `ops-lgpd` **com MFA e `--source-identity <seu usuário>`** (obrigatório na confiança do papel, como no break-glass) e roda a tarefa com essa sessão. A prova de quem rodou é o `ecs:RunTask` no CloudTrail, com a identidade de origem. Cada execução gera um alerta no tópico de segurança; um override com variável além de `CONFIRMA_ANONIMIZACAO`, troca de papel ou ECS Exec gera alerta crítico.
 
 ```bash
-aws sts assume-role --role-arn <arn do papel ops-lgpd> --role-session-name LGPD-<n> \n  --source-identity <seu usuário> --serial-number <arn do seu MFA> --token-code <código>
+aws sts assume-role --role-arn <arn do papel ops-lgpd> --role-session-name LGPD-<n> \
+  --source-identity <seu usuário> --serial-number <arn do seu MFA> --token-code <código>
 ```
 
 ```bash
