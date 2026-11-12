@@ -6,22 +6,31 @@
  * (clínica ativa, MFA e impressão dos perfis) → perfis SÓ de `clinic_members` (R6) → `mfaEm` só vale se os perfis não
  * mudaram desde o MFA (`perfis_no_mfa`, R13). A clínica nunca vem do cliente (regra 1).
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
-import { conta, doisFatores, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
-import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
+import { avisarAdminsDeAnomalia } from '../../records/avisos';
+import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
+import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
 import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
+import type { RateLimitStore } from '../../../security/rate-limit-store';
+import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { symmetricDecrypt } from 'better-auth/crypto';
+import { totpConfere } from './totp';
+import { conferirSenha } from './senha';
+import { CABECALHO_ORIGEM, JANELA_DE_REUSO_MS, TETO_DE_FALHAS, TETO_DE_FALHAS_POR_ORIGEM } from './protecao';
+import { JANELA_DE_BLOQUEIO_MS } from './protecao';
 
 /** Impressão dos perfis no momento do MFA (16 hex): se os perfis mudam no banco, o MFA deixa de valer (R13). */
 export function impressaoDosPerfis(perfis: readonly Perfil[]): string {
@@ -48,12 +57,16 @@ export interface DependenciasDoProvedor {
   readonly cookieDeEncerramento?: string;
   /** Conferência de senha vazada (R15 e R5 do #152): chamada EXPLICITAMENTE nos caminhos nossos que definem senha. */
   readonly conferirSenhaVazada?: ConferirSenhaVazada;
+  /** Store e segredo dos contadores de bloqueio (para o desbloqueio pelo admin zerar as MESMAS chaves). */
+  readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
+  /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
+  readonly segredoDaInstancia?: string;
 }
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -217,7 +230,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number }> {
+  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -226,7 +239,254 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .delete(doisFatores)
       .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
       .returning({ id: doisFatores.id });
-    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length };
+    // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias.
+    const trintaDias = new Date(agora.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const recuperacoes = await this.d.dbAuth.delete(recuperacao).where(lt(recuperacao.expiraEm, trintaDias)).returning({ id: recuperacao.id });
+    return { sessoes: sessoes.length, verificacoes: verificacoes.length, cadastrosNaoConcluidos: cadastros.length, recuperacoes: recuperacoes.length };
+  }
+
+  async trocarSenhaDaPessoa(e: {
+    headers: RequisicaoParaSessao['headers'];
+    userId: string;
+    atual: string;
+    nova: string;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'> {
+    let r: Response;
+    try {
+      r = await this.d.auth.api.changePassword({
+        body: { currentPassword: e.atual, newPassword: e.nova, revokeOtherSessions: true },
+        headers: fromNodeHeaders(e.headers),
+        asResponse: true,
+      });
+    } catch (err) {
+      // O gancho da senha vazada lança antes do endpoint (R15).
+      if ((err as { body?: { code?: string } }).body?.code === 'PASSWORD_COMPROMISED') return 'senha_vazada';
+      throw err;
+    }
+    if (r.status !== 200) {
+      const corpo = (await r.json().catch(() => ({}))) as { code?: string };
+      return corpo.code === 'PASSWORD_COMPROMISED' ? 'senha_vazada' : 'senha_atual_errada';
+    }
+    registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'pela_pessoa', userId: e.userId });
+    await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed');
+    return r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
+  }
+
+  async desbloquear(userId: string): Promise<void> {
+    const [u] = await this.d.dbAuth.select({ email: usuario.email }).from(usuario).where(eq(usuario.id, userId));
+    if (this.d.bloqueio && u) {
+      const { store, chaveHmac } = this.d.bloqueio;
+      for (const chave of [chaveDoBloqueio(chaveHmac, 'login', u.email.trim().toLowerCase()), chaveDoBloqueio(chaveHmac, 'fator', userId)]) {
+        const n = await store.peek(chave, JANELA_DE_BLOQUEIO_MS);
+        for (let i = 0; i < n; i++) await store.release(chave, JANELA_DE_BLOQUEIO_MS);
+      }
+    }
+    // A trava da própria biblioteca no login em duas etapas.
+    await this.d.dbAuth.update(doisFatores).set({ failedVerificationCount: 0, lockedUntil: null }).where(eq(doisFatores.userId, userId));
+    registrarEventoDeSeguranca('BLOQUEIO_ZERADO', { motivo: 'desbloqueio_pelo_admin', userId });
+  }
+
+  async emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }> {
+    const token = randomBytes(32).toString('base64url');
+    const [r] = await this.d.dbAuth
+      .insert(recuperacao)
+      .values({
+        id: randomUUID(),
+        usuarioId: e.userId,
+        tipo: e.tipo,
+        tokenHash: createHash('sha256').update(token).digest('hex'),
+        clinicaId: e.clinicaId,
+        criadoPor: e.criadoPor,
+        expiraEm: sql`now() + interval '15 minutes'`,
+      })
+      .returning({ expiraEm: recuperacao.expiraEm });
+    if (!r) throw new Error('falha ao emitir recuperação');
+    return { token, expiraEm: r.expiraEm.toISOString() };
+  }
+
+  async invalidarRecuperacao(token: string): Promise<void> {
+    await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.tokenHash, createHash('sha256').update(token).digest('hex')), isNull(recuperacao.usadoEm)));
+  }
+
+  /**
+   * Usa o token (R17; R1 do desenho do PR 3; R15). Senha: exige o código TOTP atual, pelo bloqueio do fator e pela
+   * marca de reuso. Fator: exige a senha atual, pelo bloqueio de login. O token é consumido de forma atômica DEPOIS de
+   * a credencial conferir. Usar o token apaga TODAS as sessões da pessoa.
+   */
+  async usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao> {
+    const hash = createHash('sha256').update(e.token).digest('hex');
+    const agora = this.agora();
+    const [r] = await this.d.dbAuth
+      .select()
+      .from(recuperacao)
+      .where(and(eq(recuperacao.tokenHash, hash), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, agora)));
+    if (!r) return 'invalido';
+    const [u] = await this.d.dbAuth.select({ email: usuario.email, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, r.usuarioId));
+    if (!u?.ativo) return 'invalido';
+    // R5 do código do 3b-2: no USO, a pessoa ainda tem vínculo ativo na clínica do token e quem emitiu ainda é admin.
+    if (!(await this.vinculoEAdminSeguemAtivos(r.clinicaId, r.usuarioId, r.criadoPor))) return 'invalido';
+
+    const b = this.d.bloqueio;
+    const origemBruta = e.cabecalhos.get(CABECALHO_ORIGEM) ?? '';
+    const origem = /^[0-9a-f]{16}$/.test(origemBruta) ? origemBruta : undefined;
+    // R3: além da pessoa, o contador por origem (teto maior: a clínica sai por um IP).
+    const contadores =
+      r.tipo === 'senha'
+        ? [
+            { chave: b ? chaveDoBloqueio(b.chaveHmac, 'fator', r.usuarioId) : '', teto: TETO_DE_FALHAS },
+            ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'fator-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+          ]
+        : [
+            { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', u.email.trim().toLowerCase()) : '', teto: TETO_DE_FALHAS },
+            ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+          ];
+    // R3 do parecer do endurecimento: entrada mal formada não gasta tentativa.
+    if (r.tipo === 'senha' && (!e.codigo || !e.senhaNova || e.senhaNova.length < 12 || e.senhaNova.length > 128)) return 'credencial_errada';
+    if (r.tipo === 'fator' && !e.senhaAtual) return 'credencial_errada';
+    const motivoDoContador = r.tipo === 'senha' ? 'bloqueio_do_fator' : 'bloqueio_de_login';
+    const reserva = await this.reservarVarias(contadores, motivoDoContador);
+    if (reserva === 'bloqueado') {
+      // R1: a tentativa barrada pelo token também entra na vigilância.
+      registrarEventoDeSeguranca(r.tipo === 'senha' ? 'MFA_BLOQUEADO' : 'LOGIN_BLOQUEADO', { motivo: motivoDoContador, userId: r.usuarioId, ...(origem ? { origem } : {}) });
+      if (r.tipo === 'senha') await this.avisarFatorBloqueado(r.usuarioId).catch(() => undefined);
+    }
+    if (reserva !== 'ok') return reserva;
+
+    let confere: boolean;
+    if (r.tipo === 'senha') {
+      confere = !!e.codigo && !!e.senhaNova && e.senhaNova.length >= 12 && e.senhaNova.length <= 128 && (await this.totpDaPessoaConfere(r.usuarioId, e.codigo)) === true;
+    } else {
+      confere = !!e.senhaAtual && (await this.senhaConfere(r.usuarioId, e.senhaAtual));
+    }
+    if (!confere) {
+      registrarEventoDeSeguranca(r.tipo === 'senha' ? 'MFA_FALHOU' : 'LOGIN_FALHOU', {
+        motivo: r.tipo === 'senha' ? 'codigo_errado' : 'senha_errada',
+        userId: r.usuarioId,
+        ...(origem ? { origem } : {}),
+      });
+      return 'credencial_errada';
+    }
+    await this.devolverVarias(contadores);
+
+    if (r.tipo === 'senha' && e.senhaNova && this.d.conferirSenhaVazada) {
+      const vazou = await this.d.conferirSenhaVazada(e.senhaNova).catch(() => {
+        registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+        return false;
+      });
+      if (vazou) return 'senha_vazada';
+    }
+    const hashNovo = r.tipo === 'senha' && e.senhaNova ? await gerarHashDeSenha(e.senhaNova) : null;
+
+    // R6: consumir o token, trocar a credencial e derrubar as sessões numa ÚNICA transação; evento antes da trilha.
+    const consumiu = await this.d.dbAuth.transaction(async (tx) => {
+      const usado = await tx
+        .update(recuperacao)
+        .set({ usadoEm: new Date() })
+        .where(and(eq(recuperacao.id, r.id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
+        .returning({ id: recuperacao.id });
+      if (usado.length === 0) return false;
+      if (hashNovo) {
+        await tx.update(conta).set({ password: hashNovo }).where(and(eq(conta.userId, r.usuarioId), eq(conta.providerId, 'credential')));
+      } else {
+        // O fator antigo sai; o cadastro de um novo é obrigatório (a sessão aberta só serve a isso, 15 min, R8).
+        await tx.delete(doisFatores).where(eq(doisFatores.userId, r.usuarioId));
+        await tx.update(usuario).set({ twoFactorEnabled: false }).where(eq(usuario.id, r.usuarioId));
+      }
+      await tx.delete(sessao).where(eq(sessao.userId, r.usuarioId));
+      return true;
+    });
+    if (!consumiu) return 'invalido';
+    registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+    await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, r.tipo);
+    if (r.tipo === 'senha') return { tipo: 'senha', cookies: [] };
+    const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual ?? '', cabecalhos: e.cabecalhos });
+    return { tipo: 'fator', cookies };
+  }
+
+  /** R5 do código do 3b-2: pessoa com vínculo ativo na clínica do token e quem emitiu ainda admin ativo nela. */
+  private async vinculoEAdminSeguemAtivos(clinicaId: string, userId: string, criadoPor: string): Promise<boolean> {
+    const linhas = await withTenant(
+      this.d.dbClinica,
+      clinicaId as TenantId,
+      (tx) =>
+        tx
+          .select({ userId: clinicMembers.userId, role: clinicMembers.role })
+          .from(clinicMembers)
+          .where(and(eq(clinicMembers.tenantId, clinicaId), isNull(clinicMembers.revokedAt), inArray(clinicMembers.userId, [userId, criadoPor]))),
+      userId,
+    );
+    return linhas.some((l) => l.userId === userId) && linhas.some((l) => l.userId === criadoPor && l.role === 'admin');
+  }
+
+  /**
+   * Reserva atômica em vários contadores (R15). R4 do código do 3b-2: na recuperação, o store fora FALHA FECHADO
+   * (indisponível), com o alarme do rate limit; barrada, devolve as reservas de todos (R13 do #152).
+   */
+  private async reservarVarias(contadores: { chave: string; teto: number }[], motivo: 'bloqueio_de_login' | 'bloqueio_do_fator'): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
+    const b = this.d.bloqueio;
+    if (!b) return 'ok';
+    const feitas: string[] = [];
+    try {
+      for (const c of contadores) {
+        const n = (await b.store.hit(c.chave, JANELA_DE_BLOQUEIO_MS)).count;
+        feitas.push(c.chave);
+        if (n > c.teto) {
+          for (const f of feitas) await b.store.release(f, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+          return 'bloqueado';
+        }
+      }
+      return 'ok';
+    } catch {
+      // R2 do parecer do endurecimento: aqui o caminho FALHA FECHADO, então o alarme não é o de "seguiu sem bloqueio".
+      registrarEventoDeSeguranca('BLOQUEIO_INDISPONIVEL', { motivo });
+      for (const f of feitas) await b.store.release(f, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+      return 'indisponivel';
+    }
+  }
+
+  private async devolverVarias(contadores: { chave: string }[]): Promise<void> {
+    const b = this.d.bloqueio;
+    if (b) for (const c of contadores) await b.store.release(c.chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+  }
+
+  /** Consome o token de forma atômica (requisições em paralelo: só uma passa). */
+  private async consumirRecuperacao(id: string): Promise<boolean> {
+    const r = await this.d.dbAuth
+      .update(recuperacao)
+      .set({ usadoEm: new Date() })
+      .where(and(eq(recuperacao.id, id), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, this.agora())))
+      .returning({ id: recuperacao.id });
+    return r.length > 0;
+  }
+
+  /**
+   * Trilha da recuperação: com o tipo na clínica que emitiu; nas DEMAIS clínicas da pessoa, só que a credencial mudou
+   * (R1 do código do 3b-2; R2 da reconferência da 3b: a credencial é da pessoa, sem detalhe da outra clínica).
+   */
+  private async trilhaDaRecuperacao(clinicaId: string, userId: string, tipo: TipoDeRecuperacao): Promise<void> {
+    for (const outra of (await this.clinicasDoUsuario(userId)).filter((t) => t !== clinicaId)) {
+      await withTenant(
+        this.d.dbClinica,
+        outra as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: outra as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'credential_changed' } }),
+        userId,
+      );
+    }
+    await withTenant(
+      this.d.dbClinica,
+      clinicaId as TenantId,
+      (tx) =>
+        recordAudit(tx, { tenantId: clinicaId as TenantId, userId: userId as UserId, roles: [] }, {
+          action: AuditAction.PermissionChange,
+          scope: 'clinic_members',
+          metadata: { op: 'credential_recovery_used', kind: tipo },
+        }),
+      userId,
+    );
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
@@ -238,17 +498,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */
   async idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'> {
     const [ja] = await this.d.dbAuth
-      .select({ id: usuario.id, ativo: usuario.ativo, origem: usuario.conviteDeOrigem, senha: conta.password })
+      .select({ id: usuario.id, ativo: usuario.ativo, inativaPor: usuario.inativaPor, senha: conta.password })
       .from(usuario)
       .leftJoin(conta, and(eq(conta.userId, usuario.id), eq(conta.providerId, 'credential')))
       .where(sql`lower(${usuario.email}) = ${email.trim().toLowerCase()}`);
     if (!ja) return { userId: randomUUID(), reaproveita: false };
-    const abandonada = !ja.ativo && ja.origem !== null && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
+    const abandonada = !ja.ativo && ja.inativaPor === 'convite_desfeito' && ja.senha === null && (await this.clinicasDoUsuario(ja.id)).length === 0;
     return abandonada ? { userId: ja.id, reaproveita: true } : 'conta_existente';
   }
 
   async desfazerContaDoConvite(userId: string): Promise<void> {
-    await this.d.dbAuth.update(usuario).set({ ativo: false }).where(eq(usuario.id, userId));
+    await this.d.dbAuth.update(usuario).set({ ativo: false, inativaPor: 'convite_desfeito' }).where(eq(usuario.id, userId));
     await this.d.dbAuth.update(conta).set({ password: null }).where(eq(conta.userId, userId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, userId));
   }
@@ -277,13 +537,15 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     if (e.reaproveita) {
       // Conta abandonada por um aceite que falhou: volta a valer com a senha nova (só se continuar abandonada).
       const hash = await gerarHashDeSenha(e.senha);
+      // A concessão já reativou a conta (trigger da 0069); a marca da conta abandonada é a senha ausente.
       const r = await this.d.dbAuth
-        .update(usuario)
-        .set({ ativo: true, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
-        .where(and(eq(usuario.id, userId), eq(usuario.ativo, false)))
-        .returning({ id: usuario.id });
+        .update(conta)
+        .set({ password: hash })
+        .where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential'), isNull(conta.password)))
+        .returning({ id: conta.id });
       if (r.length === 0) return 'conta_existente';
-      await this.d.dbAuth.update(conta).set({ password: hash }).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+      // Nome e origem vão DEPOIS do commit da clínica (completarContaReaproveitada): a linha de usuario está travada
+      // pelo trigger da concessão nesta transação, e tocá-la por outra conexão travaria as duas.
       return { userId };
     }
     try {
@@ -303,6 +565,160 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       return 'conta_existente';
     }
     return { userId };
+  }
+
+  /** Reserva atômica no contador de bloqueio (R15, mesma regra do #152); devolvida se a credencial conferir. */
+  private async reservarTentativa(chave: string): Promise<boolean> {
+    const b = this.d.bloqueio;
+    if (!b) return true;
+    const n = (await b.store.hit(chave, JANELA_DE_BLOQUEIO_MS).catch(() => ({ count: 0 }))).count;
+    if (n > TETO_DE_FALHAS) {
+      await b.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+      return false;
+    }
+    return true;
+  }
+
+  private async devolverTentativa(chave: string): Promise<void> {
+    if (this.d.bloqueio) await this.d.bloqueio.store.release(chave, JANELA_DE_BLOQUEIO_MS).catch(() => undefined);
+  }
+
+  /** Senha conferida contra o hash, com o mesmo custo quando não há credencial. */
+  private async senhaConfere(userId: string, senha: string): Promise<boolean> {
+    const [c] = await this.d.dbAuth.select({ hash: conta.password }).from(conta).where(and(eq(conta.userId, userId), eq(conta.providerId, 'credential')));
+    if (!c?.hash) {
+      await gerarHashDeSenha(senha);
+      return false;
+    }
+    return conferirSenha({ hash: c.hash, password: senha }).catch(() => false);
+  }
+
+  /** Código TOTP conferido com o segredo decifrado pela biblioteca, com a marca de reuso. */
+  private async totpDaPessoaConfere(userId: string, codigo: string): Promise<boolean | 'sem_fator'> {
+    const [f] = await this.d.dbAuth.select({ segredo: doisFatores.secret, verificado: doisFatores.verified }).from(doisFatores).where(eq(doisFatores.userId, userId));
+    if (!f?.verificado) return 'sem_fator';
+    const b = this.d.bloqueio;
+    if (b) {
+      const usado = await b.store.hit(chaveDoBloqueio(b.chaveHmac, 'totp-usado', `${userId}:${codigo}`), JANELA_DE_REUSO_MS).catch(() => ({ count: 1 }));
+      if (usado.count > 1) return false;
+    }
+    if (!this.d.segredoDaInstancia) return false;
+    const claro = await symmetricDecrypt({ key: this.d.segredoDaInstancia, data: f.segredo }).catch(() => null);
+    return claro !== null && totpConfere(claro, codigo, this.agora().getTime());
+  }
+
+  /**
+   * Senha e código TOTP de uma conta existente, SEM abrir sessão (aceite de convite, R1 e R2 do desenho do PR 3; R15:
+   * pelos bloqueios de login e de fator). Funciona também para a conta desligada que está sendo recontratada.
+   */
+  async conferirCredenciais(e: {
+    email: string;
+    senha: string;
+    codigo: string;
+    cabecalhos?: Headers;
+  }): Promise<{ userId: string } | 'falhou' | 'sem_fator' | 'bloqueado' | 'indisponivel'> {
+    const email = e.email.trim().toLowerCase();
+    const [u] = await this.d.dbAuth.select({ id: usuario.id }).from(usuario).where(sql`lower(${usuario.email}) = ${email}`);
+    const b = this.d.bloqueio;
+    const origemBruta = e.cabecalhos?.get(CABECALHO_ORIGEM) ?? '';
+    const origem = /^[0-9a-f]{16}$/.test(origemBruta) ? origemBruta : undefined;
+    const idsDoEvento = { ...(u ? { userId: u.id } : {}), ...(origem ? { origem } : {}) };
+    // R2 do código do 3b-3: os mesmos contadores do login (e-mail e origem), com falha fechada e eventos.
+    const doLogin = [
+      { chave: b ? chaveDoBloqueio(b.chaveHmac, 'login', email) : '', teto: TETO_DE_FALHAS },
+      ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'login-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+    ];
+    const r1 = await this.reservarVarias(doLogin, 'bloqueio_de_login');
+    if (r1 !== 'ok') {
+      if (r1 === 'bloqueado') registrarEventoDeSeguranca('LOGIN_BLOQUEADO', { motivo: 'bloqueio_de_login', ...(origem ? { origem } : {}) });
+      return r1;
+    }
+    // R6 do código do 3b-3: e-mail inexistente gasta o mesmo hash (o tempo não revela se a conta existe).
+    if (!u) {
+      await gerarHashDeSenha(e.senha);
+      registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', ...(origem ? { origem } : {}) });
+      return 'falhou';
+    }
+    if (!(await this.senhaConfere(u.id, e.senha))) {
+      registrarEventoDeSeguranca('LOGIN_FALHOU', { motivo: 'senha_errada', ...(origem ? { origem } : {}) });
+      return 'falhou';
+    }
+    await this.devolverVarias(doLogin);
+    const doFator = [
+      { chave: b ? chaveDoBloqueio(b.chaveHmac, 'fator', u.id) : '', teto: TETO_DE_FALHAS },
+      ...(origem && b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'fator-origem', origem), teto: TETO_DE_FALHAS_POR_ORIGEM }] : []),
+    ];
+    const r2 = await this.reservarVarias(doFator, 'bloqueio_do_fator');
+    if (r2 !== 'ok') {
+      if (r2 === 'bloqueado') {
+        registrarEventoDeSeguranca('MFA_BLOQUEADO', { motivo: 'bloqueio_do_fator', ...idsDoEvento });
+        // R1 do parecer do endurecimento: o aceite que tranca o fator também avisa os admins.
+        await this.avisarFatorBloqueado(u.id).catch(() => undefined);
+      }
+      return r2;
+    }
+    const totp = await this.totpDaPessoaConfere(u.id, e.codigo);
+    if (totp === 'sem_fator') {
+      await this.devolverVarias(doFator);
+      return 'sem_fator';
+    }
+    if (!totp) {
+      registrarEventoDeSeguranca('MFA_FALHOU', { motivo: 'codigo_errado', ...idsDoEvento });
+      return 'falhou';
+    }
+    await this.devolverVarias(doFator);
+    return { userId: u.id };
+  }
+
+  /** R6 do #152: aviso de fator bloqueado aos admins de cada clínica da pessoa (o auxiliar limita a 1 por dia). */
+  async avisarFatorBloqueado(userId: string): Promise<void> {
+    for (const tenantId of await this.clinicasDoUsuario(userId)) {
+      const ctx = { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] };
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        async (tx) => {
+          await recordAudit(tx, ctx, { action: AuditAction.AnomalyAlert, scope: 'mfa', metadata: { rule: 'fator_bloqueado' } });
+          await avisarAdminsDeAnomalia(tx, ctx, 'fator_bloqueado');
+        },
+        userId,
+      );
+    }
+  }
+
+  /**
+   * Anonimização a pedido do titular (R18; R11 do desenho do PR 3): o id fica (o prontuário identifica o autor pela
+   * tabela da clínica); e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; a conta fica inativa.
+   */
+  async anonimizarConta(userId: string): Promise<void> {
+    const clinicasAntes = await this.clinicasDoUsuario(userId);
+    await this.d.dbAuth.transaction(async (tx) => {
+      await tx
+        .update(usuario)
+        .set({ name: 'Conta anonimizada', email: `anonimizada-${userId}@anonimizada.invalid`, ativo: false, inativaPor: 'anonimizada', image: null })
+        .where(eq(usuario.id, userId));
+      await tx.update(conta).set({ password: null }).where(eq(conta.userId, userId));
+      await tx.delete(doisFatores).where(eq(doisFatores.userId, userId));
+      await tx.delete(sessao).where(eq(sessao.userId, userId));
+      await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, userId), isNull(recuperacao.usadoEm)));
+    });
+    // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
+    registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
+    for (const tenantId of clinicasAntes) {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } }),
+        userId,
+      );
+    }
+  }
+
+  async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
+    await this.d.dbAuth
+      .update(usuario)
+      .set({ ativo: true, inativaPor: null, name: e.nome.trim().slice(0, 200), clinicaDeOrigem: e.clinicaDeOrigem, conviteDeOrigem: e.conviteDeOrigem })
+      .where(eq(usuario.id, e.userId));
   }
 
   async abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
