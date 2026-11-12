@@ -119,3 +119,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - No topo: tipos e lint limpos, 1142 testes de unidade verdes. Nenhuma branch ficou com marcador de conflito.
 - **#152:** CI 16/16 verde depois da resolução. A única pendência é a nova aprovação do @Lopesloro, que pedi no PR com a explicação. Deixei dito também que, à medida que cada PR passar a apontar para a `main`, o #155, o #156, o #173, o #177 e o #178 vão precisar da revisão dele.
 - **Alerta do Dependabot na `main`** (GHSA-g3hv-75wg-m249, gravidade média): `minimatch` 10.2.6, menor que a 11.0.1 corrigida, com risco de negação de serviço. Vem só do ESLint e do typescript-eslint, que são ferramentas de desenvolvimento e não entram na imagem da API. Não é urgente. Resolver depois da pilha (atualização do ESLint ou override), junto com o #151.
+- **#170 fechado** (era nosso; branch preservada). Ficou superado: o sócio tirou o salvamento do modo http no #158 (`e7fd34a`), então não há mais medida a corrigir. O que o #170 apontava ficou registrado no comentário de fechamento, para quando o salvamento voltar.
+- **#158, reconferência do Guardião: veto retirado, APROVADO COM RESSALVAS.** V1, V2 e V3 foram resolvidos de verdade. Antes do merge, sem nova conferência, faltam:
+  - C1: a mensagem "Use a demonstração" empurra evolução real para o modo fake;
+  - R5a: um comentário de teste ficou desatualizado.
+  
+  Comentei no PR e aprovo quando ele subir os dois. As ressalvas R2 a R4 e N2 ficaram na issue #180.
+- **#143 e #157:** o sócio ainda não mexeu desde as nossas revisões.
