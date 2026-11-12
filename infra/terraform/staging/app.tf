@@ -269,7 +269,7 @@ locals {
     ["DATABASE_URL", "REDIS_URL", "PAGINATION_CURSOR_KEY", "RATE_LIMIT_HASH_KEY"],
     var.login_real_habilitado ? ["DATABASE_AUTH_URL", "BETTER_AUTH_SECRET"] : [],
   )
-  api_ambiente_obrigatorio  = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID", "AWS_REGION"]
+  api_ambiente_obrigatorio = ["NODE_ENV", "API_PORT", "HTTP_TRUST_PROXY_HOPS", "IMPORTADOR_HABILITADO", "WHATSAPP_PROVEDOR", "SUPPORT_PSEUDONYM_KMS_KEY_ID", "AWS_REGION"]
   # Nunca na tarefa da API: credencial de migração/admin, segredo local de dev, chave do pseudônimo
   # fora do KMS, rate limit por instância, jobs desligados (§4.4), TLS sem validação.
   api_variaveis_proibidas = [
