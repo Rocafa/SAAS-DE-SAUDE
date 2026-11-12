@@ -1,6 +1,6 @@
 # Anonimização a pedido do titular: como o suporte executa (desenho para o Guardião)
 
-> 12/11/2026 · Maestro · **desenho, sem código.** Origem: o RIPD de identidade (§5, item 2) diz que "o suporte roda `anonimizarConta` (sem rota pública)", mas **nada no código chama esse método**: não há rota, comando nem job. A conferência do roteiro do B8 (12/11) deixou isso em aberto. Sem um caminho, um pedido do titular (LGPD art. 18, IV e VI) não tem como ser atendido no prazo.
+> 12/11/2026 · Maestro · **desenho aprovado com ressalvas pelo Guardião** (`revisoes/2026-11-12-desenho-anonimizacao-pelo-suporte.md`); as ressalvas valem sobre o texto abaixo. Origem: o RIPD de identidade (§5, item 2) diz que "o suporte roda `anonimizarConta` (sem rota pública)", mas **nada no código chama esse método**: não há rota, comando nem job. A conferência do roteiro do B8 (12/11) deixou isso em aberto. Sem um caminho, um pedido do titular (LGPD art. 18, IV e VI) não tem como ser atendido no prazo.
 
 ## O que já existe
 

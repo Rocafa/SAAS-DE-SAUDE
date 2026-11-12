@@ -169,3 +169,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - No #154, a trava não libera mais `resultado` nem `v`. O autoteste da liberação por arquivo usa agora um caso que continua existindo.
   - Conferi a trava nova contra o código do #155: 9/9. Assim ela fica certa em qualquer ordem de merge.
 - **Lacuna achada: nada no código chama `anonimizarConta`.** O RIPD diz que o suporte roda a anonimização a pedido do titular, mas não há rota, comando nem job, então um pedido do art. 18 não teria como ser atendido. Escrevi o desenho em `docs/04-arquitetura/anonimizacao-pelo-suporte.md`: um comando operacional avulso no ECS, com duas pessoas, um chamado `LGPD-` e uma trava de confirmação, cuja saída traz só ids e contagens, e o chamado e o operador na prova. Mandei para o Guardião antes de qualquer código.
+- **Guardião aprovou o desenho da anonimização com ressalvas**: comando avulso no ECS, sem break-glass. Quem roda é provado pelo CloudTrail e por um grupo IAM nominal com MFA. A trilha da clínica leva o chamado `LGPD-` com ator sistema, mas não o operador. Entra **antes da abertura, como B10**. O parecer apontou defeitos no próprio `anonimizarConta`:
+  - a trilha registra o titular como ator;
+  - repetir duplica a trilha;
+  - um id inexistente "anonimiza" sem erro;
+  - a falha numa clínica interrompe as outras.
+  
+  Também faltam: a conferência no banco em vez do `GET /sessao`, a saída só com código fixo, a tarefa sem `BETTER_AUTH_SECRET`, o prazo interno de 15 dias e o aviso às clínicas (art. 18 §6). Criei o B10 no checklist. Próximo passo: o código.
