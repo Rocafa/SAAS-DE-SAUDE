@@ -117,3 +117,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - no #159 o conflito era só de import;
   - o script que juntava os imports descartou o `auditLog` onde a branch já importava `tenants` do mesmo módulo (#176 a #179). O typecheck do topo pegou o erro, que corrigi no #176 (`import { auditLog, tenants }`) e propaguei.
   - No topo: tipos e lint limpos, 1142 testes de unidade verdes. Nenhuma branch ficou com marcador de conflito.
+- **#152:** CI 16/16 verde depois da resolução. A única pendência é a nova aprovação do @Lopesloro, que pedi no PR com a explicação. Deixei dito também que, à medida que cada PR passar a apontar para a `main`, o #155, o #156, o #173, o #177 e o #178 vão precisar da revisão dele.
+- **Alerta do Dependabot na `main`** (GHSA-g3hv-75wg-m249, gravidade média): `minimatch` 10.2.6, menor que a 11.0.1 corrigida, com risco de negação de serviço. Vem só do ESLint e do typescript-eslint, que são ferramentas de desenvolvimento e não entram na imagem da API. Não é urgente. Resolver depois da pilha (atualização do ESLint ou override), junto com o #151.
