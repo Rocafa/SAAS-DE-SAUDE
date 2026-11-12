@@ -83,7 +83,7 @@ output "ops_anonimizacao_rede" {
   }
 }
 
-output "grupo_ops_lgpd" {
-  description = "Grupo IAM nominal que roda a anonimização (membros entram fora do Terraform, um usuário por pessoa, com MFA)."
-  value       = aws_iam_group.ops_lgpd.name
+output "papel_ops_lgpd" {
+  description = "Papel que roda a anonimização (R-C do #190): humano de principais_ops_lgpd, com MFA e --source-identity, sessão de 1 h, todo RunTask gera alerta. null quando a lista está vazia."
+  value       = one(aws_iam_role.ops_lgpd[*].arn)
 }

@@ -3,8 +3,8 @@
 # resposta 1 e R5:
 #   - definição de tarefa, papel de execução e papel de tarefa PRÓPRIOS; só as credenciais de banco
 #     (app_auth e app_user). Nada de BETTER_AUTH_SECRET, Redis, chaves HMAC, KMS ou WhatsApp;
-#   - quem roda é provado pela AWS (principal do ecs:RunTask no CloudTrail): só o grupo IAM nominal
-#     ops-lgpd, com MFA. Nenhum papel de máquina (API, jobs, deploy) roda esta tarefa nem passa os
+#   - quem roda é provado pela AWS (principal do ecs:RunTask no CloudTrail): só o papel ops-lgpd
+#     (humano nominal, MFA, SourceIdentity; R-C). Nenhum papel de máquina roda esta tarefa nem passa os
 #     papéis dela;
 #   - sem break-glass.
 #
@@ -207,18 +207,99 @@ resource "aws_ecs_task_definition" "ops_anonimizacao" {
   }
 }
 
-# --- Grupo nominal ops-lgpd (resposta 1 do parecer) -------------------------------------------
-# Uma pessoa por usuário IAM, sem papel compartilhado. Os usuários entram no grupo FORA do
-# Terraform (com o chamado de entrada), para nenhum nome de pessoa ir para o git.
+# --- Papel ops-lgpd (resposta 1 do parecer do desenho; R-C do parecer do código do #190) ---------
+# Acesso humano por PAPEL, no padrão de investigacao_seguranca e break_glass (confianca_humano_mfa):
+# só a conta, MFA recente, sessão de 1 h. Mais restrito que o padrão: só os principais de
+# var.principais_ops_lgpd (fora do git, no tfvars) e com sts:SourceIdentity obrigatório, para o
+# CloudTrail do RunTask mostrar a pessoa e não só o papel.
+#   - usuário IAM nominal: SourceIdentity tem de ser igual ao nome do usuário (aws:username);
+#   - papel do SSO (permission set): a AWS não expõe o usuário do SSO como variável de política, então
+#     a confiança exige só que haja SourceIdentity; a pessoa fica também no nome da sessão do SSO
+#     (aws:userid no CloudTrail) e o conferente confere os dois no chamado.
+# Sem principal na lista, o papel não existe (ninguém roda a anonimização).
 
-resource "aws_iam_group" "ops_lgpd" {
-  #checkov:skip=CKV2_AWS_14:Membros entram fora do Terraform (nomes de pessoas não vão para o git).
-  name = "${local.nome}-ops-lgpd"
+locals {
+  ops_lgpd_usuarios = [for a in var.principais_ops_lgpd : a if can(regex(":user/", a))]
+  ops_lgpd_sso      = [for a in var.principais_ops_lgpd : a if !can(regex(":user/", a))]
+  ops_lgpd_ativo    = length(var.principais_ops_lgpd) > 0
+}
+
+data "aws_iam_policy_document" "confianca_ops_lgpd" {
+  dynamic "statement" {
+    for_each = length(local.ops_lgpd_usuarios) > 0 ? [1] : []
+    content {
+      sid     = "UsuarioNominalComMfa"
+      actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
+      principals {
+        type        = "AWS"
+        identifiers = ["arn:${data.aws_partition.atual.partition}:iam::${local.conta}:root"]
+      }
+      condition {
+        test     = "ArnLike"
+        variable = "aws:PrincipalArn"
+        values   = local.ops_lgpd_usuarios
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "sts:SourceIdentity"
+        values   = ["$${aws:username}"]
+      }
+      condition {
+        test     = "Bool"
+        variable = "aws:MultiFactorAuthPresent"
+        values   = ["true"]
+      }
+      condition {
+        test     = "NumericLessThan"
+        variable = "aws:MultiFactorAuthAge"
+        values   = ["3600"]
+      }
+    }
+  }
+  dynamic "statement" {
+    for_each = length(local.ops_lgpd_sso) > 0 ? [1] : []
+    content {
+      sid     = "SsoComMfaESourceIdentity"
+      actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
+      principals {
+        type        = "AWS"
+        identifiers = ["arn:${data.aws_partition.atual.partition}:iam::${local.conta}:root"]
+      }
+      condition {
+        test     = "ArnLike"
+        variable = "aws:PrincipalArn"
+        values   = local.ops_lgpd_sso
+      }
+      condition {
+        test     = "Null"
+        variable = "sts:SourceIdentity"
+        values   = ["false"]
+      }
+      condition {
+        test     = "Bool"
+        variable = "aws:MultiFactorAuthPresent"
+        values   = ["true"]
+      }
+      condition {
+        test     = "NumericLessThan"
+        variable = "aws:MultiFactorAuthAge"
+        values   = ["3600"]
+      }
+    }
+  }
+}
+
+resource "aws_iam_role" "ops_lgpd" {
+  count                = local.ops_lgpd_ativo ? 1 : 0
+  name                 = "${local.nome}-ops-lgpd"
+  description          = "Roda a anonimização a pedido do titular (B10): humano nominal com MFA e SourceIdentity, sessão de 1 h, todo RunTask gera alerta."
+  assume_role_policy   = data.aws_iam_policy_document.confianca_ops_lgpd.json
+  max_session_duration = 3600
 }
 
 data "aws_iam_policy_document" "ops_lgpd" {
-  # Roda SÓ a revisão atual desta definição (ARN com revisão), SÓ neste cluster, SÓ com MFA. Uma
-  # revisão nova registrada por fora (ex.: com outros papéis) não fica executável.
+  # Roda SÓ a revisão atual desta definição (ARN com revisão), SÓ neste cluster. Uma revisão nova
+  # registrada por fora (ex.: com outros papéis) não fica executável. O MFA é exigido na confiança.
   statement {
     sid       = "RodarAnonimizacao"
     actions   = ["ecs:RunTask"]
@@ -227,16 +308,6 @@ data "aws_iam_policy_document" "ops_lgpd" {
       test     = "ArnEquals"
       variable = "ecs:cluster"
       values   = [aws_ecs_cluster.this.arn]
-    }
-    condition {
-      test     = "Bool"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["true"]
-    }
-    condition {
-      test     = "NumericLessThan"
-      variable = "aws:MultiFactorAuthAge"
-      values   = ["3600"]
     }
   }
   statement {
@@ -248,39 +319,19 @@ data "aws_iam_policy_document" "ops_lgpd" {
       variable = "iam:PassedToService"
       values   = ["ecs-tasks.amazonaws.com"]
     }
-    condition {
-      test     = "Bool"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["true"]
-    }
-    condition {
-      test     = "NumericLessThan"
-      variable = "aws:MultiFactorAuthAge"
-      values   = ["3600"]
-    }
   }
   # Acompanhar a execução: estado da tarefa e a linha de saída (só o prefixo desta tarefa no log).
   statement {
     sid       = "AcompanharTarefa"
     actions   = ["ecs:DescribeTasks"]
     resources = ["arn:${data.aws_partition.atual.partition}:ecs:${local.regiao}:${local.conta}:task/${aws_ecs_cluster.this.name}/*"]
-    condition {
-      test     = "Bool"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["true"]
-    }
   }
   statement {
     sid       = "LerSaidaDaAnonimizacao"
     actions   = ["logs:GetLogEvents"]
     resources = ["${aws_cloudwatch_log_group.api.arn}:log-stream:${local.ops_anon_prefixo}/*"]
-    condition {
-      test     = "Bool"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["true"]
-    }
   }
-  # Mesmo que alguém amplie o grupo: sem MFA, nada de RunTask nem PassRole.
+  # Mesmo que alguém amplie a confiança: sessão sem MFA não roda nem passa papel.
   statement {
     sid       = "SemMfaNada"
     effect    = "Deny"
@@ -292,13 +343,87 @@ data "aws_iam_policy_document" "ops_lgpd" {
       values   = ["false"]
     }
   }
+  statement {
+    sid         = "SomenteSaoPaulo"
+    effect      = "Deny"
+    not_actions = ["iam:*", "sts:*"]
+    resources   = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestedRegion"
+      values   = ["sa-east-1"]
+    }
+  }
 }
 
-resource "aws_iam_group_policy" "ops_lgpd" {
+resource "aws_iam_role_policy" "ops_lgpd" {
+  count  = local.ops_lgpd_ativo ? 1 : 0
   name   = "rodar-anonimizacao"
-  group  = aws_iam_group.ops_lgpd.name
+  role   = aws_iam_role.ops_lgpd[0].id
   policy = data.aws_iam_policy_document.ops_lgpd.json
 }
+
+# --- Alerta a cada execução (R-B do parecer do código do #190) -------------------------------------
+# RunTask é evento de ESCRITA do CloudTrail: o estado ENABLED basta. Duas regras no mesmo tópico:
+#   1. <nome>-ops-anonimizacao-execucao: TODA chamada a RunTask desta família (pedida pelo nome,
+#      nome:revisão ou ARN, inclusive as recusadas), como o break-glass ("cada uso gera alerta").
+#   2. <nome>-ops-anonimizacao-override-suspeito (CRÍTICO): o override traz variável de ambiente com
+#      nome diferente de CONFIRMA_ANONIMIZACAO (ex.: NODE_OPTIONS=--import=data:..., que roda código
+#      antes do main), environmentFiles, troca de papel (taskRoleArn/executionRoleArn) ou ECS Exec.
+# Limite do padrão de evento: o EventBridge não confere tamanho nem ordem de um array, então NÃO dá
+# para exigir que o `command` seja exatamente as 6 posições --usuario/--chamado/--operador. Isso fica
+# com a regra 1 (todo RunTask avisa) e com o conferente, que confere o JSON do override no evento do
+# CloudTrail daquela execução e anota no chamado (R-B c, runbook). O entryPoint fixo (R-A) já impede
+# trocar o programa pelo `command`.
+
+locals {
+  ops_anon_evento_runtask = {
+    source        = ["aws.ecs"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+  }
+  ops_anon_familia_curinga = [{ wildcard = "*${local.ops_anon_nome}*" }]
+}
+
+resource "aws_cloudwatch_event_rule" "ops_anonimizacao_execucao" {
+  name        = "${local.ops_anon_nome}-execucao"
+  description = "Toda execução (RunTask) da anonimização pelo suporte (R-B do #190)."
+  event_pattern = jsonencode(merge(local.ops_anon_evento_runtask, {
+    detail = {
+      eventSource       = ["ecs.amazonaws.com"]
+      eventName         = ["RunTask"]
+      requestParameters = { taskDefinition = local.ops_anon_familia_curinga }
+    }
+  }))
+}
+
+resource "aws_cloudwatch_event_target" "ops_anonimizacao_execucao" {
+  rule = aws_cloudwatch_event_rule.ops_anonimizacao_execucao.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
+
+resource "aws_cloudwatch_event_rule" "ops_anonimizacao_override_suspeito" {
+  name        = "${local.ops_anon_nome}-override-suspeito"
+  description = "CRITICO: RunTask da anonimização com override fora do runbook (variável além de CONFIRMA_ANONIMIZACAO, troca de papel, ECS Exec). R-B do #190."
+  event_pattern = jsonencode(merge(local.ops_anon_evento_runtask, {
+    detail = {
+      eventSource = ["ecs.amazonaws.com"]
+      eventName   = ["RunTask"]
+      "$or" = [
+        { requestParameters = { taskDefinition = local.ops_anon_familia_curinga, overrides = { containerOverrides = { environment = { name = [{ "anything-but" = "CONFIRMA_ANONIMIZACAO" }] } } } } },
+        { requestParameters = { taskDefinition = local.ops_anon_familia_curinga, overrides = { containerOverrides = { environmentFiles = [{ exists = true }] } } } },
+        { requestParameters = { taskDefinition = local.ops_anon_familia_curinga, overrides = { taskRoleArn = [{ exists = true }] } } },
+        { requestParameters = { taskDefinition = local.ops_anon_familia_curinga, overrides = { executionRoleArn = [{ exists = true }] } } },
+        { requestParameters = { taskDefinition = local.ops_anon_familia_curinga, enableExecuteCommand = [true] } },
+      ]
+    }
+  }))
+}
+
+resource "aws_cloudwatch_event_target" "ops_anonimizacao_override_suspeito" {
+  rule = aws_cloudwatch_event_rule.ops_anonimizacao_override_suspeito.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
+
 
 # --- Papéis de máquina NUNCA rodam esta tarefa (resposta 1: "o papel da API não pode...") -------
 # Hoje nenhum deles tem ecs:RunTask, e o PassRole do deploy é só nos papéis da API. O Deny
