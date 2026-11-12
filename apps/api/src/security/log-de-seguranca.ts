@@ -111,6 +111,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'teto_diario',
   'conta_sem_vinculo',
   'conta_com_vinculo',
+  'anonimizacao_incompleta',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
