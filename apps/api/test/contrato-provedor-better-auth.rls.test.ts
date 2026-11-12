@@ -153,14 +153,21 @@ const MARGEM_DA_VIRADA_MS = 3_000;
 function proximoCodigo(userId: string): string {
   const s = segredos.get(userId);
   if (!s) throw new Error('pessoa sem TOTP cadastrado');
-  const agora = Date.now();
-  const periodo = Math.floor(agora / 30_000);
-  const pertoDaVirada = 30_000 - (agora % 30_000) < MARGEM_DA_VIRADA_MS;
-  const d = DESLOCAMENTOS.find((x) => !s.usados.has(periodo + x) && !(x === -1 && pertoDaVirada));
-  if (d === undefined) throw new Error('bancada: sem código TOTP livre neste período (mais de 3 verificações em 30 s)');
-  s.usados.add(periodo + d);
-  s.ultimo = codigoTotp(s.segredo, d, agora);
-  return s.ultimo;
+  for (let tentativa = 0; tentativa < 2; tentativa++) {
+    const agora = Date.now();
+    const periodo = Math.floor(agora / 30_000);
+    const resta = 30_000 - (agora % 30_000);
+    const d = DESLOCAMENTOS.find((x) => !s.usados.has(periodo + x) && !(x === -1 && resta < MARGEM_DA_VIRADA_MS));
+    if (d !== undefined) {
+      s.usados.add(periodo + d);
+      s.ultimo = codigoTotp(s.segredo, d, agora);
+      return s.ultimo;
+    }
+    // Perto da virada, com 0 e +1 já usados: espera o período seguinte (no máximo 3 s), onde o +1 está livre.
+    if (resta >= MARGEM_DA_VIRADA_MS) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, resta + 100);
+  }
+  throw new Error('bancada: sem código TOTP livre neste período (mais de 3 verificações em 30 s)');
 }
 
 /** Cadastro real do TOTP (senha + primeiro código). A biblioteca troca a sessão: devolve o cookie novo. */
