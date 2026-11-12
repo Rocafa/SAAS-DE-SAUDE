@@ -11,7 +11,7 @@
 | Papel | O quê |
 |---|---|
 | **DPO (encarregado)** | recebe o pedido, confirma a identidade, decide se cabe, responde ao titular |
-| **Executor** (grupo IAM `ops-lgpd`, usuário nominal com MFA) | roda a tarefa avulsa do ECS |
+| **Executor** (pessoa da lista `principais_ops_lgpd`, que assume o papel `ops-lgpd` com MFA) | roda a tarefa avulsa do ECS |
 | **Conferente** (outra pessoa) | confere o uuid antes de rodar e a saída depois |
 
 Executor e conferente são pessoas diferentes, e os dois nomes vão no chamado operacional.
@@ -31,7 +31,11 @@ Executor e conferente são pessoas diferentes, e os dois nomes vão no chamado o
 
 ## Rodar
 
-Tarefa avulsa do ECS na definição `<ambiente>-ops-anonimizacao`, iniciada pelo executor (usuário do grupo `ops-lgpd`, com MFA). A prova de quem rodou é o `ecs:RunTask` no CloudTrail.
+Tarefa avulsa do ECS na definição `<ambiente>-ops-anonimizacao`. O executor assume o papel `ops-lgpd` **com MFA e `--source-identity <seu usuário>`** (obrigatório na confiança do papel, como no break-glass) e roda a tarefa com essa sessão. A prova de quem rodou é o `ecs:RunTask` no CloudTrail, com a identidade de origem. Cada execução gera um alerta no tópico de segurança; um override com variável além de `CONFIRMA_ANONIMIZACAO`, troca de papel ou ECS Exec gera alerta crítico.
+
+```bash
+aws sts assume-role --role-arn <arn do papel ops-lgpd> --role-session-name LGPD-<n> \n  --source-identity <seu usuário> --serial-number <arn do seu MFA> --token-code <código>
+```
 
 ```bash
 aws ecs run-task --cluster <cluster> --task-definition <ambiente>-ops-anonimizacao --launch-type FARGATE \
