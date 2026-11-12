@@ -192,3 +192,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Deny explícito nos papéis de máquina.
   
   Como esta máquina não tem Terraform, quem valida é o CI. Ficam em aberto: SSO × usuário IAM (I1), overrides não limitados pelo IAM (CloudTrail e conferência a dois) e o alerta de uso do `RunTask`. O código foi para a revisão do Guardião.
+- **Código do #190 revisado pelo Guardião: APROVADO COM RESSALVAS**, todas na infra. Ele aceitou o `user_id` do titular na metadata.
+  - **R-A, achado importante, já corrigido:** a imagem é distroless e já começa com o `node`. O `command = ["node", "dist/main.js"]` da **tarefa da API no `app.tf`** virava `node node dist/main.js`, e a **API do staging não subiria** no primeiro dia. Corrigi a API (`["dist/main.js"]`) e a tarefa nova (programa fixo no `entryPoint`; o RunTask só troca os argumentos).
+  - O checkov reprovava o grupo de rede da tarefa como "não ligado", mas ele é usado só no RunTask. Pulei a regra com o motivo escrito, no padrão do projeto.
+  - Runbook: o override leva só os argumentos, o nome do contêiner foi corrigido, e o conferente checa o override no CloudTrail.
+  - R-B (alarme a cada execução) e R-C (papel com MFA e `SourceIdentity` no lugar do grupo IAM) estão com o agente de devops.
