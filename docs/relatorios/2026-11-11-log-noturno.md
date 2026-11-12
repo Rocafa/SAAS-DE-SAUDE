@@ -129,3 +129,14 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Checagem automática a cada 2 h** (`pilha-login-a-cada-2h`, das 08:00 às 22:00). Ela mescla o que o sócio aprovar, traz a `main` para o PR de cima, roda tipos, lint e testes, e pede a nova aprovação. A tarefa de 12/11 às 07:00, que não rodou, foi desligada para não duplicar.
 - **#189 aberto: override do `minimatch` para 11.0.1 ou acima** (alerta do Dependabot GHSA-g3hv-75wg-m249). O pacote vulnerável vem só do ESLint. O ESLint 10 funciona com a 11: o lint passa 4/4 e uma sonda com erro continua reprovada. Tipos limpos e testes verdes (API 1122, web 411). Como mexe no lockfile, entra depois da pilha, antes do #116 e do #151.
 - **Checagem a cada 2 h recriada** (`pilha-login-merges-2h`), agora salva no modo que não pede permissão e já com o #189 na ordem de merge. A anterior foi apagada.
+
+## Continuação de 12/11 (14:30)
+
+- O sócio ainda não fez nada novo. O #152 espera a reaprovação.
+- **Teste instável do TOTP achado e corrigido.** O CI do #159 falhou no "login com TOTP" (`INVALID_CODE`). A causa estava no teste, não no login: o `proximoCodigo` da bancada entregava 0, +1 e -1 relativos à hora da chamada. Quando a janela de 30 s virava no meio do teste, o "-1" caía no código já usado no cadastro, e a proteção contra reuso recusava, corretamente. A chance era de uns 7%. O teste de reuso tinha o risco inverso: supunha que o código do período atual era o do cadastro. Correção no #152:
+  - o helper passa a guardar os períodos usados e o último código entregue;
+  - não entrega o código do período anterior nos 3 s finais da janela;
+  - o teste de reuso repete exatamente o último código.
+  
+  Propaguei pela pilha (um conflito de justaposição no #156, resolvido). O topo passa em tipos e lint, e só esse arquivo usa o gerador de TOTP.
+- **Avulsos #153, #154 e #172 atualizados com a `main`** (que já tem o #149). Sem conflito. Tipos, lint e testes passam nos três (1122, 1127 e 1122). Estão prontos para quando o sócio aprovar.
