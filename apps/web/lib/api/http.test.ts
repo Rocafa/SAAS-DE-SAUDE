@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { criarApiHttp, ErroApi, JANELA_PADRAO, MENSAGENS, mensagemDeErro, RETRATO_TTL_MS } from './http';
 import { criarApi, lerConfigApi, paraIndice } from './selecionar';
+import { MODELOS } from '../prontuario';
 
 const BASE = 'http://127.0.0.1:3333';
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -677,6 +678,134 @@ describe('adaptador HTTP: erros', () => {
     });
     await expect(corpoQueNuncaChega.listarProfissionais()).rejects.toThrow(MENSAGENS.demorou);
   }, 1000);
+
+  describe('prontuário na API real (S1 do E4)', () => {
+    const ATENDIMENTO = {
+      id: U(90),
+      pacienteId: U(1),
+      profissionalId: U(50),
+      agendamentoId: U(80),
+      autorId: U(50),
+      modelo: 'fisio',
+      restrito: false,
+      sigilo: 'compartilhado',
+      status: 'aberto',
+      versao: 1,
+      versaoModelo: 3,
+      conteudo: { queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento', medidas: [{ nome: 'dor', valor: '7' }] },
+      adendos: [],
+      consentimentoIa: 'nao_perguntado',
+      abertoEm: '2026-11-05T09:00:00.000Z',
+      atualizadoEm: '2026-11-05T09:10:00.000Z',
+      finalizadoEm: null,
+      finalizadoPor: null,
+      hashFinalizacao: null,
+      conteudoOculto: false,
+    };
+
+    it('lista o histórico do paciente e traduz o estado do servidor', async () => {
+      const { chamadas, fetch } = simular((c) =>
+        c.url.pathname === `/pacientes/${U(1)}/prontuario`
+          ? respostaJson(200, { itens: [ATENDIMENTO], pagina: 1, limite: 20, temMais: false })
+          : respostaJson(404, { statusCode: 404 }),
+      );
+      const registros = await criarApiHttp({ baseUrl: BASE, fetch }).listarRegistros(U(1));
+      expect(chamadas.filter((c) => c.url.pathname.endsWith('/prontuario'))).toHaveLength(1);
+      expect(registros).toHaveLength(1);
+      expect(registros[0]).toMatchObject({
+        id: ATENDIMENTO.id,
+        pacienteId: U(1),
+        agendamentoId: U(80),
+        modelo: 'fisio',
+        status: 'rascunho',
+        data: '2026-11-05',
+        restrito: false,
+      });
+      // Só campo de texto entra em `campos`: medida e plano não têm tela ainda e não podem virar string torta.
+      expect(registros[0]?.campos).toEqual({ queixa: 'Dor no joelho (fictício)', conduta: 'Fortalecimento' });
+    });
+
+    it('registro oculto vem do servidor com o motivo, inclusive MFA recente', async () => {
+      const oculto = { ...ATENDIMENTO, conteudo: null, adendos: [], conteudoOculto: true, motivoOculto: 'mfa_recente_obrigatorio' };
+      const { fetch } = simular(() => respostaJson(200, { itens: [oculto], pagina: 1, limite: 20, temMais: false }));
+      const [registro] = await criarApiHttp({ baseUrl: BASE, fetch }).listarRegistros(U(1));
+      expect(registro).toMatchObject({ conteudoOculto: true, motivoOculto: 'mfa_recente_obrigatorio' });
+      expect(registro?.campos).toEqual({});
+    });
+
+    it('assinar registro incompleto: a tela recebe os campos que o servidor nomeou (409 registro_incompleto)', async () => {
+      const { fetch } = simular(() =>
+        respostaJson(409, { statusCode: 409, codigo: 'registro_incompleto', campos: ['conduta', 'queixa'] }),
+      );
+      // O servidor manda NOMES de campo, nunca valor: a tela traduz para o rótulo que a pessoa vê.
+      await expect(criarApiHttp({ baseUrl: BASE, fetch }).assinarRegistro(ATENDIMENTO.id)).rejects.toThrow(
+        /Falta preencher: o que foi feito na sessão, como o paciente chegou hoje/,
+      );
+    });
+
+    it('adendo: a única escrita depois de assinado', async () => {
+      const assinado = { ...ATENDIMENTO, status: 'finalizado', finalizadoEm: '2026-11-05T10:00:00.000Z' };
+      const { chamadas, fetch } = simular(() =>
+        respostaJson(201, { ...assinado, adendos: [{ id: U(91), texto: 'Correção (fictícia)', em: '2026-11-05T11:00:00.000Z', autorId: U(50) }] }),
+      );
+      const r = await criarApiHttp({ baseUrl: BASE, fetch }).adicionarAdendo(ATENDIMENTO.id, 'Correção (fictícia)');
+      expect(chamadas.map((c) => `${c.metodo} ${c.url.pathname}`)).toEqual([`POST /atendimentos/${ATENDIMENTO.id}/adendos`]);
+      expect(r.status).toBe('assinado');
+      expect(r.adendos).toEqual([{ texto: 'Correção (fictícia)', em: '2026-11-05T11:00:00.000Z', autor: U(50) }]);
+    });
+
+    it('os campos da tela existem no contrato da API (senão o salvar dá 400 campo_desconhecido)', () => {
+      // A API recusa qualquer chave fora da lista do modelo (`validarConteudo` → `campo_desconhecido`).
+      // Esta é a lista que a API aceita hoje, por modelo, copiada de apps/api/src/modules/records/modelos.ts.
+      const daApi: Record<string, string[]> = {
+        fisio: ['queixa', 'avaliacao', 'conduta', 'resposta', 'orientacoes'],
+        to: ['queixa', 'avaliacao', 'conduta', 'resposta', 'orientacoes'],
+        psicologia: ['tema', 'intervencoes', 'evolucao', 'encaminhamentos'],
+      };
+      // Campos da tela que a API ainda NÃO aceita como texto, com o destino de cada um. Enquanto estiverem
+      // aqui, o adaptador os converte (dor → medida, plano → planoDeSessoes) ou recusa com mensagem própria.
+      const traduzidos: Record<string, 'sem_campo_na_api'> = {
+        dor: 'sem_campo_na_api',
+        plano: 'sem_campo_na_api',
+        objetivo: 'sem_campo_na_api',
+        atividades: 'sem_campo_na_api',
+        desempenho: 'sem_campo_na_api',
+      };
+      for (const [modelo, def] of Object.entries(MODELOS)) {
+        for (const campo of def.campos) {
+          const aceito = daApi[modelo]?.includes(campo.id) === true || traduzidos[campo.id] !== undefined;
+          expect(aceito, `${modelo}.${campo.id}: nem a API aceita nem há tradução declarada`).toBe(true);
+        }
+      }
+    });
+
+    it('V1/V2 do parecer: ler por agendamento e salvar recusam com 501 em vez de dar 404 e 400', async () => {
+      const api = criarApiHttp({ baseUrl: BASE, fetch: simular(() => respostaJson(200, {})).fetch });
+      // `GET /atendimentos/:id` procura pelo id do ATENDIMENTO: com o id do agendamento dava 404 sempre, e a tela
+      // abria vazia uma evolução existente. Salvar exige `versaoBase`, que tem de ser a versão lida pela tela.
+      await expect(api.obterRegistroDoAgendamento(U(80))).rejects.toMatchObject({ status: 501 });
+      await expect(api.salvarRascunho(U(80), { queixa: 'x' })).rejects.toMatchObject({ status: 501 });
+    });
+
+    it('403 de MFA recente é pedido de código, não falta de permissão', () => {
+      expect(mensagemDeErro(403, { codigo: 'mfa_recente_obrigatorio' }).message).toMatch(/confirme o código/i);
+      expect(mensagemDeErro(409, { codigo: 'versao_desatualizada' }).message).toMatch(/mudou enquanto você escrevia/i);
+    });
+
+    it('o que não tem rota recusa com 501 e mensagem própria, em vez de cair no fake', async () => {
+      const api = criarApiHttp({ baseUrl: BASE, fetch: simular(() => respostaJson(200, {})).fetch });
+      await expect(api.listarAnexos(U(1))).rejects.toMatchObject({ status: 501 });
+      await expect(api.linhaDoTempo(U(1))).rejects.toMatchObject({ status: 501 });
+    });
+  });
+
+  it('no modo http, o que é da demonstração não vem do fake (R-C do plano do E4)', async () => {
+    const api = criarApi({ modo: 'http', origem: BASE }, { http: { fetch: simular(() => respostaJson(200, {})).fetch } });
+    // `entrarComo` e `usuariosDemo` existem só na demonstração: no modo http eram servidos pelo fake,
+    // e um clique trocava o papel pelo cliente (achado ALTA do #92).
+    await expect(api.entrarComo('u2')).rejects.toMatchObject({ status: 501 });
+    await expect(api.usuariosDemo()).rejects.toMatchObject({ status: 501 });
+  });
 
   it('o adaptador não tem console nem storage (sem log de dado pessoal)', async () => {
     const { readFileSync } = await import('node:fs');

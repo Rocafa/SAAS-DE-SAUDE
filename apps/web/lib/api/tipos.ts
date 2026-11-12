@@ -41,7 +41,11 @@ export interface Registro {
    * metadados (data e profissional) aparecem. A tela decide a mensagem por este campo.
    */
   conteudoOculto?: boolean;
-  motivoOculto?: 'perfil_nao_clinico' | 'sem_vinculo' | 'sigilo_psicologia';
+  /**
+   * `mfa_recente_obrigatorio` vem da API (psicologia sem MFA recente, R3 do #123): a tela pede o código
+   * e lê de novo, em vez de dizer que não há acesso.
+   */
+  motivoOculto?: 'perfil_nao_clinico' | 'sem_vinculo' | 'sigilo_psicologia' | 'mfa_recente_obrigatorio';
 }
 
 export interface Responsavel {
