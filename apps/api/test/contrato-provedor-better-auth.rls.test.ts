@@ -103,25 +103,36 @@ function soSessao(c: Cabecalhos): Cabecalhos {
   return { cookie: par };
 }
 
-/** Segredo do TOTP por pessoa e quantas verificações já fez (para não repetir código no período: 0, +1, -1). */
-const segredos = new Map<string, { segredo: Buffer; usos: number }>();
+/**
+ * Segredo do TOTP por pessoa, os PERÍODOS já usados (contador absoluto de 30 s) e o último código entregue. Guardar o
+ * período, e não o deslocamento, evita o teste instável de 12/11: com "0, +1, -1" relativos à hora da chamada, se a
+ * janela virava entre duas chamadas, o "-1" caía no código já usado e a proteção contra reuso (correta) recusava.
+ */
+const segredos = new Map<string, { segredo: Buffer; usados: Set<number>; ultimo?: string }>();
 /** Senha atual por pessoa (o gancho trocarSenha muda). */
 const senhas = new Map<string, string>();
 const DESLOCAMENTOS = [0, 1, -1] as const;
+/** Margem para não entregar o código do período anterior perto da virada (a biblioteca aceita só -1, 0 e +1). */
+const MARGEM_DA_VIRADA_MS = 3_000;
 
 function proximoCodigo(userId: string): string {
   const s = segredos.get(userId);
   if (!s) throw new Error('pessoa sem TOTP cadastrado');
-  const d = DESLOCAMENTOS[s.usos % DESLOCAMENTOS.length] ?? 0;
-  s.usos++;
-  return codigoTotp(s.segredo, d);
+  const agora = Date.now();
+  const periodo = Math.floor(agora / 30_000);
+  const pertoDaVirada = 30_000 - (agora % 30_000) < MARGEM_DA_VIRADA_MS;
+  const d = DESLOCAMENTOS.find((x) => !s.usados.has(periodo + x) && !(x === -1 && pertoDaVirada));
+  if (d === undefined) throw new Error('bancada: sem código TOTP livre neste período (mais de 3 verificações em 30 s)');
+  s.usados.add(periodo + d);
+  s.ultimo = codigoTotp(s.segredo, d, agora);
+  return s.ultimo;
 }
 
 /** Cadastro real do TOTP (senha + primeiro código). A biblioteca troca a sessão: devolve o cookie novo. */
 async function cadastrarFator(c: Cabecalhos, userId: string, senha = SENHA): Promise<Cabecalhos> {
   const inicio = await postar('/two-factor/enable', c, { password: senha });
   expect(inicio.r.status, JSON.stringify(inicio.json)).toBe(200);
-  segredos.set(userId, { segredo: segredoDoUri(String(inicio.json['totpURI'])), usos: 0 });
+  segredos.set(userId, { segredo: segredoDoUri(String(inicio.json['totpURI'])), usados: new Set() });
   const fim = await postar('/two-factor/verify-totp', inicio.cabecalhos, { code: proximoCodigo(userId) });
   expect(fim.r.status, JSON.stringify(fim.json)).toBe(200);
   return soSessao(fim.cabecalhos);
@@ -402,8 +413,8 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
   it('código já apresentado não vale de novo, mesmo dentro da janela (RFC 6238 §5.2)', async () => {
     const { userId, c } = await pessoaLogada();
     const s = await cadastrarFator(c, userId);
-    const segredo = segredos.get(userId)?.segredo ?? Buffer.alloc(0);
-    const repetido = await postar('/two-factor/verify-totp', s, { code: codigoTotp(segredo, 0) });
+    // Repete EXATAMENTE o código do cadastro (não o do período atual, que pode ser outro se a janela virou).
+    const repetido = await postar('/two-factor/verify-totp', s, { code: segredos.get(userId)?.ultimo ?? '' });
     expect(repetido.r.status).toBe(401);
     expect(repetido.json['code']).toBe('INVALID_CODE');
   });
