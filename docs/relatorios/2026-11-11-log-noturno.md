@@ -176,3 +176,12 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - a falha numa clínica interrompe as outras.
   
   Também faltam: a conferência no banco em vez do `GET /sessao`, a saída só com código fixo, a tarefa sem `BETTER_AUTH_SECRET`, o prazo interno de 15 dias e o aviso às clínicas (art. 18 §6). Criei o B10 no checklist. Próximo passo: o código.
+- **CI de toda a pilha verde depois da refatoração da trava** (12 PRs, zero falhas).
+- **B10, código da anonimização pelo suporte**, na branch `eng/anonimizacao-suporte`, empilhada sobre o #179:
+  - `anonimizacao.ts` recebe só os dois bancos e é idempotente: uma trilha por clínica, o evento só na primeira vez e `ANONIMIZACAO_REPETIDA` depois. Recusa conta inexistente sem evento. Cada clínica fica isolada, e o erro vem no fim. A trilha tem ator sistema e leva o chamado, nunca o operador.
+  - Comando `ops/anonimizar-conta.ts`: trava de confirmação antes de escrever, saída de uma linha pelo Logger com código fixo, conferência no banco antes de dizer `ok`.
+  - Log de segurança: o evento `ANONIMIZACAO_REPETIDA` e os campos `chamado` e `operador`.
+  - Runbook novo, RIPD §5 e §5a, e o prazo do registro do pedido na matriz de retenção (5 anos, proposta).
+  - Tipos, lint e 1149 testes de unidade verdes; os testes de RLS rodam no CI.
+  - Ponto a confirmar com o Guardião: o `user_id` do titular entra na metadata da trilha. Sem ele, a prova não diz quem foi anonimizado.
+  - O Terraform da tarefa avulsa (papel próprio, só os segredos de banco, grupo `ops-lgpd` com MFA) está com o agente de devops.
