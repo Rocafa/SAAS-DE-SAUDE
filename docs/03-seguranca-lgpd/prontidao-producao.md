@@ -72,7 +72,7 @@ Cada linha precisa de evidência e do PR. A produção só abre com todas as lin
 | B6 | Este checklist | antes | em andamento | #162 |
 | B7 | Pilha na `main` (#149 a #161) e #153 | antes | **aguarda a aprovação do @Lopesloro** | — |
 | B9 | Chave dos HMACs separada por uso (HKDF, cinco rótulos), antes do B8 (`docs/04-arquitetura/derivacao-da-chave-de-hmac.md`) | antes | código no #179 (Guardião aprovado, CI verde), aguardando o sócio | — |
-| B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS | — |
+| B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS; roteiro pronto em `docs/04-arquitetura/roteiro-fumaca-login-staging.md` (falta o Guardião conferir) | — |
 | C1 | CSRF com a sessão real (#132) | antes | coberto pela montagem (403 sem Origin) e pelo `protecaoCsrf`; conferir no B8 | #149 |
 | C2 | Eventos do fator (#123 R5) | antes | feito | #152, #156, #159 |
 | C3 | Auditoria dos ganchos fora de controller (#117 R6) | antes | feito | #149 |
