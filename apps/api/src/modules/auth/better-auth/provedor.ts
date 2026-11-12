@@ -15,8 +15,8 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { EMAIL_DESCARTADO } from '../convites-retencao';
-import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
-import { listarClinicasDoAgendador, withTenant, type Database } from '../../../db/tenant-transaction';
+import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo, conviteAceito } from '../../../db/identidade';
+import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
@@ -869,14 +869,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         userId,
       );
     }
-    // G3 do parecer do #176 (completa): a conta pode ter aceitado convite em clínica onde já foi desligada. Todas as
-    // clínicas (lista do agendador, só ids, fora de contexto de clínica) perdem o HMAC do convite aceito por ela, cada
-    // uma na própria transação com o usuário de SISTEMA (sem 4º argumento: app_set_system_user, como os jobs; V1 do
-    // #177). Onde algo mudou, a trilha da clínica registra com ator sistema (art. 37). Uma falha não para as outras:
-    // cada uma gera evento, e no fim o erro sobe para o suporte rodar de novo (idempotente).
+    // G3 do parecer do #176 (completa): a conta pode ter aceitado convite em clínica onde já foi desligada. As clínicas
+    // vêm do espelho `identidade.convite_aceito` (0073, V3 do #177: só as da pessoa, sem varrer a plataforma). Cada uma
+    // perde o HMAC do convite aceito na própria transação, com o usuário de SISTEMA (sem 4º argumento:
+    // app_set_system_user, como os jobs; V1 do #177). Onde algo mudou, a trilha da clínica registra com ator sistema
+    // (art. 37). Uma falha não para as outras: cada uma gera evento, e no fim o erro sobe para o suporte rodar de novo
+    // (idempotente). Sem falha, as linhas da pessoa saem do espelho.
+    const aceitas = await this.d.dbAuth.select({ clinica: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId));
     let falhas = 0;
-    for (const id of await listarClinicasDoAgendador(this.d.dbClinica)) {
-      if (clinicasAntes.includes(id)) continue;
+    for (const { clinica } of aceitas) {
+      if (clinicasAntes.includes(clinica)) continue;
+      const id = clinica as TenantId;
       await withTenant(this.d.dbClinica, id, async (tx) => {
         const zerados = await tx.execute<{ id: string }>(
           sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${id} and accepted_user_id = ${userId} and email_hmac <> ${EMAIL_DESCARTADO} returning id`,
@@ -893,6 +896,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', userId, contagem: falhas });
       throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
     }
+    // V2 do #178: só as clínicas lidas no início (o trigger já tira a linha quando o HMAC é zerado; isto cobre a clínica
+    // que, por corrida, não tinha mais convite a zerar).
+    const lidas = aceitas.map((a) => a.clinica);
+    if (lidas.length > 0) await this.d.dbAuth.delete(conviteAceito).where(and(eq(conviteAceito.usuarioId, userId), inArray(conviteAceito.clinicaId, lidas)));
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {

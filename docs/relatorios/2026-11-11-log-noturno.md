@@ -42,3 +42,15 @@ A pilha já tem 11 PRs em cima do #149, todos esperando a revisão do @Lopesloro
 
 1. @Lopesloro: revisar a pilha de baixo para cima (#149 primeiro), além do #153, do #154 e do #172. Mesclar o #166.
 2. Os dois: decidir o D15 (`docs/00-governanca/memos/D15-login-real-egresso-e-falha-do-redis.md`).
+
+## Continuação (pedido de seguir até o reset)
+
+- Deixei uma retomada agendada para 04:20 (`retomar-plataforma-saude-madrugada`), salva no modo sem pedir permissão, para não travar como a das 03:45 de ontem.
+- **V3 do #177 (função estreita):** migração 0073 com o espelho `identidade.convite_aceito` (só ids, trigger em `team_invites`, padrão da 0064). A anonimização lê daí só as clínicas da pessoa e apaga as linhas no fim; a varredura de todas as clínicas saiu. Fica num PR separado em cima do #177, que já estava aprovado.
+- **Guardião vetou o #178 (V1):** o espelho ficava guardado enquanto a conta existisse, mas só tem uso por 30 dias. Corrigido: o trigger apaga a linha quando o HMAC é zerado, e entraram os testes de retenção, de falha no meio e de que o `app_user` não lê o espelho (V2).
+- **#178:** reconferência aprovada e CI 16/16. Revisão pedida ao @Lopesloro. Fila: teste em que só uma clínica do espelho falha; apagar o espelho quando a clínica for eliminada.
+- **Fila do #178 (teste):** só uma das clínicas do espelho falha. A outra é limpa, a que falhou continua no espelho e a nova tentativa esvazia.
+- **V3 do #178:** a eliminação de clínica ainda não existe no código (depende do D8). O requisito de apagar os espelhos `identidade.convite_aceito` e `identidade.vinculo` entrou na `fila.md`, ao lado do G4.
+- CI do #178 verde (16/16) com o teste novo.
+- **Desenho para o Guardião:** `docs/04-arquitetura/derivacao-da-chave-de-hmac.md`, sobre a separação por uso da `RATE_LIMIT_HASH_KEY` com HKDF. Inclui o plano de migração, com leitura dupla de 72 h para os convites, e três perguntas. Ainda sem código.
+- **Desenho do HKDF:** aprovado com ressalvas. A tabela de usos foi corrigida (a vigilância usa ids; o IP da sessão é o pseudônimo do log), ficaram cinco rótulos com a versão no `info`, e a leitura dupla só vale para rotações futuras. Virou o item **B9** do checklist, antes do B8. O código fica para a próxima rodada.
