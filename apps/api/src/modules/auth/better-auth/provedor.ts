@@ -930,9 +930,41 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     );
   }
 
-  /** Apaga a sessão no servidor (logout, prazo absoluto, conta desligada). */
+  /**
+   * Apaga a sessão no servidor (logout, prazo absoluto, conta desligada) e grava o fim na TRILHA da clínica, não só no
+   * log de segurança — o log serve para alarmar, a trilha é a prova (R6(a) do parecer do #117).
+   *
+   * Só o fim da sessão tem clínica para gravar: o login e a falha de login acontecem ANTES de a clínica ser escolhida
+   * (`definirClinica`), e a trilha é por clínica. Por isso login continua só no log de segurança, e o vestígio dele na
+   * trilha é o `session_tenant_selected`.
+   *
+   * A trilha vai DEPOIS do delete, com rede: a sessão já foi apagada, e logout não pode falhar porque a trilha falhou.
+   * Falha de gravação emite `TRILHA_NAO_GRAVADA`, que é crítico com alarme imediato.
+   */
   async encerrar(sessaoId: string, motivo: 'logout' | 'prazo_absoluto' | 'conta_inativa' = 'logout', userId?: string): Promise<void> {
+    const [antes] = await this.d.dbAuth
+      .select({ userId: sessao.userId, clinicaAtiva: sessao.clinicaAtiva })
+      .from(sessao)
+      .where(eq(sessao.id, sessaoId));
     await this.d.dbAuth.delete(sessao).where(eq(sessao.id, sessaoId));
-    registrarEventoDeSeguranca('LOGOUT', { motivo, ...(userId ? { userId } : {}) });
+    const ator = antes?.userId ?? userId;
+    registrarEventoDeSeguranca('LOGOUT', { motivo, ...(ator ? { userId: ator } : {}) });
+    const tenantId = antes?.clinicaAtiva;
+    if (!tenantId || !ator) return;
+    try {
+      await withTenant(
+        this.d.dbClinica,
+        tenantId as TenantId,
+        (tx) =>
+          recordAudit(tx, { tenantId: tenantId as TenantId, userId: ator as UserId, roles: [] }, {
+            action: AuditAction.Update,
+            scope: 'session',
+            metadata: { op: 'session_ended', reason: motivo },
+          }),
+        ator,
+      );
+    } catch {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { tenantId, userId: ator, motivo: 'fim_de_sessao' });
+    }
   }
 }
