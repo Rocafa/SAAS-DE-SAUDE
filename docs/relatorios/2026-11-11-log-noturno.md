@@ -126,3 +126,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Comentei no PR e aprovo quando ele subir os dois. As ressalvas R2 a R4 e N2 ficaram na issue #180.
 - **#143 e #157:** o sócio ainda não mexeu desde as nossas revisões.
+- **Checagem automática a cada 2 h** (`pilha-login-a-cada-2h`, das 08:00 às 22:00). Ela mescla o que o sócio aprovar, traz a `main` para o PR de cima, roda tipos, lint e testes, e pede a nova aprovação. A tarefa de 12/11 às 07:00, que não rodou, foi desligada para não duplicar.
