@@ -14,11 +14,10 @@ import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
-import { EMAIL_DESCARTADO } from '../convites-retencao';
-import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo, conviteAceito } from '../../../db/identidade';
+import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
-import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
+import { recordAudit } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
@@ -28,6 +27,7 @@ import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
 import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { anonimizarContaDoTitular, type PedidoDeAnonimizacao, type ResultadoDaAnonimizacao } from './anonimizacao';
 import { symmetricDecrypt, type SecretConfig } from 'better-auth/crypto';
 import { totpConfere } from './totp';
 import { conferirSenha } from './senha';
@@ -839,67 +839,11 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   }
 
   /**
-   * Anonimização a pedido do titular (R18; R11 do desenho do PR 3): o id fica (o prontuário identifica o autor pela
-   * tabela da clínica); e-mail e nome saem; senha, TOTP, sessões e tokens são apagados; a conta fica inativa.
+   * Anonimização a pedido do titular (R18; R11 do desenho do PR 3; B10). A lógica fica em `anonimizacao.ts`, que
+   * recebe só os bancos, para a tarefa operacional não carregar o segredo da instância (R5 do parecer de 12/11).
    */
-  async anonimizarConta(userId: string): Promise<void> {
-    const clinicasAntes = await this.clinicasDoUsuario(userId);
-    await this.d.dbAuth.transaction(async (tx) => {
-      await tx
-        .update(usuario)
-        .set({ name: 'Conta anonimizada', email: `anonimizada-${userId}@anonimizada.invalid`, ativo: false, inativaPor: 'anonimizada', image: null })
-        .where(eq(usuario.id, userId));
-      await tx.update(conta).set({ password: null }).where(eq(conta.userId, userId));
-      await tx.delete(doisFatores).where(eq(doisFatores.userId, userId));
-      await tx.delete(sessao).where(eq(sessao.userId, userId));
-      await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, userId), isNull(recuperacao.usadoEm)));
-    });
-    // R3 do código do 3b-3: prova do atendimento ao titular (LGPD art. 18 IV e art. 37): evento e trilha.
-    registrarEventoDeSeguranca('CONTA_ANONIMIZADA', { motivo: 'pedido_do_titular', userId });
-    for (const tenantId of clinicasAntes) {
-      await withTenant(
-        this.d.dbClinica,
-        tenantId as TenantId,
-        async (tx) => {
-          // Fila do 3b-3: o convite aceito por esta conta perde o pseudônimo do e-mail na hora, sem esperar os 30 dias
-          // do `convites-descarte`.
-          await tx.execute(sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${tenantId} and accepted_user_id = ${userId}`);
-          await recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op: 'account_anonymized' } });
-        },
-        userId,
-      );
-    }
-    // G3 do parecer do #176 (completa): a conta pode ter aceitado convite em clínica onde já foi desligada. As clínicas
-    // vêm do espelho `identidade.convite_aceito` (0073, V3 do #177: só as da pessoa, sem varrer a plataforma). Cada uma
-    // perde o HMAC do convite aceito na própria transação, com o usuário de SISTEMA (sem 4º argumento:
-    // app_set_system_user, como os jobs; V1 do #177). Onde algo mudou, a trilha da clínica registra com ator sistema
-    // (art. 37). Uma falha não para as outras: cada uma gera evento, e no fim o erro sobe para o suporte rodar de novo
-    // (idempotente). Sem falha, as linhas da pessoa saem do espelho.
-    const aceitas = await this.d.dbAuth.select({ clinica: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId));
-    let falhas = 0;
-    for (const { clinica } of aceitas) {
-      if (clinicasAntes.includes(clinica)) continue;
-      const id = clinica as TenantId;
-      await withTenant(this.d.dbClinica, id, async (tx) => {
-        const zerados = await tx.execute<{ id: string }>(
-          sql`update team_invites set email_hmac = ${EMAIL_DESCARTADO} where tenant_id = ${id} and accepted_user_id = ${userId} and email_hmac <> ${EMAIL_DESCARTADO} returning id`,
-        );
-        if (zerados.length > 0) {
-          await recordAudit(tx, { tenantId: id, userId: SYSTEM_ACTOR_ID, roles: [] }, { action: AuditAction.Update, scope: 'clinic_members', metadata: { op: 'invite_pseudonym_dropped', user_id: userId, count: zerados.length } });
-        }
-      }).catch(() => {
-        falhas += 1;
-        registrarNoMaximoUmaVez(`anonimizacao:${userId}:${id}`, 60_000, 'TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', tenantId: id, userId });
-      });
-    }
-    if (falhas > 0) {
-      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'anonimizacao_incompleta', userId, contagem: falhas });
-      throw new Error(`anonimização: ${falhas} clínica(s) sem o descarte do convite; rodar de novo`);
-    }
-    // V2 do #178: só as clínicas lidas no início (o trigger já tira a linha quando o HMAC é zerado; isto cobre a clínica
-    // que, por corrida, não tinha mais convite a zerar).
-    const lidas = aceitas.map((a) => a.clinica);
-    if (lidas.length > 0) await this.d.dbAuth.delete(conviteAceito).where(and(eq(conviteAceito.usuarioId, userId), inArray(conviteAceito.clinicaId, lidas)));
+  anonimizarConta(pedido: PedidoDeAnonimizacao): Promise<ResultadoDaAnonimizacao> {
+    return anonimizarContaDoTitular({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }, pedido);
   }
 
   async completarContaReaproveitada(e: { userId: string; nome: string; clinicaDeOrigem: string; conviteDeOrigem: string }): Promise<void> {
