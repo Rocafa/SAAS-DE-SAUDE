@@ -70,6 +70,17 @@ export function contagensParaTrilha(resultado: ResultadoDeJob): ResultadoDeJob {
   return saida;
 }
 
+/**
+ * Texto das contagens para o log (`k=v k=v`), sempre a partir de `contagensParaTrilha`: só números e booleanos com
+ * chave validada, no máximo 12. É o único ponto que monta esse texto, e a trava de logs (`logs-sem-dado-pessoal.test.ts`)
+ * não precisa liberar nada para ele (ressalva do Guardião ao 192c707 do #154).
+ */
+export function contagensParaLog(resultado: ResultadoDeJob): string {
+  return Object.entries(contagensParaTrilha(resultado))
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .join(' ');
+}
+
 function teveEfeito(resultado: ResultadoDeJob): boolean {
   return Object.values(resultado).some((v) => (typeof v === 'number' && v > 0) || v === true);
 }
@@ -130,10 +141,7 @@ export class ExecutorDeJobs {
     let ultimoErro: unknown;
     for (let tentativa = 1; tentativa <= this.tentativas; tentativa++) {
       try {
-        const resultado = contagensParaTrilha(await trabalho());
-        const contagens = Object.entries(resultado)
-          .map(([k, v]) => `${k}=${String(v)}`)
-          .join(' ');
+        const contagens = contagensParaLog(await trabalho());
         this.deps.logger.log(`JOB_OK job=${nome} plataforma tentativas=${tentativa} ${contagens}`);
         return;
       } catch (err) {
