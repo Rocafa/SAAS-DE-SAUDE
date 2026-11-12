@@ -185,3 +185,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Tipos, lint e 1149 testes de unidade verdes; os testes de RLS rodam no CI.
   - Ponto a confirmar com o Guardião: o `user_id` do titular entra na metadata da trilha. Sem ele, a prova não diz quem foi anonimizado.
   - O Terraform da tarefa avulsa (papel próprio, só os segredos de banco, grupo `ops-lgpd` com MFA) está com o agente de devops.
+- **#190 aberto (B10), empilhado sobre o #179.** O Terraform da tarefa avulsa ficou pronto (`ops-anonimizacao.tf`):
+  - papéis próprios, só os segredos de banco, com `precondition` contra qualquer outro;
+  - grupo de rede sem Redis;
+  - grupo `ops-lgpd` com MFA;
+  - Deny explícito nos papéis de máquina.
+  
+  Como esta máquina não tem Terraform, quem valida é o CI. Ficam em aberto: SSO × usuário IAM (I1), overrides não limitados pelo IAM (CloudTrail e conferência a dois) e o alerta de uso do `RunTask`. O código foi para a revisão do Guardião.
