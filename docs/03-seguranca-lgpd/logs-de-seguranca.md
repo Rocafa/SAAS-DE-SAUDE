@@ -38,6 +38,9 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 
 | Evento | Severidade | Alarme | Onde nasce |
 |---|---|---|---|
+| `LOGIN_OK` | aviso | volume | login com senha aceito (D4, gancho da sessão, com `userId` e `origem`; nunca o e-mail) |
+| `LOGIN_FALHOU` | aviso | volume | login recusado (montagem do Better Auth; sem dizer se a conta existe) |
+| `LOGOUT` | aviso | volume | sessão encerrada no servidor (logout, prazo absoluto de 12 h ou conta inativa) |
 | `SESSAO_INVALIDA` | aviso | volume | guard de sessão (401) |
 | `ACESSO_NEGADO_PERFIL` | aviso | volume | guard de sessão (403 por perfil) |
 | `MFA_RECUSADO` | aviso | volume | guard de sessão (sem MFA ou MFA antigo) |
