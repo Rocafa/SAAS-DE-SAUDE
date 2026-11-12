@@ -41,6 +41,16 @@ describe('MemoryRateLimitStore', () => {
     expect(resetMs).toBeLessThanOrEqual(60_000);
   });
 
+  it('relógio injetado: a janela vira exatamente no prazo, sem relógio real (R4 do parecer do #141)', async () => {
+    let agora = 1_000_000;
+    const s = new MemoryRateLimitStore('memoria', () => agora);
+    expect((await s.hit('k', 1_000)).count).toBe(1);
+    agora += 999;
+    expect((await s.hit('k', 1_000)).count).toBe(2);
+    agora += 1;
+    expect((await s.hit('k', 1_000)).count).toBe(1);
+  });
+
   it('janelas de tamanhos diferentes não zeram uma à outra (limite por IP e por usuário no mesmo store)', async () => {
     vi.useFakeTimers();
     try {
