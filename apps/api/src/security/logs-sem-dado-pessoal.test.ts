@@ -57,14 +57,9 @@ const DESPEJOS: ReadonlySet<string> = new Set(['util.inspect', 'inspect', 'util.
 
 /** Liberações que só valem num arquivo (nome do job, motivo do desligamento), com o motivo. */
 const PERMITIDOS_POR_ARQUIVO: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  'modules/jobs/executor-de-jobs.ts': {
-    nome: 'nome do job (constante do registro)',
-    'job.nome': 'nome do job (constante do registro)',
-    // Job da plataforma (PR 3a da D4): `resultado` já passou por `contagensParaTrilha` (só números e booleanos, chaves
-    // validadas, no máximo 12; teste em executor-de-jobs.test.ts), e `v` é cada um desses valores.
-    resultado: 'saída de contagensParaTrilha: só contagens, sem dado',
-    v: 'valor de uma contagem de contagensParaTrilha (número ou booleano)',
-  },
+  // O job da plataforma (PR 3a da D4) monta o texto das contagens em `contagensParaLog`, sem liberação aqui (ressalva do
+  // Guardião ao 192c707).
+  'modules/jobs/executor-de-jobs.ts': { nome: 'nome do job (constante do registro)', 'job.nome': 'nome do job (constante do registro)' },
   'modules/jobs/sinal-de-vida.ts': { 'j.nome': 'nome do job (constante do registro)' },
   'lifecycle/graceful-shutdown.ts': { reason: 'motivo do desligamento (SIGTERM, SIGINT…), não um erro' },
 };
@@ -521,14 +516,10 @@ describe('logs sem dado pessoal (trava de PR)', () => {
     expect(linhas).not.toContain(12);
   });
 
-  it('liberação por arquivo também vale para o despejo, e só naquele arquivo (job da plataforma, PR 3a da D4)', () => {
-    const fonte = [
-      'const resultado = contagensParaTrilha(await trabalho());',
-      "const contagens = Object.entries(resultado).map(([k, v]) => `${k}=${String(v)}`).join(' ');",
-      'this.deps.logger.log(`JOB_OK ${contagens}`);',
-    ].join('\n');
-    expect(violacoesNoFonte('modules/jobs/executor-de-jobs.ts', fonte)).toEqual([]);
-    // O mesmo código em outro arquivo continua reprovado: `resultado` e `v` não são liberados no projeto todo.
-    expect(violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha)).toEqual([3]);
+  it('liberação por arquivo também vale para o despejo, e só naquele arquivo', () => {
+    const fonte = ['const rotulo = String(j.nome);', 'this.logger.log(`JOB ${rotulo}`);'].join('\n');
+    expect(violacoesNoFonte('modules/jobs/sinal-de-vida.ts', fonte)).toEqual([]);
+    // O mesmo código em outro arquivo continua reprovado: a liberação de `j.nome` não vale no projeto todo.
+    expect(violacoesNoFonte('ficticio.ts', fonte).map((v) => v.linha)).toEqual([2]);
   });
 });
