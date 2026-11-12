@@ -203,3 +203,11 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 12/11 18:15
 
 - Nada mudou: nenhum PR aprovado (#152, #153, #154, #172, #189 em REVIEW_REQUIRED, CI verde); o sócio não subiu commit no #158, #143 nem #157.
+
+## Checagem de 12/11 21:20
+
+- Nenhum merge: o #152 segue em REVIEW_REQUIRED (CI 16/16 verde). Os de cima (#159, #171, #175, #176, #179) têm aprovações antigas, de 11/11, mas só entram depois do #152.
+- Avulsos #153, #154, #172 e #189: REVIEW_REQUIRED, CI verde. Nada a fazer.
+- O sócio não subiu commit no #158, #143 nem #157. Nada para aprovar.
+- **Novo: o CI do #174 (abertura) falhou** no job do Terraform, na trava do `api_segredos_obrigatorios`: "DATABASE_URL fora de api_segredos_obrigatorios" (run 43301229429, depois do merge das 20:31). O #174 não entra antes do B1–B9, então não bloqueia a pilha. Fica para a próxima rodada de trabalho.
+- O #151 (Dependabot) foi fechado pelo próprio bot às 13:29 de 12/11. Sai da fila do passo 5; ficam #189 e #116.
