@@ -164,3 +164,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - o convite e a recuperação **não dependem de e-mail**: o token volta para o admin.
   
   Ele também acrescentou passos: o job de expurgo, a troca da versão do segredo (B1), o `verify-full` nos dois papéis, os atributos do cookie e os convites reemitidos depois do B9. E proibiu print, HAR e PR com token ou `totpURI`. Ficam em aberto: a anonimização (só pelo procedimento de suporte), o voto do D15, a queda do Redis (opcional) e uma segunda clínica fictícia.
+- **Ressalva do Guardião sobre a trava de logs: resolvida sem PR novo.**
+  - No #155, onde nasce o job da plataforma, o texto das contagens passou a sair de `contagensParaLog`, que usa o mesmo filtro da trilha e tem teste. Propaguei pela pilha sem conflito; o topo passa em tipos e testes.
+  - No #154, a trava não libera mais `resultado` nem `v`. O autoteste da liberação por arquivo usa agora um caso que continua existindo.
+  - Conferi a trava nova contra o código do #155: 9/9. Assim ela fica certa em qualquer ordem de merge.
