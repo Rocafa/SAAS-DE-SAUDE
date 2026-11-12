@@ -127,3 +127,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   Comentei no PR e aprovo quando ele subir os dois. As ressalvas R2 a R4 e N2 ficaram na issue #180.
 - **#143 e #157:** o sócio ainda não mexeu desde as nossas revisões.
 - **Checagem automática a cada 2 h** (`pilha-login-a-cada-2h`, das 08:00 às 22:00). Ela mescla o que o sócio aprovar, traz a `main` para o PR de cima, roda tipos, lint e testes, e pede a nova aprovação. A tarefa de 12/11 às 07:00, que não rodou, foi desligada para não duplicar.
+- **#189 aberto: override do `minimatch` para 11.0.1 ou acima** (alerta do Dependabot GHSA-g3hv-75wg-m249). O pacote vulnerável vem só do ESLint. O ESLint 10 funciona com a 11: o lint passa 4/4 e uma sonda com erro continua reprovada. Tipos limpos e testes verdes (API 1122, web 411). Como mexe no lockfile, entra depois da pilha, antes do #116 e do #151.
+- **Checagem a cada 2 h recriada** (`pilha-login-merges-2h`), agora salva no modo que não pede permissão e já com o #189 na ordem de merge. A anterior foi apagada.
