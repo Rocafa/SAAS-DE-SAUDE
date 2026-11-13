@@ -264,3 +264,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O PR #193 e o desenho estão atualizados com URL e data.
 - **#192:** o RLS falhou porque a rota nova não tinha "plano" no teste de auditoria de leitura (R4 do #119), que exige para cada rota auditada um caso que prove a linha de leitura. Acrescentei o plano. Os outros testes novos (vigilância e MFA) passaram.
 - **CI:** #193 16/16 verde (com a TO corrigida). #191 15/15 verde: o CodeQL volta a funcionar com o `init` e o `analyze` na mesma versão.
+- **#192: CI 16/16 verde** com o plano da auditoria de leitura.
+- **Guia de revisão para o @Lopesloro** (`docs/relatorios/2026-11-13-guia-de-revisao.md`): os PRs abertos na ordem que destrava mais, com tamanho e situação, mais as três decisões pendentes (D13, D15 e o estagiário do piloto). O link foi para o #152.
