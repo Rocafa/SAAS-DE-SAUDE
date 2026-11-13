@@ -298,3 +298,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 13/11 10:14
 
 - Nada mudou desde 08:14: o #152 segue sem aprovação (BLOCKED), CI verde; nenhum merge possível.
+
+## Checagem de 13/11 12:13
+
+- Nada mudou desde 10:14: o #152 segue sem aprovação (BLOCKED); avulsos e PRs do sócio sem novidade; nenhum merge.
