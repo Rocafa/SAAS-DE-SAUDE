@@ -7,8 +7,10 @@
  * - fisio (v2, #167): queixa, avaliação, diagnóstico e prognóstico fisioterapêuticos (Res. COFFITO 414/2012, art. 1º
  *   §1º V), exames complementares realizados ou solicitados (inciso IV), conduta, resposta, orientações, próximos passos,
  *   medidas/escalas e plano de sessões com metas (HU-PRO-021/022).
- * - TO (v2, #167; Res. COFFITO 415/2012): modelo próprio, não mais os textos da fisioterapia. Objetivo da sessão,
- *   atividades e adaptações, desempenho, nível de assistência, próximos passos, além dos textos comuns.
+ * - TO (v2, #167): modelo próprio, não mais os textos da fisioterapia. Pela Res. COFFITO 415/2012 (art. 1º §1º,
+ *   conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026): diagnóstico e prognóstico terapêutico
+ *   ocupacional (V), exames complementares (IV), objetivos do plano (VI). Desempenho, nível de assistência e as
+ *   atividades da sessão são escolha de produto (a tela já pede), não exigência da norma.
  * - Escalas: instrumento conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); os demais, faixa larga.
  * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
  *   As ANOTAÇÕES PRIVADAS do psicólogo não são registro: ficam em `private_notes` (notas-privadas.service.ts).
@@ -74,9 +76,9 @@ export const MODELOS: Readonly<Record<RecordTemplate, DefinicaoModelo>> = {
   to: {
     nome: 'Evolução de terapia ocupacional',
     versao: 2,
-    // #167: o que é da TO (COFFITO 415/2012) e a tela já pede: objetivo, atividades, desempenho, nível de assistência
-    // e próximos passos. Os textos da v1 continuam aceitos.
-    textos: [...TEXTOS_REABILITACAO, 'objetivo', 'atividades', 'desempenho', 'nivel_assistencia', 'plano'],
+    // #167: COFFITO 415/2012 art. 1º §1º IV e V (exames; diagnóstico e prognóstico) e VI (objetivos), mais o que a tela
+    // já pede (atividades, desempenho, nível de assistência, próximos passos). Os textos da v1 continuam aceitos.
+    textos: [...TEXTOS_REABILITACAO, 'diagnostico', 'exames', 'objetivo', 'atividades', 'desempenho', 'nivel_assistencia', 'plano'],
     obrigatoriosParaFinalizar: ['objetivo', 'atividades'],
     obrigatoriosAnteriores: { 1: ['queixa', 'conduta'] },
     medidas: true,

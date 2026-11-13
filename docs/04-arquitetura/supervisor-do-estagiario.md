@@ -2,7 +2,7 @@
 
 > 13/11/2026 · Maestro · **desenho v2, sem código**, refeito sobre o veto do Guardião (`revisoes/2026-11-13-desenho-supervisor-do-estagiario.md`). A v1 está no histórico do git.
 > **Base, conferida em https://www.coffito.gov.br/nsite/?p=3177 em 13/11/2026:** Res. COFFITO 414/2012, **art. 1º §2º**. Em estágio, obrigatório ou não, o registro traz a **identificação e a assinatura** do responsável técnico, supervisor ou preceptor, que **responde pelo serviço**, e do estagiário. **Art. 1º §1º VIII:** nome completo e número do CREFITO de quem registra. O "art. 2º §1º" citado na #167 não existe.
-> **Não conferido:** a Res. COFFITO 415/2012 (TO) e as normas do CFP sobre estágio. Até conferir, a regra vale só para a **fisioterapia**.
+> **TO:** a Res. COFFITO 415/2012 tem a mesma regra no **art. 1º §2º** (conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026), então o desenho vale para **fisioterapia e TO**. **Não conferido:** as normas do CFP sobre estágio. A psicologia fica fora até conferir.
 
 ## Decisão que vem antes do código (sócios)
 
@@ -19,7 +19,7 @@
 - Novos campos: `conselho` e `registro_conselho`. São obrigatórios para quem finaliza registro de fisioterapia e para todo supervisor (V3).
 - `estagiario`, com a instituição de ensino. Nada de matrícula, CPF ou dado acadêmico (minimização).
 - `supervisor_professional_id`, com FK composta `(tenant_id, id)` (C1). O supervisor precisa ser:
-  - fisioterapeuta, como o estagiário;
+  - da mesma profissão do estagiário (fisioterapeuta ou terapeuta ocupacional);
   - ativo e não estagiário;
   - com registro no conselho.
 - Um trigger impede inativar, marcar como estagiário ou trocar a profissão de quem supervisiona alguém, sem redesignar na mesma transação.

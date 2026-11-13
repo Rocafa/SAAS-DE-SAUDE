@@ -129,7 +129,9 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(MODELOS.to.versao).toBe(2);
     const c = { objetivo: 'a', atividades: 'b', desempenho: 'c', nivel_assistencia: 'd', plano: 'e', queixa: 'f' };
     expect(validarConteudo('to', c)).toEqual(c);
-    expect(campos(() => validarConteudo('to', { diagnostico: 'x' }))).toEqual(['campo_desconhecido']);
+    // COFFITO 415/2012 art. 1º §1º IV e V: a TO também registra exames e diagnóstico/prognóstico.
+    expect(validarConteudo('to', { diagnostico: 'x', exames: 'y' })).toEqual({ diagnostico: 'x', exames: 'y' });
+    expect(campos(() => validarConteudo('to', { tema: 'x' }))).toEqual(['campo_desconhecido']);
   });
 
   it('psicologia não ganha medida nem instrumento (SATEPSI, Res. CFP 31/2022)', () => {
