@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
-import { faltasParaFinalizar, MAX_TEXTO_CLINICO, modeloPelaEspecialidade, validarConteudo } from './modelos';
+import { faltasParaFinalizar, instrumentoDoRotulo, MAX_TEXTO_CLINICO, MODELOS, modeloPelaEspecialidade, validarConteudo } from './modelos';
 import { hashDaFinalizacao, podeVerConteudo } from './prontuario-regras';
 
 function campos(fn: () => unknown): string[] {
@@ -72,7 +72,12 @@ describe('modelos de registro por nicho', () => {
 
   it('finalização cobra os obrigatórios de cada modelo', () => {
     expect(faltasParaFinalizar('fisio', { queixa: 'x' })).toEqual(['conduta']);
-    expect(faltasParaFinalizar('to', { queixa: 'x', conduta: 'y' })).toEqual([]);
+    // #167: a TO v2 cobra objetivo e atividades; o registro aberto na v1 segue a regra da v1 (PRO-01.4).
+    expect(faltasParaFinalizar('to', { queixa: 'x', conduta: 'y' })).toEqual(['objetivo', 'atividades']);
+    expect(faltasParaFinalizar('to', { objetivo: 'x', atividades: 'y' })).toEqual([]);
+    expect(faltasParaFinalizar('to', { queixa: 'x', conduta: 'y' }, 1)).toEqual([]);
+    expect(faltasParaFinalizar('to', { objetivo: 'x' }, 1)).toEqual(['queixa', 'conduta']);
+    expect(faltasParaFinalizar('fisio', { queixa: 'x', conduta: 'y' }, 1)).toEqual([]);
     expect(faltasParaFinalizar('psicologia', {})).toEqual(['tema', 'evolucao']);
   });
 
@@ -110,5 +115,50 @@ describe('regras do prontuário', () => {
     expect(hashDaFinalizacao({ ...base })).toBe(h);
     expect(hashDaFinalizacao({ ...base, contentEnc: 'v1:a:b:c:e' })).not.toBe(h);
     expect(hashDaFinalizacao({ ...base, version: 3 })).not.toBe(h);
+  });
+});
+
+describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
+  it('fisio v2 aceita diagnóstico e prognóstico, exames e próximos passos; continua aceitando os textos da v1', () => {
+    expect(MODELOS.fisio.versao).toBe(2);
+    expect(validarConteudo('fisio', { queixa: 'a', diagnostico: 'b', exames: 'c', plano: 'd', conduta: 'e' })).toEqual({ queixa: 'a', diagnostico: 'b', exames: 'c', plano: 'd', conduta: 'e' });
+    expect(campos(() => validarConteudo('fisio', { objetivo: 'x' }))).toEqual(['campo_desconhecido']);
+  });
+
+  it('TO v2 tem os campos que a tela pede (objetivo, atividades, desempenho, plano) e nível de assistência', () => {
+    expect(MODELOS.to.versao).toBe(2);
+    const c = { objetivo: 'a', atividades: 'b', desempenho: 'c', nivel_assistencia: 'd', plano: 'e', queixa: 'f' };
+    expect(validarConteudo('to', c)).toEqual(c);
+    // COFFITO 415/2012 art. 1º §1º IV e V: a TO também registra exames e diagnóstico/prognóstico.
+    expect(validarConteudo('to', { diagnostico: 'x', exames: 'y' })).toEqual({ diagnostico: 'x', exames: 'y' });
+    expect(campos(() => validarConteudo('to', { tema: 'x' }))).toEqual(['campo_desconhecido']);
+  });
+
+  it('psicologia não ganha medida nem instrumento (SATEPSI, Res. CFP 31/2022)', () => {
+    expect(MODELOS.psicologia.medidas).toBe(false);
+    expect(campos(() => validarConteudo('psicologia', { medidas: [{ tipo: 'escala', rotulo: 'Barthel', valor: 50 }] }))).toEqual(['campo_desconhecido']);
+  });
+
+  it('escala de instrumento conhecido tem faixa e inteiro próprios; escala livre continua larga', () => {
+    expect(instrumentoDoRotulo('Índice de Barthel')).toBe('barthel');
+    expect(instrumentoDoRotulo('MIF total')).toBe('mif');
+    expect(instrumentoDoRotulo('Escala de Berg')).toBe('berg');
+    expect(instrumentoDoRotulo('NPRS')).toBe('nprs');
+    expect(instrumentoDoRotulo('Bergamota')).toBeUndefined();
+    const escala = (rotulo: string, valor: number) => campos(() => validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo, valor }] }));
+    expect(escala('Barthel', 100)).toEqual([]);
+    expect(escala('Barthel', 101)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('MIF', 17)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('MIF', 126)).toEqual([]);
+    // C2: subescalas da MIF com faixa própria.
+    expect(instrumentoDoRotulo('MIF motora')).toBe('mif_motora');
+    expect(instrumentoDoRotulo('MIF cognitiva')).toBe('mif_cognitiva');
+    expect(escala('MIF motora', 13)).toEqual([]);
+    expect(escala('MIF motora', 92)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('MIF cognitiva', 5)).toEqual([]);
+    expect(escala('MIF cognitiva', 36)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('Escala de Berg', 57)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('NPRS', 7.5)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('Escala de equilíbrio da clínica', 900)).toEqual([]);
   });
 });
