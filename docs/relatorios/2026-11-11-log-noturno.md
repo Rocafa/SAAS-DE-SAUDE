@@ -225,3 +225,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O #183 e o #185 falhavam no CodeQL: cada um subia só o `init` ou só o `analyze`, e os dois precisam estar na mesma versão.
   - Abri o **#191**, que sobe os dois juntos e cria o grupo `codeql` no `dependabot.yml` para isso não se repetir. Ele substitui o #183 e o #185.
   - O #184 e o #186 (ações) estão verdes. O #188 mexe no lockfile e fica para depois da pilha, junto com o #189 e o #116.
+- **#190 aprovado pelo Guardião na reconferência (13/11):** R-A, R-B, R-C e R-D atendidas. Ficam em aberto, sem bloquear:
+  - a ordem e o tamanho do `command` não são conferidos pelo EventBridge (risco baixo com o `entryPoint` fixo; dá para fechar depois com uma Lambda);
+  - o SSO pode não conseguir assumir o papel com MFA, o que bloqueia e não abre; testar no primeiro uso, e em staging está aceito.
+  
+  Corrigi a N1: o runbook usa a rede própria da tarefa (output `ops_anonimizacao_rede`). O B10 no checklist passou a "código no #190, Guardião aprovado, CI verde; falta o sócio e a prova no staging".
