@@ -284,3 +284,5 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Anotei que os atendimentos assinados antes da 0075 ficam com o registro nulo.
   - Esta máquina não tem Postgres, então só o CI prova as migrações. Estou esperando o resultado.
   - **Lição:** SQL e código com `$` ou crase não se editam por `sed`/`node -e` no shell. Usar o editor ou um script `.mjs`.
+- **#194: CI 16/16 verde** no commit corrigido (a migração 0074 passa no CI).
+- **96% do limite de 5 h.** Tudo commitado e enviado. Relatório: [2026-11-13-rodada-37.md](2026-11-13-rodada-37.md). Retomada agendada para depois do reset (05:10).
