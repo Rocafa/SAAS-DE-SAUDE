@@ -262,3 +262,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Desempenho e nível de assistência ficaram como escolha de produto, sem atribuir à norma.
   - A regra do supervisor (art. 1º §2º) é a mesma na TO, então o desenho v2 vale para fisio e TO.
   - O PR #193 e o desenho estão atualizados com URL e data.
+- **#192:** o RLS falhou porque a rota nova não tinha "plano" no teste de auditoria de leitura (R4 do #119), que exige para cada rota auditada um caso que prove a linha de leitura. Acrescentei o plano. Os outros testes novos (vigilância e MFA) passaram.
