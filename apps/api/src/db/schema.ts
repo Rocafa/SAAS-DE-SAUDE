@@ -78,7 +78,7 @@ export const patientCpfIndexKeys = pgTable(
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
 /** Conselhos profissionais aceitos (0074). Mesma lista do CHECK no banco. */
-export const CONSELHOS = ['CREFITO', 'CRP', 'CRFa', 'CRN', 'CRO', 'CRM'] as const;
+export const CONSELHOS = ['CREFITO', 'CRP', 'CRFa', 'CRN', 'CRO', 'CRM', 'COREN'] as const;
 export type Conselho = (typeof CONSELHOS)[number];
 
 export const professionals = pgTable('professionals', {
@@ -354,6 +354,9 @@ export const encounters = pgTable('encounters', {
   signedBy: uuid('signed_by'),
   signedVersion: integer('signed_version'),
   signedHash: text('signed_hash'),
+  /** 0075: conselho e número do profissional congelados pelo banco na assinatura (B1 do parecer do #194). */
+  signedCouncil: text('signed_council'),
+  signedCouncilRegistration: text('signed_council_registration'),
   /**
    * Migração 0015 (B1 do #63): modo de sigilo da psicologia vigente na ABERTURA. A leitura decide por
    * ele, nunca pela configuração atual. Só pode ficar mais restrito (trigger).

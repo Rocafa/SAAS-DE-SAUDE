@@ -51,6 +51,7 @@ describe('conselho e número de registro do profissional (0074)', () => {
     for (const corpo of [
       { conselho: 'XYZ', registro: '123' },
       { conselho: 'CREFITO', registro: 'Fulano de Tal' },
+      { conselho: 'CREFITO', registro: 'FulanoDeTal' },
       { conselho: 'CREFITO', registro: '' },
       { conselho: 'CREFITO' },
       { conselho: 'CREFITO', registro: '123', nome: 'x' },
@@ -83,5 +84,6 @@ describe('conselho e número de registro do profissional (0074)', () => {
     expect(await tentar({ councilRegistration: null })).toBe('23514');
     expect(await tentar({ council: null })).toBe('23514');
     expect(await tentar({ councilRegistration: 'nome@exemplo' })).toBe('23514');
+    expect(await tentar({ councilRegistration: 'FulanoDeTal' })).toBe('23514');
   });
 });

@@ -126,7 +126,7 @@ export function validarRegistroNoConselho(corpo: unknown): RegistroNoConselho {
   const v = new Validador(exigirObjeto(corpo, ['conselho', 'registro']));
   const conselho = v.umDe('conselho', CONSELHOS, true);
   const registro = v.texto('registro', { max: 30, obrigatorio: true });
-  if (typeof registro === 'string' && !REGISTRO_RE.test(registro)) v.falhar('registro');
+  if (typeof registro === 'string' && (!REGISTRO_RE.test(registro) || !/[0-9]/.test(registro))) v.falhar('registro');
   v.concluir();
   return { conselho: conselho as Conselho, registro: registro };
 }

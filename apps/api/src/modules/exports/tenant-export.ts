@@ -131,6 +131,8 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
  * 1.25.0: `professionals[].council` e `professionals[].councilRegistration` (migração 0074; Res. COFFITO 414 e 415,
  *        art. 1º §1º VIII): o prontuário exportado identifica o autor com o número no conselho. Null se não informado.
+ *        E `encounters[].signedCouncil`/`signedCouncilRegistration` (0075): o registro CONGELADO na assinatura, que é o
+ *        que vale para a evolução (B1 do parecer do código do #194).
  */
 export const EXPORT_SCHEMA_VERSION = '1.25.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
@@ -523,6 +525,9 @@ export interface ExportedEncounter {
   readonly signedBy: string | null;
   readonly signedVersion: number | null;
   readonly signedHash: string | null;
+  /** 0075: conselho e número de quem assinou, congelados na assinatura. */
+  readonly signedCouncil: string | null;
+  readonly signedCouncilRegistration: string | null;
   /** Sigilo da psicologia gravado na abertura (0015, B1 do #63). */
   readonly confidentiality: string;
 }
@@ -1101,6 +1106,8 @@ export async function exportInTransaction(
     signedBy: e.signedBy,
     signedVersion: e.signedVersion,
     signedHash: e.signedHash,
+    signedCouncil: e.signedCouncil ?? null,
+    signedCouncilRegistration: e.signedCouncilRegistration ?? null,
     confidentiality: e.confidentiality,
   }));
   const exportedVersions: ExportedClinicalRecordVersion[] = [];
