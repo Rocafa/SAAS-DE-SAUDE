@@ -266,3 +266,9 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **CI:** #193 16/16 verde (com a TO corrigida). #191 15/15 verde: o CodeQL volta a funcionar com o `init` e o `analyze` na mesma versão.
 - **#192: CI 16/16 verde** com o plano da auditoria de leitura.
 - **Guia de revisão para o @Lopesloro** (`docs/relatorios/2026-11-13-guia-de-revisao.md`): os PRs abertos na ordem que destrava mais, com tamanho e situação, mais as três decisões pendentes (D13, D15 e o estagiário do piloto). O link foi para o #152.
+- **#194 aberto (para a `main`): conselho e número de registro do profissional** (0074; COFFITO 414 e 415, art. 1º §1º VIII).
+  - O cadastro da API não tinha onde guardar o CREFITO, que as normas exigem e o documento precisa. A tela já esperava o campo.
+  - Migração com lista fechada de conselhos, formato restrito e os dois campos juntos ou nenhum.
+  - Rota de admin com MFA. A trilha leva o conselho, nunca o número.
+  - Exportação G2 1.25.0. Testes de unidade (1124) e bancada nova.
+  - Também é pré-requisito do supervisor do estagiário. Mandei para o Guardião.
