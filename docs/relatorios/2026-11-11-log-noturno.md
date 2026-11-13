@@ -231,3 +231,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Corrigi a N1: o runbook usa a rede própria da tarefa (output `ops_anonimizacao_rede`). O B10 no checklist passou a "código no #190, Guardião aprovado, CI verde; falta o sócio e a prova no staging".
 - **D13, voto do Matheus (13/11): opção B** (só o staging até o piloto, ≈ US$ 180–260/mês, estimativa). Registrei no memorando e pedi o voto do @Lopesloro. Com a decisão, o staging destrava as provas B1, B3, B4, B8 e B10.
+- **#192 aberto (para a `main`, fora da pilha): leitura do atendimento pelo agendamento** (item 1 da #180, que saiu do veto do Guardião ao #158). A rota `GET /atendimentos/do-agendamento/:agendamentoId` devolve o atendimento com a `versao` que o salvar exige, ou `null` se ainda não foi aberto.
+  - Valem as mesmas regras do `GET` por id. O porteiro do vínculo roda antes de revelar se há atendimento. A trilha de leitura é gravada também sem atendimento.
+  - De carona, fecha a R8 do #63: esta rota e o `GET /atendimentos/:id` passam a contar na vigilância de leitura.
+  - Tipos, lint e 1122 testes de unidade verdes; cobertura da auditoria OK. Mandei para o Guardião.
+  - É isto que destrava a fatia S1 do front do sócio.
