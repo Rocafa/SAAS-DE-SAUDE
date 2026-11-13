@@ -286,3 +286,11 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **Lição:** SQL e código com `$` ou crase não se editam por `sed`/`node -e` no shell. Usar o editor ou um script `.mjs`.
 - **#194: CI 16/16 verde** no commit corrigido (a migração 0074 passa no CI).
 - **96% do limite de 5 h.** Tudo commitado e enviado. Relatório: [2026-11-13-rodada-37.md](2026-11-13-rodada-37.md). Retomada agendada para depois do reset (05:10).
+
+## Checagem de 13/11 08:14
+
+- Nenhum merge possível: o #152 (base da pilha) segue sem aprovação do @Lopesloro (BLOCKED), CI 16/16 verde no 5daf777.
+- Os avulsos #153, #154 e #172 também esperam aprovação. CI verde.
+- O sócio não subiu commit no #158, #143 nem #157 desde 12/11 17:00. Não aprovei nada.
+- O #174 segue com uma falha de CI (Terraform) e fica fora até o checklist B1–B9.
+- O #116 ficou DIRTY (conflito com a main); só entra depois da pilha, junto com o #189. O #151 continua fechado.
