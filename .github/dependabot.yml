@@ -23,6 +23,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # O init e o analyze do CodeQL precisam estar na MESMA versão (o analyze recusa a configuração
+      # gravada por outra versão). Separados, os PRs #183 e #185 de 12/11/2026 falharam os dois.
+      codeql:
+        patterns: ["github/codeql-action*"]
   # Bases da imagem da API fixadas por digest (apps/api/Dockerfile): PR semanal com o digest novo.
   - package-ecosystem: docker
     directory: /apps/api
