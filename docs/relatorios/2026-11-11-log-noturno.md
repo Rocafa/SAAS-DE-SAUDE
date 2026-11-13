@@ -257,3 +257,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Corrigi a citação no PR #193 (com URL e data) e na #167.
   - Reescrevi o desenho como v2: cofinalização com segundo hash, CREFITO no cadastro, aceite do supervisor, vínculo "supervisão" só nos atendimentos do estagiário, trilha, exportação e retenção.
   - **Decisão dos sócios antes do código: a clínica do piloto tem estagiário atendendo?** Se não tiver, basta uma declaração no termo de adesão e um item no checklist, e o código entra antes da segunda clínica.
+- **Conferi a Res. COFFITO 415/2012 (TO) no site oficial** (https://www.coffito.gov.br/nsite/?p=3178, 13/11/2026). Isso **corrigiu um erro meu no #193**: a TO também exige exames complementares (IV) e diagnóstico e prognóstico (V), e eu não tinha posto esses campos.
+  - Acrescentei os dois na TO v2, com teste.
+  - Desempenho e nível de assistência ficaram como escolha de produto, sem atribuir à norma.
+  - A regra do supervisor (art. 1º §2º) é a mesma na TO, então o desenho v2 vale para fisio e TO.
+  - O PR #193 e o desenho estão atualizados com URL e data.
