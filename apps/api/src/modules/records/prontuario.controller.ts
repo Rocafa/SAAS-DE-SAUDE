@@ -84,10 +84,14 @@ export class AtendimentosController {
 
   @Get(':id/versoes')
   @Permissao('prontuario:acessar')
-  versoes(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<VersaoDto[]> {
+  async versoes(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<VersaoDto[]> {
     const alvo = exigirUuid(id);
     validarQueryVaziaClinica(query);
-    return this.service.versoes(paraRequestContext(auth), alvo);
+    const ctx = paraRequestContext(auth);
+    const res = await this.service.versoes(ctx, alvo);
+    // R8 do parecer do #63 (completo com o R1 do parecer de 13/11): todas as versões também contam como ficha aberta.
+    await this.vigilancia.ficha(ctx, `prontuario:${res.pacienteId}`);
+    return res.versoes;
   }
 
   @Post(':id/finalizar')

@@ -18,6 +18,7 @@ let clinica: TenantId;
 let psiUserId: string;
 let pacienteId: string;
 let atPsi: string;
+let agPsi: string;
 
 const sessaoPsi = (mfaEm: Date | null) => ({ Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: psiUserId, perfis: ['profissional'], mfaEm })}` });
 const antigo = () => new Date(Date.now() - MFA_RECENTE_MS - 60_000);
@@ -52,6 +53,7 @@ beforeAll(async () => {
       }),
     recepcao,
   );
+  agPsi = ag;
   const at = await api.http().post('/atendimentos').set(cab(sessaoPsi(new Date()))).send({ agendamentoId: ag });
   expect(at.status, JSON.stringify(at.body)).toBe(200);
   atPsi = (at.body as { id: string; restrito: boolean }).id;
@@ -69,6 +71,7 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     for (const [metodo, url, corpo] of [
       ['get', `/atendimentos/${atPsi}`, undefined],
       ['get', `/atendimentos/${atPsi}/versoes`, undefined],
+      ['get', `/atendimentos/do-agendamento/${agPsi}`, undefined],
       ['put', `/atendimentos/${atPsi}/registro`, { versaoBase: 1, conteudo: { tema: 'Tentativa ficticia' } }],
     ] as const) {
       const req = metodo === 'get' ? api.http().get(url) : api.http().put(url).send(corpo);
@@ -79,7 +82,7 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     const negadas = await withTenant(api.db.db, clinica, (tx) =>
       tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinica), eq(auditLog.actorId, psiUserId), eq(auditLog.scope, SCOPE_ACESSO_NEGADO))),
     );
-    expect(negadas.filter((l) => (l.metadata as { reason?: string }).reason === 'mfa_recente_obrigatorio').length).toBeGreaterThanOrEqual(3);
+    expect(negadas.filter((l) => (l.metadata as { reason?: string }).reason === 'mfa_recente_obrigatorio').length).toBeGreaterThanOrEqual(4);
   });
 
   it('B3: quem não pode ver o conteúdo nunca recebe código de MFA (não revela que o paciente faz psicoterapia)', async () => {
@@ -87,7 +90,7 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     const outro = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
     const velho = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: antigo() })}` };
     const recente = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: new Date() })}` };
-    for (const url of [`/atendimentos/${atPsi}`, `/atendimentos/${atPsi}/versoes`]) {
+    for (const url of [`/atendimentos/${atPsi}`, `/atendimentos/${atPsi}/versoes`, `/atendimentos/do-agendamento/${agPsi}`]) {
       const comVelho = await api.http().get(url).set(cab(velho));
       const comRecente = await api.http().get(url).set(cab(recente));
       expect((comVelho.body as { codigo?: string }).codigo ?? '', url).not.toMatch(/^mfa_/);
@@ -100,6 +103,10 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     const r = await api.http().get(`/atendimentos/${atPsi}`).set(cab(sessaoPsi(new Date())));
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ conteudoOculto: false, conteudo: { tema: 'Tema ficticio psi' } });
+    // #180: a leitura pelo agendamento devolve o mesmo, com MFA recente.
+    const pelo = await api.http().get(`/atendimentos/do-agendamento/${agPsi}`).set(cab(sessaoPsi(new Date())));
+    expect(pelo.status).toBe(200);
+    expect(pelo.body).toMatchObject({ atendimento: { conteudoOculto: false, conteudo: { tema: 'Tema ficticio psi' } } });
   });
 
   it('histórico sem MFA recente: o atendimento de psicologia aparece com o conteúdo oculto, sem 403', async () => {

@@ -42,15 +42,6 @@ export interface AdendoDto {
  * Atendimento com o registro atual. `conteudo`/`adendos` vêm vazios com `conteudoOculto: true`
  * quando quem pede passou pelo porteiro mas o compartimento de psicologia é restrito ao autor.
  */
-/**
- * Leitura pelo agendamento (#180, item 1): a tela de atendimento conhece o AGENDAMENTO, não o atendimento.
- * `atendimento: null` quando o agendamento existe, o porteiro deixou passar e ainda não há atendimento aberto; a tela
- * só abre vazia nesse caso (nunca por um 404 de outro motivo).
- */
-export interface AtendimentoDoAgendamentoDto {
-  readonly atendimento: AtendimentoDto | null;
-}
-
 export interface AtendimentoDto {
   readonly id: string;
   readonly pacienteId: string;
@@ -76,6 +67,15 @@ export interface AtendimentoDto {
   readonly conteudoOculto: boolean;
   /** `mfa_recente_obrigatorio`: psicologia sem MFA recente (R3 do #123); pedir o código e ler de novo. */
   readonly motivoOculto?: 'sigilo_psicologia' | 'mfa_recente_obrigatorio';
+}
+
+/**
+ * Leitura pelo agendamento (#180, item 1): a tela de atendimento conhece o AGENDAMENTO, não o atendimento.
+ * `atendimento: null` quando o agendamento existe, o porteiro deixou passar e ainda não há atendimento aberto; a tela
+ * só abre vazia nesse caso (nunca por um 404 de outro motivo).
+ */
+export interface AtendimentoDoAgendamentoDto {
+  readonly atendimento: AtendimentoDto | null;
 }
 
 /** Pedido de troca do sigilo da psicologia (B1 do #63). */
@@ -382,7 +382,8 @@ export class ProntuarioService {
   }
 
   /** Todas as versões do registro (a mais antiga primeiro): prova de que nada foi reescrito. */
-  versoes(ctx: RequestContext, id: string): Promise<VersaoDto[]> {
+  /** Todas as versões do registro, com o paciente (para a vigilância de leitura contar a ficha; R1 do parecer de 13/11). */
+  versoes(ctx: RequestContext, id: string): Promise<{ readonly pacienteId: string; readonly versoes: VersaoDto[] }> {
     return comNegacaoAuditada(this.db, ctx, { op: 'versoes', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
@@ -409,7 +410,7 @@ export class ProntuarioService {
           scope: SCOPE_REGISTROS,
           metadata: { encounter_id: e.id, patient_id: e.patientId, op: 'versions', count: out.length, care_basis: vinculo.base },
         });
-        return out;
+        return { pacienteId: e.patientId, versoes: out };
       }),
     );
   }

@@ -657,7 +657,6 @@ describe('leitura pelo agendamento (#180, item 1)', () => {
     expect(res.status).toBe(200);
     const direto = await api.http().get(`/atendimentos/${atFisio}`).set(cab(fisioA));
     expect(res.body).toEqual({ atendimento: direto.body as unknown });
-    expect((res.body as { atendimento: { versao: number } }).atendimento.versao).toBeGreaterThanOrEqual(0);
   });
 
   it('agendamento ainda sem atendimento: { atendimento: null }, e a consulta fica na trilha', async () => {
