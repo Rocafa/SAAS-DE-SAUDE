@@ -272,3 +272,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Rota de admin com MFA. A trilha leva o conselho, nunca o número.
   - Exportação G2 1.25.0. Testes de unidade (1124) e bancada nova.
   - Também é pré-requisito do supervisor do estagiário. Mandei para o Guardião.
+- **#194: o Guardião VETOU** (B1). O número novo sobrescrevia a identificação das evoluções já assinadas.
+  - **Correção (0075):** o conselho e o número ficam **congelados no atendimento na assinatura, gravados pelo próprio banco** (trigger na transição para "assinado"). Antes de assinar, esses campos ficam nulos; depois, nada os altera.
+  - O DTO e a exportação passaram a trazer o registro da assinatura, e há um teste de bancada que muda o cadastro depois de assinar.
+  - Também resolvidas: o número exige ao menos um dígito, o COREN entrou na lista, e a documentação foi para a tabela certa.
+  - Ficam anotados: o perfil fiscal tem outro campo de registro, a unificar, e o aviso ao profissional quando o número mudar. Pedi a reconferência.
