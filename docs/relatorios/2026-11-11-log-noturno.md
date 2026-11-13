@@ -252,3 +252,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O supervisor fica congelado no atendimento, entra no hash da finalização e na trilha.
   - Estagiário sem supervisor ativo não abre atendimento.
   - Ficaram quatro perguntas, entre elas se o supervisor precisa cofinalizar e como fica a psicologia. Mandei para o Guardião, sem código ainda.
+- **Supervisor do estagiário: o Guardião VETOU o desenho v1, e com razão.** Ele conferiu no site oficial do COFFITO: a regra está no **art. 1º §2º** da Res. 414/2012 (o "art. 2º §1º" da #167 não existe) e exige a **assinatura** do supervisor, não só a identificação.
+  - Confirmei por conta própria, na mesma fonte, que os incisos IV e V usados no #193 estão certos.
+  - Corrigi a citação no PR #193 (com URL e data) e na #167.
+  - Reescrevi o desenho como v2: cofinalização com segundo hash, CREFITO no cadastro, aceite do supervisor, vínculo "supervisão" só nos atendimentos do estagiário, trilha, exportação e retenção.
+  - **Decisão dos sócios antes do código: a clínica do piloto tem estagiário atendendo?** Se não tiver, basta uma declaração no termo de adesão e um item no checklist, e o código entra antes da segunda clínica.
