@@ -129,8 +129,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
+ * 1.25.0: `professionals[].council` e `professionals[].councilRegistration` (migração 0074; Res. COFFITO 414 e 415,
+ *        art. 1º §1º VIII): o prontuário exportado identifica o autor com o número no conselho. Null se não informado.
  */
-export const EXPORT_SCHEMA_VERSION = '1.24.0';
+export const EXPORT_SCHEMA_VERSION = '1.25.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -354,6 +356,9 @@ export interface ExportedProfessional {
   readonly displayName: string;
   readonly specialty: string;
   readonly sensitiveArea: boolean;
+  /** 0074: conselho e número de registro; null enquanto não informados. */
+  readonly council: string | null;
+  readonly councilRegistration: string | null;
   readonly capacity: number;
   readonly active: boolean;
   readonly createdAt: string;
@@ -936,6 +941,8 @@ export async function exportInTransaction(
     displayName: p.displayName,
     specialty: p.specialty,
     sensitiveArea: p.sensitiveArea,
+    council: p.council ?? null,
+    councilRegistration: p.councilRegistration ?? null,
     capacity: p.capacity,
     active: p.active,
     createdAt: p.createdAt.toISOString(),
