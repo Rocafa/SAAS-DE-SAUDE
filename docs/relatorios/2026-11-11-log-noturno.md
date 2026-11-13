@@ -176,3 +176,57 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - a falha numa clínica interrompe as outras.
   
   Também faltam: a conferência no banco em vez do `GET /sessao`, a saída só com código fixo, a tarefa sem `BETTER_AUTH_SECRET`, o prazo interno de 15 dias e o aviso às clínicas (art. 18 §6). Criei o B10 no checklist. Próximo passo: o código.
+- **CI de toda a pilha verde depois da refatoração da trava** (12 PRs, zero falhas).
+- **B10, código da anonimização pelo suporte**, na branch `eng/anonimizacao-suporte`, empilhada sobre o #179:
+  - `anonimizacao.ts` recebe só os dois bancos e é idempotente: uma trilha por clínica, o evento só na primeira vez e `ANONIMIZACAO_REPETIDA` depois. Recusa conta inexistente sem evento. Cada clínica fica isolada, e o erro vem no fim. A trilha tem ator sistema e leva o chamado, nunca o operador.
+  - Comando `ops/anonimizar-conta.ts`: trava de confirmação antes de escrever, saída de uma linha pelo Logger com código fixo, conferência no banco antes de dizer `ok`.
+  - Log de segurança: o evento `ANONIMIZACAO_REPETIDA` e os campos `chamado` e `operador`.
+  - Runbook novo, RIPD §5 e §5a, e o prazo do registro do pedido na matriz de retenção (5 anos, proposta).
+  - Tipos, lint e 1149 testes de unidade verdes; os testes de RLS rodam no CI.
+  - Ponto a confirmar com o Guardião: o `user_id` do titular entra na metadata da trilha. Sem ele, a prova não diz quem foi anonimizado.
+  - O Terraform da tarefa avulsa (papel próprio, só os segredos de banco, grupo `ops-lgpd` com MFA) está com o agente de devops.
+- **#190 aberto (B10), empilhado sobre o #179.** O Terraform da tarefa avulsa ficou pronto (`ops-anonimizacao.tf`):
+  - papéis próprios, só os segredos de banco, com `precondition` contra qualquer outro;
+  - grupo de rede sem Redis;
+  - grupo `ops-lgpd` com MFA;
+  - Deny explícito nos papéis de máquina.
+  
+  Como esta máquina não tem Terraform, quem valida é o CI. Ficam em aberto: SSO × usuário IAM (I1), overrides não limitados pelo IAM (CloudTrail e conferência a dois) e o alerta de uso do `RunTask`. O código foi para a revisão do Guardião.
+- **Código do #190 revisado pelo Guardião: APROVADO COM RESSALVAS**, todas na infra. Ele aceitou o `user_id` do titular na metadata.
+  - **R-A, achado importante, já corrigido:** a imagem é distroless e já começa com o `node`. O `command = ["node", "dist/main.js"]` da **tarefa da API no `app.tf`** virava `node node dist/main.js`, e a **API do staging não subiria** no primeiro dia. Corrigi a API (`["dist/main.js"]`) e a tarefa nova (programa fixo no `entryPoint`; o RunTask só troca os argumentos).
+  - O checkov reprovava o grupo de rede da tarefa como "não ligado", mas ele é usado só no RunTask. Pulei a regra com o motivo escrito, no padrão do projeto.
+  - Runbook: o override leva só os argumentos, o nome do contêiner foi corrigido, e o conferente checa o override no CloudTrail.
+  - R-B (alarme a cada execução) e R-C (papel com MFA e `SourceIdentity` no lugar do grupo IAM) estão com o agente de devops.
+- **#190:** o agente de devops fez a R-B (alertas por execução do `RunTask`, crítico se o override trouxer outra variável, troca de papel ou ECS Exec) e a R-C (o grupo virou o papel `ops-lgpd`, com MFA e `SourceIdentity`). O runbook foi atualizado. O fmt do Terraform pegou o alinhamento no `app.tf`, que corrigi. **CI do #190: 16/16 verde.**
+- **18:10 — 92% do limite de 5 h.** Tudo commitado e enviado (16 worktrees conferidos). Relatório da rodada: [2026-11-12-rodada-36.md](2026-11-12-rodada-36.md). Retomada agendada para depois do reset.
+
+## Checagem de 12/11 18:15
+
+- Nada mudou: nenhum PR aprovado (#152, #153, #154, #172, #189 em REVIEW_REQUIRED, CI verde); o sócio não subiu commit no #158, #143 nem #157.
+
+## Checagem de 12/11 21:20
+
+- Nenhum merge: o #152 segue em REVIEW_REQUIRED (CI 16/16 verde). Os de cima (#159, #171, #175, #176, #179) têm aprovações antigas, de 11/11, mas só entram depois do #152.
+- Avulsos #153, #154, #172 e #189: REVIEW_REQUIRED, CI verde. Nada a fazer.
+- O sócio não subiu commit no #158, #143 nem #157. Nada para aprovar.
+- **Novo: o CI do #174 (abertura) falhou** no job do Terraform, na trava do `api_segredos_obrigatorios`: "DATABASE_URL fora de api_segredos_obrigatorios" (run 43301229429, depois do merge das 20:31). O #174 não entra antes do B1–B9, então não bloqueia a pilha. Fica para a próxima rodada de trabalho.
+- O #151 (Dependabot) foi fechado pelo próprio bot às 13:29 de 12/11. Sai da fila do passo 5; ficam #189 e #116.
+
+## Checagem de 12/11 22:13
+
+- Nada mudou desde as 21:20: nenhum PR aprovado, o sócio não subiu commit, e o #174 segue com o Terraform falhando.
+
+## 13/11 (00:00)
+
+- A retomada das 18:45 de 12/11 não rodou (parou pedindo permissão). As checagens de 2 em 2 h rodaram (18:15, 20:14 e 22:13), sem nada novo: o @Lopesloro não mexeu desde 11/11 à noite.
+- O limite zerou: 12% da janela, 46% na semana.
+- **Reconferência do #190 pedida ao Guardião** (R-A, R-B e R-C da infra).
+- **Dependabot:** chegaram o #183 a #186 (ações) e o #188 (17 dependências). O #151 foi fechado pelo próprio Dependabot.
+  - O #183 e o #185 falhavam no CodeQL: cada um subia só o `init` ou só o `analyze`, e os dois precisam estar na mesma versão.
+  - Abri o **#191**, que sobe os dois juntos e cria o grupo `codeql` no `dependabot.yml` para isso não se repetir. Ele substitui o #183 e o #185.
+  - O #184 e o #186 (ações) estão verdes. O #188 mexe no lockfile e fica para depois da pilha, junto com o #189 e o #116.
+- **#190 aprovado pelo Guardião na reconferência (13/11):** R-A, R-B, R-C e R-D atendidas. Ficam em aberto, sem bloquear:
+  - a ordem e o tamanho do `command` não são conferidos pelo EventBridge (risco baixo com o `entryPoint` fixo; dá para fechar depois com uma Lambda);
+  - o SSO pode não conseguir assumir o papel com MFA, o que bloqueia e não abre; testar no primeiro uso, e em staging está aceito.
+  
+  Corrigi a N1: o runbook usa a rede própria da tarefa (output `ops_anonimizacao_rede`). O B10 no checklist passou a "código no #190, Guardião aprovado, CI verde; falta o sócio e a prova no staging".
