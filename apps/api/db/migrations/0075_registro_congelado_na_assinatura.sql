@@ -4,6 +4,7 @@
 --
 -- Quem copia é o BANCO, na transição open -> signed, a partir do profissional do atendimento: a aplicação não escolhe
 -- o valor. Antes da assinatura as colunas ficam nulas (CHECK); depois, o encounters_guard já impede qualquer mudança.
+-- Atendimentos assinados ANTES desta migração ficam com as colunas nulas: o registro deles não foi gravado na época.
 
 ALTER TABLE encounters
   ADD COLUMN signed_council text,

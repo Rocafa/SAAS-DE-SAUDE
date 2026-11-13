@@ -10,11 +10,7 @@ ALTER TABLE professionals
   -- Só o número como o conselho escreve (ex.: "3/123456-F"): letras, dígitos, barra, hífen e ponto, com ao menos um
   -- dígito (R2 do parecer: "FulanoDeTal" não passa). Nada de nome.
   ADD COLUMN council_registration text CONSTRAINT professionals_council_registration_check
-    CHECK (council_registration ~ '^[A-Za-z0-9][A-Za-z0-9./-]{0,29}
-
--- Os dois juntos ou nenhum.
-ALTER TABLE professionals ADD CONSTRAINT professionals_council_pair_check CHECK ((council IS NULL) = (council_registration IS NULL));
- AND council_registration ~ '[0-9]');
+    CHECK (council_registration ~ '^[A-Za-z0-9][A-Za-z0-9./-]{0,29}$' AND council_registration ~ '[0-9]');
 
 -- Os dois juntos ou nenhum.
 ALTER TABLE professionals ADD CONSTRAINT professionals_council_pair_check CHECK ((council IS NULL) = (council_registration IS NULL));

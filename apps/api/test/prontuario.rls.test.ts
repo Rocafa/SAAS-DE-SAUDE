@@ -680,6 +680,24 @@ describe('registro no conselho congelado na assinatura (0075, B1 do parecer do #
     const codigos = await sqlstates(
       withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ signedCouncil: 'CREFITO', signedCouncilRegistration: '1/1-F' }).where(eq(encounters.id, id)), fisioA.userId),
     );
-    expect(codigos.some((c) => c === '23514' || c === '42501')).toBe(true);
+    // O trigger barra antes do CHECK: só o banco grava, e só na assinatura.
+    expect(codigos).toContain('42501');
+  });
+
+  it('restringir o sigilo de um atendimento já assinado continua funcionando e não mexe no registro congelado', async () => {
+    const pf = profissionalDe.get(fisioA.userId) as string;
+    await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'prontuario_unico' }).expect(200);
+    const ag = await agendamento(clinicaA, pacienteA, pf, tipoA);
+    const id = ((await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag })).body as { id: string }).id;
+    await api.http().put(`/atendimentos/${id}/registro`).set(cab(fisioA)).send({ versaoBase: 0, conteudo: { queixa: 'Queixa ficticia', conduta: 'Conduta ficticia' } }).expect(200);
+    const fin = await api.http().post(`/atendimentos/${id}/finalizar`).set(cab(fisioA)).send({});
+    expect(fin.body).toMatchObject({ sigilo: 'prontuario_unico', status: 'finalizado' });
+    const congelado = (fin.body as { registroNaAssinatura: string | null }).registroNaAssinatura;
+    expect(congelado).not.toBeNull();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ confidentiality: 'restrito_ao_autor' }).where(eq(encounters.id, id)), fisioA.userId);
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select({ sigilo: encounters.confidentiality, registro: encounters.signedCouncilRegistration }).from(encounters).where(eq(encounters.id, id)),
+    );
+    expect(linha).toEqual({ sigilo: 'restrito_ao_autor', registro: congelado });
   });
 });

@@ -58,3 +58,46 @@ Um teste deve provar que, depois de uma troca, o valor anterior continua recuper
 | Retenção (20 anos) | Falha parcial: B1 (valor histórico se perde) |
 | Segredos / dados reais | Nenhum; dados fictícios |
 | COFFITO 414/415 | Atende no valor atual; B1 para o histórico |
+
+## Reconferência (13/11/2026)
+
+**Veredito: VETADO** (novo bloqueante B2). O desenho do B1 está correto; o que impede é a migração 0074 quebrada, que deixou toda a prova sem rodar.
+
+Commit conferido: 7c7954a (`git pull` sem novidades). CI do commit: "Isolamento entre tenants (RLS)", "Testes ofensivos", "Resiliência", "DAST", "Carga" e "conferência das guardas" **falharam** no `db:migrate` com `PostgresError: syntax error at or near "["` na 0074.
+
+### B2 (bloqueante). `0074_registro_no_conselho.sql` não aplica
+
+A edição do R2 colou o trecho no lugar errado (linhas 12-20): o literal da regex ficou sem `$'` de fechamento, o `AND council_registration ~ '[0-9]');` caiu depois do `professionals_council_pair_check`, e o `ADD CONSTRAINT professionals_council_pair_check` aparece duas vezes. O SQL é inválido em banco novo. Se ninguém tivesse visto, teria passado para a main **sem as colunas e sem o CHECK**. Os testes locais só passam em banco onde a 0074 antiga já estava em `schema_migrations` (o runner não reaplica), e isso é **verde falso**: nenhum teste do B1 e do R2 no banco rodou de verdade.
+**Correção:** a linha 12-13 deve ficar `CHECK (council_registration ~ '^[A-Za-z0-9][A-Za-z0-9./-]{0,29}$' AND council_registration ~ '[0-9]');`, com **um** só `professionals_council_pair_check`. Depois, recriar o banco de teste do zero (sem `schema_migrations` herdado), rodar `test:rls` inteiro localmente e esperar o CI verde nos jobs que hoje falham.
+
+### B1: desenho resolvido (aceite condicionado ao B2 e ao CI verde)
+
+- **Ordem dos triggers:** os dois são `BEFORE UPDATE ... FOR EACH ROW` em `encounters`. O Postgres dispara por ordem de nome, então `encounters_guard` roda antes de `encounters_snapshot_council` ("g" < "s"). Não há outro BEFORE UPDATE na tabela (0012/0015 conferidas).
+- **Transição open→signed:** o guard deixa passar (`OLD.status = 'open'`) e o snapshot **sobrescreve** qualquer valor que a aplicação mande, com o que está em `professionals`. A aplicação não escolhe o valor. O CHECK `encounters_signed_council_only_when_signed` e o ramo `ELSIF` (42501) impedem gravar antes de assinar. Depois de assinado, o guard dá 55000 antes de chegar ao snapshot.
+- **Restringir o sigilo de atendimento assinado:** continua funcionando. O guard aceita e retorna cedo; no snapshot, `OLD.status = NEW.status = 'signed'` e o registro não muda, então ele não dispara erro. Assinar e mudar o sigilo no mesmo UPDATE continua recusado (`semSigilo` difere).
+- **RLS na leitura de `professionals`:** a função é SECURITY INVOKER (sem `SECURITY DEFINER`), com `search_path` fixo. Ela lê sob a policy `tenant_isolation` (0007, FORCE) da sessão `app_user`, que já está na clínica do atendimento, e filtra por `NEW.tenant_id`. A FK `(professional_id, tenant_id)` (0012:70) garante que o profissional é da mesma clínica. Não há leitura entre clínicas.
+- **DTO e exportação:** `conselhoNaAssinatura`/`registroNaAssinatura` vêm do `.returning()` do finalizar e da leitura; `encounters[].signedCouncil*` saem no G2 1.25.0. OK.
+
+### Testes (depois do B2)
+
+- O 1º teste prova o essencial: assina com 3/111111-F, troca o cadastro para 4/222222-F, e a leitura continua 3/111111-F. O UPDATE direto em assinado dá 55000. OK.
+- **Ressalva T1:** o 2º teste aceita `23514 || 42501`. O caminho real é 42501 (o trigger BEFORE roda antes do CHECK). Fixar `toContain('42501')` e testar o CHECK à parte (por exemplo, INSERT com `signed_council` em `open`).
+- **Ressalva T2:** falta a prova de que restringir o sigilo de um atendimento **assinado** continua funcionando depois da 0075 (no teste de `prontuario.rls.test.ts:516`, o `atNovo` não está finalizado). Acrescentar a finalização antes do `restringirAnteriores` ou fazer um caso próprio.
+- **Ressalva T3:** falta conferir no teste da exportação que `encounters[].signedCouncilRegistration` sai com o valor congelado depois da troca. O parecer original pedia que "continua recuperável **e exportado**".
+- **Ressalva T4:** os atendimentos assinados antes da 0075 ficam com nulo (não dá para saber o número da época). Aceitável, mas registrar isso na nota da migração e na documentação de exportação.
+
+### R2, R4 e R6
+
+- **R2:** a validação está OK (`scheduling.validation.ts:129`, exige dígito, teste com "FulanoDeTal"). No banco, **falha** por causa do B2. Continua pendente: conferir que o erro não devolve o valor enviado, como promete o título do teste.
+- **R4:** COREN entrou em `CONSELHOS` e no CHECK. OK (CRBM, CRF e CREF ficam para a onda de cada nicho, como combinado).
+- **R6:** a linha foi movida para a tabela de rotas de cadastro do `api-dominio.md` e saiu da tabela R1–R4. OK. Continuam pendentes o caso `had_registration: true` e a nota sobre a 0027.
+- R1, R3 e R5 continuam como pendência registrada (não bloqueiam).
+
+### Checklist (delta)
+
+| Item | Situação |
+|---|---|
+| Retenção / COFFITO 414/415 (histórico) | Resolvido no desenho (0075); depende do B2 |
+| Isolamento por tenant | OK (INVOKER sob RLS + FK composta) |
+| Integridade do prontuário assinado | OK (guard + snapshot; sigilo só restringe) |
+| Testes sem verde falso | **Falha**: a 0074 não aplica em banco novo; o CI está vermelho |
