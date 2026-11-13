@@ -294,3 +294,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - O sócio não subiu commit no #158, #143 nem #157 desde 12/11 17:00. Não aprovei nada.
 - O #174 segue com uma falha de CI (Terraform) e fica fora até o checklist B1–B9.
 - O #116 ficou DIRTY (conflito com a main); só entra depois da pilha, junto com o #189. O #151 continua fechado.
+
+## Checagem de 13/11 10:14
+
+- Nada mudou desde 08:14: o #152 segue sem aprovação (BLOCKED), CI verde; nenhum merge possível.
