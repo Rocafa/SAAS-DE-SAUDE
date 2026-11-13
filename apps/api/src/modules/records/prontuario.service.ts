@@ -273,7 +273,7 @@ export class ProntuarioService {
         if (e.currentVersion === 0) throw new ConflitoError('registro_vazio');
         const v = await this.versaoAtual(tx, ctx, e);
         const conteudo = await this.decifrarVersao(tx, ctx, v);
-        const faltas = faltasParaFinalizar(e.template, conteudo);
+        const faltas = faltasParaFinalizar(e.template, conteudo, v.templateVersion);
         if (faltas.length > 0) throw new ConflitoError('registro_incompleto', faltas);
         const agora = new Date();
         const hash = hashDaFinalizacao({
