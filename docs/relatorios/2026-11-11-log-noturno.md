@@ -211,3 +211,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - O sócio não subiu commit no #158, #143 nem #157. Nada para aprovar.
 - **Novo: o CI do #174 (abertura) falhou** no job do Terraform, na trava do `api_segredos_obrigatorios`: "DATABASE_URL fora de api_segredos_obrigatorios" (run 43301229429, depois do merge das 20:31). O #174 não entra antes do B1–B9, então não bloqueia a pilha. Fica para a próxima rodada de trabalho.
 - O #151 (Dependabot) foi fechado pelo próprio bot às 13:29 de 12/11. Sai da fila do passo 5; ficam #189 e #116.
+
+## Checagem de 12/11 22:13
+
+- Nada mudou desde as 21:20: nenhum PR aprovado, o sócio não subiu commit, e o #174 segue com o Terraform falhando.
