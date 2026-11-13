@@ -1,6 +1,6 @@
 # Registro feito por estagiário: identificação do supervisor (desenho para o Guardião)
 
-> 13/11/2026 · Maestro · **desenho, sem código.** Origem: issue #167, último item que é do backend. Base citada na issue: **Res. COFFITO 414/2012, art. 2º §1º**: quando quem registra no prontuário é estagiário, o registro identifica o supervisor ou responsável técnico. ⚖️ O texto exato do artigo será conferido na fonte oficial antes do código; o resumo vem da pesquisa da issue.
+> 13/11/2026 · Maestro · **VETADO pelo Guardião** (`revisoes/2026-11-13-desenho-supervisor-do-estagiario.md`); refazer antes de qualquer código. **A base certa é a Res. COFFITO 414/2012, art. 1º §2º** (o "art. 2º §1º" da issue não existe), conferida em https://www.coffito.gov.br/nsite/?p=3177 em 13/11/2026: o registro traz a **identificação e a assinatura** do supervisor, que responde pelo serviço, e do estagiário. Então o supervisor **cofinaliza**; só identificar não basta. Faltam também o número do CREFITO no cadastro (art. 1º §1º VIII), a base de vínculo "supervisão" para o supervisor ler o que assina e o aceite da designação. O texto abaixo é a primeira versão, mantida como registro.
 
 ## Hoje
 
