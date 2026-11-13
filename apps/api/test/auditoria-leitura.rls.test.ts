@@ -178,6 +178,7 @@ beforeAll(async () => {
     'GET /clinica/auditoria': c('/clinica/auditoria?limite=5'),
     'GET /atendimentos/:id': c(`/atendimentos/${atId}`),
     'GET /atendimentos/:id/versoes': c(`/atendimentos/${atId}/versoes`),
+    'GET /atendimentos/do-agendamento/:agendamentoId': c(`/atendimentos/do-agendamento/${ag3}`),
     'GET /clinica/portal/pacientes/:id/consentimentos': c(`/clinica/portal/pacientes/${pacienteId}/consentimentos`),
     'GET /clinica/portal/pacientes/:id/vinculos': c(`/clinica/portal/pacientes/${pacienteId}/vinculos`),
     'GET /clinica/portal/solicitacoes': c('/clinica/portal/solicitacoes'),
