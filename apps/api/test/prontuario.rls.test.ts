@@ -648,3 +648,55 @@ describe('auditoria do prontuário', () => {
     expect(tudo).not.toContain('invasao');
   });
 });
+
+describe('leitura pelo agendamento (#180, item 1)', () => {
+  const ler = (ag: string, s: Sessao) => api.http().get(`/atendimentos/do-agendamento/${ag}`).set(cab(s));
+
+  it('devolve o mesmo atendimento de GET /atendimentos/:id, com a versão que o salvar exige', async () => {
+    const res = await ler(agFisio, fisioA);
+    expect(res.status).toBe(200);
+    const direto = await api.http().get(`/atendimentos/${atFisio}`).set(cab(fisioA));
+    expect(res.body).toEqual({ atendimento: direto.body as unknown });
+    expect((res.body as { atendimento: { versao: number } }).atendimento.versao).toBeGreaterThanOrEqual(0);
+  });
+
+  it('agendamento ainda sem atendimento: { atendimento: null }, e a consulta fica na trilha', async () => {
+    const ag = await agendamento(clinicaA, pacienteA, profissionalDe.get(fisioA.userId) as string, tipoA);
+    const res = await ler(ag, fisioA);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ atendimento: null });
+    const trilha = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.actorId, fisioA.userId), sql`${auditLog.metadata}->>'appointment_id' = ${ag}`)),
+    );
+    expect(trilha.map((t) => t.metadata)).toEqual([expect.objectContaining({ found: false, patient_id: pacienteA })]);
+  });
+
+  it('psicologia: outro profissional com vínculo recebe só os metadados (mesmo sigilo do GET por id)', async () => {
+    const res = await ler(agPsi, outroA);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ atendimento: { conteudoOculto: true, motivoOculto: 'sigilo_psicologia', conteudo: null } });
+    expect(JSON.stringify(res.body)).not.toContain('QZX5505');
+  });
+
+  it('perfil não clínico e profissional sem vínculo: 403 auditado, sem revelar se há atendimento', async () => {
+    const semAtendimento = await agendamento(clinicaA, pacienteA, profissionalDe.get(fisioA.userId) as string, tipoA);
+    for (const s of [recepA, finA]) {
+      const antes = (await negacoes(clinicaA, s)).length;
+      for (const ag of [agFisio, semAtendimento]) expect((await ler(ag, s)).status).toBe(403);
+      expect((await negacoes(clinicaA, s)).length).toBe(antes + 2);
+    }
+    const com = await ler(agFisio, semVinculoA);
+    const sem = await ler(semAtendimento, semVinculoA);
+    expect([com.status, sem.status]).toEqual([403, 403]);
+    expect(com.body).toEqual(sem.body);
+  });
+
+  it('inexistente e de outra clínica: 404 iguais; id fora do formato e query extra: 400', async () => {
+    const inexistente = await ler(randomUUID(), fisioA);
+    const deOutra = await ler(agFisio, profB);
+    expect([inexistente.status, deOutra.status]).toEqual([404, 404]);
+    expect(inexistente.body).toEqual(deOutra.body);
+    expect((await api.http().get('/atendimentos/do-agendamento/nao-e-uuid').set(cab(fisioA))).status).toBe(400);
+    expect((await api.http().get(`/atendimentos/do-agendamento/${agFisio}?x=1`).set(cab(fisioA))).status).toBe(400);
+  });
+});
