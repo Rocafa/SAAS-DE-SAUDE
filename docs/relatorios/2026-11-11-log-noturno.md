@@ -247,3 +247,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **Escalas:** faixa própria para Barthel, MIF (total, motora e cognitiva), Berg e NPRS. A COPM ficou fora (licença), e a psicologia continua sem instrumento.
   - **Guardião: aprovado.** Corrigi as duas condições: a versão do modelo num teste de bancada e as subescalas da MIF.
   - Ficam para depois: o supervisor do estagiário, o campo `instrumento` explícito e as medidas próprias da TO.
+- **Desenho do supervisor do estagiário** (último item de backend da #167; COFFITO 414 art. 2º §1º), em `docs/04-arquitetura/supervisor-do-estagiario.md`, no branch do #193.
+  - O cadastro ganha a marca de estagiário e o supervisor obrigatório.
+  - O supervisor fica congelado no atendimento, entra no hash da finalização e na trilha.
+  - Estagiário sem supervisor ativo não abre atendimento.
+  - Ficaram quatro perguntas, entre elas se o supervisor precisa cofinalizar e como fica a psicologia. Mandei para o Guardião, sem código ainda.
