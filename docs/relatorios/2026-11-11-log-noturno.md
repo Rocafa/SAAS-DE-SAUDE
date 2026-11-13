@@ -215,3 +215,13 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 12/11 22:13
 
 - Nada mudou desde as 21:20: nenhum PR aprovado, o sócio não subiu commit, e o #174 segue com o Terraform falhando.
+
+## 13/11 (00:00)
+
+- A retomada das 18:45 de 12/11 não rodou (parou pedindo permissão). As checagens de 2 em 2 h rodaram (18:15, 20:14 e 22:13), sem nada novo: o @Lopesloro não mexeu desde 11/11 à noite.
+- O limite zerou: 12% da janela, 46% na semana.
+- **Reconferência do #190 pedida ao Guardião** (R-A, R-B e R-C da infra).
+- **Dependabot:** chegaram o #183 a #186 (ações) e o #188 (17 dependências). O #151 foi fechado pelo próprio Dependabot.
+  - O #183 e o #185 falhavam no CodeQL: cada um subia só o `init` ou só o `analyze`, e os dois precisam estar na mesma versão.
+  - Abri o **#191**, que sobe os dois juntos e cria o grupo `codeql` no `dependabot.yml` para isso não se repetir. Ele substitui o #183 e o #185.
+  - O #184 e o #186 (ações) estão verdes. O #188 mexe no lockfile e fica para depois da pilha, junto com o #189 e o #116.
