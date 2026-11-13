@@ -40,9 +40,10 @@ aws sts assume-role --role-arn <arn do papel ops-lgpd> --role-session-name LGPD-
 
 ```bash
 aws ecs run-task --cluster <cluster> --task-definition <ambiente>-ops-anonimizacao --launch-type FARGATE \
-  --network-configuration '<a mesma da API>' \
+  --network-configuration 'awsvpcConfiguration={subnets=[<subnets>],securityGroups=[<security_group>],assignPublicIp=DISABLED}' \
   --overrides '{"containerOverrides":[{"name":"ops-anonimizacao","command":["--usuario","<uuid>","--chamado","LGPD-<n>","--operador","<uuid do executor>"],"environment":[{"name":"CONFIRMA_ANONIMIZACAO","value":"<uuid>"}]}]}'
 ```
+O cluster, as sub-redes e o grupo de segurança vêm do output `ops_anonimizacao_rede` do Terraform (`terraform output ops_anonimizacao_rede`). A tarefa tem **rede própria**: só o banco e os endpoints da VPC, sem Redis e sem entrada. Não use a rede da API.
 
 O programa é fixo no `entryPoint` da tarefa; o override leva **só os argumentos** e a variável `CONFIRMA_ANONIMIZACAO`. O `containerOverrides` fica no CloudTrail: só uuid e número do chamado, **nunca** nome ou e-mail.
 

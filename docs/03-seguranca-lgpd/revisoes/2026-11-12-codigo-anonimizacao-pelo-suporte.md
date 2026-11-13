@@ -70,3 +70,27 @@ O código cumpre R1 a R5 e R7 a R9 na lógica. Nenhum caminho de saída do coman
 - **Retenção:** prontuário e autoria 20 anos inalterados; registro do pedido em 5 anos ⚖️ (B5).
 - **Segredos e dados fora do git:** ok. Só uuids fictícios nos testes, e nenhum nome de pessoa no Terraform.
 - **CFM e ICP-Brasil:** a autoria do prontuário é preservada pelo id; nenhuma assinatura é afetada.
+
+## Reconferência (13/11/2026)
+
+Commits conferidos: 5f1ba47, b99b82a, fc2a1d9, fc0201f e b65901c (branch `eng/anonimizacao-suporte`). `gh pr checks 190`: 16/16 verdes, incluindo "Isolamento entre tenants (RLS)", "Lint, typecheck e testes" e "fmt, validate, tflint e checkov".
+
+### Veredito: **APROVADO** (R-A, R-B, R-C e R-D atendidas; notas abaixo não bloqueiam)
+
+| Ressalva | Situação | Evidência |
+|---|---|---|
+| R-A entryPoint | **atendida.** `entryPoint = ["/nodejs/bin/node", "dist/ops/anonimizar-conta.js"]` e `command = []`; o override leva só os argumentos. A API passou a `command = ["dist/main.js"]`, o que bate com o `CMD` do Dockerfile (`apps/api/Dockerfile:74`). O `#checkov:skip=CKV2_AWS_5` tem motivo (grupo usado só no RunTask avulso). | `ops-anonimizacao.tf` (local `ops_anon_entrypoint`, definição da tarefa), `app.tf:312-314` |
+| R-B alarme do override | **atendida, com limite aceito.** (a) O entryPoint fixo tira o `node -e`. (b) A regra `-execucao` alerta todo `RunTask` da família, inclusive os recusados. A regra `-override-suspeito` (crítica) dispara com variável de nome diferente de `CONFIRMA_ANONIMIZACAO` (cobre `NODE_OPTIONS` mesmo junto da variável certa, porque o casamento vale para qualquer elemento), `environmentFiles`, troca de `taskRoleArn`/`executionRoleArn` ou `enableExecuteCommand`. As duas regras entram na política do tópico (`acesso-humano.tf:221-223`). (c) O runbook manda o conferente checar o JSON do override no CloudTrail e tratar desvio como incidente. | `ops-anonimizacao.tf` (bloco "Alerta a cada execução"), runbook "Rodar" |
+| R-C papel | **atendida.** `aws_iam_group` removido; `aws_iam_role.ops_lgpd` com MFA (<1 h), `max_session_duration = 3600`, lista própria `principais_ops_lgpd` (validação sem curinga, fora do git), `sts:SourceIdentity` = `${aws:username}` para usuário nominal e obrigatório para SSO. Lista vazia = papel não existe. Output trocado para `papel_ops_lgpd`. Runbook com `assume-role --source-identity`. | `ops-anonimizacao.tf` (bloco "Papel ops-lgpd"), `variables.tf:95-103`, `outputs.tf:86-89` |
+| R-D prova | **atendida.** Os três checks pendentes em 12/11 estão verdes. | `gh pr checks 190` |
+
+### O que fica em aberto (não bloqueia o B10 em staging)
+
+- **A1 — Forma do `command` não é conferida por máquina.** O padrão do EventBridge não confere tamanho nem ordem de array, então "exatamente as 6 posições" fica com o alerta de toda execução e com o conferente. Risco residual baixo: com o entryPoint fixo, argumento extra vai para o `argv` do script, não para o node, e o script exige `CONFIRMA_ANONIMIZACAO` igual ao `--usuario`. Se quiserem fechar por máquina depois: o destino da regra `-execucao` vira uma Lambda pequena que confere o `command` e publica crítico no mesmo tópico.
+- **A2 — Caminho SSO provavelmente não assume (falha fechada).** Em sessão do IAM Identity Center encadeada com `AssumeRole`, a chave `aws:MultiFactorAuthPresent` costuma vir ausente, e a condição `Bool = true` recusa. Não é falha de segurança, mas o SSO pode não funcionar como descrito. Testar no primeiro uso real; se falhar, documentar que o executor usa usuário nominal ou ajustar a confiança, com nova revisão do Guardião.
+- **A3 — SourceIdentity livre no SSO.** No caminho SSO a confiança exige só que exista SourceIdentity, não que seja da pessoa. A pessoa continua no nome da sessão do SSO (`aws:userid`), que o conferente confere no chamado, como diz o comentário do `.tf`. Aceito para staging; reavaliar antes de produção.
+- **N1 — Rede no runbook continua `'<a mesma da API>'`.** Trocar pelo output `ops_anonimizacao_rede` (grupo próprio, sem Redis). Nota da revisão anterior, ainda aberta.
+
+### Checagens LGPD (delta)
+
+Controle de acesso e auditoria agora completos para o escopo do B10: humano nominal, MFA, identidade de origem no CloudTrail, alerta em toda execução e crítico em override fora do runbook. Minimização, base legal (art. 18, IV e VI; art. 16 para o que fica retido), retenção do prontuário e segredos seguem como no parecer de 12/11. Nenhum dado real, segredo ou ARN de pessoa entrou no git.
