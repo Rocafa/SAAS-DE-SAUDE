@@ -28,6 +28,7 @@ export const EVENTOS_DE_SEGURANCA = {
   CONTA_DESLIGADA_SEM_VINCULO: { severidade: 'aviso', alarme: 'volume', descricao: 'expurgo desligou conta ativa sem vínculo em nenhuma clínica (corrida no desligamento)' },
   CONTA_REATIVADA_COM_VINCULO: { severidade: 'aviso', alarme: 'volume', descricao: 'expurgo reativou conta inativa que tem vínculo (corrida com uma concessão)' },
   CONTA_ANONIMIZADA: { severidade: 'alto', alarme: 'volume', descricao: 'conta da equipe anonimizada a pedido do titular (D4 PR 3b-3; prova do art. 18 IV)' },
+  ANONIMIZACAO_REPETIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'pedido de anonimização rodado de novo numa conta já anonimizada (B10; completa a trilha, sem novo CONTA_ANONIMIZADA)' },
   SENHA_TROCADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha trocada pela própria pessoa; as outras sessões caem (D4 PR 3b-2)' },
   BLOQUEIO_ZERADO: { severidade: 'alto', alarme: 'volume', descricao: 'admin zerou os contadores de bloqueio de uma pessoa da clínica (D4 PR 3b-2)' },
   SENHA_VAZADA_RECUSADA: { severidade: 'aviso', alarme: 'volume', descricao: 'senha nova recusada por aparecer na base de senhas vazadas (k-anonimato)' },
@@ -145,6 +146,10 @@ const FORMATOS = {
   status: (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 599,
   contagem: (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000_000,
   origem: (v: unknown) => typeof v === 'string' && HEX.test(v),
+  /** B10: chamado operacional do atendimento ao titular (`LGPD-<número>`), nunca nome ou e-mail. */
+  chamado: (v: unknown) => typeof v === 'string' && /^LGPD-\d{1,7}$/.test(v),
+  /** B10: id interno de quem executou a anonimização. Só no log de segurança, nunca na trilha da clínica (R2). */
+  operador: (v: unknown) => typeof v === 'string' && UUID.test(v),
 } as const;
 
 export type CampoDeSeguranca = keyof typeof FORMATOS;

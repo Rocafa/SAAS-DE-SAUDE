@@ -67,3 +67,23 @@ output "papel_investigacao_seguranca" {
   description = "Papel que lê o bucket de logs de acesso: humano com MFA, sessão de 1 h, uso gera alerta (R2)."
   value       = aws_iam_role.investigacao_seguranca.arn
 }
+
+output "ops_anonimizacao_task_definition" {
+  description = "Definição de tarefa (com revisão) da anonimização pelo suporte (B10). Só o grupo ops-lgpd, com MFA, roda; o comando vem por containerOverrides (runbook)."
+  value       = aws_ecs_task_definition.ops_anonimizacao.arn
+}
+
+output "ops_anonimizacao_rede" {
+  description = "Cluster, sub-redes e grupo de segurança para o RunTask da anonimização (awsvpc, sem IP público)."
+  value = {
+    cluster          = aws_ecs_cluster.this.name
+    subnets          = aws_subnet.app[*].id
+    security_group   = aws_security_group.ops_anonimizacao.id
+    assign_public_ip = "DISABLED"
+  }
+}
+
+output "papel_ops_lgpd" {
+  description = "Papel que roda a anonimização (R-C do #190): humano de principais_ops_lgpd, com MFA e --source-identity, sessão de 1 h, todo RunTask gera alerta. null quando a lista está vazia."
+  value       = one(aws_iam_role.ops_lgpd[*].arn)
+}
