@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
-import { loadRateLimitHashKey } from './rate-limit-store';
+import { chaveDeHmac } from './rate-limit-store';
 
 /**
  * Log de segurança estruturado (produção: uma linha JSON por evento, para filtro e alarme no CloudWatch).
@@ -166,7 +166,7 @@ export function linhaDeSeguranca(evento: EventoDeSeguranca, campos: CamposDeSegu
 let segredoDaOrigem: Uint8Array | null | undefined;
 
 /**
- * Correlaciona a mesma origem sem guardar o IP (HMAC truncado, mesmo segredo do rate limit). O segredo é lido uma
+ * Correlaciona a mesma origem sem guardar o IP (HMAC truncado com a chave do uso `origem`, B9). O segredo é lido uma
  * vez. Sem ele (produção mal configurada), devolve `undefined` e o campo some da linha: o log nunca derruba a
  * requisição (R9 do parecer do #129). A falta do segredo já impede o boot do rate limit em produção.
  */
@@ -174,7 +174,7 @@ export function origemDaRequisicao(ip: string | undefined, segredo?: Uint8Array)
   if (!segredo) {
     if (segredoDaOrigem === undefined) {
       try {
-        segredoDaOrigem = loadRateLimitHashKey();
+        segredoDaOrigem = chaveDeHmac('origem');
       } catch {
         segredoDaOrigem = null;
       }

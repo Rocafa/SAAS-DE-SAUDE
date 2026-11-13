@@ -49,3 +49,12 @@ O orçamento da D13 (para as opções 1A e 1C) e a confirmação de que o Redis 
 - `docs/03-seguranca-lgpd/prontidao-producao.md` (B2) e `RIPD-identidade.md` §8
 - `docs/04-arquitetura/autenticacao-better-auth.md` §13 (senha vazada) e §14.7 (falha do contador)
 - Pareceres: `docs/03-seguranca-lgpd/revisoes/2026-11-05-codigo-better-auth-pr2.md` (R5) e `2026-11-10-codigo-better-auth-fila-antiga.md` (H1)
+
+## Votos (registro)
+
+| Sócio | Pergunta 1 (senha vazada) | Pergunta 2 (Redis caído) | Data |
+|---|---|---|---|
+| @Rocafa | **D**: abrir o piloto sem a conferência, com a decisão escrita aqui e no RIPD; A ou C antes da venda aberta | sem preferência | 12/11/2026 |
+| @Lopesloro | — | — | — |
+
+Vira decisão com o voto do outro sócio. Na pergunta 2, se o @Lopesloro votar, vale o voto dele; se não votar, fica o que já está no código (opção A).

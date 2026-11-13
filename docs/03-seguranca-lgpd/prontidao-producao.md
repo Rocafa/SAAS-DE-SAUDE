@@ -65,14 +65,15 @@ Cada linha precisa de evidência e do PR. A produção só abre com todas as lin
 | # | Item | Quando | Situação | PR / evidência |
 |---|---|---|---|---|
 | B1 | Segredos versionados, runbook e Terraform | antes | **feito no código**; falta provar no staging | #162 (`segredos.ts`, `segredos.test.ts`, `runbook-rotacao-better-auth.md`) |
-| B2 | Saída para a base de senhas vazadas filtrada por domínio, ou decisão escrita dos sócios | antes | **decisão dos sócios** | — |
+| B2 | Saída para a base de senhas vazadas filtrada por domínio, ou decisão escrita dos sócios | antes | **decisão dos sócios** — voto do @Rocafa (12/11): opção D no piloto (D15); falta o @Lopesloro | — |
 | B3 | `HTTP_TRUST_PROXY_HOPS` provado atrás do ALB real (duas origens contam separado) | antes | depende da AWS | — |
 | B4 | TLS `verify-full` para `app_user` e `app_auth`, e Redis `rediss://` com AUTH | antes | caminho da CA corrigido; falta provar no staging | #162 |
 | B5 | RIPD e contrato: base legal confirmada pelo advogado, cláusula no DPA, §8 assinada pelo encarregado | antes | RIPD e DPA escritos; faltam o advogado e a assinatura | #162 |
 | B6 | Este checklist | antes | em andamento | #162 |
 | B7 | Pilha na `main` (#149 a #161) e #153 | antes | **aguarda a aprovação do @Lopesloro** | — |
-| B9 | Chave dos HMACs separada por uso (HKDF, cinco rótulos), antes do B8 (`docs/04-arquitetura/derivacao-da-chave-de-hmac.md`) | antes | desenho aprovado com ressalvas, falta o código | — |
-| B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS | — |
+| B9 | Chave dos HMACs separada por uso (HKDF, cinco rótulos), antes do B8 (`docs/04-arquitetura/derivacao-da-chave-de-hmac.md`) | antes | código no #179 (Guardião aprovado, CI verde), aguardando o sócio | — |
+| B10 | Anonimização a pedido do titular executável pelo suporte (comando avulso no ECS, grupo IAM nominal com MFA, chamado `LGPD-` na trilha, idempotente), junto da fumaça do B8 (`docs/04-arquitetura/anonimizacao-pelo-suporte.md`) | antes | **código no #190: Guardião aprovado (13/11), CI verde**; falta o sócio e a prova no staging junto do B8 | #190 |
+| B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS; roteiro em `docs/04-arquitetura/roteiro-fumaca-login-staging.md`, conferido pelo Guardião (aprovado com ressalvas) | — |
 | C1 | CSRF com a sessão real (#132) | antes | coberto pela montagem (403 sem Origin) e pelo `protecaoCsrf`; conferir no B8 | #149 |
 | C2 | Eventos do fator (#123 R5) | antes | feito | #152, #156, #159 |
 | C3 | Auditoria dos ganchos fora de controller (#117 R6) | antes | feito | #149 |

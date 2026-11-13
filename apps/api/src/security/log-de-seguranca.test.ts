@@ -73,6 +73,21 @@ describe('linhaDeSeguranca', () => {
   });
 });
 
+describe('origemDaRequisicao em produção sem a raiz (V1 do #179)', () => {
+  it('devolve undefined e não lança (o log nunca derruba a requisição)', async () => {
+    vi.resetModules();
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('RATE_LIMIT_HASH_KEY', '');
+    try {
+      const m = await import('./log-de-seguranca.js');
+      expect(m.origemDaRequisicao('198.51.100.9')).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
 describe('origemDaRequisicao', () => {
   it('nunca devolve o IP: HMAC de 16 hex, estável para o mesmo IP e diferente entre IPs', () => {
     const segredo = Buffer.alloc(32, 7);
