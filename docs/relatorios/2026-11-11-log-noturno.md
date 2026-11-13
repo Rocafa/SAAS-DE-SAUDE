@@ -277,3 +277,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O DTO e a exportação passaram a trazer o registro da assinatura, e há um teste de bancada que muda o cadastro depois de assinar.
   - Também resolvidas: o número exige ao menos um dígito, o COREN entrou na lista, e a documentação foi para a tabela certa.
   - Ficam anotados: o perfil fiscal tem outro campo de registro, a unificar, e o aviso ao profissional quando o número mudar. Pedi a reconferência.
+- **#194, reconferência: o Guardião aprovou a correção do B1** (o banco congela o registro na assinatura), **mas achou um bloqueante novo (B2) criado por mim.** Ao editar a migração 0074 por um comando de shell, o `$` da expressão regular se perdeu e o SQL quebrou: o `db:migrate` do CI falharia.
+  - Reescrevi a 0074 inteira pelo editor, sem passar pelo shell.
+  - Fixei o código de erro esperado no teste do atendimento aberto.
+  - Acrescentei um teste que restringe o sigilo de um atendimento já assinado sem mexer no registro congelado.
+  - Anotei que os atendimentos assinados antes da 0075 ficam com o registro nulo.
+  - Esta máquina não tem Postgres, então só o CI prova as migrações. Estou esperando o resultado.
+  - **Lição:** SQL e código com `$` ou crase não se editam por `sed`/`node -e` no shell. Usar o editor ou um script `.mjs`.
