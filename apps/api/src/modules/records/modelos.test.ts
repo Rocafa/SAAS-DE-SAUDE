@@ -148,6 +148,13 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(escala('Barthel', 101)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('MIF', 17)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('MIF', 126)).toEqual([]);
+    // C2: subescalas da MIF com faixa própria.
+    expect(instrumentoDoRotulo('MIF motora')).toBe('mif_motora');
+    expect(instrumentoDoRotulo('MIF cognitiva')).toBe('mif_cognitiva');
+    expect(escala('MIF motora', 13)).toEqual([]);
+    expect(escala('MIF motora', 92)).toEqual(['conteudo.medidas.0.valor']);
+    expect(escala('MIF cognitiva', 5)).toEqual([]);
+    expect(escala('MIF cognitiva', 36)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('Escala de Berg', 57)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('NPRS', 7.5)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('Escala de equilíbrio da clínica', 900)).toEqual([]);

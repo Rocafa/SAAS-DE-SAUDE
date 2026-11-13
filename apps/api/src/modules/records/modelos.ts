@@ -116,18 +116,28 @@ const FAIXAS: Readonly<Record<TipoDeMedida, { min: number; max: number; inteiro:
 const INSTRUMENTOS: Readonly<Record<string, { min: number; max: number }>> = {
   barthel: { min: 0, max: 100 },
   mif: { min: 18, max: 126 },
+  // C2 do parecer de 13/11: as subescalas da MIF têm faixa própria (13 itens motores e 5 cognitivos, de 1 a 7).
+  mif_motora: { min: 13, max: 91 },
+  mif_cognitiva: { min: 5, max: 35 },
   berg: { min: 0, max: 56 },
   nprs: { min: 0, max: 10 },
 };
 
-/** Instrumento pelo rótulo: "Índice de Barthel", "MIF total", "Escala de Berg" e "NPRS" casam pela palavra. */
+/**
+ * Instrumento pelo rótulo: "Índice de Barthel", "MIF total", "MIF motora", "Escala de Berg" e "NPRS" casam pela palavra.
+ * Casar pelo rótulo é provisório: o campo `instrumento` explícito é o próximo passo (parecer de 13/11).
+ */
 export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS | undefined {
   const palavras = rotulo
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .split(/[^a-z0-9]+/);
-  return (Object.keys(INSTRUMENTOS)).find((i) => palavras.includes(i));
+  if (palavras.includes('mif')) {
+    if (palavras.some((p) => p.startsWith('motor'))) return 'mif_motora';
+    if (palavras.some((p) => p.startsWith('cognit'))) return 'mif_cognitiva';
+  }
+  return Object.keys(INSTRUMENTOS).find((i) => palavras.includes(i));
 }
 
 /** Modelo padrão pela especialidade do profissional (o front faz igual). */
