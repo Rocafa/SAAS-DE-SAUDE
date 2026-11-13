@@ -236,3 +236,14 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - De carona, fecha a R8 do #63: esta rota e o `GET /atendimentos/:id` passam a contar na vigilância de leitura.
   - Tipos, lint e 1122 testes de unidade verdes; cobertura da auditoria OK. Mandei para o Guardião.
   - É isto que destrava a fatia S1 do front do sócio.
+- **#192 (atendimento pelo agendamento): o Guardião aprovou com ressalvas, e resolvi todas as necessárias.**
+  - A rota `/versoes` também conta na vigilância, então a R8 do #63 fica completa nas três rotas de leitura.
+  - Bancada nova prova o alerta `fichas_distintas` em cada uma das três rotas.
+  - A rota nova entrou nos testes de MFA da psicologia.
+  - Ajustes menores feitos. A R6, opcional, ficou de fora: o caso `null` não tem conteúdo e já fica na trilha.
+- **#193 aberto (para a `main`): modelos do prontuário v2, a parte da API da #167**, que assumi na própria issue.
+  - **Fisio:** diagnóstico e prognóstico, exames (COFFITO 414 art. 1º §1º IV e V) e próximos passos.
+  - **TO:** modelo próprio (objetivo, atividades, desempenho, nível de assistência, plano; COFFITO 415). Registro aberto na versão 1 é finalizado pela regra da versão 1.
+  - **Escalas:** faixa própria para Barthel, MIF (total, motora e cognitiva), Berg e NPRS. A COPM ficou fora (licença), e a psicologia continua sem instrumento.
+  - **Guardião: aprovado.** Corrigi as duas condições: a versão do modelo num teste de bancada e as subescalas da MIF.
+  - Ficam para depois: o supervisor do estagiário, o campo `instrumento` explícito e as medidas próprias da TO.
