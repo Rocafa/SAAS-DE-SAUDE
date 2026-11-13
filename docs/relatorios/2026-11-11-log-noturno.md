@@ -230,3 +230,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - o SSO pode não conseguir assumir o papel com MFA, o que bloqueia e não abre; testar no primeiro uso, e em staging está aceito.
   
   Corrigi a N1: o runbook usa a rede própria da tarefa (output `ops_anonimizacao_rede`). O B10 no checklist passou a "código no #190, Guardião aprovado, CI verde; falta o sócio e a prova no staging".
+- **D13, voto do Matheus (13/11): opção B** (só o staging até o piloto, ≈ US$ 180–260/mês, estimativa). Registrei no memorando e pedi o voto do @Lopesloro. Com a decisão, o staging destrava as provas B1, B3, B4, B8 e B10.
