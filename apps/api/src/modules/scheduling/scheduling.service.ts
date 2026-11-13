@@ -36,6 +36,7 @@ import {
   type FiltroAgenda,
   type NovoAgendamento,
   type NovoProfissional,
+  type RegistroNoConselho,
   type NovoTipoAtendimento,
 } from './scheduling.validation';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
@@ -64,6 +65,9 @@ export interface ProfissionalDto {
   readonly capacidade: number;
   /** R2 do #68: área sensível (sigilo do adolescente no portal). */
   readonly areaSensivel: boolean;
+  /** 0074: conselho e número de registro, ou null enquanto não informados. */
+  readonly conselho: string | null;
+  readonly registro: string | null;
 }
 
 export interface TipoAtendimentoDto {
@@ -381,6 +385,33 @@ export class SchedulingService {
   }
 
   /**
+   * Conselho e número de registro do profissional (0074; COFFITO 414/415 art. 1º §1º VIII). Gestão do admin. A trilha leva
+   * o conselho e se havia registro antes, não o número.
+   */
+  definirRegistroNoConselho(ctx: RequestContext, id: string, dados: RegistroNoConselho): Promise<ProfissionalDto> {
+    return this.escrita(ctx, async (tx) => {
+      const [antes] = await tx
+        .select({ council: professionals.council })
+        .from(professionals)
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .for('update');
+      if (!antes) throw new NaoEncontradoError();
+      const [p] = await tx
+        .update(professionals)
+        .set({ council: dados.conselho, councilRegistration: dados.registro })
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .returning();
+      if (!p) throw new NaoEncontradoError();
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: 'professionals',
+        metadata: { op: 'council_registration', professional_id: p.id, council: dados.conselho, had_registration: antes.council !== null },
+      });
+      return this.profissionalDto(p);
+    });
+  }
+
+  /**
    * Marca de área sensível do profissional (R2 do #68): estruturada, decide o sigilo do adolescente no portal.
    * Desligar não vence a especialidade: se ela parecer de área sensível, o banco mantém a marca ligada.
    */
@@ -410,7 +441,15 @@ export class SchedulingService {
   }
 
   private profissionalDto(p: typeof professionals.$inferSelect): ProfissionalDto {
-    return { id: p.id, nome: p.displayName, especialidade: p.specialty, capacidade: p.capacity, areaSensivel: p.sensitiveArea };
+    return {
+      id: p.id,
+      nome: p.displayName,
+      especialidade: p.specialty,
+      capacidade: p.capacity,
+      areaSensivel: p.sensitiveArea,
+      conselho: p.council ?? null,
+      registro: p.councilRegistration ?? null,
+    };
   }
 
   listarTipos(ctx: RequestContext): Promise<TipoAtendimentoDto[]> {

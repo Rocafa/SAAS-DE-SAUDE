@@ -1,3 +1,4 @@
+import { CONSELHOS, type Conselho } from '../../db/schema';
 import { ehDataValida, ehHoraValida, exigirObjeto, Validador } from '../../common/validacao';
 import { STATUS_FRONT, type StatusFront } from './agenda-regras';
 
@@ -111,6 +112,23 @@ export function validarNovoProfissional(corpo: unknown): NovoProfissional {
   const areaSensivel = v.booleano('areaSensivel');
   v.concluir();
   return { nome: nome, especialidade: especialidade, capacidade, ...(usuarioId ? { usuarioId } : {}), ...(areaSensivel !== undefined ? { areaSensivel } : {}) };
+}
+
+/** Conselho e número de registro (0074). Só o número, como o conselho escreve: "3/123456-F". */
+export interface RegistroNoConselho {
+  readonly conselho: Conselho;
+  readonly registro: string;
+}
+
+const REGISTRO_RE = /^[A-Za-z0-9][A-Za-z0-9./-]{0,29}$/;
+
+export function validarRegistroNoConselho(corpo: unknown): RegistroNoConselho {
+  const v = new Validador(exigirObjeto(corpo, ['conselho', 'registro']));
+  const conselho = v.umDe('conselho', CONSELHOS, true);
+  const registro = v.texto('registro', { max: 30, obrigatorio: true });
+  if (typeof registro === 'string' && (!REGISTRO_RE.test(registro) || !/[0-9]/.test(registro))) v.falhar('registro');
+  v.concluir();
+  return { conselho: conselho as Conselho, registro: registro };
 }
 
 export function validarAreaSensivel(corpo: unknown): boolean {

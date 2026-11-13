@@ -119,6 +119,7 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | `POST /agendamentos/:id/check-in` | agenda:escrever | — | atalho para `chegou` |
 | `POST /agendamentos/:id/cancelar` | agenda:escrever | `removerAgendamento` | não há exclusão: "remover/desfazer" vira cancelar |
 | `GET /profissionais`, `POST /profissionais` | cadastros:ler / gerir | `listarProfissionais` | `capacidade` 1–20 (AGD-01.5) |
+| `POST /profissionais/:id/conselho` | cadastros:gerir, MFA recente | `definirRegistroNoConselho` | conselho (lista fechada) e número com ao menos um dígito (`3/123456-F`); trilha com o conselho, nunca o número. O atendimento guarda o registro congelado na assinatura (`conselhoNaAssinatura`, `registroNaAssinatura`; 0074/0075; COFFITO 414/415 art. 1º §1º VIII). O `registroConselho` do perfil fiscal (0018) é outra fonte, a unificar |
 | `GET /tipos-atendimento`, `POST /tipos-atendimento` | cadastros:ler / gerir | `listarTiposAtendimento` | `minutos` 5–480, `capacidade` 1–20 |
 
 ### 3a. Limite por usuário e alerta de anomalia (R5 do parecer PR #57)

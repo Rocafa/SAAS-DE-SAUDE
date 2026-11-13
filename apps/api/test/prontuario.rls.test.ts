@@ -648,3 +648,56 @@ describe('auditoria do prontuário', () => {
     expect(tudo).not.toContain('invasao');
   });
 });
+
+describe('registro no conselho congelado na assinatura (0075, B1 do parecer do #194)', () => {
+  it('a evolução assinada guarda o número vigente na assinatura; mudar o cadastro depois não a reescreve', async () => {
+    const pf = profissionalDe.get(fisioA.userId) as string;
+    await api.http().post(`/profissionais/${pf}/conselho`).set(cab(adminA)).send({ conselho: 'CREFITO', registro: '3/111111-F' }).expect(201);
+    const ag = await agendamento(clinicaA, pacienteA, pf, tipoA);
+    const at = await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag });
+    expect(at.status).toBe(200);
+    const id = (at.body as { id: string }).id;
+    expect(at.body).toMatchObject({ conselhoNaAssinatura: null, registroNaAssinatura: null });
+    await api.http().put(`/atendimentos/${id}/registro`).set(cab(fisioA)).send({ versaoBase: 0, conteudo: { queixa: 'Queixa ficticia', conduta: 'Conduta ficticia' } }).expect(200);
+    const fin = await api.http().post(`/atendimentos/${id}/finalizar`).set(cab(fisioA)).send({});
+    expect(fin.status).toBe(200);
+    expect(fin.body).toMatchObject({ conselhoNaAssinatura: 'CREFITO', registroNaAssinatura: '3/111111-F' });
+    // O profissional muda de região: o cadastro muda, a evolução assinada não.
+    await api.http().post(`/profissionais/${pf}/conselho`).set(cab(adminA)).send({ conselho: 'CREFITO', registro: '4/222222-F' }).expect(201);
+    const depois = await api.http().get(`/atendimentos/${id}`).set(cab(fisioA));
+    expect(depois.body).toMatchObject({ registroNaAssinatura: '3/111111-F' });
+    // Assinado não muda por SQL direto.
+    expect(
+      await sqlstates(withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ signedCouncilRegistration: '9/999-F' }).where(eq(encounters.id, id)), fisioA.userId)),
+    ).toContain('55000');
+  });
+
+  it('antes da assinatura ninguém grava o registro do atendimento (CHECK e trigger)', async () => {
+    const pf = profissionalDe.get(fisioA.userId) as string;
+    const ag = await agendamento(clinicaA, pacienteA, pf, tipoA);
+    const at = await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag });
+    const id = (at.body as { id: string }).id;
+    const codigos = await sqlstates(
+      withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ signedCouncil: 'CREFITO', signedCouncilRegistration: '1/1-F' }).where(eq(encounters.id, id)), fisioA.userId),
+    );
+    // O trigger barra antes do CHECK: só o banco grava, e só na assinatura.
+    expect(codigos).toContain('42501');
+  });
+
+  it('restringir o sigilo de um atendimento já assinado continua funcionando e não mexe no registro congelado', async () => {
+    const pf = profissionalDe.get(fisioA.userId) as string;
+    await api.http().put('/prontuario/configuracao').set(cab(adminA)).send({ psicologia: 'prontuario_unico' }).expect(200);
+    const ag = await agendamento(clinicaA, pacienteA, pf, tipoA);
+    const id = ((await api.http().post('/atendimentos').set(cab(fisioA)).send({ agendamentoId: ag })).body as { id: string }).id;
+    await api.http().put(`/atendimentos/${id}/registro`).set(cab(fisioA)).send({ versaoBase: 0, conteudo: { queixa: 'Queixa ficticia', conduta: 'Conduta ficticia' } }).expect(200);
+    const fin = await api.http().post(`/atendimentos/${id}/finalizar`).set(cab(fisioA)).send({});
+    expect(fin.body).toMatchObject({ sigilo: 'prontuario_unico', status: 'finalizado' });
+    const congelado = (fin.body as { registroNaAssinatura: string | null }).registroNaAssinatura;
+    expect(congelado).not.toBeNull();
+    await withTenant(api.db.db, clinicaA, (tx) => tx.update(encounters).set({ confidentiality: 'restrito_ao_autor' }).where(eq(encounters.id, id)), fisioA.userId);
+    const [linha] = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select({ sigilo: encounters.confidentiality, registro: encounters.signedCouncilRegistration }).from(encounters).where(eq(encounters.id, id)),
+    );
+    expect(linha).toEqual({ sigilo: 'restrito_ao_autor', registro: congelado });
+  });
+});

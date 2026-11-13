@@ -64,6 +64,9 @@ export interface AtendimentoDto {
   readonly finalizadoEm: string | null;
   readonly finalizadoPor: string | null;
   readonly hashFinalizacao: string | null;
+  /** 0075: conselho e número de quem assinou, congelados na assinatura (null antes de assinar ou se não havia registro). */
+  readonly conselhoNaAssinatura: string | null;
+  readonly registroNaAssinatura: string | null;
   readonly conteudoOculto: boolean;
   /** `mfa_recente_obrigatorio`: psicologia sem MFA recente (R3 do #123); pedir o código e ler de novo. */
   readonly motivoOculto?: 'sigilo_psicologia' | 'mfa_recente_obrigatorio';
@@ -551,6 +554,8 @@ export class ProntuarioService {
       finalizadoEm: e.signedAt?.toISOString() ?? null,
       finalizadoPor: e.signedBy,
       hashFinalizacao: e.signedHash,
+      conselhoNaAssinatura: e.signedCouncil ?? null,
+      registroNaAssinatura: e.signedCouncilRegistration ?? null,
     };
     if (!visivel) {
       return { ...base, versaoModelo: null, conteudo: null, adendos: [], conteudoOculto: true, motivoOculto: 'sigilo_psicologia' };
