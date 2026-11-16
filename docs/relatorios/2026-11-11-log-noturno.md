@@ -324,3 +324,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Item B11 no checklist da abertura:** primeiro fator de quem não nasce de convite, sem afrouxar a R8. O fundador recebe um token de cadastro no provisionamento, e o membro adicionado recebe a recuperação de fator do admin. Depende do desenho do provisionamento (`criarClinica` ainda não tem chamador, então hoje ninguém fica preso).
 - **#194, pendências do parecer resolvidas:** um teste da troca de número (a trilha marca `had_registration: true`, sem o número) e um teste da exportação total com o registro congelado na assinatura. O CI está rodando.
 - **#194: CI 16/16 verde** com os testes novos da troca de número e da exportação.
+- **#181, ressalvas R2 e R3 (no branch do #155, propagadas pela pilha):** o alarme `TRILHA_NAO_GRAVADA` do fator agora diz se a linha perdida era a do cadastro (`trilha_do_cadastro_do_fator`) e se o desfazer do MFA também falhou (`mfa_sem_trilha`, o pior caso). O topo passa no typecheck.
+- **#194, mais ressalvas resolvidas:**
+  - **R1:** o recibo passa a usar o registro do cadastro do profissional, e o campo do perfil fiscal fica como legado (o recibo já emitido não muda). Com teste de bancada.
+  - **R5:** o admin pode apagar um registro informado errado (os dois nulos). Com testes de unidade e de bancada.
+  - A R3 (o profissional ver o próprio registro e ser avisado da troca) fica na fila: precisa de um tipo novo de aviso.
