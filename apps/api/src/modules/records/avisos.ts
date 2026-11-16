@@ -260,8 +260,20 @@ export class AvisosService {
   }
 }
 
-/** Regras de anomalia que viram aviso (as mesmas do CHECK da 0063). */
-export type RegraDeAnomaliaAvisada = 'paginas_de_pacientes' | 'fichas_distintas' | 'limite_por_usuario' | 'vinculo_autoagendado' | 'vinculo_cruzado' | 'mfa_recusas_por_usuario';
+/**
+ * Regras de anomalia que viram aviso. É a MESMA lista do CHECK da 0063, e o teste
+ * `avisos-anomalia.rls.test.ts` compara as duas (R6 do parecer do #137): regra nova só aqui passa no compilador e
+ * estoura 23514 na hora de avisar, em produção, onde ninguém está olhando.
+ */
+export const REGRAS_DE_ANOMALIA_AVISADAS = [
+  'paginas_de_pacientes',
+  'fichas_distintas',
+  'limite_por_usuario',
+  'vinculo_autoagendado',
+  'vinculo_cruzado',
+  'mfa_recusas_por_usuario',
+] as const;
+export type RegraDeAnomaliaAvisada = (typeof REGRAS_DE_ANOMALIA_AVISADAS)[number];
 
 /**
  * Resto do E10 de 04/11 (0063): o alerta de anomalia de uma sessão da EQUIPE também avisa os DEMAIS admins ativos (quem
