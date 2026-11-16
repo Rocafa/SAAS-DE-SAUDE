@@ -357,3 +357,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - eventos `CLINICA_PROVISIONADA` e `ATIVACAO_EMITIDA`.
   
   Tipos, lint e 1163 testes de unidade verdes. Mandei ao Guardião. Ficam para os PRs 2 e 3: a rota de ativação, o ajuste da 0022 (ator sistema), o cliente SSM real (o pacote não está instalado), o expurgo e o Terraform.
+- **#195: CI 16/16 verde e o Guardião aprovou com ressalvas.** A tarefa não roda em ambiente nenhum até o cliente SSM entrar, e é isso que impede o veto.
+  - **C1 (alta, primeira coisa da próxima rodada):** o fundador que já tem conta vira admin com vínculo ativo no provisionamento, antes de ativar. Um e-mail errado que caia na conta de outra pessoa daria admin a ela. Correção: a sessão recusa a clínica com ativação pendente para aquela pessoa, ou o vínculo nasce bloqueado.
+  - C2 a C4 bloqueiam só o PR que ligar o SSM: o ator sistema da R7, a reemissão depois do expurgo e o IAM e a expiração do parâmetro de entrega.
+  - A1 a A3 são pequenos (HMAC próprio `ativacao-email`, conferir o e-mail da conta existente ao repetir, `pedido` nos eventos).
+- **89% do limite de 5 h às 19:00.** Tudo commitado e enviado. Retomada agendada para depois do reset (19:55).
