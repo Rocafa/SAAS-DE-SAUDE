@@ -11,7 +11,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
-import type { DadosClinica, Papel, PedidoExportacao } from '@/lib/api/tipos';
+import type { DadosClinica, MembroEquipe, Papel, PapelEquipe, PedidoExportacao } from '@/lib/api/tipos';
 import { JANELA_SAIDA_DIAS, avisoDeSaida, validarEmail } from '@/lib/conta';
 import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
@@ -21,6 +21,13 @@ import { CAMPO } from '@/components/ui/formulario';
 
 
 const NOME_PAPEL: Record<Papel, string> = { admin: 'Administrador', profissional: 'Profissional de saúde', recepcao: 'Recepção' };
+/** Perfis que a API real concede: além dos três do convite, financeiro e psicólogo. */
+const NOME_PERFIL: Record<PapelEquipe, string> = { ...NOME_PAPEL, financeiro: 'Financeiro', psicologo: 'Psicólogo' };
+
+/** A API real não manda nome nem e-mail da equipe: sem eles, a linha mostra o id da conta. */
+function rotuloDoMembro(m: MembroEquipe): string {
+  return m.nome ?? `Conta ${m.usuarioId ?? m.id}`;
+}
 
 function Campo({ id, rotulo, children }: { id: string; rotulo: string; children: ReactNode }) {
   return (
@@ -113,6 +120,7 @@ function SecaoUsuarios() {
   const [papel, setPapel] = useState<Papel>('recepcao');
   const [erro, setErro] = useState('');
   const [tirando, setTirando] = useState<string | null>(null);
+  const [erroEquipe, setErroEquipe] = useState('');
 
   async function convidar(e: FormEvent) {
     e.preventDefault();
@@ -132,17 +140,18 @@ function SecaoUsuarios() {
     try {
       const m = await api.removerAcesso(id);
       setTirando(null);
+      setErroEquipe('');
       atualizar();
       if (m)
         avisar({
-          texto: `${m.nome} não acessa mais a clínica.`,
+          texto: `${rotuloDoMembro(m)} não acessa mais a clínica.`,
           desfazer: async () => {
             await api.devolverAcesso(m);
             atualizar();
           },
         });
     } catch (err) {
-      setErro(err instanceof Error ? err.message : 'Não deu.');
+      setErroEquipe(err instanceof Error ? err.message : 'Não deu.');
       setTirando(null);
     }
   }
@@ -155,15 +164,21 @@ function SecaoUsuarios() {
         </h2>
         {consulta.estado === 'carregando' && <Carregando />}
         {consulta.estado === 'erro' && <Erro mensagem={consulta.mensagem} tentarDeNovo={consulta.tentarDeNovo} />}
+        {erroEquipe && (
+          <p role="alert" className="mb-3 font-bold">
+            ⚠ {erroEquipe}
+          </p>
+        )}
         {consulta.estado === 'pronto' && (
           <ul className="flex flex-col gap-2">
             {consulta.dados.map((m) => (
               <li key={m.id} className="flex flex-col gap-2 rounded-md border-2 border-borda p-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="flex-1">
-                    <strong>{m.nome}</strong> · {m.email}
+                    <strong className="break-all">{rotuloDoMembro(m)}</strong>
+                    {m.email && <> · {m.email}</>}
                   </span>
-                  <span className="rounded-sm border-2 border-borda px-2 text-[0.9rem]">{NOME_PAPEL[m.papel]}</span>
+                  <span className="rounded-sm border-2 border-borda px-2 text-[0.9rem]">{NOME_PERFIL[m.papel]}</span>
                   {m.situacao === 'convite_enviado' && (
                     <span className="flex items-center gap-1 rounded-sm border-2 border-dashed border-borda px-2 text-[0.9rem]">
                       <Mail aria-hidden className="size-4" /> Convite enviado
@@ -172,7 +187,7 @@ function SecaoUsuarios() {
                 </div>
                 {tirando === m.id ? (
                   <div role="alertdialog" aria-label="Confirmar" className="flex flex-wrap items-center gap-2">
-                    <span className="font-bold">Tirar o acesso de {m.nome}?</span>
+                    <span className="font-bold">Tirar o acesso de {rotuloDoMembro(m)}?</span>
                     <Botao variante="perigo" tamanho="pequeno" onClick={() => tirar(m.id)}>
                       Sim, tirar acesso
                     </Botao>
@@ -355,6 +370,9 @@ function TrilhaDeAcesso() {
         <input id="a-filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Ex.: Beatriz" className={`${CAMPO} mb-3 mt-2 max-w-md`} />
         {auditoria.estado === 'carregando' && <Carregando />}
         {auditoria.estado === 'erro' && <Erro mensagem={auditoria.mensagem} tentarDeNovo={auditoria.tentarDeNovo} />}
+        {auditoria.estado === 'pronto' && auditoria.dados.truncado && (
+          <p className="mb-3 font-bold">Mostrando só os registros mais recentes. Há registros mais antigos que não aparecem aqui.</p>
+        )}
         {auditoria.estado === 'pronto' &&
           (() => {
             const lista = auditoria.dados.filter((e) => e.quem.toLowerCase().includes(filtro.trim().toLowerCase()));

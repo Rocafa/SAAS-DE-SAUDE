@@ -4,7 +4,7 @@ import type {
   Anexo,
   Assinatura,
   DadosClinica,
-  EventoAuditoria,
+  ListaAuditoria,
   MembroEquipe,
   PedidoExportacao,
   Papel,
@@ -120,7 +120,7 @@ export interface ApiClinica {
   convidar(email: string, papel: Papel): Promise<MembroEquipe>;
   removerAcesso(id: string): Promise<MembroEquipe | null>;
   devolverAcesso(m: MembroEquipe): Promise<void>;
-  listarAuditoria(): Promise<EventoAuditoria[]>;
+  listarAuditoria(): Promise<ListaAuditoria>;
   obterAssinatura(): Promise<Assinatura>;
   cancelarAssinatura(): Promise<Assinatura>;
   reativarAssinatura(): Promise<Assinatura>;

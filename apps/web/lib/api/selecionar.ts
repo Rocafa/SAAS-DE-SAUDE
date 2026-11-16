@@ -2,8 +2,9 @@
  * Escolha do adaptador por variável de ambiente (lida no build do Next):
  * - `NEXT_PUBLIC_API_MODO=fake` (padrão): tudo no fake em memória, como antes.
  * - `NEXT_PUBLIC_API_MODO=http`: pacientes e agenda na API real (`NEXT_PUBLIC_API_ORIGIN`, a mesma
- *   origem liberada no `connect-src` da CSP); atendimento, financeiro, espera, recibos etc.
- *   continuam no fake até ganharem rota.
+ *   origem liberada no `connect-src` da CSP), equipe e trilha de acesso; atendimento, financeiro,
+ *   espera, recibos etc. continuam no fake até ganharem rota. Método que o HTTP não tem rota recusa
+ *   com 501 em vez de cair no fake.
  * Nenhuma das duas variáveis é segredo.
  */
 import type { ApiClinica } from './cliente';
