@@ -383,12 +383,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       await this.trilhaDoFator(tenantId, userId, ops, action);
       return true;
     } catch {
+      let desfeito = true;
       try {
         await this.d.dbAuth.update(sessao).set({ mfaEm: null, perfisNoMfa: null }).where(eq(sessao.id, sessaoId));
       } catch {
-        // Desfazer também falhou: o alarme abaixo é crítico e imediato justamente para este caso.
+        desfeito = false;
       }
-      registrarNoMaximoUmaVez(`trilha-fator:${sessaoId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo: 'trilha_do_fator' });
+      // R2 e R3 do parecer de 16/11 sobre o #181: o motivo diz qual linha se perdeu (a do cadastro não se refaz na
+      // reverificação) e se o desfazer falhou (sessão com MFA e sem linha: o pior caso).
+      const motivo = !desfeito ? 'mfa_sem_trilha' : ops.includes('mfa_enrolled') ? 'trilha_do_cadastro_do_fator' : 'trilha_do_fator';
+      registrarNoMaximoUmaVez(`trilha-fator:${sessaoId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo });
       return false;
     }
   }
