@@ -200,7 +200,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
    */
   private async trilhaDeSessaoNasClinicas(userId: string, op: string, motivo: 'logout' | 'logout_global'): Promise<void> {
     let falhas = 0;
-    for (const tenantId of await this.clinicasDoUsuario(userId)) {
+    // R1 do parecer de 16/11 sobre o #181: a leitura das clínicas também pode falhar, e nem ela pode virar 500 depois
+    // de as sessões terem sido apagadas.
+    let clinicas: string[];
+    try {
+      clinicas = await this.clinicasDoUsuario(userId);
+    } catch {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo, userId });
+      return;
+    }
+    for (const tenantId of clinicas) {
       try {
         await withTenant(
           this.d.dbClinica,
