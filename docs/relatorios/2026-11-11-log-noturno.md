@@ -323,3 +323,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#182:** pedi mudanças, com o parecer e o caminho certo (token de cadastro do fator no provisionamento do fundador; recuperação de fator para o membro adicionado). Sugeri separar a parte 2 num PR próprio, que eu mesclo.
 - **Item B11 no checklist da abertura:** primeiro fator de quem não nasce de convite, sem afrouxar a R8. O fundador recebe um token de cadastro no provisionamento, e o membro adicionado recebe a recuperação de fator do admin. Depende do desenho do provisionamento (`criarClinica` ainda não tem chamador, então hoje ninguém fica preso).
 - **#194, pendências do parecer resolvidas:** um teste da troca de número (a trilha marca `had_registration: true`, sem o número) e um teste da exportação total com o registro congelado na assinatura. O CI está rodando.
+- **#194: CI 16/16 verde** com os testes novos da troca de número e da exportação.
