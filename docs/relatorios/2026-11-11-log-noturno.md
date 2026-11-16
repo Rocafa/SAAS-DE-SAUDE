@@ -314,3 +314,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **#181** (logout que não vira 500 se a trilha falhar; `mfa_em` só com a linha do fator): CI verde.
   - **#182** (fundador e membro adicionado ficavam em 403 permanente sem cadastrar o TOTP): o CI falha no teste da R8. A mudança libera o cadastro do fator para quem só tem a senha e ainda não tem fator, e isso abre tomada de conta por quem roubou a senha.
   - Mandei os dois ao Guardião antes de mesclar.
+- **#194: veto retirado pelo Guardião (16/11).** A 0074 reescrita é válida, e o CI passou 16/16. Ficam pendências que não bloqueiam, anotadas no parecer: o teste da exportação com o registro congelado, o caso `had_registration: true` e as ressalvas R1, R3 e R5.
