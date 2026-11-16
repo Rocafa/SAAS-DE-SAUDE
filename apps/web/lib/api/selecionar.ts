@@ -61,7 +61,7 @@ export function criarApi(
   config: ConfigApi,
   opcoes: { fake?: OpcoesFake; http?: Omit<OpcoesHttp, 'baseUrl'> } = {},
 ): ApiClinica {
-  const fake = criarApiFake(opcoes.fake ?? {});
+  const fake = criarApiFake({ ...(opcoes.fake ?? {}), modo: config.modo });
   if (config.modo === 'fake' || !config.origem) return fake;
   return { ...fake, ...criarApiHttp({ ...opcoes.http, baseUrl: config.origem }) };
 }

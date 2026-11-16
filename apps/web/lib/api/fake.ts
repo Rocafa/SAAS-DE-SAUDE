@@ -2,6 +2,7 @@
  * Adaptador FAKE em memória. Todos os pacientes, telefones e CPFs são INVENTADOS para demonstração;
  * nenhum dado real. Os CPFs começam com 000 de propósito (não existem).
  */
+import { codigoDeDemonstracaoAceito, CODIGO_DE_DEMONSTRACAO, type ModoAcesso } from '../acesso-demonstracao';
 import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
@@ -167,6 +168,8 @@ export interface OpcoesFake {
   simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
   /** Papel de quem ENTRA na demonstração (padrão: admin). `entrarComo` troca depois. */
   papel?: Papel;
+  /** Modo do adaptador da clínica (`lerConfigApi().modo`). Em `http`, o código de demonstração não vale. */
+  modo?: ModoAcesso;
 }
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
@@ -694,7 +697,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     async pedirExportacao(codigo) {
       exigirAdmin();
       if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
-      if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
+      if (!codigoDeDemonstracaoAceito(codigo, opcoes.modo ?? 'fake')) {
+        throw new Error(opcoes.modo === 'http' ? 'Código não confere.' : `Código não confere. Na demonstração, use ${CODIGO_DE_DEMONSTRACAO}.`);
+      }
       const p: PedidoExportacao = { id: novoId('x'), status: 'aguardando_rt', pedidoEm: hojeIso };
       exportacoes.push(p);
       registrar('Pediu a exportação total dos dados');

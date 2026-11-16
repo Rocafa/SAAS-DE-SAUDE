@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Botao } from '@/components/ui/botao';
+import { codigoDeDemonstracaoAceito } from '@/lib/acesso-demonstracao';
+import { lerConfigApi } from '@/lib/api/selecionar';
 import { validarCodigo, validarEmail } from '@/lib/conta';
 import { CAMPO } from '@/components/ui/formulario';
 
@@ -29,7 +31,7 @@ export default function PaginaEntrar() {
     e.preventDefault();
     const ec = validarCodigo(codigo);
     if (ec) return setErro(ec);
-    if (codigo.replace(/\s/g, '') !== '123456') return setErro('Código não confere. Ele muda a cada 30 segundos: digite o que aparece agora.');
+    if (!codigoDeDemonstracaoAceito(codigo, lerConfigApi().modo)) return setErro('Código não confere. Ele muda a cada 30 segundos: digite o que aparece agora.');
     router.push('/escolher-clinica');
   }
 
@@ -43,7 +45,10 @@ export default function PaginaEntrar() {
       <label htmlFor="e-senha" className="font-bold">
         Senha
       </label>
-      <input id="e-senha" type="password" autoComplete="current-password" value={senha} onChange={(e) => setSenha(e.target.value)} className={CAMPO} />
+      <input id="e-senha" type="password" autoComplete="off" value={senha} onChange={(e) => setSenha(e.target.value)} className={CAMPO} />
+      <p className="border-2 border-borda bg-superficie-2 px-4 py-2 text-[0.95rem] font-bold">
+        Esta tela é de demonstração. Não digite a senha da sua conta real aqui.
+      </p>
       {erro && <p role="alert" className="font-bold">⚠ {erro}</p>}
       <Botao type="submit" tamanho="grande">
         <LogIn aria-hidden />
