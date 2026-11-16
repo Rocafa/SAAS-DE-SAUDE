@@ -344,3 +344,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Isso virou condição do B8. **Lacuna nova: B12**, o admin único que perde o fator, que vai precisar de um procedimento operacional.
 - **Provisionamento, PR 1** (tabela `ativacao_do_fundador`, função, comando, eventos e testes) **passado ao agente de engenharia**, no branch `eng/provisionamento-clinica`, empilhado sobre o #190. A rota de ativação, o ajuste da 0022 e o Terraform ficam para os PRs 2 e 3.
+- **CI verde em toda a pilha (#152 a #179, #190) e no #194**, depois da entrada do #181 e das correções R1 a R3. Nenhuma falha.
