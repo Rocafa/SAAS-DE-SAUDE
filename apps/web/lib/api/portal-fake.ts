@@ -7,6 +7,7 @@
  * Conta de demonstração: Maria Silva (p01) como titular e responsável legal de Sofia Pinto (p24).
  */
 import { ehDataAAAAMMDD, type PortalAgindoComo, type PortalFinalidade, type PortalTipoDePedido } from '@plataforma/shared';
+import { codigoDeDemonstracaoAceito, CODIGO_DE_DEMONSTRACAO } from '../acesso-demonstracao';
 import { cpfMascarado } from '../ajudante/busca';
 import { deIsoLocal, paraIsoLocal } from '../ajudante/datas';
 import { criarApiFake, PROFISSIONAIS_FICTICIOS } from './fake';
@@ -24,7 +25,7 @@ import {
 /** Token do convite de demonstração (fictício; o real tem 256 bits e chega no `#fragmento` do link). */
 export const TOKEN_CONVITE_DEMONSTRACAO = 'convite-de-demonstracao';
 /** Código do convite de demonstração (só no fake; o real vai por SMS ao telefone do cadastro). */
-export const CODIGO_CONVITE_DEMONSTRACAO = '123456';
+export const CODIGO_CONVITE_DEMONSTRACAO = CODIGO_DE_DEMONSTRACAO;
 
 const VERSAO_TEXTO = '2026-10-01';
 const ANTECEDENCIA_CANCELAR_MS = 2 * 60 * 60 * 1000;
@@ -161,7 +162,7 @@ export function criarApiPortalFake(opcoes: OpcoesPortalFake = {}): ClientePortal
       return { canal: 'sms', destino: '(11) *****-0001' };
     },
     async confirmarConvite(token, codigo) {
-      if (token.trim() !== TOKEN_CONVITE_DEMONSTRACAO || codigo.trim() !== CODIGO_CONVITE_DEMONSTRACAO) throw new ErroPortal(409, 'convite_invalido');
+      if (token.trim() !== TOKEN_CONVITE_DEMONSTRACAO || !codigoDeDemonstracaoAceito(codigo, 'fake')) throw new ErroPortal(409, 'convite_invalido');
       if (vinculos.length === 0) vinculos.push({ vinculoId: 'v-titular', pacienteId: 'p01', agindoComo: 'titular' });
       escolhido = vinculos[0]!;
       return { vinculoId: escolhido.vinculoId };

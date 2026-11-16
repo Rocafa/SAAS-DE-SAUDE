@@ -1,11 +1,13 @@
 'use client';
 
-/** Entrada do paciente no portal: celular e código por mensagem (aguarda D4; código 123456). */
+/** Entrada do paciente no portal: celular e código por mensagem (aguarda D4; código de demonstração só em modo fake). */
 import { MessageSquare } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { validarTelefone } from '@/lib/agenda';
+import { codigoDeDemonstracaoAceito } from '@/lib/acesso-demonstracao';
+import { lerConfigPortal } from '@/lib/api/portal-selecionar';
 import { validarCodigo } from '@/lib/conta';
 import { CAMPO } from '@/components/ui/formulario';
 
@@ -27,7 +29,7 @@ export default function PortalEntrar() {
     e.preventDefault();
     const ec = validarCodigo(codigo);
     if (ec) return setErro(ec.replace('no aplicativo autenticador do seu celular', 'na mensagem que mandamos'));
-    if (codigo.trim() !== '123456') return setErro('Código não confere. Confira a última mensagem que chegou.');
+    if (!codigoDeDemonstracaoAceito(codigo, lerConfigPortal().modo)) return setErro('Código não confere. Confira a última mensagem que chegou.');
     router.push('/portal');
   }
   return etapa === 'celular' ? (

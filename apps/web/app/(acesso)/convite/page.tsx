@@ -5,6 +5,8 @@ import { Check, KeyRound, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Botao } from '@/components/ui/botao';
+import { codigoDeDemonstracaoAceito } from '@/lib/acesso-demonstracao';
+import { lerConfigApi } from '@/lib/api/selecionar';
 import { REGRAS_SENHA, errosSenha, validarCodigo } from '@/lib/conta';
 import { CAMPO } from '@/components/ui/formulario';
 
@@ -28,7 +30,7 @@ export default function PaginaConvite() {
     e.preventDefault();
     const ec = validarCodigo(codigo);
     if (ec) return setErros([ec]);
-    if (codigo.trim() !== '123456') return setErros(['Código não confere. Digite o que aparece agora no aplicativo.']);
+    if (!codigoDeDemonstracaoAceito(codigo, lerConfigApi().modo)) return setErros(['Código não confere. Digite o que aparece agora no aplicativo.']);
     router.push('/primeiros-passos');
   }
 

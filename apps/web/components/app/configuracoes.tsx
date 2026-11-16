@@ -10,7 +10,9 @@ import Link from 'next/link';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
+import { CODIGO_DE_DEMONSTRACAO } from '@/lib/acesso-demonstracao';
 import { formatarDia } from '@/lib/ajudante/datas';
+import { lerConfigApi } from '@/lib/api/selecionar';
 import type { DadosClinica, Papel, PedidoExportacao } from '@/lib/api/tipos';
 import { JANELA_SAIDA_DIAS, avisoDeSaida, validarEmail } from '@/lib/conta';
 import { MODELOS } from '@/lib/prontuario';
@@ -433,7 +435,7 @@ function SecaoPrivacidade() {
             <Campo id="x-cod" rotulo="Código do aplicativo autenticador (6 números)">
               <input id="x-cod" inputMode="numeric" autoComplete="one-time-code" value={codigo} onChange={(e) => setCodigo(e.target.value)} className={CAMPO} />
             </Campo>
-            <p className="text-texto-suave">Na demonstração, use 123456.</p>
+            {lerConfigApi().modo === 'fake' && <p className="text-texto-suave">Na demonstração, use {CODIGO_DE_DEMONSTRACAO}.</p>}
             <label className="flex min-h-12 items-start gap-3">
               <input type="checkbox" checked={ciente} onChange={(e) => setCiente(e.target.checked)} className="mt-1 size-6 shrink-0 accent-[var(--texto)]" />
               <span>Estou ciente de que o arquivo tem dados de saúde protegidos por sigilo profissional e vou guardá-lo com segurança.</span>
