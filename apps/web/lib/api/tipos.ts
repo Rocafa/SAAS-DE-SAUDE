@@ -256,11 +256,18 @@ export interface Conversa {
   mensagens: { de: 'paciente' | 'clinica'; texto: string; hora: string }[];
 }
 
+/** Perfis que a API real concede por usuário (`clinic_members`): além dos três papéis da tela, financeiro e psicólogo. */
+export type PapelEquipe = Papel | 'financeiro' | 'psicologo';
+
 export interface MembroEquipe {
+  /** Chave da linha na tela. No modo http é `usuarioId:perfil` (uma linha por perfil concedido). */
   id: string;
-  nome: string;
-  email: string;
-  papel: Papel;
+  /** Id da conta na API real (modo http). */
+  usuarioId?: string;
+  /** A API real não devolve nome nem e-mail da equipe: só o fake os traz. */
+  nome?: string;
+  email?: string;
+  papel: PapelEquipe;
   situacao: 'ativo' | 'convite_enviado';
 }
 
@@ -271,6 +278,12 @@ export interface EventoAuditoria {
   quem: string;
   acao: string;
 }
+
+/**
+ * Trilha de acesso. `truncado: true` quando o servidor ainda tinha páginas além do teto que o adaptador
+ * busca (a tela avisa). Mesmo espírito do `truncado` de `ListaPacientes`.
+ */
+export type ListaAuditoria = EventoAuditoria[] & { truncado?: true };
 
 export interface Assinatura {
   plano: string;
