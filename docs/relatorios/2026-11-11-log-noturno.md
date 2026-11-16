@@ -321,3 +321,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - o #181 passou a exigir o motivo na trilha das sessões, e a troca de senha (#159) chamava sem ele. Corrigi com `pela_pessoa` e propaguei.
   - Topo da pilha: tipos e lint limpos, 1153 testes de unidade verdes.
 - **#182:** pedi mudanças, com o parecer e o caminho certo (token de cadastro do fator no provisionamento do fundador; recuperação de fator para o membro adicionado). Sugeri separar a parte 2 num PR próprio, que eu mesclo.
+- **Item B11 no checklist da abertura:** primeiro fator de quem não nasce de convite, sem afrouxar a R8. O fundador recebe um token de cadastro no provisionamento, e o membro adicionado recebe a recuperação de fator do admin. Depende do desenho do provisionamento (`criarClinica` ainda não tem chamador, então hoje ninguém fica preso).
