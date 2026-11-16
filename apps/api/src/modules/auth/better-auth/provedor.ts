@@ -174,7 +174,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       .returning({ id: sessao.id });
     if (apagadas.length === 0) return false;
     registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout', userId: s.userId });
-    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_revoked');
+    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_revoked', 'logout');
     return true;
   }
 
@@ -186,19 +186,34 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
   async encerrarTodasDaPessoa(s: SessaoDePessoa): Promise<number> {
     const apagadas = await this.d.dbAuth.delete(sessao).where(eq(sessao.userId, s.userId)).returning({ id: sessao.id });
     registrarEventoDeSeguranca('LOGOUT', { motivo: 'logout_global', userId: s.userId, contagem: apagadas.length });
-    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_logout_global');
+    await this.trilhaDeSessaoNasClinicas(s.userId, 'session_logout_global', 'logout_global');
     return apagadas.length;
   }
 
-  private async trilhaDeSessaoNasClinicas(userId: string, op: string): Promise<void> {
+  /**
+   * Trilha do fim de sessão nas clínicas do vínculo. As sessões JÁ foram apagadas quando esta função roda, e sair é a
+   * ação que reduz acesso: nenhuma falha de trilha pode desfazer o logout nem virar 500 (sem o 204, o navegador não
+   * recebe o cookie expirado e continua com o cookie de uma sessão que não existe mais).
+   *
+   * Por isso: cada clínica na própria transação, uma falha NÃO para as outras, e nada é lançado. Cada falha gera
+   * `TRILHA_NAO_GRAVADA` (crítico, alarme imediato) com a clínica, e no fim um evento com a contagem.
+   */
+  private async trilhaDeSessaoNasClinicas(userId: string, op: string, motivo: 'logout' | 'logout_global'): Promise<void> {
+    let falhas = 0;
     for (const tenantId of await this.clinicasDoUsuario(userId)) {
-      await withTenant(
-        this.d.dbClinica,
-        tenantId as TenantId,
-        (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op } }),
-        userId,
-      );
+      try {
+        await withTenant(
+          this.d.dbClinica,
+          tenantId as TenantId,
+          (tx) => recordAudit(tx, { tenantId: tenantId as TenantId, userId: userId as UserId, roles: [] }, { action: AuditAction.Update, scope: 'session', metadata: { op } }),
+          userId,
+        );
+      } catch {
+        falhas += 1;
+        registrarNoMaximoUmaVez(`trilha-sessao:${userId}:${tenantId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo });
+      }
     }
+    if (falhas > 0) registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo, userId, contagem: falhas });
   }
 
   /**
@@ -291,7 +306,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
     };
     const aproveita =
       antes.clinicaAtiva === null && antes.semClinica !== null && this.agora().getTime() - antes.semClinica.getTime() <= PRAZO_MFA_SEM_CLINICA_MS;
-    if (aproveita && (await this.marcarMfa(sessaoId))) await this.trilhaDoFator(tenantId, userId, ['mfa_verified'], AuditAction.Login);
+    if (aproveita) await this.marcarMfaComTrilha(sessaoId, tenantId, userId, ['mfa_verified'], AuditAction.Login);
     return true;
   }
 
@@ -329,9 +344,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
       // Sem a linha da escolha na trilha, a sessão fica sem clínica: nada de MFA marcado.
       if (!(await this.definirClinica(sessaoId, userId, tenantId))) return 'nada';
     }
-    if (!(await this.marcarMfa(sessaoId))) return 'nada';
     const ops = motivo === 'cadastro_do_fator' ? ['mfa_enrolled', 'mfa_verified'] : ['mfa_verified'];
-    await this.trilhaDoFator(tenantId, userId, ops, AuditAction.Login);
+    if (!(await this.marcarMfaComTrilha(sessaoId, tenantId, userId, ops, AuditAction.Login))) return 'nada';
     return 'marcado';
   }
 
@@ -340,6 +354,34 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa {
     const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
     if (!s?.clinicaAtiva) return;
     await this.trilhaDoFator(s.clinicaAtiva, userId, bloqueou ? ['mfa_failed', 'mfa_locked'] : ['mfa_failed'], AuditAction.LoginFailed);
+  }
+
+  /**
+   * Marca o MFA e grava a trilha do fator. `mfa_em` e a trilha ficam em bancos diferentes, então a ordem importa:
+   * marcar primeiro e gravar depois deixaria, se a trilha falhasse, uma sessão com MFA válido abrindo prontuário
+   * sensível SEM a linha do fator na trilha da clínica. Aqui, se a trilha falha, o MFA é DESFEITO (a pessoa
+   * reverifica) e o log alarma. Devolve se a sessão terminou com MFA marcado.
+   */
+  private async marcarMfaComTrilha(
+    sessaoId: string,
+    tenantId: string,
+    userId: string,
+    ops: readonly string[],
+    action: AuditAction,
+  ): Promise<boolean> {
+    if (!(await this.marcarMfa(sessaoId))) return false;
+    try {
+      await this.trilhaDoFator(tenantId, userId, ops, action);
+      return true;
+    } catch {
+      try {
+        await this.d.dbAuth.update(sessao).set({ mfaEm: null, perfisNoMfa: null }).where(eq(sessao.id, sessaoId));
+      } catch {
+        // Desfazer também falhou: o alarme abaixo é crítico e imediato justamente para este caso.
+      }
+      registrarNoMaximoUmaVez(`trilha-fator:${sessaoId}`, 60_000, 'TRILHA_NAO_GRAVADA', { tenantId, userId, motivo: 'trilha_do_fator' });
+      return false;
+    }
   }
 
   private async trilhaDoFator(tenantId: string, userId: string, ops: readonly string[], action: AuditAction): Promise<void> {
