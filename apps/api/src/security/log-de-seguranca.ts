@@ -105,6 +105,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'recuperacao_pelo_admin',
   'pedido_do_titular',
   'conferencia_indisponivel',
+  'trilha_do_fator',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
