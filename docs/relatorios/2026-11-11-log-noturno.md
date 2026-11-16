@@ -334,3 +334,12 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O comando avulso no ECS recebe só o id do pedido, então nada de e-mail vai para o CloudTrail. Ele cria a conta sem senha nem fator, chama o `criarClinica` e emite um token de ativação de uso único, com validade de 72 h.
   - A ativação abre a sessão de cadastro pendente de 15 min (senha nova e TOTP), sem afrouxar a R8.
 - **#193:** a medida de escala aceita `instrumento` explícito (lista fechada: Barthel, MIF total, motora e cognitiva, Berg, NPRS). Ele vence o rótulo, e o rótulo fica livre; sem o campo, o rótulo continua como reserva. 16 testes do modelo verdes.
+- **Provisionamento: o Guardião aprovou o desenho com ressalvas (R1 a R10)**, e reescrevi como v2:
+  - o e-mail entra por um parâmetro cifrado do SSM e fica só em HMAC;
+  - a conta nasce na ativação (e o fundador que já tem conta faz login completo);
+  - o token é entregue por uma segunda pessoa;
+  - a rota de ativação devolve o mesmo 404 do convite, bloqueia na 5ª falha e falha fechada sem Redis;
+  - a regra do D15 vale para a senha nova;
+  - o importador só roda depois da confirmação da ativação.
+  
+  Isso virou condição do B8. **Lacuna nova: B12**, o admin único que perde o fator, que vai precisar de um procedimento operacional.

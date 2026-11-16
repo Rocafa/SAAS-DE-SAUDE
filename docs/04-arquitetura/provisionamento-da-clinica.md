@@ -1,55 +1,66 @@
-# Provisionamento da clínica e primeiro fator do fundador (desenho para o Guardião)
+# Provisionamento da clínica e primeiro fator do fundador (desenho v2)
 
-> 16/11/2026 · Maestro · **desenho, sem código.** Origem: item **B11** do checklist da abertura (`prontidao-producao.md`) e parecer de 16/11 sobre o #182. Hoje `MembrosService.criarClinica` existe (0022: o fundador nasce admin na mesma transação), mas **nada o chama**. Por isso não há como uma clínica real nascer com login real, e o fundador não teria como cadastrar o TOTP sem afrouxar a R8.
+> 16/11/2026 · Maestro · **desenho v2, sem código**, refeito sobre o parecer do Guardião (aprovado com ressalvas, `revisoes/2026-11-16-desenho-provisionamento-da-clinica.md`; R1 a R10 abaixo). A v1 está no histórico do git. Item **B11** do checklist (`prontidao-producao.md`), condição do **B8**.
 
-## Requisitos
+## Por quê
 
-1. Uma clínica nasce **depois do contrato assinado**, por ação nossa. No piloto não há cadastro aberto ao público.
-2. O fundador nasce **admin** (0022) e **sem senha nem fator**.
-3. O primeiro acesso dele usa um **token de ativação de uso único**, que:
-   - abre a sessão de cadastro pendente de 15 min (a mesma do convite, R8);
-   - pede a senha nova e, na mesma sessão, o TOTP.
+`MembrosService.criarClinica` (0022) não tem chamador. Por isso nenhuma clínica real nasce com login real, e o fundador não teria como cadastrar o TOTP sem afrouxar a R8 (parecer de 16/11 sobre o #182).
 
-   Quem tem só a senha continua sem cadastrar autenticador.
-4. Nenhum dado pessoal do fundador (nome, e-mail) vai para argumentos de tarefa, CloudTrail ou log.
+## Fluxo
 
-## Proposta
+**1. Provisionar** (nossa equipe, depois do contrato `CTR-<n>` assinado)
+- Uma pessoa do grupo IAM nominal `ops-provisionamento` (MFA e `SourceIdentity`; R7) grava o e-mail do fundador num parâmetro **SecureString** do SSM e roda a tarefa avulsa do ECS `ops/provisionar-clinica.ts`, com `--pedido <uuid>`, `--contrato CTR-<n>` e a trava `CONFIRMA_PROVISIONAMENTO`. **Nenhum dado pessoal vai para argumentos ou para o CloudTrail.**
+- A tarefa:
+  1. lê o parâmetro, guarda só o **HMAC** do e-mail e apaga o parâmetro;
+  2. reserva o uuid da conta, ou reconhece a conta que já existe;
+  3. chama `criarClinica` (ator **sistema**, `via: 'provisionamento'`, contrato na metadata; R7, com ajuste da conferência da 0022);
+  4. cria a linha `identidade.ativacao_do_fundador`: hash do token, HMAC do e-mail, contrato, 72 h, uso único, `falhas` (R1);
+  5. grava o token num **segundo** parâmetro SecureString.
+- Saída: `ok <clinica> <pedido>` ou um código fixo. A tarefa é idempotente (R8).
 
-**1. Pedido de provisionamento (tabela `identidade.pedido_de_provisionamento`)**
-- Campos: id, nome da clínica, e-mail do fundador cifrado (envelope, como os outros dados de identidade), contrato (referência `CTR-<n>`), quem pediu, quando e situação.
-- Quem cria é a **nossa equipe**, por uma rota interna de plataforma com MFA, fora das rotas da clínica. Essa rota é a única porta para o e-mail entrar.
+**2. Entregar** (R3)
+- **Outra pessoa** de `ops-provisionamento` lê o parâmetro do token uma vez, entrega ao fundador fora de banda (canal combinado no contrato, nunca o e-mail em claro junto do link) e apaga o parâmetro.
+- O token vai no corpo do POST ou no fragmento (`#`) do link.
+- **Risco residual (o DPO assina):** quem entrega poderia ativar no lugar do fundador. Mitigações:
+  - duas pessoas, uma que provisiona e outra que entrega;
+  - confirmação fora de banda depois de `FUNDADOR_ATIVADO`;
+  - **o importador só roda depois dessa confirmação**.
+  
+  O risco some com o provedor de e-mail.
 
-**2. Comando operacional** `ops/provisionar-clinica.ts`, no mesmo padrão do B10:
-- tarefa avulsa do ECS, com papel `ops-provisionamento` (MFA e `SourceIdentity`) e só os segredos de banco;
-- recebe **só o id do pedido** (`--pedido <uuid>`, sem e-mail no CloudTrail) e uma trava de confirmação.
+**3. Ativar** (`POST /ativacao/usar`, pública; R4)
+- **Mesmo 404** para token inválido, vencido, usado ou com e-mail errado (nada de 410).
+- Rate limit da borda, CSRF e origem, como na recuperação.
+- Contador por origem e por ativação: na 5ª falha, o token é invalidado (`ATIVACAO_BLOQUEADA`).
+- Redis fora: 503, falha fechada.
+- O consumo é atômico.
+- **Conta nova** (R2): o fundador digita o e-mail (conferido contra o HMAC), o nome e a senha nova (R5: a mesma `conferirSenhaVazada` dos outros caminhos; senha vazada **não** consome o token). A conta nasce nesse momento e abre a sessão de cadastro pendente de 15 min → TOTP.
+- **Conta existente** (R2): login completo (senha e TOTP), sem senha nova e sem sessão de cadastro. Conta anonimizada ou expurgada nunca é reaproveitada.
+- A transação confere que a conta é o `founder_user_id` da clínica do token e que ainda é admin ativo; se não for, 404 (R8).
+- No máximo uma ativação pendente por clínica.
 
-Ele faz:
-1. cria a conta do fundador em `identidade.usuario`, sem senha e sem fator;
-2. chama `criarClinica` com essa conta (o tenant e o fundador como admin nascem na mesma transação, 0022);
-3. emite o **token de ativação** (hash guardado, como o do convite; validade de 72 h; uso único);
-4. marca o pedido como `provisionado`.
+**4. Reemitir:** só antes da ativação, invalidando a anterior (`ATIVACAO_REEMITIDA`). Depois da ativação, nunca. Quando o token vence sem uso, a equipe é avisada (`ATIVACAO_VENCIDA`).
 
-**Saída:** só o id da clínica e o id do pedido. O token **não** sai no log. Ele é entregue pelo mesmo canal do convite: e-mail transacional quando houver provedor; até lá, uma tela interna mostra o link **uma vez** a quem pediu.
+## Eventos, trilha e retenção (R6, R9)
 
-**3. Ativação** (`POST /ativacao/usar`, pública e com rate limit, como `/recuperacao/usar`)
-- token válido → define a senha (com a conferência de senha vazada, conforme o D15) → abre a sessão de cadastro pendente de 15 min → `two-factor/enable` e `verify-totp` → sessão com MFA.
-- Token vencido ou já usado → 410. A nossa equipe reemite pelo pedido, e a reemissão invalida o anterior.
+- **Eventos:** `CLINICA_PROVISIONADA` (com o operador), `ATIVACAO_EMITIDA`, `ATIVACAO_REEMITIDA`, `ATIVACAO_FALHOU`, `ATIVACAO_BLOQUEADA`, `ATIVACAO_VENCIDA` e `FUNDADOR_ATIVADO`.
+- **Trilha da clínica:** `tenant_create` e `member_found` (ator sistema), `factor_enrollment_issued` e `founder_activated`. **Nunca** o id do operador.
+- **Retenção:**
+  - o token (só o hash) fica 30 dias depois de vencer ou ser usado e depois cai no expurgo diário;
+  - o HMAC do e-mail é zerado na ativação ou no vencimento;
+  - os parâmetros SSM são de vida curta.
 
-**4. Trilha e eventos**
-- Na clínica: `tenant_create`, `member_found` (já existem) e `founder_activated`.
-- No log de segurança: `CLINICA_PROVISIONADA` e `FUNDADOR_ATIVADO`, só com ids.
+## Testes
 
-**5. Retenção**
-- O pedido fica pelo prazo do contrato. O e-mail cifrado é apagado depois da ativação, porque a conta já tem o próprio e-mail.
-- O token vencido sai no expurgo diário (`identidade-expurgo`).
+A lista da R9: fundador novo e existente, e-mail errado e bloqueio, mesmo 404, senha vazada sem consumir o token, Redis fora, reemissão, idempotência, metadata fechada, saída sem dado pessoal e parâmetro apagado mesmo na falha.
 
-## Perguntas para o Guardião
+## Lacuna nova: B12
 
-1. A rota interna de plataforma (nossa equipe, com MFA) para criar o pedido está certa, ou o e-mail deveria entrar só pela tela do contrato, fora da API da clínica?
-2. 72 h de validade e uso único para o token de ativação: está bom? Deve haver aviso à nossa equipe quando ele vencer sem uso?
-3. A senha nova e o TOTP na mesma sessão de 15 min bastam, ou o fundador deve confirmar algo do contrato (o número `CTR-`) na ativação?
-4. Entra antes do B8 (a fumaça do staging já pede "clínica criada pelo fluxo de provisionamento")?
+O **admin único que perde o fator depois de ativar** não tem outro admin que emita a recuperação. Vira o item **B12** do checklist: um procedimento operacional no padrão do B10, com verificação da identidade pelo contrato, duas pessoas e chamado.
 
-## Fora do escopo
+## Tamanho
 
-Cadastro aberto ao público (self-service), cobrança e assinatura do SaaS, e a migração de dados (o importador já existe).
+Grande. Divido em três PRs:
+1. tabela, tarefa e Terraform (`ops-provisionamento`);
+2. rota de ativação, conta nova e existente, e o ajuste da 0022;
+3. RIPD, checklist e o procedimento do B12.
