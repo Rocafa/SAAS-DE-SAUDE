@@ -329,3 +329,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **R1:** o recibo passa a usar o registro do cadastro do profissional, e o campo do perfil fiscal fica como legado (o recibo já emitido não muda). Com teste de bancada.
   - **R5:** o admin pode apagar um registro informado errado (os dois nulos). Com testes de unidade e de bancada.
   - A R3 (o profissional ver o próprio registro e ser avisado da troca) fica na fila: precisa de um tipo novo de aviso.
+- **Desenho do provisionamento da clínica (B11)** em `docs/04-arquitetura/provisionamento-da-clinica.md`, enviado ao Guardião.
+  - O pedido de provisionamento guarda o e-mail cifrado e só entra por uma rota interna.
+  - O comando avulso no ECS recebe só o id do pedido, então nada de e-mail vai para o CloudTrail. Ele cria a conta sem senha nem fator, chama o `criarClinica` e emite um token de ativação de uso único, com validade de 72 h.
+  - A ativação abre a sessão de cadastro pendente de 15 min (senha nova e TOTP), sem afrouxar a R8.
