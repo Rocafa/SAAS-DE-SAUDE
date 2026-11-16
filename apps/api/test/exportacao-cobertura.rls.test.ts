@@ -182,6 +182,8 @@ beforeAll(async () => {
   clinicaB = await api.novaClinica();
   const admin = api.sessao(clinicaA, 'admin', 'profissional');
   const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'Terapia ocupacional', usuarioId: admin.userId });
+  // 0074/0075: com o registro no conselho, a evolução assinada leva o número congelado na exportação.
+  await api.http().post(`/profissionais/${(prof.body as { id: string }).id}/conselho`).set(cab(admin)).send({ conselho: 'CREFITO', registro: '3/777777-TO' }).expect(201);
   const tipo = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Avaliacao', minutos: 40 });
   const pac = await api
     .http()
@@ -750,6 +752,8 @@ describe('G2 — conteúdo do pacote', () => {
     const { encounters: ats, clinicalRecordVersions: versoes, clinicalAddenda: adendos, clinicalSettings: cfg } = pkg.json.data;
     expect(ats[0]).toMatchObject({ status: 'signed', currentVersion: 2, signedVersion: 2, template: 'to', compartment: 'geral', aiConsent: 'nao_informado' });
     expect(ats[0]?.signedHash).toMatch(/^[0-9a-f]{64}$/);
+    // Pendência do parecer do #194: a exportação leva o registro CONGELADO na assinatura.
+    expect(ats[0]).toMatchObject({ signedCouncil: 'CREFITO', signedCouncilRegistration: '3/777777-TO' });
     expect(versoes.map((v) => v.version)).toEqual([1, 2]);
     expect(versoes[0]?.content).toEqual({ queixa: 'Queixa v1' });
     expect(versoes[1]?.content).toMatchObject({ queixa: TEXTO_CLINICO, medidas: [{ tipo: 'eva', valor: 4 }] });
