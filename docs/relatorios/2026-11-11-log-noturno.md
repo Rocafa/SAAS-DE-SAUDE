@@ -346,3 +346,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Provisionamento, PR 1** (tabela `ativacao_do_fundador`, função, comando, eventos e testes) **passado ao agente de engenharia**, no branch `eng/provisionamento-clinica`, empilhado sobre o #190. A rota de ativação, o ajuste da 0022 e o Terraform ficam para os PRs 2 e 3.
 - **CI verde em toda a pilha (#152 a #179, #190) e no #194**, depois da entrada do #181 e das correções R1 a R3. Nenhuma falha.
 - **Desenho do B12** (o admin único que perde o fator) em `docs/04-arquitetura/recuperacao-do-admin-unico.md`, enviado ao Guardião. É um comando no padrão do B10, só quando não há outro admin com fator. Usa a identidade conferida pelo contrato, o mesmo token do #159 entregue por uma segunda pessoa e um teto de uma recuperação por clínica a cada 30 dias.
+- **B12, parecer do Guardião:** a recuperação só do fator foi **aprovada com ressalvas**, e a recuperação completa (senha e fator) foi **vetada**, porque nenhum token restaura os dois.
+  - Ele corrigiu a minha descrição do #159: o token vale 15 min, o teto é por quem emite, e o uso exige que quem emitiu seja admin ativo. Por isso o token do suporte precisa de `origem` e `chamado` e de um ajuste no `usarRecuperacao`.
+  - Validade de 24 h, opção `--derrubar-sessoes`, teto também por pessoa e alarme em toda emissão.
+  - **Item B13 novo:** quem perdeu senha e fator recebe conta nova pelo provisionamento, com o vínculo antigo revogado e 48 h de espera.

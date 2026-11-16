@@ -1,6 +1,6 @@
 # Admin único que perde o fator: recuperação pelo suporte (desenho para o Guardião)
 
-> 16/11/2026 · Maestro · **desenho, sem código.** Item **B12** do checklist (`prontidao-producao.md`), da R10 do parecer de 16/11 sobre o provisionamento. Hoje a recuperação de fator é emitida **por um admin ativo da clínica** (#159, `POST /clinica/membros/:id/recuperacao`). Se o único admin perde o celular do TOTP, ninguém consegue emitir, e a clínica fica sem gestão: não convida, não desliga e não recupera ninguém.
+> 16/11/2026 · Maestro · **desenho v1; parecer do Guardião: recuperação só do fator APROVADA COM RESSALVAS (R1–R10), recuperação completa VETADA** (`revisoes/2026-11-16-desenho-recuperacao-do-admin-unico.md`). As ressalvas valem sobre o texto abaixo, e o código segue o parecer: mesma tabela do #159 com `origem` e `chamado`, validade de 24 h, `usarRecuperacao` ajustado para o token do suporte, `--derrubar-sessoes` e teto também por pessoa (dois em 12 meses). Item **B12**. A perda de senha e fator juntos vira conta nova pelo provisionamento (**B13**).
 
 ## Proposta
 
@@ -23,4 +23,4 @@
 1. A conferência de identidade (contrato, documento exibido e ligação de retorno) é suficiente para emitir uma recuperação de fator?
 2. O token deve ser o do #159 (mesma tabela e mesmo uso), ou um tipo próprio para separar as provas?
 3. O teto de um por 30 dias por clínica está certo?
-4. E se o admin único perdeu **a senha e o fator**? Proposta: o mesmo comando emite um token de recuperação completa, que define senha nova e abre o cadastro do fator, com conferência reforçada (duas pessoas do nosso lado e confirmação por escrito da clínica).
+4. ~~Recuperação completa (senha e fator)~~ **vetada**: nenhum token restaura os dois fatores (RIPD §5, item 1). O caminho é a conta nova, com outro e-mail, ativada pelo provisionamento, mais a revogação do vínculo antigo e 48 h de espera (B13).
