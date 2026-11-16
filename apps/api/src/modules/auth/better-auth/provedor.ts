@@ -14,7 +14,7 @@ import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
-import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit } from '../../audit/audit-log';
@@ -191,6 +191,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * ser escolhida só dentro da janela de saída (portabilidade); fora dela some da lista e da escolha.
    */
   private async clinicaLiberada(id: string, userId: string): Promise<{ nome: string } | null> {
+    // C1 do parecer do #195: o fundador com conta existente já é admin desde o provisionamento, mas só entra na clínica
+    // DEPOIS de ativar (token + conferência do e-mail). Ativação ainda não usada = clínica fora da lista e da escolha.
+    const [pendente] = await this.d.dbAuth
+      .select({ id: ativacaoDoFundador.id })
+      .from(ativacaoDoFundador)
+      .where(and(eq(ativacaoDoFundador.clinicaId, id), eq(ativacaoDoFundador.usuarioId, userId), isNull(ativacaoDoFundador.usadoEm)));
+    if (pendente) return null;
     const [t] = await withTenant(
       this.d.dbClinica,
       id as TenantId,

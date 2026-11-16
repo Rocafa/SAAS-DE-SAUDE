@@ -17,6 +17,7 @@ import {
   type BancosDoProvisionamento,
   type PedidoDeProvisionamento,
 } from '../src/modules/auth/better-auth/provisionamento';
+import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { subirApi, type ApiDeTeste } from './apoio-api';
 
 let api: ApiDeTeste;
@@ -131,6 +132,12 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
     expect(r.contaExistente).toBe(true);
     const [linha] = await dbAuth.db.select().from(ativacaoDoFundador).where(eq(ativacaoDoFundador.id, p.pedido));
     expect(linha).toMatchObject({ usuarioId: id, contaExistente: true, emailHmac: hmacDoEmail(email, CHAVE) });
+
+    // C1 do parecer do #195: já é admin, mas a clínica fica fora da lista e da escolha até ativar.
+    const provedor = new BetterAuthProvider({ auth: null as never, dbAuth: dbAuth.db, dbClinica: api.db.db });
+    expect((await provedor.clinicasDaPessoa(id)).map((c) => c.id)).not.toContain(r.clinicaId);
+    await dbAuth.db.update(ativacaoDoFundador).set({ usadoEm: new Date() }).where(eq(ativacaoDoFundador.id, p.pedido));
+    expect((await provedor.clinicasDaPessoa(id)).map((c) => c.id)).toContain(r.clinicaId);
   });
 
   it('conta inativa com o e-mail não é reaproveitada: conta_inativa, sem clínica', async () => {
