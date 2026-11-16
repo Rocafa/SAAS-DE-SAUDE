@@ -306,3 +306,11 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 16/11 14:59
 
 - Nada mudou desde 13/11 12:13: o #152 segue sem aprovação (BLOCKED), CI verde; avulsos e PRs do sócio sem novidade; nenhum merge.
+
+## 16/11 — o Matheus voltou
+
+- Desde 12/11 nada novo entrou na `main` além do #149. As retomadas agendadas (13/11, 05:10) e as checagens de 2 em 2 h não acharam aprovação nova.
+- **Achado: o @Lopesloro abriu o #181 e o #182 na noite de 12/11, direto nos branches do #155 e do #156.** São as ressalvas pelas quais ele segurou a aprovação desses dois. Eu não tinha visto, e a pilha travou nisso. Pelo precedente do #169, quem mescla é o dono do branch de destino (nós).
+  - **#181** (logout que não vira 500 se a trilha falhar; `mfa_em` só com a linha do fator): CI verde.
+  - **#182** (fundador e membro adicionado ficavam em 403 permanente sem cadastrar o TOTP): o CI falha no teste da R8. A mudança libera o cadastro do fator para quem só tem a senha e ainda não tem fator, e isso abre tomada de conta por quem roubou a senha.
+  - Mandei os dois ao Guardião antes de mesclar.
