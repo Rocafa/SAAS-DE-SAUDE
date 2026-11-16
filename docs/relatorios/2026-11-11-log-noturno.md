@@ -333,3 +333,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O pedido de provisionamento guarda o e-mail cifrado e só entra por uma rota interna.
   - O comando avulso no ECS recebe só o id do pedido, então nada de e-mail vai para o CloudTrail. Ele cria a conta sem senha nem fator, chama o `criarClinica` e emite um token de ativação de uso único, com validade de 72 h.
   - A ativação abre a sessão de cadastro pendente de 15 min (senha nova e TOTP), sem afrouxar a R8.
+- **#193:** a medida de escala aceita `instrumento` explícito (lista fechada: Barthel, MIF total, motora e cognitiva, Berg, NPRS). Ele vence o rótulo, e o rótulo fica livre; sem o campo, o rótulo continua como reserva. 16 testes do modelo verdes.
