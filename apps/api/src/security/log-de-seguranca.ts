@@ -111,6 +111,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'recuperacao_pelo_admin',
   'pedido_do_titular',
   'conferencia_indisponivel',
+  'expurgo_de_credencial',
   'teto_diario',
   'conta_sem_vinculo',
   'conta_com_vinculo',

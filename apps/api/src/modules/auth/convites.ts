@@ -21,7 +21,7 @@ import { clinicMembers, teamInvites, type ClinicMemberRole } from '../../db/sche
 import { origemDaRequisicao } from '../../security/log-de-seguranca';
 import { chaveDeHmac } from '../../security/rate-limit-store';
 import { CABECALHO_ORIGEM } from './better-auth/protecao';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { AUTH_PROVIDER, ehProvedorDeConvite, paraRequestContext, type AuthContext, type AuthProvider } from './auth-context';
 import { ehPerfilDoBanco, exigirPerfilNoBanco, gravarConcessao } from './membros';
@@ -235,14 +235,25 @@ export class ConvitesService {
    * HMAC do e-mail (pseudônimo) e fica só como histórico (quem convidou, perfil, datas). Job `convites-descarte`.
    */
   async descartarEncerradosComoSistema(tenantId: TenantId): Promise<{ descartados: number }> {
-    const r = await this.db.run(tenantId, (tx) =>
-      tx.execute<{ id: string }>(sql`
+    return this.db.run(tenantId, async (tx) => {
+      const r = await tx.execute<{ id: string }>(sql`
         update team_invites set email_hmac = ${EMAIL_DESCARTADO}
          where tenant_id = ${tenantId} and email_hmac <> ${EMAIL_DESCARTADO}
            and coalesce(accepted_at, revoked_at, expires_at) < now() - interval '30 days'
-        returning id`),
-    );
-    return { descartados: [...r].length };
+        returning id`);
+      const descartados = [...r].length;
+      // Parecer do #173 (LGPD art. 37): o descarte apaga dado pessoal (o pseudônimo do e-mail) e devolvia só a
+      // contagem — nada na trilha. A linha vai na MESMA transação do UPDATE, com ator sistema, e só quando algo
+      // mudou (a rodada que não acha nada não enche a trilha).
+      if (descartados > 0) {
+        await recordAudit(tx, { tenantId, userId: SYSTEM_ACTOR_ID, roles: [] }, {
+          action: AuditAction.Update,
+          scope: 'team_invites',
+          metadata: { op: 'invite_pseudonym_dropped', count: descartados },
+        });
+      }
+      return { descartados };
+    });
   }
 }
 

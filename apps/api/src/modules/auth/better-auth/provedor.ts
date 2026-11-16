@@ -17,7 +17,7 @@ import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
-import { recordAudit } from '../../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
@@ -281,7 +281,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number; contasReativadas: number }> {
+  async expurgarComoSistema(): Promise<{
+    sessoes: number;
+    verificacoes: number;
+    cadastrosNaoConcluidos: number;
+    recuperacoes: number;
+    credenciaisDeInativas: number;
+    expurgosSemTrilha: number;
+    contasSemVinculo: number;
+    contasReativadas: number;
+  }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -338,7 +347,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     for (const { id } of reativadas) registrarEventoDeSeguranca('CONTA_REATIVADA_COM_VINCULO', { motivo: 'conta_com_vinculo', userId: id });
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
-      .select({ id: usuario.id })
+      .select({ id: usuario.id, clinicaDeOrigem: usuario.clinicaDeOrigem })
       .from(usuario)
       .where(
         and(
@@ -348,7 +357,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         ),
       );
     let credenciaisDeInativas = 0;
-    for (const { id } of inativas) {
+    let expurgosSemTrilha = 0;
+    for (const { id, clinicaDeOrigem } of inativas) {
       const expurgou = await this.d.dbAuth.transaction(async (tx) => {
         // Ressalvas 7 e 8 da reconferência do #173: a marca 'expurgada' recusa nova concessão (0072) e o nome sai junto com
         // o e-mail (art. 16); a autoria clínica está em `professionals` da clínica. F1 do #175: a marca vai PRIMEIRO, com a
@@ -366,14 +376,39 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, id), isNull(recuperacao.usadoEm)));
         return true;
       });
-      if (expurgou) credenciaisDeInativas += 1;
+      if (!expurgou) continue;
+      credenciaisDeInativas += 1;
+      // Parecer do #173: este passo apaga dado pessoal (senha, TOTP, nome e e-mail) e devolvia só a contagem — nada na
+      // trilha, e o art. 37 da LGPD pede a prova. A linha vai na clínica de ORIGEM da conta (0067): é a clínica que a
+      // cadastrou, e a essa altura a conta não tem vínculo nenhum para onde apontar. Conta anterior à 0067 não tem
+      // clínica de origem; aí não existe trilha de clínica possível e sobra o evento de segurança.
+      //
+      // De propósito NÃO é fail-closed: segurar o expurgo guardaria dado pessoal além do prazo, que é a violação maior.
+      // A falha vira `TRILHA_NAO_GRAVADA` (crítico, alarme imediato), como no `anonimizarConta`, e sai contada.
+      const trilhado = clinicaDeOrigem
+        ? await withTenant(this.d.dbClinica, clinicaDeOrigem as TenantId, (tx) =>
+            recordAudit(tx, { tenantId: clinicaDeOrigem as TenantId, userId: SYSTEM_ACTOR_ID, roles: [] }, {
+              action: AuditAction.Update,
+              scope: 'identidade.conta',
+              metadata: { op: 'account_credentials_purged', user_id: id },
+            }),
+          )
+            .then(() => true)
+            .catch(() => false)
+        : false;
+      if (!trilhado) {
+        expurgosSemTrilha += 1;
+        registrarNoMaximoUmaVez(`expurgo-credencial:${id}`, 60_000, 'TRILHA_NAO_GRAVADA', { userId: id, motivo: 'expurgo_de_credencial' });
+      }
     }
+    if (expurgosSemTrilha > 0) registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'expurgo_de_credencial', contagem: expurgosSemTrilha });
     return {
       sessoes: sessoes.length,
       verificacoes: verificacoes.length,
       cadastrosNaoConcluidos: cadastros.length,
       recuperacoes: recuperacoes.length,
       credenciaisDeInativas,
+      expurgosSemTrilha,
       contasSemVinculo: semVinculo.length,
       contasReativadas: reativadas.length,
     };
