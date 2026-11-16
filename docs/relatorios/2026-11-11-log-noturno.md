@@ -230,3 +230,88 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - o SSO pode não conseguir assumir o papel com MFA, o que bloqueia e não abre; testar no primeiro uso, e em staging está aceito.
   
   Corrigi a N1: o runbook usa a rede própria da tarefa (output `ops_anonimizacao_rede`). O B10 no checklist passou a "código no #190, Guardião aprovado, CI verde; falta o sócio e a prova no staging".
+- **D13, voto do Matheus (13/11): opção B** (só o staging até o piloto, ≈ US$ 180–260/mês, estimativa). Registrei no memorando e pedi o voto do @Lopesloro. Com a decisão, o staging destrava as provas B1, B3, B4, B8 e B10.
+- **#192 aberto (para a `main`, fora da pilha): leitura do atendimento pelo agendamento** (item 1 da #180, que saiu do veto do Guardião ao #158). A rota `GET /atendimentos/do-agendamento/:agendamentoId` devolve o atendimento com a `versao` que o salvar exige, ou `null` se ainda não foi aberto.
+  - Valem as mesmas regras do `GET` por id. O porteiro do vínculo roda antes de revelar se há atendimento. A trilha de leitura é gravada também sem atendimento.
+  - De carona, fecha a R8 do #63: esta rota e o `GET /atendimentos/:id` passam a contar na vigilância de leitura.
+  - Tipos, lint e 1122 testes de unidade verdes; cobertura da auditoria OK. Mandei para o Guardião.
+  - É isto que destrava a fatia S1 do front do sócio.
+- **#192 (atendimento pelo agendamento): o Guardião aprovou com ressalvas, e resolvi todas as necessárias.**
+  - A rota `/versoes` também conta na vigilância, então a R8 do #63 fica completa nas três rotas de leitura.
+  - Bancada nova prova o alerta `fichas_distintas` em cada uma das três rotas.
+  - A rota nova entrou nos testes de MFA da psicologia.
+  - Ajustes menores feitos. A R6, opcional, ficou de fora: o caso `null` não tem conteúdo e já fica na trilha.
+- **#193 aberto (para a `main`): modelos do prontuário v2, a parte da API da #167**, que assumi na própria issue.
+  - **Fisio:** diagnóstico e prognóstico, exames (COFFITO 414 art. 1º §1º IV e V) e próximos passos.
+  - **TO:** modelo próprio (objetivo, atividades, desempenho, nível de assistência, plano; COFFITO 415). Registro aberto na versão 1 é finalizado pela regra da versão 1.
+  - **Escalas:** faixa própria para Barthel, MIF (total, motora e cognitiva), Berg e NPRS. A COPM ficou fora (licença), e a psicologia continua sem instrumento.
+  - **Guardião: aprovado.** Corrigi as duas condições: a versão do modelo num teste de bancada e as subescalas da MIF.
+  - Ficam para depois: o supervisor do estagiário, o campo `instrumento` explícito e as medidas próprias da TO.
+- **Desenho do supervisor do estagiário** (último item de backend da #167; COFFITO 414 art. 2º §1º), em `docs/04-arquitetura/supervisor-do-estagiario.md`, no branch do #193.
+  - O cadastro ganha a marca de estagiário e o supervisor obrigatório.
+  - O supervisor fica congelado no atendimento, entra no hash da finalização e na trilha.
+  - Estagiário sem supervisor ativo não abre atendimento.
+  - Ficaram quatro perguntas, entre elas se o supervisor precisa cofinalizar e como fica a psicologia. Mandei para o Guardião, sem código ainda.
+- **Supervisor do estagiário: o Guardião VETOU o desenho v1, e com razão.** Ele conferiu no site oficial do COFFITO: a regra está no **art. 1º §2º** da Res. 414/2012 (o "art. 2º §1º" da #167 não existe) e exige a **assinatura** do supervisor, não só a identificação.
+  - Confirmei por conta própria, na mesma fonte, que os incisos IV e V usados no #193 estão certos.
+  - Corrigi a citação no PR #193 (com URL e data) e na #167.
+  - Reescrevi o desenho como v2: cofinalização com segundo hash, CREFITO no cadastro, aceite do supervisor, vínculo "supervisão" só nos atendimentos do estagiário, trilha, exportação e retenção.
+  - **Decisão dos sócios antes do código: a clínica do piloto tem estagiário atendendo?** Se não tiver, basta uma declaração no termo de adesão e um item no checklist, e o código entra antes da segunda clínica.
+- **Conferi a Res. COFFITO 415/2012 (TO) no site oficial** (https://www.coffito.gov.br/nsite/?p=3178, 13/11/2026). Isso **corrigiu um erro meu no #193**: a TO também exige exames complementares (IV) e diagnóstico e prognóstico (V), e eu não tinha posto esses campos.
+  - Acrescentei os dois na TO v2, com teste.
+  - Desempenho e nível de assistência ficaram como escolha de produto, sem atribuir à norma.
+  - A regra do supervisor (art. 1º §2º) é a mesma na TO, então o desenho v2 vale para fisio e TO.
+  - O PR #193 e o desenho estão atualizados com URL e data.
+- **#192:** o RLS falhou porque a rota nova não tinha "plano" no teste de auditoria de leitura (R4 do #119), que exige para cada rota auditada um caso que prove a linha de leitura. Acrescentei o plano. Os outros testes novos (vigilância e MFA) passaram.
+- **CI:** #193 16/16 verde (com a TO corrigida). #191 15/15 verde: o CodeQL volta a funcionar com o `init` e o `analyze` na mesma versão.
+- **#192: CI 16/16 verde** com o plano da auditoria de leitura.
+- **Guia de revisão para o @Lopesloro** (`docs/relatorios/2026-11-13-guia-de-revisao.md`): os PRs abertos na ordem que destrava mais, com tamanho e situação, mais as três decisões pendentes (D13, D15 e o estagiário do piloto). O link foi para o #152.
+- **#194 aberto (para a `main`): conselho e número de registro do profissional** (0074; COFFITO 414 e 415, art. 1º §1º VIII).
+  - O cadastro da API não tinha onde guardar o CREFITO, que as normas exigem e o documento precisa. A tela já esperava o campo.
+  - Migração com lista fechada de conselhos, formato restrito e os dois campos juntos ou nenhum.
+  - Rota de admin com MFA. A trilha leva o conselho, nunca o número.
+  - Exportação G2 1.25.0. Testes de unidade (1124) e bancada nova.
+  - Também é pré-requisito do supervisor do estagiário. Mandei para o Guardião.
+- **#194: o Guardião VETOU** (B1). O número novo sobrescrevia a identificação das evoluções já assinadas.
+  - **Correção (0075):** o conselho e o número ficam **congelados no atendimento na assinatura, gravados pelo próprio banco** (trigger na transição para "assinado"). Antes de assinar, esses campos ficam nulos; depois, nada os altera.
+  - O DTO e a exportação passaram a trazer o registro da assinatura, e há um teste de bancada que muda o cadastro depois de assinar.
+  - Também resolvidas: o número exige ao menos um dígito, o COREN entrou na lista, e a documentação foi para a tabela certa.
+  - Ficam anotados: o perfil fiscal tem outro campo de registro, a unificar, e o aviso ao profissional quando o número mudar. Pedi a reconferência.
+- **#194, reconferência: o Guardião aprovou a correção do B1** (o banco congela o registro na assinatura), **mas achou um bloqueante novo (B2) criado por mim.** Ao editar a migração 0074 por um comando de shell, o `$` da expressão regular se perdeu e o SQL quebrou: o `db:migrate` do CI falharia.
+  - Reescrevi a 0074 inteira pelo editor, sem passar pelo shell.
+  - Fixei o código de erro esperado no teste do atendimento aberto.
+  - Acrescentei um teste que restringe o sigilo de um atendimento já assinado sem mexer no registro congelado.
+  - Anotei que os atendimentos assinados antes da 0075 ficam com o registro nulo.
+  - Esta máquina não tem Postgres, então só o CI prova as migrações. Estou esperando o resultado.
+  - **Lição:** SQL e código com `$` ou crase não se editam por `sed`/`node -e` no shell. Usar o editor ou um script `.mjs`.
+- **#194: CI 16/16 verde** no commit corrigido (a migração 0074 passa no CI).
+- **96% do limite de 5 h.** Tudo commitado e enviado. Relatório: [2026-11-13-rodada-37.md](2026-11-13-rodada-37.md). Retomada agendada para depois do reset (05:10).
+
+## Checagem de 13/11 08:14
+
+- Nenhum merge possível: o #152 (base da pilha) segue sem aprovação do @Lopesloro (BLOCKED), CI 16/16 verde no 5daf777.
+- Os avulsos #153, #154 e #172 também esperam aprovação. CI verde.
+- O sócio não subiu commit no #158, #143 nem #157 desde 12/11 17:00. Não aprovei nada.
+- O #174 segue com uma falha de CI (Terraform) e fica fora até o checklist B1–B9.
+- O #116 ficou DIRTY (conflito com a main); só entra depois da pilha, junto com o #189. O #151 continua fechado.
+
+## Checagem de 13/11 10:14
+
+- Nada mudou desde 08:14: o #152 segue sem aprovação (BLOCKED), CI verde; nenhum merge possível.
+
+## Checagem de 13/11 12:13
+
+- Nada mudou desde 10:14: o #152 segue sem aprovação (BLOCKED); avulsos e PRs do sócio sem novidade; nenhum merge.
+
+## Checagem de 16/11 14:59
+
+- Nada mudou desde 13/11 12:13: o #152 segue sem aprovação (BLOCKED), CI verde; avulsos e PRs do sócio sem novidade; nenhum merge.
+
+## 16/11 — o Matheus voltou
+
+- Desde 12/11 nada novo entrou na `main` além do #149. As retomadas agendadas (13/11, 05:10) e as checagens de 2 em 2 h não acharam aprovação nova.
+- **Achado: o @Lopesloro abriu o #181 e o #182 na noite de 12/11, direto nos branches do #155 e do #156.** São as ressalvas pelas quais ele segurou a aprovação desses dois. Eu não tinha visto, e a pilha travou nisso. Pelo precedente do #169, quem mescla é o dono do branch de destino (nós).
+  - **#181** (logout que não vira 500 se a trilha falhar; `mfa_em` só com a linha do fator): CI verde.
+  - **#182** (fundador e membro adicionado ficavam em 403 permanente sem cadastrar o TOTP): o CI falha no teste da R8. A mudança libera o cadastro do fator para quem só tem a senha e ainda não tem fator, e isso abre tomada de conta por quem roubou a senha.
+  - Mandei os dois ao Guardião antes de mesclar.
+- **#194: veto retirado pelo Guardião (16/11).** A 0074 reescrita é válida, e o CI passou 16/16. Ficam pendências que não bloqueiam, anotadas no parecer: o teste da exportação com o registro congelado, o caso `had_registration: true` e as ressalvas R1, R3 e R5.
