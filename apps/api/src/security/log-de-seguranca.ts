@@ -112,6 +112,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'conta_sem_vinculo',
   'conta_com_vinculo',
   'anonimizacao_incompleta',
+  'trilha_do_fator',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
