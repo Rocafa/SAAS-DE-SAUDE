@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
-import { faltasParaFinalizar, instrumentoDoRotulo, MAX_TEXTO_CLINICO, MODELOS, modeloPelaEspecialidade, validarConteudo } from './modelos';
+import { faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloPelaEspecialidade, validarConteudo } from './modelos';
 import { hashDaFinalizacao, podeVerConteudo } from './prontuario-regras';
 
 function campos(fn: () => unknown): string[] {
@@ -160,5 +160,23 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(escala('Escala de Berg', 57)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('NPRS', 7.5)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('Escala de equilíbrio da clínica', 900)).toEqual([]);
+  });
+
+  it('instrumento explícito: da lista fechada, só em escala, e vence o rótulo', () => {
+    const medir = (m: Record<string, unknown>) => campos(() => validarConteudo('to', { medidas: [m] }));
+    expect(INSTRUMENTOS_CONHECIDOS).toEqual(expect.arrayContaining(['barthel', 'mif', 'mif_motora', 'mif_cognitiva', 'berg', 'nprs']));
+    // Rótulo livre, faixa pelo instrumento.
+    expect(medir({ tipo: 'escala', rotulo: 'Avaliação de entrada', instrumento: 'barthel', valor: 100 })).toEqual([]);
+    expect(medir({ tipo: 'escala', rotulo: 'Avaliação de entrada', instrumento: 'barthel', valor: 101 })).toEqual(['conteudo.medidas.0.valor']);
+    // O explícito vence o rótulo: rótulo diz Berg (0–56), instrumento diz MIF (18–126).
+    expect(medir({ tipo: 'escala', rotulo: 'Escala de Berg', instrumento: 'mif', valor: 100 })).toEqual([]);
+    // Fora da lista, em outro tipo de medida ou não texto: recusado.
+    expect(medir({ tipo: 'escala', rotulo: 'x', instrumento: 'copm', valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
+    expect(medir({ tipo: 'eva', instrumento: 'nprs', valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
+    expect(medir({ tipo: 'escala', rotulo: 'x', instrumento: 7, valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
+    // Volta normalizado com o instrumento.
+    expect(validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 40 }] })).toEqual({
+      medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 40 }],
+    });
   });
 });

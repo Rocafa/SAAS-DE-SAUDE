@@ -26,6 +26,8 @@ export interface Medida {
   /** Ex.: "flexão de joelho D", "Escala de Berg". Obrigatório para goniometria, perimetria e escala. */
   readonly rotulo?: string;
   readonly valor: number;
+  /** Instrumento conhecido, explícito (lista fechada `INSTRUMENTOS_CONHECIDOS`); só para `escala`. Sem ele, o rótulo decide. */
+  readonly instrumento?: string;
 }
 
 export interface MetaDoPlano {
@@ -125,9 +127,12 @@ const INSTRUMENTOS: Readonly<Record<string, { min: number; max: number }>> = {
   nprs: { min: 0, max: 10 },
 };
 
+/** Lista fechada aceita no campo `instrumento` da medida (o front oferece estes). */
+export const INSTRUMENTOS_CONHECIDOS: readonly string[] = Object.keys(INSTRUMENTOS);
+
 /**
  * Instrumento pelo rótulo: "Índice de Barthel", "MIF total", "MIF motora", "Escala de Berg" e "NPRS" casam pela palavra.
- * Casar pelo rótulo é provisório: o campo `instrumento` explícito é o próximo passo (parecer de 13/11).
+ * É a reserva para quem não manda o campo `instrumento` explícito, que vence o rótulo quando vem.
  */
 export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS | undefined {
   const palavras = rotulo
@@ -188,7 +193,7 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
   const out: Medida[] = [];
   valor.forEach((m: unknown, i) => {
     const campo = `conteudo.medidas.${i}`;
-    if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor'].includes(k))) {
+    if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor', 'instrumento'].includes(k))) {
       erros.push(campo);
       return;
     }
@@ -216,15 +221,24 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
       erros.push(`${campo}.rotulo`);
       return;
     }
-    if (tipo === 'escala' && rotulo) {
-      const instrumento = instrumentoDoRotulo(rotulo);
+    // Instrumento explícito (parecer de 13/11): da lista fechada e só para `escala`; vence o rótulo.
+    let explicito: string | undefined;
+    if (m.instrumento !== undefined) {
+      if (tipo !== 'escala' || typeof m.instrumento !== 'string' || !Object.hasOwn(INSTRUMENTOS, m.instrumento)) {
+        erros.push(`${campo}.instrumento`);
+        return;
+      }
+      explicito = m.instrumento;
+    }
+    if (tipo === 'escala') {
+      const instrumento = explicito ?? (rotulo ? instrumentoDoRotulo(rotulo) : undefined);
       const propria = instrumento ? INSTRUMENTOS[instrumento] : undefined;
       if (propria && (v < propria.min || v > propria.max || !Number.isInteger(v))) {
         erros.push(`${campo}.valor`);
         return;
       }
     }
-    out.push({ tipo: tipo as TipoDeMedida, valor: v, ...(rotulo ? { rotulo } : {}) });
+    out.push({ tipo: tipo as TipoDeMedida, valor: v, ...(rotulo ? { rotulo } : {}), ...(explicito ? { instrumento: explicito } : {}) });
   });
   return out;
 }
