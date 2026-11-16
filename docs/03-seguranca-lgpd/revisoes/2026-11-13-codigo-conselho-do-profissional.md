@@ -101,3 +101,21 @@ A edição do R2 colou o trecho no lugar errado (linhas 12-20): o literal da reg
 | Isolamento por tenant | OK (INVOKER sob RLS + FK composta) |
 | Integridade do prontuário assinado | OK (guard + snapshot; sigilo só restringe) |
 | Testes sem verde falso | **Falha**: a 0074 não aplica em banco novo; o CI está vermelho |
+
+## Reconferência final (16/11/2026)
+
+**Veredito: APROVADO.** O veto cai.
+
+Commit conferido: 515f5d2 (cabeça do PR #194; o CI rodou nesse SHA). `gh pr checks 194`: 16/16 verdes, incluindo "Isolamento entre tenants (RLS)", "Testes ofensivos", "Resiliência", "DAST", "Carga" e "conferência das guardas", que antes falhavam no `db:migrate`.
+
+- **B2 (resolvido):** a 0074 foi reescrita e o SQL está válido. A regex está fechada (`'^[A-Za-z0-9][A-Za-z0-9./-]{0,29}$'` mais a exigência de dígito), há um só `professionals_council_pair_check` e o CHECK de conselho já inclui COREN. O CI aplica as migrações em banco novo, então o verde agora é real e cobre B1 e R2 no banco.
+- **B1:** o aceite fica confirmado, porque dependia só do B2 e do CI.
+- **T1 (resolvida):** o teste do atendimento aberto exige `42501`.
+- **T2 (resolvida):** há um teste próprio que assina, restringe o sigilo do atendimento assinado e confere que `signed_council_registration` continua com o valor congelado.
+- **T4 (resolvida na migração):** a 0075 anota que os assinados antes dela ficam nulos. Falta repetir isso na documentação da exportação (não bloqueia).
+
+Pendências que não bloqueiam (seguem registradas):
+- **T3:** conferir no teste da exportação que `encounters[].signedCouncilRegistration` sai com o valor congelado.
+- **R2:** conferir que o erro de validação não devolve o valor enviado.
+- Caso `had_registration: true` no teste RLS (hoje só existe o `false`) e a nota na 0027 sobre a coluna visível ao portal.
+- R1, R3 e R5, como antes.
