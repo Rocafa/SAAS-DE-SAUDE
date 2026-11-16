@@ -375,3 +375,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#172:** estava aprovado mas BEHIND. Trouxe a main, bateria verde, push e comentário pedindo nova aprovação.
 - #153 e #154 seguem sem aprovação. #158, #143 e #157 sem mudança do sócio.
 - #189 aprovado, mas só entra depois da pilha. #116 em conflito (DIRTY). #151 foi fechado pelo Dependabot em 12/11.
+
+## Checagem de 16/11 20:16
+
+- **#172 entrou na main** (aprovado, CLEAN, CI 13 verdes e 3 pulados). Merge sem `--delete-branch`, conferido MERGED.
+- **#155:** trouxe a main de novo, sem conflito. Tipos, lint e 1138 testes verdes. Push e comentário pedindo nova aprovação. Segue sem aprovação.
+- #153 e #154 sem aprovação (BEHIND). #158, #143 e #157 sem mudança do sócio.
+- #189 aprovado, espera a pilha. #116 segue em conflito (DIRTY).
