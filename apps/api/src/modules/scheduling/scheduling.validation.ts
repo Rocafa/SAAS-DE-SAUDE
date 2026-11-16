@@ -115,15 +115,15 @@ export function validarNovoProfissional(corpo: unknown): NovoProfissional {
 }
 
 /** Conselho e número de registro (0074). Só o número, como o conselho escreve: "3/123456-F". */
-export interface RegistroNoConselho {
-  readonly conselho: Conselho;
-  readonly registro: string;
-}
+/** Os dois preenchidos, ou os dois nulos para apagar um registro informado errado (R5 do parecer do #194). */
+export type RegistroNoConselho = { readonly conselho: Conselho; readonly registro: string } | { readonly conselho: null; readonly registro: null };
 
 const REGISTRO_RE = /^[A-Za-z0-9][A-Za-z0-9./-]{0,29}$/;
 
 export function validarRegistroNoConselho(corpo: unknown): RegistroNoConselho {
-  const v = new Validador(exigirObjeto(corpo, ['conselho', 'registro']));
+  const entrada = exigirObjeto(corpo, ['conselho', 'registro']);
+  if (entrada.conselho === null && entrada.registro === null) return { conselho: null, registro: null };
+  const v = new Validador(entrada);
   const conselho = v.umDe('conselho', CONSELHOS, true);
   const registro = v.texto('registro', { max: 30, obrigatorio: true });
   if (typeof registro === 'string' && (!REGISTRO_RE.test(registro) || !/[0-9]/.test(registro))) v.falhar('registro');

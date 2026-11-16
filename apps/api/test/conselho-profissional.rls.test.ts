@@ -76,6 +76,16 @@ describe('conselho e número de registro do profissional (0074)', () => {
     expect((await definir(adminOutra, profissionalId, { conselho: 'CREFITO', registro: '1' })).status).toBe(404);
   });
 
+  it('R5: o admin apaga um registro informado errado (os dois nulos)', async () => {
+    const p = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia Apagar', especialidade: 'Fisioterapia' });
+    const id = (p.body as { id: string }).id;
+    await definir(admin, id, { conselho: 'CREFITO', registro: '3/5-F' }).expect(201);
+    const apagado = await definir(admin, id, { conselho: null, registro: null });
+    expect(apagado.status).toBe(201);
+    expect(apagado.body).toMatchObject({ conselho: null, registro: null });
+    expect((await definir(admin, id, { conselho: null, registro: '3/5-F' })).status).toBe(400);
+  });
+
   it('o banco recusa conselho sem número (e vice-versa) e número fora do formato, mesmo por SQL direto', async () => {
     const tentar = (set: Record<string, unknown>) =>
       withTenant(api.db.db, clinica, (tx) => tx.update(professionals).set(set).where(eq(professionals.id, profissionalId)), admin.userId).then(

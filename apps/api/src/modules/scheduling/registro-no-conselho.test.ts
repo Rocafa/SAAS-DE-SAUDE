@@ -19,6 +19,12 @@ describe('validarRegistroNoConselho (0074)', () => {
     expect(validarRegistroNoConselho({ conselho: 'CRP', registro: '06.12345' })).toEqual({ conselho: 'CRP', registro: '06.12345' });
   });
 
+  it('R5: os dois nulos apagam; um nulo e o outro não é recusado', () => {
+    expect(validarRegistroNoConselho({ conselho: null, registro: null })).toEqual({ conselho: null, registro: null });
+    expect(campos(() => validarRegistroNoConselho({ conselho: null, registro: '3/1-F' })).length).toBeGreaterThan(0);
+    expect(campos(() => validarRegistroNoConselho({ conselho: 'CREFITO', registro: null })).length).toBeGreaterThan(0);
+  });
+
   it('recusa conselho fora da lista, número com espaço, @ ou longo demais, e campo a mais (sem ecoar o valor)', () => {
     expect(campos(() => validarRegistroNoConselho({ conselho: 'XYZ', registro: '1' }))).toContain('conselho');
     expect(campos(() => validarRegistroNoConselho({ conselho: 'CREFITO', registro: 'Fulano de Tal' }))).toContain('registro');
