@@ -226,7 +226,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Por isso: cada clínica na própria transação, uma falha NÃO para as outras, e nada é lançado. Cada falha gera
    * `TRILHA_NAO_GRAVADA` (crítico, alarme imediato) com a clínica, e no fim um evento com a contagem.
    */
-  private async trilhaDeSessaoNasClinicas(userId: string, op: string, motivo: 'logout' | 'logout_global'): Promise<void> {
+  private async trilhaDeSessaoNasClinicas(userId: string, op: string, motivo: 'logout' | 'logout_global' | 'pela_pessoa'): Promise<void> {
     let falhas = 0;
     // R1 do parecer de 16/11 sobre o #181: a leitura das clínicas também pode falhar, e nem ela pode virar 500 depois
     // de as sessões terem sido apagadas.
@@ -337,7 +337,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     }
     await this.devolverVarias(doLogin);
     registrarEventoDeSeguranca('SENHA_TROCADA', { motivo: 'pela_pessoa', userId: e.userId });
-    await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed');
+    // A troca de senha encerra as outras sessões: a trilha segue a regra do #181 (nunca derruba a operação).
+    await this.trilhaDeSessaoNasClinicas(e.userId, 'password_changed', 'pela_pessoa');
     return r.headers.getSetCookie().filter((c) => COOKIE_DE_SESSAO.test(c));
   }
 
