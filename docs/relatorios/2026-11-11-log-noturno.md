@@ -367,3 +367,11 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 16/11 16:13
 
 - Nada mudou desde 14:59: o #152 segue sem aprovação (BLOCKED); avulsos e PRs do sócio sem novidade; nenhum merge.
+
+## Checagem de 16/11 18:20
+
+- **#152 entrou na main** às 16:27 (merge feito pelo @Lopesloro). A branch `eng/better-auth-mfa` ficou de pé.
+- **#155 redirecionado para a main** e com a main mesclada, sem conflito. Tipos, lint e 1138 testes verdes. Push feito e comentário pedindo nova aprovação.
+- **#172:** estava aprovado mas BEHIND. Trouxe a main, bateria verde, push e comentário pedindo nova aprovação.
+- #153 e #154 seguem sem aprovação. #158, #143 e #157 sem mudança do sócio.
+- #189 aprovado, mas só entra depois da pilha. #116 em conflito (DIRTY). #151 foi fechado pelo Dependabot em 12/11.
