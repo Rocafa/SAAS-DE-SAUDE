@@ -315,3 +315,12 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **#182** (fundador e membro adicionado ficavam em 403 permanente sem cadastrar o TOTP): o CI falha no teste da R8. A mudança libera o cadastro do fator para quem só tem a senha e ainda não tem fator, e isso abre tomada de conta por quem roubou a senha.
   - Mandei os dois ao Guardião antes de mesclar.
 - **#194: veto retirado pelo Guardião (16/11).** A 0074 reescrita é válida, e o CI passou 16/16. Ficam pendências que não bloqueiam, anotadas no parecer: o teste da exportação com o registro congelado, o caso `had_registration: true` e as ressalvas R1, R3 e R5.
+- **Guardião sobre os PRs do sócio:** o #181 foi **aprovado com ressalvas**; no #182, a **parte 1 foi vetada** (liberar o cadastro do fator só com a senha permite tomar a conta) e a parte 2 foi aprovada (conta reaproveitada sem senha).
+- **#181 mesclado** no branch do #155. Corrigi por cima a R1 (a leitura das clínicas no logout também não vira 500) e propaguei até o #190. No caminho:
+  - um conflito de item de lista no log de segurança (`teto_diario` × `trilha_do_fator`), resolvido mantendo os dois, com um resolvedor que só aceita conflito de item;
+  - o #181 passou a exigir o motivo na trilha das sessões, e a troca de senha (#159) chamava sem ele. Corrigi com `pela_pessoa` e propaguei.
+  - Topo da pilha: tipos e lint limpos, 1153 testes de unidade verdes.
+- **#182:** pedi mudanças, com o parecer e o caminho certo (token de cadastro do fator no provisionamento do fundador; recuperação de fator para o membro adicionado). Sugeri separar a parte 2 num PR próprio, que eu mesclo.
+- **Item B11 no checklist da abertura:** primeiro fator de quem não nasce de convite, sem afrouxar a R8. O fundador recebe um token de cadastro no provisionamento, e o membro adicionado recebe a recuperação de fator do admin. Depende do desenho do provisionamento (`criarClinica` ainda não tem chamador, então hoje ninguém fica preso).
+- **#194, pendências do parecer resolvidas:** um teste da troca de número (a trilha marca `had_registration: true`, sem o número) e um teste da exportação total com o registro congelado na assinatura. O CI está rodando.
+- **#194: CI 16/16 verde** com os testes novos da troca de número e da exportação.

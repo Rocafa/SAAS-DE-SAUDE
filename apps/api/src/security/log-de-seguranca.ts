@@ -114,6 +114,9 @@ export const MOTIVOS_DE_SEGURANCA = [
   'conta_com_vinculo',
   'anonimizacao_incompleta',
   'trilha_do_fator',
+  // R2 e R3 do parecer de 16/11 sobre o #181: a linha perdida era a do CADASTRO do fator; o desfazer do MFA também falhou.
+  'trilha_do_cadastro_do_fator',
+  'mfa_sem_trilha',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',
