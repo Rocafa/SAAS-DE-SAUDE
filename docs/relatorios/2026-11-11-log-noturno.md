@@ -363,3 +363,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - A1 a A3 são pequenos (HMAC próprio `ativacao-email`, conferir o e-mail da conta existente ao repetir, `pedido` nos eventos).
 - **89% do limite de 5 h às 19:00.** Tudo commitado e enviado. Retomada agendada para depois do reset (19:55).
 - **#195, C1 corrigida:** a lista e a escolha de clínica recusam a clínica com ativação ainda não usada para aquela pessoa, então o fundador com conta existente só entra depois de ativar. Com teste de bancada. A reconferência do Guardião fica para depois do reset.
+
+## Checagem de 16/11 16:13
+
+- Nada mudou desde 14:59: o #152 segue sem aprovação (BLOCKED); avulsos e PRs do sócio sem novidade; nenhum merge.
