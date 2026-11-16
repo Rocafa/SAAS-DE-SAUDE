@@ -45,6 +45,13 @@ describe('conselho e número de registro do profissional (0074)', () => {
     );
     expect(trilha.map((t) => t.metadata)).toEqual([{ op: 'council_registration', professional_id: profissionalId, council: 'CREFITO', had_registration: false }]);
     expect(JSON.stringify(trilha)).not.toContain('123456');
+    // Trocar o número (outra região): a trilha marca que já havia registro, ainda sem o número.
+    expect((await definir(admin, profissionalId, { conselho: 'CREFITO', registro: '4/654321-F' })).status).toBe(201);
+    const depois = await withTenant(api.db.db, clinica, (tx) =>
+      tx.select({ metadata: auditLog.metadata }).from(auditLog).where(and(eq(auditLog.tenantId, clinica), sql`${auditLog.metadata}->>'op' = 'council_registration'`)),
+    );
+    expect(depois.map((t) => (t.metadata as { had_registration: boolean }).had_registration).sort()).toEqual([false, true]);
+    expect(JSON.stringify(depois)).not.toContain('654321');
   });
 
   it('conselho fora da lista, número fora do formato ou campo a mais: 400', async () => {
