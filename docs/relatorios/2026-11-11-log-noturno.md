@@ -350,3 +350,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Ele corrigiu a minha descrição do #159: o token vale 15 min, o teto é por quem emite, e o uso exige que quem emitiu seja admin ativo. Por isso o token do suporte precisa de `origem` e `chamado` e de um ajuste no `usarRecuperacao`.
   - Validade de 24 h, opção `--derrubar-sessoes`, teto também por pessoa e alarme em toda emissão.
   - **Item B13 novo:** quem perdeu senha e fator recebe conta nova pelo provisionamento, com o vínculo antigo revogado e 48 h de espera.
+- **#195 aberto (PR 1 do provisionamento, B11), empilhado sobre o #190.** O código veio do agente de engenharia:
+  - migração 0076 `ativacao_do_fundador`, sem e-mail (só o HMAC) e com o token só em hash;
+  - função idempotente pelo id do pedido;
+  - comando avulso que lê o e-mail e o nome do SSM, apaga o parâmetro e grava o token num segundo parâmetro;
+  - eventos `CLINICA_PROVISIONADA` e `ATIVACAO_EMITIDA`.
+  
+  Tipos, lint e 1163 testes de unidade verdes. Mandei ao Guardião. Ficam para os PRs 2 e 3: a rota de ativação, o ajuste da 0022 (ator sistema), o cliente SSM real (o pacote não está instalado), o expurgo e o Terraform.
