@@ -450,3 +450,4 @@ Pendente para a próxima sessão:
 4. A1 (papel dedicado) e R4 do #205.
 5. Dependabot depois da pilha; #182 parte 2; votos de D13 e D15.
 - **Retomada depois do limite.** Pedi ao Guardião a reconferência do #205. O #195 caiu no teste de resiliência por tempo (3,1 s contra o teto de 2 s no `statement_timeout`, instabilidade da máquina do CI); rodei de novo só o job que falhou. O #197 e o #198 são do sócio, que faz o merge.
+- **Guardião reconferiu o #205: APROVADO.** Os testes de V1 e V2 quebram se o código regredir; R1 a R3 feitos. Ficam abertos: R4 (guarda dos grants), R5/A1 (papel dedicado) e R6 (não bloqueia): o V1 pode dar vermelho falso quando outro arquivo roda o expurgo em paralelo; correção possível com advisory lock no expurgo ou `fileParallelism: false`. Parecer commitado.
