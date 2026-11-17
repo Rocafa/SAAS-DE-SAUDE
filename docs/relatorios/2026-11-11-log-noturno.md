@@ -428,3 +428,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - **A4:** o e-mail tomado por outra conta sai como `email_em_uso` no log, com a resposta ainda no mesmo 404.
   - O vitest saiu com 0.
   - Ficam para o PR 3: A1 (papel de banco próprio para a tarefa), A2 (o expurgo não pode apagar ativação nunca usada, senão a C1 cai), A3 e os testes da T2.
+- **Dois agentes em paralelo:** o de devops escreve o Terraform das tarefas avulsas do provisionamento e da recuperação do admin único (branch `eng/infra-ops-provisionamento`), no padrão do B10. O de testes escreve a lista T2 do parecer do #203, no próprio branch do #203.
