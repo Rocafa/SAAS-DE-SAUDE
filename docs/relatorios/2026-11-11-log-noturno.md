@@ -415,3 +415,6 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#193 MESCLADO na `main`** (modelos v2 de fisio e TO, escalas com faixa e instrumento explícito). O sócio tinha reaprovado.
 - **#191 e #194 atualizados** com a `main` (a aprovação caiu de novo). Pedi para ele aprovar um de cada vez: #194, depois #191.
 - **#199:** o RLS falhou por causa da minha C1. Duas bancadas usavam "perdeu o aparelho" sem derrubar as sessões, o que agora é recusado. Passaram a usar "troca de aparelho". O CI está rodando de novo.
+- **#191 MESCLADO na `main`**: o CodeQL volta a funcionar com o `init` e o `analyze` juntos. Fechei o #183 e o #185 do Dependabot, que ele substitui.
+- **#199: CI verde.** Falta só o sócio (ele depende do #195 e do resto da pilha).
+- **#194 atualizado** de novo com a `main`. É o último da leva e espera a aprovação do sócio.
