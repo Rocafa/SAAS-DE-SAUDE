@@ -57,6 +57,8 @@ function montar(opcoes: { trilhaFora: boolean }) {
   };
   const auth = { api: { getSession: () => Promise.resolve({ session: { id: SESSAO } }) } } as unknown as Autenticacao;
   const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+  // H3 do #176: a regra da clínica cancelada lê `tenants`; aqui a clínica está liberada.
+  vi.spyOn(provedor as unknown as { clinicaLiberada: () => Promise<{ nome: string }> }, 'clinicaLiberada').mockResolvedValue({ nome: 'Clinica Ficticia' });
   return { provedor, ordem };
 }
 
@@ -128,6 +130,8 @@ function montarComTotp(agora: Date) {
   };
   const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
   const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never, agora: () => agora });
+  // H3 do #176: a regra da clínica cancelada lê `tenants`; aqui a clínica está liberada.
+  vi.spyOn(provedor as unknown as { clinicaLiberada: () => Promise<{ nome: string }> }, 'clinicaLiberada').mockResolvedValue({ nome: 'Clinica Ficticia' });
   const marcarMfa = vi.spyOn(provedor, 'marcarMfa').mockResolvedValue(true);
   const comFator = provedor as unknown as { trilhaDoFator: (...a: unknown[]) => Promise<void> };
   const trilhaDoFator = vi.spyOn(comFator, 'trilhaDoFator').mockResolvedValue(undefined);

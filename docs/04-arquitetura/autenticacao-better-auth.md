@@ -212,3 +212,17 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **Troca de senha**: só o código `INVALID_PASSWORD` da biblioteca gasta tentativa do bloqueio. Outro erro devolve a reserva e responde `troca_recusada`.
 - **Invalidação limitada à clínica**: o token novo invalida só os pendentes emitidos pela mesma clínica (risco residual no RIPD §3).
 - **Testes do trigger da 0071**: o desligamento grava `inativa_desde`, um UPDATE sem mudança não zera a contagem e a recontratação limpa a data.
+
+### 14.7 Ressalvas antigas da fila (3b-1, 3b-2 e 3b-3), 10/11/2026
+
+- **Teto de convites atômico** (R6 do 3b-1): `pg_advisory_xact_lock` por admin na transação da clínica. Teste: rajada de 23 convites gera exatamente 20.
+- **Sessão de cadastro órfã** (R7 do 3b-1): se a marca `cadastro_pendente_ate` não gravar, a sessão aberta é apagada na hora.
+- **Marca de reuso do TOTP só depois de conferir** (R12 do 3b-2, R7 do 3b-3): um código errado não queima o valor por 90 s.
+- **Conta ativa sem vínculo** (R5 do 3b-3): o expurgo diário desliga a conta ativa sem nenhum vínculo há mais de 1 dia (corrida de duas revogações simultâneas), derruba as sessões na mesma transação e registra `CONTA_DESLIGADA_SEM_VINCULO` (G4 do #176). A conta inativa `sem_vinculo` que tem vínculo (corrida com uma concessão) é reativada pelo mesmo job, e o expurgo de 90 dias nunca marca quem tem vínculo (G1).
+- **Anonimização**: o convite aceito pela conta perde o HMAC do e-mail na hora, nas clínicas com vínculo e na clínica de origem (G3). Nas demais, em até 30 dias pelo `convites-descarte`.
+- **Marca de reuso do TOTP com o contador fora do ar**, nos caminhos do provedor (recuperação por token e aceite com conta existente), conta como reuso (falha fechada, G5) e registra `BLOQUEIO_INDISPONIVEL` (H1). A rota de login `/two-factor/verify-totp` (`protecao.ts`) continua aberta com o contador fora, com `RATE_LIMIT_FAIL_OPEN`, e fica na fila junto com a decisão de falha do bloqueio 5/15, que tem o mesmo comportamento. Também fica na fila: no login, a marca de reuso ainda é gravada antes da conferência.
+- **Clínica cancelada no `definirClinica`** (H3): a regra vale também para a escolha automática do `resolver` e é lida depois da conferência do vínculo. **Reativação pelo job** gera `CONTA_REATIVADA_COM_VINCULO` (H4).
+- **Runbook**: efeitos da rotação da `RATE_LIMIT_HASH_KEY` (R5 do 3b-1). **RIPD §5**: procedimento de suporte para quem não tem vínculo em nenhuma clínica (R13 do 3b-2).
+- **Clínica cancelada** (R3 do 3a): a lista de clínicas da pessoa e a escolha seguem a mesma regra de leitura das rotas da clínica (`canRead`). A clínica cancelada aparece só dentro da janela de saída.
+- **`LOGIN_OK` do cadastro do fator** (R5 do 3a): a troca de sessão no fim do cadastro do TOTP sai com `motivo: cadastro_do_fator`, separada do login.
+- **Já resolvida antes:** R7 do 3a (a sessão de cadastro pendente não usa as rotas da pessoa). **Fica na fila:** R4 do 3a (teste pela HTTP do `Set-Cookie` só da sessão, também no polling).

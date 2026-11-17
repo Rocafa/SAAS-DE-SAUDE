@@ -19,6 +19,7 @@ Cada decisão: data, quem decidiu (N0 = sócios), o que, por quê, e onde está 
 | D12 | **Certificação SBIS S-RES NGS2** | Seguir o manual 5.2 desde o M0 e certificar depois do GA vs não certificar | idem §3.9 |
 | D13 | **Orçamento de infraestrutura e pentest** | ~US$ 750–1.050/mês de AWS (staging + prod) [ESTIMATIVA]; pentest US$ 5–30 mil | idem §4 |
 | D14 | **Escopo do Receita Saúde no MVP** | Gerar o arquivo de lote (manual v2.1) e conciliar vs prometer emissão automática (não há API pública) | `docs/relatorios/2026-10-10-rodada-7-necessidades-producao.md` §3.2 |
+| D15 | **Login real: saída para a base de senhas vazadas (B2) e queda do Redis** | Filtro de saída por domínio, proxy, cópia local ou abrir sem a conferência; login aberto ou fechado quando o Redis cai | `docs/00-governanca/memos/D15-login-real-egresso-e-falha-do-redis.md` |
 | J4 | **Nomear o encarregado (DPO)** com canal público | Sócio, funcionário ou DPO terceirizado; trava o plano de incidente e os RIPDs | `docs/03-seguranca-lgpd/plano-resposta-incidentes.md` |
 
 ## Tomadas
