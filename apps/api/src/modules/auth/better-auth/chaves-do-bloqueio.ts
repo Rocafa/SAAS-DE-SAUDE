@@ -4,7 +4,8 @@
  */
 import { createHmac } from 'node:crypto';
 
-export type TipoDeContador = 'login' | 'login-origem' | 'fator' | 'fator-origem' | 'totp-usado';
+/** `ativacao-origem`: falhas da ativação do fundador por origem (B11, R4); o contador por ativação é a coluna `falhas`. */
+export type TipoDeContador = 'login' | 'login-origem' | 'fator' | 'fator-origem' | 'totp-usado' | 'ativacao-origem';
 
 export function chaveDoBloqueio(chaveHmac: Uint8Array, tipo: TipoDeContador, valor: string): string {
   return `bl:v1:${tipo}:${createHmac('sha256', chaveHmac).update(`${tipo}:${valor}`).digest('hex').slice(0, 32)}`;

@@ -51,6 +51,9 @@ export const EVENTOS_DE_SEGURANCA = {
   CLINICA_PROVISIONADA: { severidade: 'alto', alarme: 'volume', descricao: 'tarefa de provisionamento criou clínica com o fundador como admin (B11; quem rodou: principal no CloudTrail)' },
   RECUPERACAO_PELO_SUPORTE: { severidade: 'alto', alarme: 'imediato', descricao: 'suporte emitiu recuperação do fator do admin único pelo comando operacional (B12; operador e chamado só aqui)' },
   ATIVACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador emitido pela tarefa de provisionamento (B11; só o hash no banco)' },
+  ATIVACAO_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'uso do token de ativação do fundador recusado (B11; o usuário recebe sempre o mesmo 404)' },
+  ATIVACAO_BLOQUEADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de ativação do fundador invalidado na 5ª conferência de e-mail errada (B11; volta só por reemissão)' },
+  FUNDADOR_ATIVADO: { severidade: 'alto', alarme: 'imediato', descricao: 'fundador ativou a clínica provisionada (B11; dispara a confirmação fora de banda antes do importador)' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 
 export type EventoDeSeguranca = keyof typeof EVENTOS_DE_SEGURANCA;
@@ -126,6 +129,13 @@ export const MOTIVOS_DE_SEGURANCA = [
   // R2 e R3 do parecer de 16/11 sobre o #181: a linha perdida era a do CADASTRO do fator; o desfazer do MFA também falhou.
   'trilha_do_cadastro_do_fator',
   'mfa_sem_trilha',
+  // B11, PR 2: ativação do fundador (o motivo fica só no log; o usuário recebe sempre o mesmo 404).
+  'bloqueio_da_ativacao',
+  'token_invalido',
+  'email_diferente',
+  'fundador_nao_confere',
+  'conta_nova',
+  'conta_existente',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

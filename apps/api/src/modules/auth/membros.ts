@@ -30,7 +30,7 @@ import { exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
 import { CLINIC_MEMBER_ROLES, clinicMembers, tenants, type ClinicMemberRole } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { randomUUID } from 'node:crypto';
-import { recordAudit } from '../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { avisarDemaisAdmins } from '../records/avisos';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { paraRequestContext, type AuthContext } from './auth-context';
@@ -177,26 +177,41 @@ export interface EntradaDaCriacaoDeClinica {
   readonly fundadorUserId: string;
   /** Id da clínica escolhido por quem chama (o provisionamento deriva do pedido, para ser idempotente). Padrão: novo. */
   readonly clinicaId?: TenantId;
+  /**
+   * Provisionamento pela nossa equipe (B11; R7 do parecer de 16/11/2026, C2 do #195): a transação roda na SESSÃO DE
+   * SISTEMA e `tenant_create` e `member_found` saem com ator sistema e metadata fechada `{ op, via, contract }` (a 0078
+   * só aceita assim). Quem rodou a tarefa nunca entra na trilha da clínica; o fundador também não é o ator.
+   */
+  readonly provisionamento?: { readonly contrato: string };
+}
+
+/** Metadata fechada do provisionamento na trilha da clínica (R7): sem id de operador. */
+export function metadataDoProvisionamento(contrato: string): { via: 'provisionamento'; contract: string } {
+  if (!/^CTR-\d{1,7}$/.test(contrato)) throw new Error('contrato fora do formato');
+  return { via: 'provisionamento', contract: contrato };
 }
 
 /**
  * Corpo de `MembrosService.criarClinica`, também usado pela tarefa de provisionamento (B11), que não sobe o Nest: só
- * precisa de quem abra a transação da clínica com o fundador como usuário.
+ * precisa de quem abra a transação da clínica (com o fundador como usuário, ou na sessão de sistema no provisionamento).
  */
 export async function criarClinica(
   db: Pick<TenantDatabase, 'run'>,
   entrada: EntradaDaCriacaoDeClinica,
 ): Promise<{ clinicaId: TenantId; fundador: MembroDto }> {
   const clinicaId = entrada.clinicaId ?? (randomUUID() as TenantId);
-  const ctx: RequestContext = { tenantId: clinicaId, userId: entrada.fundadorUserId as UserId, roles: ['admin'] };
+  const prov = entrada.provisionamento ? metadataDoProvisionamento(entrada.provisionamento.contrato) : null;
+  const ator = (prov ? SYSTEM_ACTOR_ID : entrada.fundadorUserId) as UserId;
+  const ctx: RequestContext = { tenantId: clinicaId, userId: ator, roles: prov ? [] : ['admin'] };
   const fundador = await db.run(
     clinicaId,
     async (tx) => {
       await tx.insert(tenants).values({ id: clinicaId, displayName: entrada.nome, founderUserId: entrada.fundadorUserId });
-      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'tenants', metadata: { op: 'tenant_create' } });
-      return gravarConcessao(tx, ctx, entrada.fundadorUserId, 'admin', 'member_found');
+      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'tenants', metadata: { op: 'tenant_create', ...(prov ?? {}) } });
+      return gravarConcessao(tx, ctx, entrada.fundadorUserId, 'admin', 'member_found', prov ?? {});
     },
-    entrada.fundadorUserId,
+    // Sem usuário: sessão de sistema (0019), que a 0078 aceita só com a trilha do provisionamento.
+    prov ? undefined : entrada.fundadorUserId,
   );
   return { clinicaId, fundador };
 }

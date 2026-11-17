@@ -13,9 +13,9 @@
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { ativacaoDoFundador, usuario } from '../../../db/identidade';
-import { tenants } from '../../../db/schema';
+import { auditLog, tenants } from '../../../db/schema';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
 import { chaveDeHmac } from '../../../security/rate-limit-store';
@@ -89,6 +89,26 @@ function ehViolacaoDeUnicidade(err: unknown): boolean {
   return false;
 }
 
+/**
+ * A clínica já teve o fundador ativado? Trilha `founder_activated` (retenção da trilha, bem maior que os 30 dias da
+ * linha de ativação) ou conta do fundador nascida da ativação desta clínica. Leitura na sessão de sistema.
+ */
+async function clinicaJaAtivada(bancos: BancosDoProvisionamento, clinicaId: TenantId, fundador: string): Promise<boolean> {
+  const [naTrilha] = await withTenant(bancos.dbClinica, clinicaId, (tx) =>
+    tx
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(and(eq(auditLog.tenantId, clinicaId), sql`${auditLog.metadata}->>'op' = 'founder_activated'`))
+      .limit(1),
+  );
+  if (naTrilha) return true;
+  const [conta] = await bancos.dbAuth
+    .select({ id: usuario.id })
+    .from(usuario)
+    .where(and(eq(usuario.id, fundador), eq(usuario.clinicaDeOrigem, clinicaId)));
+  return !!conta;
+}
+
 export async function provisionarClinica(
   bancos: BancosDoProvisionamento,
   entrada: PedidoDeProvisionamento,
@@ -118,6 +138,10 @@ export async function provisionarClinica(
   let usuarioId: string;
   if (existente?.fundador) {
     usuarioId = existente.fundador;
+    // C3 do parecer do #195: clínica já ATIVADA nunca recebe token novo, mesmo depois de o expurgo apagar a linha de
+    // ativação. A prova durável é a trilha da clínica (`founder_activated`) e, na conta nova, a conta que nasceu da
+    // ativação desta clínica (`clinica_de_origem`).
+    if (await clinicaJaAtivada(bancos, clinicaId, usuarioId)) throw new ProvisionamentoRecusado('ja_provisionado');
   } else {
     // Conta existente pelo e-mail, como o convite (`idParaContaDoConvite`). Só a conta ATIVA vira fundador com login
     // completo (R2); a inativa (desligada, convite desfeito, expurgada) não é reaproveitada aqui. A anonimizada já não
@@ -128,10 +152,9 @@ export async function provisionarClinica(
       .where(sql`lower(${usuario.email}) = ${email}`);
     if (conta && !conta.ativo) throw new ProvisionamentoRecusado('conta_inativa');
     usuarioId = conta?.id ?? randomUUID();
-    // TODO(R7 do parecer de 16/11/2026, PR 2): a 0022 exige `founder_user_id` = usuário da transação, então
-    // `tenant_create` e `member_found` saem hoje com o FUNDADOR como ator, e sem `{ via: 'provisionamento', contract }`
-    // na metadata. O PR 2 ajusta a conferência da 0022 para aceitar o ator sistema só com `via: 'provisionamento'`.
-    await criarClinica({ run: (t, fn, u) => withTenant(bancos.dbClinica, t, fn, u) }, { clinicaId, nome, fundadorUserId: usuarioId });
+    // R7 (C2 do #195): ator SISTEMA e metadata fechada `{ op, via: 'provisionamento', contract }`; a 0078 recusa a
+    // fundação pelo sistema sem essa trilha. Nem o operador nem o fundador são o ator.
+    await criarClinica({ run: (t, fn, u) => withTenant(bancos.dbClinica, t, fn, u) }, { clinicaId, nome, fundadorUserId: usuarioId, provisionamento: { contrato } });
     // O operador não é declarado (R7): a prova é o principal da tarefa no CloudTrail.
     registrarEventoDeSeguranca('CLINICA_PROVISIONADA', { tenantId: clinicaId, userId: usuarioId, contrato, pedido });
   }

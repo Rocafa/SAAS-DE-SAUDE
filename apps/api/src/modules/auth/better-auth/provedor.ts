@@ -6,7 +6,7 @@
  * (clínica ativa, MFA e impressão dos perfis) → perfis SÓ de `clinic_members` (R6) → `mfaEm` só vale se os perfis não
  * mudaram desde o MFA (`perfis_no_mfa`, R13). A clínica nunca vem do cliente (regra 1).
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
@@ -19,7 +19,10 @@ import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
-import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
+import type { ProvedorDeAtivacao, ResultadoDaAtivacao, ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
+import { hmacDoEmail } from '../convites';
+import { EMAIL_DESCARTADO } from '../convites-retencao';
+import { chaveDeHmac } from '../../../security/rate-limit-store';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
 import { PERFIS, type Perfil } from '../perfis';
 import { PRAZO_ABSOLUTO_MS, type Autenticacao } from './instancia';
@@ -63,6 +66,23 @@ export interface DependenciasDoProvedor {
   readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
   /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
   readonly segredoDaInstancia?: string | SecretConfig;
+  /** Chave do HMAC do e-mail da ativação do fundador (A1 do #195); padrão: `chaveDeHmac('ativacao-email')`. */
+  readonly chaveDoEmailDaAtivacao?: Uint8Array;
+}
+
+/** R4 do parecer de 16/11/2026 (B11): na 5ª conferência de e-mail errada, o token de ativação deixa de valer. */
+export const TETO_DE_FALHAS_DA_ATIVACAO = 5;
+const TOKEN_DE_ATIVACAO = /^[A-Za-z0-9_-]{43}$/;
+const EMAIL_DA_ATIVACAO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A conta da ativação não é o fundador admin ativo da clínica do token: desfaz tudo e responde o mesmo 404. */
+class FundadorNaoConfere extends Error {}
+
+function ehViolacaoDeUnicidade(err: unknown): boolean {
+  for (let e: unknown = err, i = 0; e && i < 5; e = (e as { cause?: unknown }).cause, i++) {
+    if ((e as { code?: unknown }).code === '23505') return true;
+  }
+  return false;
 }
 
 /** R10 do código do 3b-2: recuperações emitidas por admin por dia. */
@@ -71,7 +91,7 @@ export const TETO_DIARIO_DE_RECUPERACOES = 10;
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao, ProvedorDeAtivacao {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -649,7 +669,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Reserva atômica em vários contadores (R15). R4 do código do 3b-2: na recuperação, o store fora FALHA FECHADO
    * (indisponível), com o alarme do rate limit; barrada, devolve as reservas de todos (R13 do #152).
    */
-  private async reservarVarias(contadores: { chave: string; teto: number }[], motivo: 'bloqueio_de_login' | 'bloqueio_do_fator'): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
+  private async reservarVarias(
+    contadores: { chave: string; teto: number }[],
+    motivo: 'bloqueio_de_login' | 'bloqueio_do_fator' | 'bloqueio_da_ativacao',
+  ): Promise<'ok' | 'bloqueado' | 'indisponivel'> {
     const b = this.d.bloqueio;
     if (!b) return 'ok';
     const feitas: string[] = [];
@@ -711,6 +734,171 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         }),
       userId,
     );
+  }
+
+  /**
+   * Ativação do fundador da clínica provisionada (B11, PR 2; R2, R4, R5 e R8 do parecer de 16/11/2026). Ordem:
+   * 1. entrada mal formada sai sem gastar tentativa;
+   * 2. contador por origem (store fora = `indisponivel`, falha fechada);
+   * 3. token (só o SHA-256) e e-mail digitado contra o HMAC (`ativacao-email`). E-mail errado soma `falhas`; a 5ª
+   *    invalida o token (ATIVACAO_BLOQUEADA). Token inválido, vencido, usado ou bloqueado: o MESMO `invalido`;
+   * 4. conta EXISTENTE: login completo (senha e TOTP), sem senha nova e sem sessão de cadastro. Conta NOVA: nome e
+   *    senha nova conferida contra vazadas (vazada não consome o token);
+   * 5. numa transação do `app_auth`: consumo atômico, conta nova com o uuid reservado e, na clínica do token, a
+   *    conferência de que a conta é o fundador e segue admin ativo, com `founder_activated` (ator: o fundador);
+   * 6. conta nova: sessão de cadastro pendente de 15 min (a mesma do convite, R8).
+   */
+  async usarAtivacao(e: { token: string; email: string; senha: string; nome?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaAtivacao> {
+    const email = e.email.trim().toLowerCase();
+    if (!TOKEN_DE_ATIVACAO.test(e.token)) return 'invalido';
+    if (email.length > 320 || !EMAIL_DA_ATIVACAO.test(email) || e.senha.length < 12 || e.senha.length > 128) return 'entrada_invalida';
+
+    const b = this.d.bloqueio;
+    const origemBruta = e.cabecalhos.get(CABECALHO_ORIGEM) ?? '';
+    const origem = /^[0-9a-f]{16}$/.test(origemBruta) ? origemBruta : undefined;
+    const comOrigem = origem ? { origem } : {};
+    // Sem origem (não acontece atrás do balanceador), as tentativas dividem um contador só: falha fechada, nunca sem conta.
+    const porOrigem = b ? [{ chave: chaveDoBloqueio(b.chaveHmac, 'ativacao-origem', origem ?? 'sem-origem'), teto: TETO_DE_FALHAS_POR_ORIGEM }] : [];
+    const reserva = await this.reservarVarias(porOrigem, 'bloqueio_da_ativacao');
+    if (reserva === 'indisponivel') return 'indisponivel';
+    if (reserva === 'bloqueado') {
+      registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: 'bloqueio_da_ativacao', ...comOrigem });
+      return 'invalido';
+    }
+
+    const pendente = and(
+      isNull(ativacaoDoFundador.usadoEm),
+      gt(ativacaoDoFundador.expiraEm, sql`now()`),
+      lt(ativacaoDoFundador.falhas, TETO_DE_FALHAS_DA_ATIVACAO),
+    );
+    const [a] = await this.d.dbAuth
+      .select()
+      .from(ativacaoDoFundador)
+      .where(and(eq(ativacaoDoFundador.tokenHash, createHash('sha256').update(e.token).digest('hex')), pendente));
+    if (!a) {
+      registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: 'token_invalido', ...comOrigem });
+      return 'invalido';
+    }
+    const ids = { tenantId: a.clinicaId, pedido: a.id, ...comOrigem };
+    const digitado = Buffer.from(hmacDoEmail(email, this.d.chaveDoEmailDaAtivacao ?? chaveDeHmac('ativacao-email')), 'hex');
+    const guardado = Buffer.from(a.emailHmac, 'hex');
+    if (digitado.length !== guardado.length || !timingSafeEqual(digitado, guardado)) {
+      // Contador por ativação, atômico; na 5ª o HMAC do e-mail também sai (o token não volta a valer).
+      const [r] = await this.d.dbAuth
+        .update(ativacaoDoFundador)
+        .set({
+          falhas: sql`${ativacaoDoFundador.falhas} + 1`,
+          emailHmac: sql`case when ${ativacaoDoFundador.falhas} + 1 >= ${TETO_DE_FALHAS_DA_ATIVACAO} then ${EMAIL_DESCARTADO} else ${ativacaoDoFundador.emailHmac} end`,
+        })
+        .where(and(eq(ativacaoDoFundador.id, a.id), pendente))
+        .returning({ falhas: ativacaoDoFundador.falhas });
+      registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: 'email_diferente', ...ids });
+      if (r && r.falhas >= TETO_DE_FALHAS_DA_ATIVACAO) registrarEventoDeSeguranca('ATIVACAO_BLOQUEADA', { motivo: 'email_diferente', ...ids });
+      return 'invalido';
+    }
+    // O e-mail confere: a tentativa não conta contra a origem.
+    await this.devolverVarias(porOrigem);
+
+    const [u] = await this.d.dbAuth.select({ id: usuario.id, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, a.usuarioId));
+    let contaNova: { nome: string; hash: string } | null = null;
+    if (a.contaExistente || u) {
+      // R2: conta existente (ou já criada) = login COMPLETO. Desligada, anonimizada ou expurgada nunca é reaproveitada.
+      if (!u?.ativo) {
+        registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: 'fundador_nao_confere', ...ids });
+        return 'invalido';
+      }
+      if (!e.codigo || !/^[0-9]{6}$/.test(e.codigo)) return 'codigo_obrigatorio';
+      const login = await this.conferirCredenciais({ email, senha: e.senha, codigo: e.codigo, cabecalhos: e.cabecalhos });
+      if (login === 'indisponivel') return 'indisponivel';
+      if (login === 'sem_fator') return 'conta_sem_fator';
+      if (login === 'falhou' || login === 'bloqueado') return 'credencial_errada';
+      if (login.userId !== a.usuarioId) {
+        registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: 'fundador_nao_confere', ...ids });
+        return 'invalido';
+      }
+    } else {
+      const nome = e.nome?.trim() ?? '';
+      if (nome.length === 0) return 'nome_obrigatorio';
+      // R5: a mesma conferência dos outros caminhos que definem senha; vazada não consome o token.
+      if (this.d.conferirSenhaVazada) {
+        try {
+          if (await this.d.conferirSenhaVazada(e.senha)) {
+            registrarEventoDeSeguranca('SENHA_VAZADA_RECUSADA', { motivo: 'senha_vazada' });
+            return 'senha_vazada';
+          }
+        } catch {
+          registrarEventoDeSeguranca('CONFERENCIA_DE_SENHA_INDISPONIVEL', { motivo: 'conferencia_indisponivel' });
+        }
+      }
+      contaNova = { nome: nome.slice(0, 200), hash: await gerarHashDeSenha(e.senha) };
+    }
+
+    const consumiu = await this.consumirAtivacao(a, email, contaNova);
+    if (consumiu !== true) {
+      registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: consumiu, ...ids });
+      return 'invalido';
+    }
+    registrarEventoDeSeguranca('FUNDADOR_ATIVADO', { motivo: contaNova ? 'conta_nova' : 'conta_existente', userId: a.usuarioId, contrato: a.contrato, ...ids });
+    if (!contaNova) return { cookies: [], contaExistente: true };
+    const cookies = await this.abrirSessaoDeCadastro({ email, senha: e.senha, cabecalhos: e.cabecalhos });
+    return { cookies, contaExistente: false };
+  }
+
+  /**
+   * Consumo atômico do token, conta nova (se houver) e, na clínica do token, conferência do fundador admin ativo e a
+   * trilha `founder_activated`, tudo antes do COMMIT do `app_auth`: se a clínica recusar, nada fica (R8).
+   */
+  private async consumirAtivacao(
+    a: { id: string; clinicaId: string; usuarioId: string; contrato: string },
+    email: string,
+    contaNova: { nome: string; hash: string } | null,
+  ): Promise<true | 'token_invalido' | 'fundador_nao_confere'> {
+    try {
+      return await this.d.dbAuth.transaction(async (tx) => {
+        const usado = await tx
+          .update(ativacaoDoFundador)
+          .set({ usadoEm: sql`now()`, emailHmac: EMAIL_DESCARTADO })
+          .where(
+            and(
+              eq(ativacaoDoFundador.id, a.id),
+              isNull(ativacaoDoFundador.usadoEm),
+              gt(ativacaoDoFundador.expiraEm, sql`now()`),
+              lt(ativacaoDoFundador.falhas, TETO_DE_FALHAS_DA_ATIVACAO),
+            ),
+          )
+          .returning({ id: ativacaoDoFundador.id });
+        if (usado.length === 0) return 'token_invalido' as const;
+        if (contaNova) {
+          // A conta nasce aqui, com o uuid reservado no provisionamento (R2). `clinica_de_origem` marca a ativação (C3).
+          await tx.insert(usuario).values({ id: a.usuarioId, name: contaNova.nome, email, emailVerified: false, clinicaDeOrigem: a.clinicaId });
+          await tx.insert(conta).values({ id: randomUUID(), accountId: a.usuarioId, providerId: 'credential', userId: a.usuarioId, password: contaNova.hash });
+        }
+        await withTenant(
+          this.d.dbClinica,
+          a.clinicaId as TenantId,
+          async (ct) => {
+            const [t] = await ct.select({ fundador: tenants.founderUserId }).from(tenants).where(eq(tenants.id, a.clinicaId));
+            const [m] = await ct
+              .select({ id: clinicMembers.id })
+              .from(clinicMembers)
+              .where(and(eq(clinicMembers.tenantId, a.clinicaId), eq(clinicMembers.userId, a.usuarioId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt)));
+            if (t?.fundador !== a.usuarioId || !m) throw new FundadorNaoConfere();
+            await recordAudit(ct, { tenantId: a.clinicaId as TenantId, userId: a.usuarioId as UserId, roles: [] }, {
+              action: AuditAction.PermissionChange,
+              scope: 'tenants.founder',
+              metadata: { op: 'founder_activated', user_id: a.usuarioId, contract: a.contrato, account: contaNova ? 'new' : 'existing' },
+            });
+          },
+          a.usuarioId,
+        );
+        return true as const;
+      });
+    } catch (err) {
+      if (err instanceof FundadorNaoConfere) return 'fundador_nao_confere';
+      // Índice único do e-mail: outra conta ficou com ele no meio do caminho. Nada foi consumido.
+      if (contaNova && ehViolacaoDeUnicidade(err)) return 'token_invalido';
+      throw err;
+    }
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
