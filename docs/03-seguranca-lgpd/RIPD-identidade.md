@@ -35,6 +35,8 @@
 | Token de uso único da biblioteca (`verificacao`) | 24 h depois de vencer | expurgo diário |
 | Cadastro de TOTP não concluído | 24 h | expurgo diário |
 | Token de recuperação | 30 dias depois de vencer | expurgo diário |
+| Token de recuperação emitido pelo suporte (`origem = suporte`, B12) | 13 meses (o teto de 2 por pessoa em 12 meses cruza clínicas e só esta tabela o conta) | expurgo diário |
+| Ativação do fundador (`ativacao_do_fundador`: hash do token e HMAC do e-mail, B11) | 30 dias depois de vencer ou ser usada; o HMAC do e-mail é zerado na ativação ou no vencimento | expurgo diário |
 | Convite da equipe (`team_invites`, na clínica) | 30 dias depois do estado final (aceito, revogado ou vencido) | job `convites-descarte` zera o HMAC do e-mail e grava `invite_pseudonym_dropped` na trilha da clínica, na mesma transação do UPDATE (art. 37) |
 | Espelho dos convites aceitos (`identidade.convite_aceito`, só ids, 0073) | enquanto houver convite aceito com HMAC vivo naquela clínica (no máximo 30 dias depois do aceite) ou até a anonimização | o trigger apaga a linha quando o `convites-descarte` ou a anonimização zera o HMAC; a anonimização apaga o que restar da pessoa |
 | Contadores de bloqueio (Redis) | até 15 min | TTL da janela |
@@ -67,6 +69,9 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 3. **Disputa de e-mail (R17):** quando alguém diz que o e-mail da conta é dele, a conta fica **suspensa durante a investigação**. O suporte confere com as clínicas de origem, desativa a conta indevida (sem apagar o histórico), libera o e-mail e registra o resultado na trilha das clínicas envolvidas.
 4. **Sem vínculo em nenhuma clínica e sem senha (R13 do código do 3b-2):** a recuperação pelo admin exige vínculo ativo na clínica dele (R16), então quem foi desligado de todas e perdeu a senha não tem admin que o atenda. Se a pessoa volta a trabalhar numa clínica **antes dos 90 dias**, a conta antiga ainda guarda o e-mail, e o convite para ele pede a senha e o TOTP que ela perdeu: o convite vai para **outro e-mail** e o histórico continua no id antigo (como no item 1). **Depois dos 90 dias**, o expurgo libera o e-mail e o convite para ele cria conta nova. Se a pessoa só precisa exercer um direito do art. 18 sobre a conta antiga, o pedido vai ao DPO pelo procedimento 2.
 5. **Ordem judicial (Marco Civil, art. 22):** o IP fica só em HMAC. O suporte entrega o que há (sessões e eventos do período, com a origem em HMAC). Se a ordem trouxer IPs, o suporte calcula o HMAC de cada um e compara. O IP em claro nunca é guardado.
+6. **Fundador da clínica (B11):** depois do contrato `CTR-<n>` assinado, a nossa equipe provisiona a clínica pelo comando operacional (o e-mail entra por parâmetro cifrado do SSM e fica só em HMAC). O token de ativação é entregue fora de banda por **outra pessoa**. A ativação abre a sessão de cadastro pendente de 15 min. O importador só roda depois de confirmar que foi o fundador quem ativou. Desenho e parecer: `docs/04-arquitetura/provisionamento-da-clinica.md`.
+7. **Admin único que perdeu o fator (B12):** só quando não há outro admin com fator. O suporte confere a identidade pelo contrato (o próprio dono da conta, ligação de retorno ao telefone cadastrado antes do pedido, log de segurança da conta olhado antes) e emite, pelo comando operacional, um token só de **fator**, de 24 h, entregue por outra pessoa. Teto: 1 por clínica em 30 dias e 2 por pessoa em 12 meses. As sessões caem em todo motivo, menos a troca planejada de aparelho. Runbook: `docs/04-arquitetura/runbook-recuperacao-admin-unico.md`.
+8. **Admin único que perdeu senha e fator (B13):** nenhum token restaura os dois. Conta nova, com outro e-mail, ativada pelo fluxo do fundador (item 6), mais revogação do vínculo antigo e 48 h de espera.
 
 ## 5a. Controles e evidências (art. 38; ressalva 3 do parecer do 3c)
 
@@ -91,6 +96,8 @@ O risco residual é aceitável **depois** do checklist do 3c: segredos versionad
 |---|---|---|
 | E-mail declarado pelo admin, sem verificação (R17) | encarregado e sócios | _pendente_ |
 | Conferência de senha vazada desligada até a decisão do egresso (B2) | sócios | _pendente_ |
+| Quem entrega o token de ativação conhece o token e o e-mail e poderia ativar no lugar do fundador (B11, R3) | encarregado | _pendente_ |
+| O `--operador` do comando do suporte é declarado; a prova é o CloudTrail (B12) | encarregado | _pendente_ |
 
 Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, B5).
 

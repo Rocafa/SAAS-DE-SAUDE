@@ -121,6 +121,10 @@ export const recuperacao = identidade.table('recuperacao', {
   criadoEm: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
   expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
   usadoEm: timestamp('usado_em', { withTimezone: true }),
+  /** 0077 (B12): 'suporte' = emitido pelo comando operacional, só tipo `fator`, ator sistema, 24 h, com `chamado`. */
+  origem: text('origem', { enum: ['admin', 'suporte'] }).notNull().default('admin'),
+  /** `SUP-<número>`, só com origem 'suporte' (check da 0077). */
+  chamado: text('chamado'),
 });
 
 /**

@@ -6,7 +6,7 @@
  * DE VERDADE (cadastro e verificação pela HTTP da biblioteca), mais bloqueio 5/15, reuso de código e eventos do fator.
  * Dados fictícios.
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { Controller, Get, Logger, UseGuards, type INestApplication } from '@nestjs/common';
@@ -29,6 +29,7 @@ import { codigoErrado, codigoTotp, segredoDoUri } from './apoio-totp';
 import { BetterAuthProvider, TETO_DIARIO_DE_RECUPERACOES } from '../src/modules/auth/better-auth/provedor';
 import { AnonimizacaoRecusada, conferirAnonimizacao } from '../src/modules/auth/better-auth/anonimizacao';
 import { SYSTEM_ACTOR_ID } from '../src/modules/audit/audit-log';
+import { emitirRecuperacaoPeloSuporte } from '../src/modules/auth/better-auth/recuperacao-pelo-suporte';
 import { zerarJanelasDoLog } from '../src/security/log-de-seguranca';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
 import type { Perfil } from '../src/modules/auth/perfis';
@@ -1088,6 +1089,81 @@ describe('PR 3b-2: recuperação pelo admin (R17; R1, R15 e R16 do desenho do PR
     const m = await membroComFator();
     const estranha = await novaPessoa(await api.novaClinica(), ['recepcao']);
     await expect(credenciais().emitirRecuperacao(m.ctx, estranha.userId, 'senha', 'esqueceu_a_senha')).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+});
+
+describe('B12: uso do token de recuperação do fator emitido pelo suporte (R2 do parecer de 16/11)', () => {
+  const emitirPeloSuporte = async (tenantId: string, userId: string): Promise<string> => {
+    let token = '';
+    await emitirRecuperacaoPeloSuporte(
+      { dbAuth: dbAuth.db, dbClinica: api.db.db },
+      { clinicaId: tenantId, usuarioId: userId, chamado: 'SUP-77', operador: OPERADOR_FICTICIO, motivo: 'troca_de_aparelho', derrubarSessoes: false },
+      (t) => Promise.resolve(void (token = t)),
+    );
+    return token;
+  };
+
+  async function adminUnicoComFator() {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin', 'recepcao']);
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    return { tenantId, ...p };
+  }
+
+  it('(a) a pessoa segue admin ativo: o token (sem admin emissor) exige a senha, tira o TOTP e abre a sessão de cadastro; o evento leva o chamado', async () => {
+    const m = await adminUnicoComFator();
+    const token = await emitirPeloSuporte(m.tenantId, m.userId);
+    expect(await provedor.usarRecuperacao({ token, senhaAtual: SENHA_ERRADA_TROCA, cabecalhos: new Headers() })).toBe('credencial_errada');
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toHaveLength(1);
+    zerarJanelasDoLog();
+    const erro = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    let r: Awaited<ReturnType<BetterAuthProvider['usarRecuperacao']>>;
+    try {
+      r = await provedor.usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() });
+      const usada = erro.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"evento":"RECUPERACAO_USADA"'));
+      expect(usada).toHaveLength(1);
+      expect(JSON.parse(usada[0]!)).toMatchObject({ motivo: 'recuperacao_pelo_suporte', userId: m.userId, chamado: 'SUP-77' });
+    } finally {
+      erro.mockRestore();
+    }
+    expect(r).toMatchObject({ tipo: 'fator' });
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toEqual([]);
+    const cookies = typeof r === 'object' ? r.cookies : [];
+    const sessaoDeCadastro = { cookie: (cookies[0] ?? '').split(';')[0] ?? '' };
+    expect((await postar('/two-factor/enable', sessaoDeCadastro, { password: SENHA })).r.status).toBe(200);
+    expect(await provedor.usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBe('invalido');
+  });
+
+  it('(b) a pessoa perdeu o perfil admin entre a emissão e o uso: invalido, e o fator fica', async () => {
+    const m = await adminUnicoComFator();
+    const token = await emitirPeloSuporte(m.tenantId, m.userId);
+    const adm = await api.membro(m.tenantId, api.sessao(m.tenantId, 'admin'), 'admin');
+    await api.http().delete(`/clinica/membros/${m.userId}/admin`).set({ Authorization: adm.Authorization }).expect(204);
+    expect(await provedor.usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBe('invalido');
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toHaveLength(1);
+  });
+
+  it('(c) token de origem admin continua exigindo emissor admin ativo; (e) o do suporte vence em 24 h', async () => {
+    const m = await adminUnicoComFator();
+    const tokenAdmin = randomBytes(32).toString('base64url');
+    await dbAuth.db.insert(recuperacao).values({
+      id: randomUUID(),
+      usuarioId: m.userId,
+      tipo: 'fator',
+      tokenHash: createHash('sha256').update(tokenAdmin).digest('hex'),
+      clinicaId: m.tenantId,
+      criadoPor: randomUUID(),
+      expiraEm: new Date(Date.now() + 10 * 60_000),
+    });
+    expect(await provedor.usarRecuperacao({ token: tokenAdmin, senhaAtual: SENHA, cabecalhos: new Headers() })).toBe('invalido');
+
+    const token = await emitirPeloSuporte(m.tenantId, m.userId);
+    await dbAuth.db
+      .update(recuperacao)
+      .set({ criadoEm: new Date(Date.now() - 25 * 3600_000), expiraEm: new Date(Date.now() - 3600_000) })
+      .where(and(eq(recuperacao.usuarioId, m.userId), eq(recuperacao.origem, 'suporte')));
+    expect(await provedor.usarRecuperacao({ token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBe('invalido');
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, m.userId))).toHaveLength(1);
   });
 });
 
