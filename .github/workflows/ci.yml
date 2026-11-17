@@ -126,6 +126,9 @@ jobs:
             data=$(grep -oE "<!-- vence: $g [0-9]{4}-[0-9]{2}-[0-9]{2} -->" "$doc" | awk '{print $4}' | head -1)
             [ -n "$data" ] || { echo "::error::$g ignorada sem data de vencimento em $doc"; exit 1; }
             if [ "$hoje" \> "$data" ]; then echo "::error::exceção $g venceu em $data: revise ($doc)"; exit 1; fi
+            # Prazo máximo de 31 dias: uma exceção não se renova para longe sem nova revisão.
+            teto=$(date -u -d "+31 days" +%F)
+            if [ "$data" \> "$teto" ]; then echo "::error::exceção $g vence em $data, além do teto de 31 dias ($teto)"; exit 1; fi
             echo "$g vence em $data"
           done
       - name: pnpm audit (high/critical bloqueia)

@@ -29,7 +29,8 @@ Assim que sair a correção, a exceção é removida e a dependência é atualiz
 - **Revisão:** até **01/12/2026**, ou antes, se sair a 4.0.8. Quem remove: o Maestro, no primeiro ciclo depois da
   publicação da correção (com o Dependabot, ou pelo vencimento na CI).
 - **Pendência recomendada (não bloqueia):** tirar da imagem as dependências de teste trazidas pelos *peers* do
-  `better-auth` (cerca de 268 MB).
+  `better-auth` (cerca de 268 MB). Dono: o Maestro, com a frente de DevOps. Prazo: junto com a revisão desta exceção,
+  em 01/12/2026.
 - **Parecer:** `revisoes/2026-11-17-excecao-picomatch.md`.
 
 <!-- vence: GHSA-fc5q-39xc-vjpf 2026-12-01 -->
@@ -37,4 +38,5 @@ Assim que sair a correção, a exceção é removida e a dependência é atualiz
 ## Formato (lido pela CI)
 
 Cada exceção tem uma linha `<!-- vence: <GHSA> <AAAA-MM-DD> -->` neste arquivo. O passo `excecoes-de-auditoria` do
-`ci.yml` falha se uma GHSA do `ignoreGhsas` não tiver essa linha, ou se a data já tiver passado.
+`ci.yml` falha se uma GHSA do `ignoreGhsas` não tiver essa linha, se a data já tiver passado ou se ela estiver a
+mais de 31 dias de hoje (teto: renovar exige nova revisão).

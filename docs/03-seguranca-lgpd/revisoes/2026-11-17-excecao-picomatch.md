@@ -69,3 +69,18 @@ não acrescenta nada a isso.
 
 A mudança não toca dado pessoal, base legal, tenant, criptografia nem trilha de auditoria. Não há segredo nem dado
 real no diff.
+
+## Reconferência (17/11/2026, commit `75e564e`, PR #209)
+
+### Veredito: **APROVADO**, e o veto acima fica levantado
+
+| Correção | Situação | Evidência |
+|---|---|---|
+| 1. FATO do registro | ✅ | `excecoes-de-auditoria.md` agora diz "presente na imagem de produção da API, mas não é alcançável". Cita a origem nos *peers* opcionais do `better-auth` e no `pnpm deploy --prod` do Dockerfile, e ajusta a avaliação de risco. |
+| 2. Trava por exceção | ✅ | O `ci.yml` não tem mais data fixa. Para cada GHSA do `package.json`, o passo lê a linha `<!-- vence: <GHSA> <AAAA-MM-DD> -->` do documento e falha se ela faltar ou se a data tiver passado. Rodei o mesmo script localmente: data presente = passa; hoje = 01/12 = passa; hoje = 02/12 = falha ("venceu"); linha removida = falha ("sem data"). A linha de exemplo da seção "Formato" usa `<GHSA>` literal e não casa com a regex, então não gera um falso registro. |
+| R2. Quem remove | ✅ | O Maestro, no primeiro ciclo depois da publicação da correção. |
+| R1. Os 268 MB na imagem | 🟡 | Registrada como pendência no documento, mas sem dono e sem prazo. Continua recomendação, não bloqueia. |
+
+**Observação (não bloqueia):** a trava não limita o prazo máximo. Uma data como `2099-12-31` passaria. A defesa é que
+toda mudança no documento de exceções precisa de parecer do Guardião, que confere se o prazo é razoável (até 30 dias
+para alerta alto sem correção).
