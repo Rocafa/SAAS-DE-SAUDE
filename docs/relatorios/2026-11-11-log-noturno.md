@@ -399,3 +399,22 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Os dois mexem em linhas vizinhas de `configuracoes.tsx`, então o segundo a entrar terá conflito.
 - **#195, A1 a A3 feitos:** chave própria `ativacao-email`, o e-mail conferido ao repetir depois de falha parcial e o `pedido` nos dois eventos. 1166 testes de unidade verdes. Falta a reconferência do Guardião sobre a C1 e o A1 a A3.
+- **#195, reconferência do Guardião (17/11): aprovado com ressalvas.** A C1 está resolvida de verdade: nenhuma rota dá acesso à clínica antes de ativar. A1 e A3 estão resolvidas.
+  - Corrigi as duas sobras: a escolha automática de clínica ignora a pendente, e entrou o teste do A2 (outro e-mail ao repetir dá `parametro_invalido`).
+  - C2 a C4 continuam bloqueando o PR que ligar o SSM e o PR 2.
+- **#155 atualizado com a `main`** (sem aprovação a perder) e a pilha inteira propagada, até o #195, sem conflito.
+- **Erro meu, corrigido em seguida:** o commit das sobras da C1 subiu com 4 testes de unidade quebrados no `provedor.test.ts`. Eu tinha encadeado o commit num `grep` da saída do vitest, e não no código de saída dele. A consulta nova virou um método próprio, com dublê nesses testes; agora o vitest sai com 0 (1166 verdes). **Regra mantida:** o commit depende do `exit` do vitest, nunca de um `grep` da saída.
+- **B12 (recuperação do admin único) passado ao agente de engenharia**, no branch `eng/recuperacao-admin-unico`, sobre o provisionamento, com o escopo fechado pelo parecer: migração 0077, função com teto e ator sistema, ajuste no `usarRecuperacao`, comando avulso, testes e runbook. A recuperação completa (vetada) ficou de fora.
+- **#192 MESCLADO na `main`** (`c3221c6`): o atendimento pelo agendamento, com a `versao`, destrava a fatia S1 do front do sócio.
+  - O #191 e o #193 ficaram atrasados e foram atualizados.
+  - O #194 teve conflito de testes com o #192 (dois `describe` novos no mesmo ponto). Resolvi mantendo os dois; o primeiro resolvedor perdeu o fechamento `});`, que corrigi. O vitest saiu com 0.
+  - Pedi de novo a aprovação do sócio, sugerindo mesclar um por vez (#194, #193, #191), porque cada merge derruba a aprovação dos outros.
+- **#199 aberto (B12, recuperação do fator do admin único)**, empilhado sobre o #195. O código veio do agente de engenharia: migração 0077, tetos com trava, token do suporte de 24 h só para o fator, uso só se a pessoa ainda é admin, comando avulso e runbook. Mandei ao Guardião.
+- **#199: o Guardião aprovou com ressalvas.** Corrigi a C1: `--derrubar-sessoes` passou a ser obrigatório em todo motivo, menos a troca planejada de aparelho, com teste e runbook atualizados. A C2 é esperar o CI. A1 a A5 ficam anotadas (evento na compensação, testes de concorrência). O parecer foi commitado.
+- **#199, A2:** se a compensação não conseguir anular o token do suporte, sai `TRILHA_NAO_GRAVADA` com o motivo novo `recuperacao_nao_anulada`, com alarme imediato, em vez de engolir o erro. O vitest saiu com 0.
+- **#193 MESCLADO na `main`** (modelos v2 de fisio e TO, escalas com faixa e instrumento explícito). O sócio tinha reaprovado.
+- **#191 e #194 atualizados** com a `main` (a aprovação caiu de novo). Pedi para ele aprovar um de cada vez: #194, depois #191.
+- **#199:** o RLS falhou por causa da minha C1. Duas bancadas usavam "perdeu o aparelho" sem derrubar as sessões, o que agora é recusado. Passaram a usar "troca de aparelho". O CI está rodando de novo.
+- **#191 MESCLADO na `main`**: o CodeQL volta a funcionar com o `init` e o `analyze` juntos. Fechei o #183 e o #185 do Dependabot, que ele substitui.
+- **#199: CI verde.** Falta só o sócio (ele depende do #195 e do resto da pilha).
+- **#194 atualizado** de novo com a `main`. É o último da leva e espera a aprovação do sócio.

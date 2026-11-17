@@ -298,7 +298,7 @@ beforeAll(async () => {
     .http()
     .put(`/atendimentos/${atId}/registro`)
     .set(cab(admin))
-    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', medidas: [{ tipo: 'eva', valor: 4 }] } })
+    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', objetivo: 'Objetivo ficticio', atividades: 'Atividades ficticias', medidas: [{ tipo: 'eva', valor: 4 }] } })
     .expect(200);
   await api.http().post(`/atendimentos/${atId}/finalizar`).set(cab(admin)).send({}).expect(200);
   await api.http().post(`/atendimentos/${atId}/adendos`).set(cab(admin)).send({ texto: TEXTO_ADENDO }).expect(201);
