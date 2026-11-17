@@ -202,6 +202,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   tenant_master_keys: 'referência de chave mestra (KMS): segredo operacional do operador, nunca sai',
   tenant_data_keys: 'chave de dados cifrada: os campos já saem decifrados para a clínica',
   tenant_context: 'tabela interna do RLS (contexto da transação), sem dado da clínica',
+  team_invites: 'convite da equipe (0067): credencial temporária de 72 h (só hash do token e HMAC do e-mail), sem valor para a clínica fora da plataforma; o vínculo aceito sai em clinic_members',
   portal_invite_lookup: 'índice interno token -> clínica do convite (0027); o convite sai em portal_invites',
   portal_link_index: 'índice interno vínculo -> conta/clínica (0027); o vínculo sai em portal_links',
   portal_invite_otp: 'hash do código de resgate do convite (0033): credencial temporária, nunca sai; o convite sai em portal_invites',

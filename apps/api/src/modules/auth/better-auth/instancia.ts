@@ -45,7 +45,7 @@ export interface OpcoesDaAutenticacao {
   /** Store dos contadores de bloqueio (o do rate limit: Redis em produção). */
   readonly store: RateLimitStore;
   /** Ganchos do provedor para o código aceito ou recusado (mfa_em e trilha). */
-  readonly fator: Pick<DependenciasDaProtecao, 'aoVerificarMfa' | 'aoFalharMfa'>;
+  readonly fator: Pick<DependenciasDaProtecao, 'aoVerificarMfa' | 'aoFalharMfa' | 'podeCadastrarFator'>;
   /** Conferência de senha vazada (R15): k-anonimato em produção; dublê nos testes. */
   readonly conferirSenhaVazada: DependenciasDaProtecao['conferirSenhaVazada'];
 }
@@ -79,7 +79,11 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
     database: drizzleAdapter(o.db, { provider: 'pg', schema: { usuario, sessao, conta, verificacao, doisFatores } }),
     user: {
       modelName: 'usuario',
-      additionalFields: { ativo: { type: 'boolean', input: false, required: false, defaultValue: true } },
+      additionalFields: {
+        ativo: { type: 'boolean', input: false, required: false, defaultValue: true },
+        clinicaDeOrigem: { type: 'string', input: false, required: false, returned: false },
+        conviteDeOrigem: { type: 'string', input: false, required: false, returned: false },
+      },
     },
     session: {
       modelName: 'sessao',
@@ -92,6 +96,7 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
         mfaEm: { type: 'date', input: false, required: false, returned: false },
         perfisNoMfa: { type: 'string', input: false, required: false, returned: false },
         mfaSemClinicaEm: { type: 'date', input: false, required: false, returned: false },
+        cadastroPendenteAte: { type: 'date', input: false, required: false, returned: false },
       },
     },
     account: { modelName: 'conta' },

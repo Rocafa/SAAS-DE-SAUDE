@@ -72,6 +72,32 @@ export interface ProvedorDePessoa {
   cookieDeEncerramento(): string;
 }
 
+/** Parte OPCIONAL da porta para o aceite do convite da equipe (PR 3b): só o provedor real. */
+export interface ProvedorDeConvite {
+  criarContaDoConvite(e: {
+    userId: string;
+    reaproveita: boolean;
+    email: string;
+    nome: string;
+    senha: string;
+    clinicaDeOrigem: string;
+    conviteDeOrigem: string;
+  }): Promise<{ userId: string } | 'conta_existente' | 'senha_vazada'>;
+  /**
+   * Id da conta do aceite: novo, ou o de uma conta ABANDONADA por um aceite que falhou depois de criá-la (inativa, sem
+   * senha, sem vínculo, nascida de convite), para o mesmo e-mail não ficar preso (R1 do código do 3b-1).
+   */
+  idParaContaDoConvite(email: string): Promise<{ userId: string; reaproveita: boolean } | 'conta_existente'>;
+  /** Desfaz a conta de um aceite que não fechou: inativa e sem senha (o app_auth não apaga identidade, R18). */
+  desfazerContaDoConvite(userId: string): Promise<void>;
+  /** Entra com a senha recém-definida e marca a sessão como só de cadastro do fator (15 min, R8). */
+  abrirSessaoDeCadastro(e: { email: string; senha: string; cabecalhos: Headers }): Promise<string[]>;
+}
+
+export function ehProvedorDeConvite(p: AuthProvider): p is AuthProvider & ProvedorDeConvite {
+  return typeof (p as Partial<ProvedorDeConvite>).criarContaDoConvite === 'function';
+}
+
 export function ehProvedorDePessoa(p: AuthProvider): p is AuthProvider & ProvedorDePessoa {
   return typeof (p as Partial<ProvedorDePessoa>).sessaoDePessoa === 'function';
 }

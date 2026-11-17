@@ -1336,3 +1336,19 @@ export const schema = {
   whatsappOutbox,
   whatsappInbound,
 };
+
+/** Convite da equipe (0067, D4 PR 3b): só o hash do token e o HMAC do e-mail; o vínculo nasce no aceite. */
+export const teamInvites = pgTable('team_invites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  tokenHash: text('token_hash').notNull(),
+  emailHmac: text('email_hmac').notNull(),
+  role: text('role', { enum: CLINIC_MEMBER_ROLES }).notNull(),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  acceptedUserId: uuid('accepted_user_id'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by'),
+});

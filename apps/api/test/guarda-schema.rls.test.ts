@@ -85,6 +85,7 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   // da função SECURITY DEFINER). Vínculo: nasce só do resgate (sem INSERT para o runtime); a clínica revoga.
   // Consentimento: append-only. Pedido do titular: o portal abre; a clínica muda a situação.
   portal_invites: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  team_invites: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   portal_links: { privilegios: ['SELECT', 'UPDATE'] },
   portal_consents: { privilegios: ['SELECT', 'INSERT'] },
   portal_rights_requests: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
