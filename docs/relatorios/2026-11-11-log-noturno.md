@@ -429,3 +429,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - O vitest saiu com 0.
   - Ficam para o PR 3: A1 (papel de banco próprio para a tarefa), A2 (o expurgo não pode apagar ativação nunca usada, senão a C1 cai), A3 e os testes da T2.
 - **Dois agentes em paralelo:** o de devops escreve o Terraform das tarefas avulsas do provisionamento e da recuperação do admin único (branch `eng/infra-ops-provisionamento`), no padrão do B10. O de testes escreve a lista T2 do parecer do #203, no próprio branch do #203.
+- **#203, testes T2 escritos pelo agente de testes:** 16 de unidade no controller (404, 503, token só no corpo, campo extra recusado) e 5 casos de bancada (fundador revogado, login de outra conta, teto por origem, C1 depois do bloqueio, escolha automática mantida). Nenhum revelou defeito. O vitest saiu com 0 (1194). A bancada roda no CI.
