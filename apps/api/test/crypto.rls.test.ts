@@ -7,7 +7,7 @@ import { AuditAction, type TenantId, type UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { tenants } from '../src/db/schema';
+import { criarClinicaSemFundador } from './apoio-clinica';
 import { recordAudit } from '../src/modules/audit/audit-log';
 import { createDatabase, withTenant, type DatabaseHandle, type TenantTx } from '../src/db/tenant-transaction';
 import { FieldDecryptionError, KeyUnavailableError, TenantKeysDestroyedError } from '../src/modules/crypto/crypto-errors';
@@ -50,11 +50,8 @@ async function errorText(p: Promise<unknown>): Promise<string> {
   return text;
 }
 
-async function novaClinica(tenantId: TenantId): Promise<void> {
-  await withTenant(h.db, tenantId, async (tx) => {
-    await tx.insert(tenants).values({ id: tenantId, displayName: `Clinica Ficticia ${tenantId.slice(0, 8)}` });
-  });
-}
+const novaClinica = (tenantId: TenantId): Promise<void> =>
+  criarClinicaSemFundador(tenantId, { displayName: `Clinica Ficticia ${tenantId.slice(0, 8)}` });
 
 beforeAll(async () => {
   h = createDatabase(url, { max: 4 });

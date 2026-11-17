@@ -11,10 +11,11 @@ import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, patients, tenants } from '../../src/db/schema';
+import { auditLog, patients } from '../../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../../src/db/tenant-transaction';
 import { exportTenantData } from '../../src/modules/exports/tenant-export';
 import { createPatient, listPatients } from '../../src/modules/patients/patients.repository';
+import { criarClinicaSemFundador } from '../apoio-clinica';
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória para a suíte de segurança');
@@ -36,8 +37,8 @@ async function seedTenant(nPatients: number): Promise<FakeTenant> {
   const tenantId = randomUUID() as TenantId;
   const tag = tenantId.slice(0, 8);
   const names = Array.from({ length: nPatients }, (_, i) => `Paciente Ficticio Sec ${tag}-${i}`);
+  await criarClinicaSemFundador(tenantId, { displayName: `Clinica Ficticia Sec ${tag}` });
   await withTenant(h.db, tenantId, async (tx) => {
-    await tx.insert(tenants).values({ id: tenantId, displayName: `Clinica Ficticia Sec ${tag}` });
     for (const displayName of names) await tx.insert(patients).values({ tenantId, displayName });
   });
   return { ctx: ctxFor(tenantId), names };

@@ -91,15 +91,20 @@ async function setTenant(tx, tenantId) {
 
 async function seed() {
   const app = postgres(appUrl, opts);
+  // Clínica sem fundador só pelo papel de migração (0081, G3 do #207); o resto pelo runtime, sob RLS.
+  const migrator = postgres(migratorUrl, opts);
   const tenantIds = [];
   try {
     for (let t = 0; t < 3; t++) {
       const id = randomUUID();
       const tag = id.slice(0, 8);
       tenantIds.push(id);
-      await app.begin(async (tx) => {
+      await migrator.begin(async (tx) => {
         await setTenant(tx, id);
         await tx`insert into tenants (id, display_name) values (${id}, ${`Clinica Ficticia ${tag}`})`;
+      });
+      await app.begin(async (tx) => {
+        await setTenant(tx, id);
         for (let p = 0; p < 5; p++) {
           await tx`insert into patients (tenant_id, display_name) values (${id}, ${`Paciente Ficticio ${tag}-${p}`})`;
         }
@@ -110,6 +115,7 @@ async function seed() {
       });
     }
   } finally {
+    await migrator.end({ timeout: 5 });
     await app.end({ timeout: 5 });
   }
   return tenantIds;

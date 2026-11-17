@@ -6,6 +6,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ativacaoDoFundador, usuario } from '../src/db/identidade';
 import { auditLog, clinicMembers, tenants } from '../src/db/schema';
@@ -20,6 +21,7 @@ import {
 } from '../src/modules/auth/better-auth/provisionamento';
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { subirApi, type ApiDeTeste } from './apoio-api';
+import { criarClinicaSemFundador } from './apoio-clinica';
 
 let api: ApiDeTeste;
 let dbAuth: DatabaseHandle;
@@ -254,5 +256,91 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
   it('app_user (rotas de negócio) não lê nem escreve a tabela (R1)', async () => {
     await expect(api.db.db.execute(sql`select token_hash from identidade.ativacao_do_fundador limit 1`)).rejects.toThrow();
     await expect(api.db.db.execute(sql`update identidade.ativacao_do_fundador set falhas = 0`)).rejects.toThrow();
+  });
+
+  it('G3 do #207 (0081): clínica sem fundador só pelo app_migrator; o trigger recusa runtime e provisionamento, e app_auth nem tem GRANT', async () => {
+    /** SQLSTATE e mensagens da cadeia de causas (drizzle e postgres embrulham o erro original). */
+    const recusa = async (p: Promise<unknown>) => {
+      const e: unknown = await p.then(
+        () => null,
+        (x: unknown) => x,
+      );
+      expect(e, 'era esperada recusa').not.toBeNull();
+      let codigo: unknown;
+      let texto = '';
+      for (let x: unknown = e; x; x = (x as { cause?: unknown }).cause) {
+        codigo ??= (x as { code?: unknown }).code;
+        if (x instanceof Error) texto += ` ${x.message}`;
+      }
+      return { codigo, texto };
+    };
+    // A mensagem é do trigger (0081): uma regressão dele não fica escondida atrás de RLS ou GRANT, que também dão 42501.
+    const DO_TRIGGER = /nasce com o fundador/;
+    const semFundador = (db: DatabaseHandle['db'], id: TenantId, usuario?: string) =>
+      withTenant(db, id, (tx) => tx.insert(tenants).values({ id, displayName: 'Clinica Ficticia Sem Fundador' }), usuario);
+    const ids = Array.from({ length: 5 }, () => randomUUID() as TenantId);
+
+    // 1) Papéis que chegam ao trigger: o runtime (sessão de sistema e de usuário) e o provisionamento.
+    const peloTrigger: [string, () => Promise<unknown>][] = [
+      ['app_user (sistema)', () => semFundador(api.db.db, ids[0]!)],
+      ['app_user (usuário)', () => semFundador(api.db.db, ids[1]!, randomUUID())],
+      ['app_provisionamento (sistema)', () => semFundador(dbProv.db, ids[2]!)],
+    ];
+    for (const [nome, tentar] of peloTrigger) {
+      const r = await recusa(tentar());
+      expect(r.codigo, nome).toBe('42501');
+      expect(r.texto, nome).toMatch(DO_TRIGGER);
+    }
+
+    // 2) app_auth: a barreira é anterior ao trigger, a falta de GRANT de INSERT em tenants.
+    const [grant] = (await api.db.db.execute(
+      sql`select has_table_privilege('app_auth', 'public.tenants', 'INSERT') as pode`,
+    )) as unknown as [{ pode: boolean }];
+    expect(grant?.pode, 'app_auth sem GRANT em tenants').toBe(false);
+    const peloAuth = await recusa(
+      dbAuth.db.execute(sql`insert into tenants (id, display_name) values (${ids[3]}::uuid, 'Clinica Ficticia Sem Fundador')`),
+    );
+    expect(peloAuth.codigo, 'app_auth sem GRANT em tenants').toBe('42501');
+    expect(peloAuth.texto).not.toMatch(DO_TRIGGER);
+
+    // 3) Função SECURITY DEFINER de dono app_migrator chamada pelo runtime: o trigger olha o LOGIN (session_user), então
+    // recusa. Schema descartável (fora de public, para não cruzar a guarda O-R17e de outros arquivos em paralelo),
+    // criado pelo papel administrativo e removido no fim. A função nunca fica aberta a PUBLIC.
+    const adminUrl = process.env.DATABASE_ADMIN_URL;
+    const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+    if (!adminUrl || !migratorUrl) throw new Error('DATABASE_ADMIN_URL e DATABASE_MIGRATOR_URL são obrigatórias neste teste');
+    const esquema = `teste_g3_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const adm = postgres(adminUrl, { max: 1, onnotice: () => undefined });
+    const mig = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
+    try {
+      await adm.unsafe(`CREATE SCHEMA ${esquema} AUTHORIZATION app_migrator`);
+      await mig.begin(async (t) => {
+        await t.unsafe(`REVOKE ALL ON SCHEMA ${esquema} FROM PUBLIC`);
+        await t.unsafe(`GRANT USAGE ON SCHEMA ${esquema} TO app_user`);
+        await t.unsafe(`CREATE FUNCTION ${esquema}.clinica_sem_fundador(p uuid) RETURNS void
+          LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
+          AS 'INSERT INTO public.tenants (id, display_name) VALUES (p, ''Clinica Ficticia Sem Fundador'')'`);
+        await t.unsafe(`REVOKE ALL ON FUNCTION ${esquema}.clinica_sem_fundador(uuid) FROM PUBLIC`);
+        await t.unsafe(`GRANT EXECUTE ON FUNCTION ${esquema}.clinica_sem_fundador(uuid) TO app_user`);
+      });
+      const peloDefiner = await recusa(
+        withTenant(api.db.db, ids[4]!, (tx) => tx.execute(sql`select ${sql.raw(esquema)}.clinica_sem_fundador(${ids[4]}::uuid)`)),
+      );
+      expect(peloDefiner.codigo, 'SECURITY DEFINER do app_migrator chamada pelo app_user').toBe('42501');
+      expect(peloDefiner.texto).toMatch(DO_TRIGGER);
+    } finally {
+      await adm.unsafe(`DROP SCHEMA IF EXISTS ${esquema} CASCADE`);
+      await adm.end({ timeout: 5 });
+      await mig.end({ timeout: 5 });
+    }
+
+    // Nenhuma das tentativas deixou linha.
+    for (const id of ids) expect(await contarClinicas(id)).toBe(0);
+
+    // O caminho permitido (migrações e seeds): o papel de migração.
+    const pelaMigracao = randomUUID() as TenantId;
+    await criarClinicaSemFundador(pelaMigracao, { displayName: 'Clinica Ficticia Pela Migracao' });
+    const [linha] = await withTenant(api.db.db, pelaMigracao, (tx) => tx.select().from(tenants).where(eq(tenants.id, pelaMigracao)));
+    expect(linha).toMatchObject({ id: pelaMigracao, founderUserId: null });
   });
 });

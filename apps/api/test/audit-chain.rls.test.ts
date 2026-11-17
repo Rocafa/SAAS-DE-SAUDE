@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { tenants } from '../src/db/schema';
+import { criarClinicaSemFundador } from './apoio-clinica';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { auditChainHead, GENESIS_HASH, verifyAuditChain, type ChainAnchor } from '../src/modules/audit/audit-chain';
 import { recordAudit } from '../src/modules/audit/audit-log';
@@ -30,9 +30,7 @@ const ctxFor = (tenantId: TenantId): RequestContext => ({ tenantId, userId: rand
 
 async function novaClinica(n = 0): Promise<RequestContext> {
   const ctx = ctxFor(randomUUID() as TenantId);
-  await withTenant(h.db, ctx.tenantId, async (tx) => {
-    await tx.insert(tenants).values({ id: ctx.tenantId, displayName: `Clinica Ficticia ${ctx.tenantId.slice(0, 8)}` });
-  });
+  await criarClinicaSemFundador(ctx.tenantId, { displayName: `Clinica Ficticia ${ctx.tenantId.slice(0, 8)}` });
   for (let i = 1; i <= n; i++) {
     await withTenant(h.db, ctx.tenantId, (tx) =>
       recordAudit(tx, ctx, { action: 'read', scope: 'patients', metadata: { count: i } }),

@@ -82,6 +82,7 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 | Senha forte e conferida | `senha.ts` (scrypt N=2^16), `senha-vazada.ts` e testes |
 | Segundo fator obrigatório e bloqueio | `protecao.ts` e testes de bloqueio, rajada e reuso |
 | Nenhum token restaura os dois fatores | testes da recuperação (3b-2) |
+| Clínica nova nasce com o fundador; sem fundador, só pelo papel de migração (G3 do parecer do #207) | migração 0081 (`tenants_founder_guard`) e teste RLS "G3 do #207 (0081)": `app_user` (sessão de sistema e de usuário), `app_auth` e `app_provisionamento` recebem 42501 |
 | Retenção | job `identidade-expurgo`, com alarme (`jobs.tf`) |
 | Segredos fora do git, com rotação | Terraform (`dados.tf`, `api-ambiente.tf`) e runbook `docs/04-arquitetura/runbook-rotacao-better-auth.md` |
 | Prova do atendimento ao titular | evento `CONTA_ANONIMIZADA` (com o chamado e o operador) e trilha `account_anonymized` em cada clínica (ator sistema, com o chamado; nunca o operador) |
@@ -99,7 +100,7 @@ O risco residual é aceitável **depois** do checklist do 3c: segredos versionad
 | Conferência de senha vazada desligada até a decisão do egresso (B2) | sócios | _pendente_ |
 | Quem entrega o token de ativação conhece o token e o e-mail e poderia ativar no lugar do fundador (B11, R3) | encarregado | _pendente_ |
 | O `--operador` do comando do suporte é declarado; a prova é o CloudTrail (B12) | encarregado | _pendente_ |
-| Clínica sem fundador criada na sessão de sistema sem trilha (G3 do parecer do #207). Risco baixo: a linha fica inerte (nenhum vínculo, nenhum dado pessoal) e quem consegue isso (`app_user`) já escreve em qualquer clínica. **Prazo: fechar em PR próprio antes da primeira clínica real** (recusa no `tenants_founder_guard` salvo `app_migrator`) | encarregado | _pendente_ |
+| Clínica criada à mão pelo `app_migrator` (único caminho sem fundador, 0081) não grava `tenant_create` na trilha (R2 do parecer do #208). **Antes da primeira clínica real:** toda criação manual por esse papel registra o chamado e o operador nominal (CloudTrail da tarefa de migração) | encarregado | _pendente_ |
 | O papel `app_provisionamento` pode abrir o contexto de qualquer clínica e ler `tenants`, `clinic_members` e `audit_log` dela (O1 do parecer do #207); não chega a paciente, prontuário nem financeiro. Portão: IAM da tarefa com duas pessoas e MFA | encarregado | _pendente_ |
 
 Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, B5).
@@ -110,3 +111,4 @@ Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, 
 |---|---|
 | 2026-11-06 | Rascunho (Maestro). |
 | 2026-11-08 | Ressalvas 2 a 6 do parecer do 3c parcial: base legal, §0, controles, prazo da credencial de conta inativa, egresso, suporte e ordem judicial. |
+| 2026-11-17 | G3 do parecer do #207 fechada pela 0081: sai do §8 o risco aceito "clínica sem fundador criada na sessão de sistema sem trilha"; o controle entra no §5a. |

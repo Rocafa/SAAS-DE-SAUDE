@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog, patients, tenants, type SubscriptionStatus } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
 import { recordAudit } from '../src/modules/audit/audit-log';
+import { criarClinicaSemFundador } from './apoio-clinica';
 import { ExitWindowClosedError, SubscriptionWriteBlockedError } from '../src/modules/exports/access-policy';
 import { EXPORT_AUDIT_SCOPE, EXPORT_SCHEMA_VERSION, exportTenantData } from '../src/modules/exports/tenant-export';
 import { createPatient, listPatients } from '../src/modules/patients/patients.repository';
@@ -37,10 +38,8 @@ async function seedTenant(
   const tenantId = randomUUID() as TenantId;
   const tag = tenantId.slice(0, 8);
   const patientNames = Array.from({ length: nPatients }, (_, i) => `Paciente Ficticio ${tag}-${i}`);
+  await criarClinicaSemFundador(tenantId, { displayName: `Clinica Ficticia ${tag}`, subscriptionStatus: status, cancelledAt });
   await withTenant(h.db, tenantId, async (tx) => {
-    await tx
-      .insert(tenants)
-      .values({ id: tenantId, displayName: `Clinica Ficticia ${tag}`, subscriptionStatus: status, cancelledAt });
     for (const displayName of patientNames) await tx.insert(patients).values({ tenantId, displayName });
   });
   return { ctx: ctxFor(tenantId), patientNames };
