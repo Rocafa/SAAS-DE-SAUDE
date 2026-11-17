@@ -109,7 +109,7 @@ describe('B12: emissão da recuperação do fator pelo suporte', () => {
     expect(prova).toHaveLength(1);
     expect(prova[0]?.tipo).toBe('sistema');
     expect(prova[0]?.ator).toBe(SYSTEM_ACTOR_ID);
-    expect(prova[0]?.meta).toEqual({ op: 'credential_recovery_issued', user_id: admin, kind: 'fator', reason: 'perdeu_o_aparelho', via: 'suporte', ticket: p.chamado });
+    expect(prova[0]?.meta).toEqual({ op: 'credential_recovery_issued', user_id: admin, kind: 'fator', reason: 'troca_de_aparelho', via: 'suporte', ticket: p.chamado });
     // Nenhum operador em nenhuma linha da trilha da clínica.
     const tudo = await withTenant(api.db.db, tenantId, (tx) => tx.execute(sql`select actor_id, metadata from audit_log where tenant_id = ${tenantId}`));
     expect(JSON.stringify([...tudo])).not.toContain(OPERADOR_FICTICIO);

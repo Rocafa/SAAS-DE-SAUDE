@@ -1097,7 +1097,7 @@ describe('B12: uso do token de recuperação do fator emitido pelo suporte (R2 d
     let token = '';
     await emitirRecuperacaoPeloSuporte(
       { dbAuth: dbAuth.db, dbClinica: api.db.db },
-      { clinicaId: tenantId, usuarioId: userId, chamado: 'SUP-77', operador: OPERADOR_FICTICIO, motivo: 'perdeu_o_aparelho', derrubarSessoes: false },
+      { clinicaId: tenantId, usuarioId: userId, chamado: 'SUP-77', operador: OPERADOR_FICTICIO, motivo: 'troca_de_aparelho', derrubarSessoes: false },
       (t) => Promise.resolve(void (token = t)),
     );
     return token;
