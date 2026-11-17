@@ -30,14 +30,9 @@ import { Botao } from '@/components/ui/botao';
 import { acharAcao } from '@/lib/ajudante/acoes';
 import { buscar, type Grupo, type Resultado } from '@/lib/ajudante/busca';
 import type { Artigo } from '@/lib/ajudante/catalogo';
+import { ehPerfilClinico } from '@/lib/prontuario';
 import { useDados } from './dados';
 import { useExecutor } from './executor';
-
-/** Interface pronta para um reconhecimento de voz LOCAL (no aparelho). Nenhum implementado ainda. */
-export interface ReconhecimentoVozLocal {
-  disponivel(): boolean;
-  ouvir(): Promise<string>;
-}
 
 const ICONE_GRUPO: Record<Grupo, typeof Zap> = {
   Fazer: Zap,
@@ -93,7 +88,14 @@ export function Ajudante() {
   }, []);
 
   const grupos = useMemo(
-    () => buscar(texto, { pacientes, agendamentos, agora: new Date(), papel: usuario?.papel ?? 'recepcao' }),
+    () =>
+      buscar(texto, {
+        pacientes,
+        agendamentos,
+        agora: new Date(),
+        // Quem atende (inclusive admin que é profissional) usa as ações clínicas; os demais, não.
+        papel: ehPerfilClinico(usuario) ? 'profissional' : (usuario?.papel ?? 'recepcao'),
+      }),
     [texto, pacientes, agendamentos, usuario],
   );
 

@@ -27,6 +27,8 @@ export const PAGINAS: ItemPagina[] = [
   { id: 'relatorios', titulo: 'Relatórios', rota: '/relatorios', grupo: 'Páginas', sinonimos: ['numeros', 'graficos', 'faltas', 'recebido'] },
   { id: 'ajuda', titulo: 'Ajuda', rota: '/ajuda', grupo: 'Páginas', sinonimos: ['como faco', 'duvida', 'suporte', 'manual'] },
   { id: 'mais', titulo: 'Mais opções', rota: '/mais', grupo: 'Páginas', sinonimos: ['menu', 'outros'] },
+  { id: 'configuracoes', titulo: 'Configurações', rota: '/configuracoes', grupo: 'Configurações', sinonimos: ['ajustes', 'opcoes', 'preferencias'] },
+  { id: 'primeiros-passos', titulo: 'Primeiros passos', rota: '/primeiros-passos', grupo: 'Páginas', sinonimos: ['comecar', 'configurar clinica', 'importar', 'migrar', 'sistema antigo'] },
   { id: 'cfg-clinica', titulo: 'Dados da clínica', rota: '/configuracoes/clinica', grupo: 'Configurações', sinonimos: ['endereco', 'cnpj', 'logo', 'clinica'] },
   { id: 'cfg-usuarios', titulo: 'Usuários e permissões', rota: '/configuracoes/usuarios', grupo: 'Configurações', sinonimos: ['equipe', 'senha', 'acesso', 'convidar', 'recepcionista'] },
   { id: 'cfg-horarios', titulo: 'Horários de atendimento', rota: '/configuracoes/horarios', grupo: 'Configurações', sinonimos: ['expediente', 'grade', 'folga', 'feriado'] },

@@ -9,9 +9,14 @@ export default function HomePage() {
         Gestão para clínicas e consultórios: agenda, prontuário, financeiro e muito mais, com LGPD desde o desenho.
       </p>
       <p className="text-texto-suave">Ambiente de demonstração, com pacientes fictícios.</p>
-      <Botao asChild tamanho="grande" className="self-start">
-        <Link href="/inicio">Abrir a demonstração</Link>
-      </Botao>
+      <div className="flex flex-wrap gap-3">
+        <Botao asChild tamanho="grande">
+          <Link href="/inicio">Abrir a demonstração</Link>
+        </Botao>
+        <Botao asChild tamanho="grande" variante="contorno">
+          <Link href="/entrar">Entrar</Link>
+        </Botao>
+      </div>
     </main>
   );
 }

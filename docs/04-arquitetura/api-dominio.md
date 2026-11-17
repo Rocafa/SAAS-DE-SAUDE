@@ -278,6 +278,7 @@ Nenhuma rota devolve conteúdo clínico: guia e pacote não guardam procedimento
 |---|---|---|
 | `POST /atendimentos` | profissional DO agendamento, com vínculo | `{agendamentoId, modelo?, consentimentoIa?}`; agendamento em chegou/em atendimento/atendido (senão 409 `agendamento_sem_chegada`); modelo padrão pela especialidade; **idempotente** (200 com o já aberto) |
 | `GET /atendimentos/:id` | clínico com vínculo | registro atual + adendos; psicologia restrita vem com `conteudoOculto: true, motivoOculto: 'sigilo_psicologia'` |
+| `GET /atendimentos/do-agendamento/:agendamentoId` | clínico com vínculo | `{ atendimento }` com o mesmo corpo do `GET /atendimentos/:id` (inclusive a `versao` para o `versaoBase`), ou `{ atendimento: null }` se o agendamento ainda não tem atendimento. Porteiro antes de dizer se existe; trilha de leitura também sem atendimento (#180) |
 | `PUT /atendimentos/:id/registro` | autor | `{conteudo, versaoBase}`; cada chamada = **versão nova** (serve ao salvamento automático); `versaoBase` diferente da atual: 409 `versao_desatualizada`; finalizado: 409 `registro_finalizado` |
 | `GET /atendimentos/:id/versoes` | clínico com vínculo que pode ver o conteúdo | todas as versões, da 1ª à atual |
 | `POST /atendimentos/:id/finalizar` | autor | exige os obrigatórios do modelo (409 `registro_incompleto` com `campos`); grava `signed_version` e `signed_hash` (SHA-256 do registro canônico com o conteúdo **cifrado**, `prontuario-regras.ts`); auditoria `sign` (evento "encounter_record_signed" da HU-PRO-007) |
@@ -925,3 +926,28 @@ Nossa equipe só acessa dados de uma clínica com chamado aberto por ela ([requi
 - **Ainda não feito (depende da D4):** a identidade do atendente do operador, a aprovação por duas pessoas do break-glass e o alerta ao dono da clínica quando houver break-glass.
 
 Testes: `test/autorizacao-suporte.rls.test.ts`.
+
+## 17. Política de MFA (issue #106, S3; regra 2 do memo da D4; requisitos de segurança §4)
+
+O provedor de login (D4) só informa **quando** o usuário passou pelo segundo fator (`AuthContext.mfaEm`). A obrigatoriedade é decidida pela API (`src/modules/auth/mfa.ts`), no `SessaoGuard`, antes de qualquer leitura:
+
+- **Obrigatório para todos os perfis** (B1 do [parecer](../03-seguranca-lgpd/revisoes/2026-11-03-mfa-politica.md)). Todos acessam dado C3/C4: a recepção vê CPF, agenda, menores e convênio, e opera o financeiro. Sem MFA a resposta é `403 mfa_obrigatorio`.
+- **MFA recente:** as rotas com `@ExigeMfaRecente(janela)` respondem `403 mfa_recente_obrigatorio` fora da janela da rota. O padrão é 15 min. A exportação total (G2) usa 5 min (`MFA_RECENTE_EXPORTACAO_MS`), como promete a cláusula 16.2 da minuta do DPA. MFA com data no futuro também é recusado. A lista fechada fica em `ROTAS_COM_MFA_RECENTE` (teste de cobertura): conteúdo clínico mais sensível e ações irreversíveis ou de alto impacto, 24 rotas hoje.
+- **A recusa numa rota sensível vai para a trilha** (B2), com escopo `mfa_denied` e só ids: o handler, o motivo e o id do alvo. É o caso típico de sessão roubada. A recusa em rota comum vai para a trilha com o provedor real.
+- **Prontuário: MFA recente só na psicologia** (R3). Ver, salvar, finalizar, pôr adendo ou ver versões de um atendimento do compartimento de psicologia exige MFA dos últimos 15 min. Sem ele, a resposta é `403 mfa_recente_obrigatorio`, auditado como acesso clínico negado. No histórico do paciente, esses atendimentos vêm com `conteudoOculto: true` e `motivoOculto: mfa_recente_obrigatorio`, e o resto continua visível. Nos demais registros, o MFA da sessão basta.
+- **Rotas de poder com MFA recente** (E8 da revisão interna de 04/11): janela do vínculo de cuidado, configuração do WhatsApp, cadastro de profissional, área sensível, configuração financeira e perfil fiscal. Também exigem MFA recente a revogação do sigilo do adolescente, a execução da retenção fiscal e o convite do portal. São 33 rotas no inventário `ROTAS_COM_MFA_RECENTE`, conferido pelo teste de cobertura. Desmarcar a área sensível gera o aviso `area_sensivel_desmarcada` (migração 0060), que leva só o id do profissional e vai para o próprio profissional e os outros admins ativos.
+- **Exportação total (G2) fora da regra de tela** (R12): o pacote lê as tabelas direto e não usa `mfaEm`. A psicologia sai inteira e marcada em `manifest.compartments` (G2 1.24.0). O MFA de 5 min fica na rota HTTP da G2, que ainda depende do provedor de e-mail, do armazenamento e do papel do RT.
+- **Sem inundar a trilha** (R9): na janela de 60 s grava 1 linha de recusa por usuário, rota e motivo. Acima de 20 recusas do usuário na janela, a resposta é `429 limite_de_recusas_mfa` e entra um único alerta `anomaly_alert` (`rule: mfa_recusas_por_usuario`). O contador fica no store do rate limit (Redis em produção), com chave em hash e sem id em claro.
+- **`GET /sessao`** devolve só `mfaRecenteAte` (R8, minimização), para o cliente saber se pede o código antes.
+- **Sessão fictícia** (dev/teste): nasce com MFA feito agora. Os testes de rota sensível passam `mfaEm` explícito. **Esse padrão não vale para o provedor real**: lá `mfaEm` vem só da sessão guardada no servidor, e sem informação vale `null` (R6, contrato da D4).
+- **Perfil revogado sai da sessão aberta** (E2 da revisão interna de 04/11): a cada requisição, o guard lê as linhas do usuário em `clinic_members` e aplica três regras. Se o usuário tem qualquer linha no banco, só ficam os perfis da sessão que estão ativos no banco. A qualificação `psicologo` não conta como perfil de sessão. Um desligado perde tudo. Usuário sem linha nenhuma fica como o provedor disse; essa transição acaba com o provedor real da D4, que lê os perfis só do banco. A negação sai no log de segurança com `motivo: perfil_revogado`.
+- **Contrato de todo provedor de sessão** (R6, `auth/contrato-provedor.test.ts`): sem credencial válida, adulterada ou depois do logout, o resultado é `null`. Clínica, usuário, perfis e `mfaEm` vêm só da sessão do servidor, e cabeçalhos forjados não mudam nada. Sem fator, `mfaEm === null`; com fator, uma data que não está no futuro. As sessões não se misturam. O registro de bancadas é tipado por `TIPOS_DE_PROVEDOR`, então um provedor novo na fábrica sem bancada não compila.
+- **Com o provedor real (D4, R5):** vão para a trilha os eventos do próprio fator (cadastro, verificação, falha, bloqueio após 5 falhas em 15 min, reset com justificativa e alerta ao admin) e as recusas em rotas comuns. Trocar de clínica, perfil ou senha reavalia o MFA.
+
+## 18. Consulta da trilha pela clínica (E10 da revisão interna de 04/11)
+
+- `GET /clinica/auditoria`: só admin (`auditoria:consultar`), com MFA recente.
+- Filtros: `pacienteId` (o `patient_id` gravado na linha), `usuarioId` (quem agiu), `de` e `ate` (`AAAA-MM-DD`, UTC, inclusivos) e `acao` (da lista de `AuditAction`).
+- Paginação: `limite` (1 a 100, padrão 50) e `cursor` (opaco, devolvido em `proximo`). A ordem é da mais nova para a mais antiga.
+- Devolve só o que a trilha já guarda: id, data, ação, escopo, ator, tipo de ator e metadata (o contrato da 0005 já limita a metadata a ids e códigos).
+- A própria consulta vai para a trilha (`read` `audit_trail`), com os filtros usados (só ids) e a contagem.

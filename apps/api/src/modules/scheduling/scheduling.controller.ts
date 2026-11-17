@@ -18,6 +18,7 @@ import {
   validarRemarcacao,
   validarStatus,
 } from './scheduling.validation';
+import { ExigeMfaRecente } from '../auth/mfa';
 
 /**
  * Agenda (semântica de listarAgendamentos/criarAgendamento/remarcarAgendamento/alterarStatus da
@@ -90,12 +91,14 @@ export class CadastrosAgendaController {
 
   @Post('profissionais')
   @Permissao('cadastros:gerir')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   criarProfissional(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ProfissionalDto> {
     return this.service.criarProfissional(paraRequestContext(auth), validarNovoProfissional(corpo));
   }
 
   @Post('profissionais/:id/area-sensivel')
   @Permissao('cadastros:gerir')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   marcarAreaSensivel(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ProfissionalDto> {
     return this.service.marcarAreaSensivel(paraRequestContext(auth), exigirUuid(id), validarAreaSensivel(corpo));
   }

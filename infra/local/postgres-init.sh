@@ -5,7 +5,13 @@ set -e
 psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<SQL
 CREATE ROLE app_migrator LOGIN PASSWORD '${POSTGRES_PASSWORD}';
 CREATE ROLE app_user LOGIN NOBYPASSRLS PASSWORD '${POSTGRES_PASSWORD}';
-GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO app_migrator, app_user;
+-- app_auth (D4): só a autenticação (Better Auth) usa; único com acesso ao schema identidade.
+CREATE ROLE app_auth LOGIN NOBYPASSRLS PASSWORD '${POSTGRES_PASSWORD}';
+GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO app_migrator, app_user, app_auth;
+CREATE SCHEMA identidade AUTHORIZATION app_migrator;
+REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
+GRANT USAGE ON SCHEMA identidade TO app_auth;
+GRANT USAGE ON SCHEMA public TO app_auth;
 GRANT ALL ON SCHEMA public TO app_migrator;
 GRANT USAGE ON SCHEMA public TO app_user;
 -- Sem objetos temporários: pg_temp vem antes de public no search_path, então uma tabela TEMP

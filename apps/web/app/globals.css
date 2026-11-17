@@ -114,3 +114,19 @@
     animation-duration: 0.01ms !important;
   }
 }
+
+/* Impressão de documentos: só a folha marcada com data-imprimir sai no papel. */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  [data-imprimir],
+  [data-imprimir] * {
+    visibility: visible !important;
+  }
+  [data-imprimir] {
+    position: absolute;
+    inset: 0;
+    border: 0 !important;
+  }
+}

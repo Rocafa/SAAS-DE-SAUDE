@@ -46,6 +46,9 @@ RBAC/MFA continuam valendo à parte.**
   Desde a 1.7.0 (migração 0015, B1/D1/D2 do parecer PR #63): `encounters[].confidentiality` (sigilo
   gravado na abertura), `patients[].legalHoldSince` (retenção legal) e `privateNotes[].custodyState`/
   `custodyDeadline` (notas sob guarda da clínica saem; descartadas nunca saem).
+  Desde a 1.24.0 (R12 do parecer do #123): `manifest.compartments` separa o prontuário por compartimento
+  (atendimentos, versões, adendos e ids). A psicologia sai **inteira** e marcada: a exportação não usa
+  `mfaEm`, então a regra de MFA recente da tela nunca oculta nada do pacote.
   Desde a 1.8.0 (migração 0017, R2/R12 do parecer PR #63): `legalHolds` (referência e motivo da
   retirada decifrados) e `noteCustodies`; `clinical_notices` fica fora (aviso interno, sem dado de paciente).
 - **G3** — toda exportação grava 1 linha em `audit_log` **na mesma transação** (sem auditoria,

@@ -44,6 +44,7 @@ jobs:
       POSTGRES_PASSWORD: ci-efemero
       DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
       DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_AUTH_URL: postgresql://app_auth:ci-efemero@localhost:5432/plataforma_saude
       BACKUP_ADMIN_URL: postgresql://postgres:ci-efemero@localhost:5432/plataforma_saude
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,6 +92,7 @@ jobs:
       POSTGRES_PASSWORD: ci-efemero
       DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
       DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_AUTH_URL: postgresql://app_auth:ci-efemero@localhost:5432/plataforma_saude
       API_PORT: '3333'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

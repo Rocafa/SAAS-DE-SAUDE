@@ -663,6 +663,21 @@ describe('adaptador HTTP: erros', () => {
     await expect(lento.listarProfissionais()).rejects.toThrow(MENSAGENS.demorou);
   });
 
+  it('o timeout também vale para a leitura do corpo', async () => {
+    const corpoQueNuncaChega = criarApiHttp({
+      baseUrl: BASE,
+      timeoutMs: 20,
+      fetch: ((_: unknown, init: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise((_r, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('abortado', 'AbortError')))),
+        })) as unknown as typeof fetch,
+    });
+    await expect(corpoQueNuncaChega.listarProfissionais()).rejects.toThrow(MENSAGENS.demorou);
+  }, 1000);
+
   it('o adaptador não tem console nem storage (sem log de dado pessoal)', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');

@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, UseGu
 import { exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
 import { CaixaService, type CaixaDto } from './caixa.service';
 import { FinanceiroService, type CobrancaDto, type ConfiguracaoDto, type RecebimentoDto } from './financeiro.service';
@@ -52,6 +53,7 @@ export class FinanceiroController {
 
   @Put('configuracao')
   @Permissao('financeiro:configurar')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   alterarConfiguracao(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ConfiguracaoDto> {
     return this.financeiro.alterarConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
   }
@@ -66,6 +68,7 @@ export class FinanceiroController {
 
   @Put('profissionais/:id/perfil-fiscal')
   @Permissao('financeiro:fiscal')
+  @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   alterarPerfilFiscal(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown) {
     const alvo = exigirUuid(id);
     return this.financeiro.alterarPerfilFiscal(paraRequestContext(auth), alvo, validarPerfilFiscal(corpo));
@@ -200,6 +203,7 @@ export class FinanceiroController {
    * financeiro; a recepção entrega a via de conferência ("não vale para IR"). Conta como ficha aberta (R5).
    */
   @Post('recibos/:id/via-oficial')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('recibos:emitir_via_oficial')
   async viaOficialRecibo(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ReciboDto> {
@@ -222,6 +226,7 @@ export class FinanceiroController {
 
   /** Insumo em lote do profissional PF no período (corpo: `{profissionalId, de, ate}`, ≤ 31 dias). */
   @Post('receita-saude/lotes')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('financeiro:fiscal')
   async loteReceitaSaude(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<LoteReceitaSaudeDto> {

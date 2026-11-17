@@ -87,12 +87,16 @@ function FormularioMarcar() {
     if (primeiroProf) setProfissionalId((atual) => (listas.profissionais.some((p) => p.id === atual) ? atual : primeiroProf));
     if (primeiroTipo) setTipoId((atual) => (listas.tipos.some((t) => t.id === atual) ? atual : primeiroTipo));
   }, [listas]);
+  // Depende do id, não do objeto: `original` sai de um `find` numa lista nova a cada atualização em
+  // segundo plano, e com `[original]` qualquer atualização devolvia os campos ao valor original,
+  // jogando fora o que a pessoa acabou de escolher.
+  const originalId = original?.id;
   useEffect(() => {
     if (!original) return;
     setPacienteId(original.pacienteId);
     setProfissionalId(original.profissionalId);
     setTipoId(original.tipoId);
-  }, [original]);
+  }, [originalId]);
 
   usePreenchimento('marcar-paciente', (v) => {
     setPacienteId(v);

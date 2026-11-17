@@ -16,6 +16,7 @@ import { rateLimitKey, type RateLimitStore } from '../../security/rate-limit-sto
 import { insertAudit } from '../audit/audit-log';
 import { VIGILANCIA_OPCOES, VIGILANCIA_STORE, type VigilanciaOpcoes } from '../patients/vigilancia-de-leitura';
 import { TenantDatabase } from '../tenancy/tenancy.module';
+import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../security/log-de-seguranca';
 
 export interface PortalLimites {
   readonly contaMax: number;
@@ -71,11 +72,12 @@ export class PortalVigilanciaService {
   ) {}
 
   /** Conta a chamada; acima do limite, alerta (uma vez por janela) na clínica do vínculo e lança 429. */
-  async requisicao(contaId: string, vinculoId: string | null): Promise<void> {
+  async requisicao(contaId: string, vinculoId: string | null, origem?: string): Promise<void> {
     const c = await this.contar(this.chave('req', contaId), this.limites.contaJanelaMs);
     if (!c || c.count <= this.limites.contaMax) return;
     if (c.count === this.limites.contaMax + 1) {
       this.logger.warn('ALERTA_ANOMALIA regra=portal_limite_por_conta');
+      registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_limite_por_conta', origem });
       if (vinculoId) {
         await this.alertar(contaId, vinculoId, {
           rule: 'portal_limite_por_conta',
@@ -92,20 +94,24 @@ export class PortalVigilanciaService {
    * Teto diário de pedidos do titular atingido (A3c do #68; quem conta é o banco). Grava UM anomaly_alert
    * por vínculo a cada 24 h (o contador do store só decide se já alertou) e lança 429.
    */
-  async tetoDePedidos(contaId: string, vinculoId: string, teto: number): Promise<never> {
+  async tetoDePedidos(contaId: string, vinculoId: string, teto: number, origem?: string): Promise<never> {
     const c = await this.contar(this.chave('pedidos-alerta', `${contaId}\u001f${vinculoId}`), 86_400_000);
     if (!c || c.count === 1) {
       this.logger.warn('ALERTA_ANOMALIA regra=portal_teto_diario_pedidos');
+      registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_teto_diario_pedidos', origem });
       await this.alertar(contaId, vinculoId, { rule: 'portal_teto_diario_pedidos', window_s: 86_400, threshold: teto, count: teto + 1 });
     }
     throw new LimiteDoPortalError(3600, 'limite_diario_de_pedidos');
   }
 
   /** Tentativa de resgate de convite (antes de qualquer consulta ao banco). */
-  async resgate(contaId: string): Promise<void> {
+  async resgate(contaId: string, origem?: string): Promise<void> {
     const c = await this.contar(this.chave('resgate', contaId), this.limites.resgateJanelaMs);
     if (!c || c.count <= this.limites.resgateMax) return;
-    if (c.count === this.limites.resgateMax + 1) this.logger.warn('ALERTA_ANOMALIA regra=portal_resgate');
+    if (c.count === this.limites.resgateMax + 1) {
+      this.logger.warn('ALERTA_ANOMALIA regra=portal_resgate');
+      registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'portal_resgate', origem });
+    }
     throw new LimiteDoPortalError(Math.max(1, Math.ceil(c.resetMs / 1000)));
   }
 
@@ -119,6 +125,7 @@ export class PortalVigilanciaService {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`RATE_LIMIT_FAIL_OPEN: contador do portal indisponível (${name}); chamada seguiu sem limite`);
+      registrarNoMaximoUmaVez('fail_open:portal', 60_000, 'RATE_LIMIT_FAIL_OPEN', { motivo: 'portal' });
       return undefined;
     }
   }
@@ -142,6 +149,7 @@ export class PortalVigilanciaService {
     } catch (err) {
       const name = err instanceof Error ? err.name : typeof err;
       this.logger.error(`ALERTA_ANOMALIA_NAO_GRAVADO regra=${metadata.rule} (${name})`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { regra: String(metadata.rule), motivo: 'alerta_de_anomalia' });
     }
   }
 }

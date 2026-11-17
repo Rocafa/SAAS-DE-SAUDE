@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { EntradaInvalidaError, exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { toCsv } from '../exports/csv';
 import { CAMPOS, OBRIGATORIOS, TERMO_MIGRACAO_VERSAO } from './importacao-regras';
 import { ImportacaoService, type LoteDto, type RecebidoDto, type RelatorioDto } from './importacao.service';
@@ -118,6 +119,7 @@ export class ImportacaoController {
   }
 
   @Post(':id/aplicar')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('importacao:gerir')
   aplicar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<LoteDto> {
@@ -127,6 +129,7 @@ export class ImportacaoController {
   }
 
   @Post(':id/desfazer')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('importacao:gerir')
   desfazer(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<LoteDto> {

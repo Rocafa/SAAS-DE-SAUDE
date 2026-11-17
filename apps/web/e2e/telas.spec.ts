@@ -1,8 +1,7 @@
-import { fileURLToPath } from 'node:url';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
 import { coresNaoCinza } from '../lib/cores.mjs';
+import { capturar, exigirModoFake } from './captura';
 
 const TELAS: [string, string][] = [
   ['inicio', '/inicio'],
@@ -15,10 +14,39 @@ const TELAS: [string, string][] = [
   ['agenda-profissional', '/agenda?ver=profissional'],
   ['lista-espera', '/agenda?ver=espera'],
   ['novo-paciente', '/pacientes/novo'],
-  ['em-construcao', '/financeiro'],
+  ['atendimento-recepcao', '/atendimento'],
+  ['documentos-vazio', '/documentos'],
+  ['prontuario-sigiloso', '/pacientes/p04/prontuario'],
+  ['financeiro', '/financeiro'],
+  ['recibos', '/financeiro/recibos'],
+  ['guias', '/guias'],
+  ['mensagens', '/mensagens'],
+  ['relatorios', '/relatorios'],
+  ['configuracoes', '/configuracoes'],
+  ['config-clinica', '/configuracoes/clinica'],
+  ['config-usuarios', '/configuracoes/usuarios'],
+  ['config-horarios', '/configuracoes/horarios'],
+  ['config-tipos', '/configuracoes/tipos'],
+  ['config-modelos', '/configuracoes/modelos'],
+  ['config-privacidade', '/configuracoes/privacidade'],
+  ['config-plano', '/configuracoes/plano'],
+  ['primeiros-passos', '/primeiros-passos'],
+  ['ajuda', '/ajuda'],
+  ['entrar', '/entrar'],
+  ['esqueci-senha', '/esqueci-senha'],
+  ['convite', '/convite'],
+  ['escolher-clinica', '/escolher-clinica'],
+  ['sessao-expirada', '/sessao-expirada'],
+  ['portal-entrar', '/portal/entrar'],
+  ['portal-consultas', '/portal'],
+  ['portal-documentos', '/portal/documentos'],
+  ['portal-dados', '/portal/dados'],
+  ['portal-direitos', '/portal/direitos'],
+  ['portal-convite', '/portal/convite'],
+  ['sem-conexao', '/offline'],
+  ['pagina-404', '/nao-existe-esta-pagina'],
 ];
 
-const PASTA = fileURLToPath(new URL('../../../docs/02-produto/telas/', import.meta.url));
 
 /** Lê as cores CALCULADAS de todos os elementos da tela e devolve as que não são cinza. */
 async function coresRenderizadas(page: Page): Promise<string[]> {
@@ -43,6 +71,15 @@ async function axe(page: Page) {
 }
 
 test.describe('telas do PR 1', () => {
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await exigirModoFake(page);
+    } finally {
+      await page.close();
+    }
+  });
+
   for (const [nome, rota] of TELAS) {
     test(`${nome}: acessível, só cinza, letra de 18 px e captura`, async ({ page }, info) => {
       await page.goto(rota);
@@ -63,8 +100,7 @@ test.describe('telas do PR 1', () => {
       );
       expect(pequenos).toEqual([]);
 
-      mkdirSync(PASTA, { recursive: true });
-      await page.screenshot({ path: `${PASTA}${info.project.name}-${nome}.png`, fullPage: true });
+      await capturar(page, info, nome);
     });
   }
 
@@ -75,7 +111,7 @@ test.describe('telas do PR 1', () => {
     await page.waitForLoadState('networkidle');
     expect(await axe(page)).toEqual([]);
     expect(await coresRenderizadas(page)).toEqual([]);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-inicio-escuro.png`, fullPage: true });
+    await capturar(page, info, 'inicio-escuro');
   });
 
   test('Ajudante aberto: acessível e só cinza', async ({ page }, info) => {
@@ -85,7 +121,7 @@ test.describe('telas do PR 1', () => {
     await expect(page.getByRole('option').first()).toBeVisible();
     expect(await axe(page)).toEqual([]);
     expect(await coresRenderizadas(page)).toEqual([]);
-    await page.screenshot({ path: `${PASTA}${info.project.name}-ajudante.png` });
+    await capturar(page, info, 'ajudante', { fullPage: false });
   });
 
   test('estado de erro tem "Tentar de novo"', async ({ page }) => {

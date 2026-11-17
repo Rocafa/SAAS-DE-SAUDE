@@ -7,4 +7,9 @@ export interface RequestContext {
   readonly roles: readonly string[];
   /** Finalidade declarada do acesso — registrada na auditoria. */
   readonly purpose?: string;
+  /**
+   * Quando o usuário passou pelo segundo fator nesta sessão (null = não passou; ausente = contexto sem sessão, como
+   * os jobs). Usado onde o MFA recente depende do REGISTRO, e não da rota (R3 do parecer do #123: psicologia).
+   */
+  readonly mfaEm?: Date | null;
 }

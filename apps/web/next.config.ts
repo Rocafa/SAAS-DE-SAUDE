@@ -75,11 +75,52 @@ export function securityHeaders(env: NodeJS.ProcessEnv = process.env): { key: st
   ];
 }
 
+/**
+ * Portal do paciente em modo http só em desenvolvimento até a D4 (`lib/api/portal-selecionar.ts` recusa
+ * igual). Em build de produção, nem o modo http nem a sessão fictícia (`ptl_…`) podem ir para o bundle.
+ */
+export function conferirConfigPortal(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') return;
+  if ((env.NEXT_PUBLIC_PORTAL_MODO?.trim() || 'fake') !== 'fake') {
+    throw new Error('NEXT_PUBLIC_PORTAL_MODO=http só em desenvolvimento até a D4 (login real do portal)');
+  }
+  if (env.NEXT_PUBLIC_PORTAL_SESSAO_DEV?.trim()) {
+    throw new Error('NEXT_PUBLIC_PORTAL_SESSAO_DEV é só de desenvolvimento: não pode entrar em build de produção');
+  }
+}
+
+/**
+ * Mesma trava para o lado da CLÍNICA: enquanto a D4 (login real) não existe, o fluxo de `/entrar` é
+ * simulado — qualquer e-mail entra, com código fixo. Build de produção apontado para a API real com
+ * essa tela de acesso não pode sair.
+ */
+export function conferirConfigClinica(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') return;
+  if ((env.NEXT_PUBLIC_API_MODO?.trim() || 'fake') !== 'fake') {
+    throw new Error('NEXT_PUBLIC_API_MODO=http só em desenvolvimento até a D4 (login real da clínica)');
+  }
+}
+
+conferirConfigPortal();
+conferirConfigClinica();
+
+/**
+ * Identificação do build, usada no `?v=` com que o service worker é registrado. O CI pode passar o SHA
+ * do commit em `NEXT_PUBLIC_BUILD_ID`; sem isso, cada build gera a sua.
+ */
+const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID?.trim() || `b${Date.now().toString(36)}`;
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
+  generateBuildId: () => BUILD_ID,
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders() }];
+    return [
+      { source: '/:path*', headers: securityHeaders() },
+      // Convite do portal: o token vem no #fragmento; nenhum Referer sai desta página (P4).
+      { source: '/portal/convite', headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] },
+    ];
   },
 };
 

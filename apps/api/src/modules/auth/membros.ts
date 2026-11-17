@@ -35,6 +35,7 @@ import { avisarDemaisAdmins } from '../records/avisos';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { paraRequestContext, type AuthContext } from './auth-context';
 import { Permissao, Sessao, SessaoGuard } from './sessao.guard';
+import { ExigeMfaRecente } from './mfa';
 
 const SCOPE = 'clinic_members';
 
@@ -216,6 +217,7 @@ export class MembrosController {
   }
 
   @Post()
+  @ExigeMfaRecente()
   @Permissao('cadastros:gerir')
   conceder(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<MembroDto> {
     const v = new Validador(exigirObjeto(corpo, ['usuarioId', 'perfil']));
@@ -226,6 +228,7 @@ export class MembrosController {
   }
 
   @Delete(':usuarioId/:perfil')
+  @ExigeMfaRecente()
   @HttpCode(204)
   @Permissao('cadastros:gerir')
   revogar(@Sessao() auth: AuthContext, @Param('usuarioId') usuarioId: string, @Param('perfil') perfil: string): Promise<void> {

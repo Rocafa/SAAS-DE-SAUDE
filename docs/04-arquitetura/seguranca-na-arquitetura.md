@@ -31,9 +31,9 @@ CREATE POLICY tenant_isolation ON patient
 ## 2. Controle de acesso
 
 - **RBAC** por tenant + **ABAC** para prontuário (profissional responsável, equipe do atendimento, compartilhamento explícito).
-- **MFA obrigatório** para usuários com acesso clínico ou financeiro; WebAuthn/passkeys suportados.
-- Sessões: cookie `HttpOnly`, `Secure`, `SameSite=Lax`; access token curto (≤ 15 min) + refresh rotativo com detecção de reuso.
-- Senhas com Argon2id; bloqueio progressivo e detecção de credenciais vazadas.
+- **MFA obrigatório para todos os perfis** (#123), com código recente (15 min; 5 min na exportação) nas ações sensíveis e na psicologia. O TOTP vem no PR 2 da D4, e passkeys ficam para depois.
+- **Sessões (D4, Better Auth; aval do Guardião em 05/11):** sessão opaca guardada no servidor (schema `identidade`, papel `app_auth`), com cookie `__Host-sessao`, `HttpOnly`, `Secure` e `SameSite=Strict`. Expira com **15 min sem uso**, tem **prazo absoluto de 12 h** e é revogável na hora: logout, conta desligada e perfil revogado valem na próxima requisição. **Isso substitui o "access token curto + refresh rotativo com detecção de reuso"**: sem refresh token, não há o que reusar. Token entre serviços só quando houver um segundo serviço. Ver [autenticacao-better-auth.md](autenticacao-better-auth.md).
+- **Senhas com scrypt** (N=2^16, r=8, p=2, um dos mínimos da OWASP), com hash nosso no lugar do padrão da biblioteca, que é mais fraco. A troca de Argon2id por scrypt evita uma dependência nativa a mais. Bloqueio de 5 tentativas em 15 min no Redis e detecção de senha vazada entram no PR 2 da D4.
 - Acesso de suporte da empresa a dados de cliente: somente com autorização do tenant, tempo limitado, registrado em auditoria e visível para a clínica.
 
 ## 3. Criptografia

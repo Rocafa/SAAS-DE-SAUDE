@@ -27,6 +27,8 @@ import {
   professionals,
   sessionPackages,
   tenants,
+  RECORD_COMPARTMENTS,
+  type RecordCompartment,
   type SubscriptionStatus,
 } from '../../db/schema';
 import { withTenant, type Database, type TenantTx } from '../../db/tenant-transaction';
@@ -124,8 +126,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  *        atendimento do prontuário onde o pedido de sigilo foi registrado; só o id).
  * 1.23.0: `supportAccessGrants` (migração 0059, S9: autorizações de acesso do suporte dadas pela clínica; chamado,
  *        quem e quando autorizou/revogou, prazo), com a contagem em `manifest.counts.supportAccessGrants`.
+ * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
+ *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
+ *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
  */
-export const EXPORT_SCHEMA_VERSION = '1.23.0';
+export const EXPORT_SCHEMA_VERSION = '1.24.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -207,7 +212,7 @@ export const EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   portal_birth_date_changes: 'marca interna e transitória "a data de nascimento mudou nesta transação" (0038); apagada no mesmo COMMIT (só guarda, durante a transação, a cifra anterior e os valores de antes do recálculo: 0039)',
   whatsapp_phone_keys: 'chave interna (cifrada) do HMAC de comparação de número; os números saem decifrados no pacote',
   clinical_notices:
-    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção, transição do sigilo do portal), sem dado de paciente além do id; o fato está em audit_log, clinic_members, legal_holds e portal_links, que saem no pacote',
+    'caixa de avisos interna ao usuário (troca de sigilo, perfil alterado, retirada de retenção, transição do sigilo do portal, área sensível desmarcada, alerta de anomalia), sem dado de paciente além do id; o fato está em audit_log, clinic_members, legal_holds, portal_links e professionals, que saem no pacote',
   import_raw_files:
     'arquivo bruto da importação (0024): cópia transitória e cifrada do que a própria clínica enviou, vive no máximo 7 dias e some ao aplicar (MIG-02.4); exportá-lo esticaria a vida dele. O resultado sai em patients/appointments e a evidência do descarte em import_batches',
   patient_cpf_index_keys:
@@ -277,8 +282,47 @@ export interface ExportManifest {
    * trilha DEPOIS e aparece no próximo pacote.
    */
   readonly auditChain: { readonly head: ChainAnchor | null; readonly legacy: number };
+  /**
+   * G2: as seções do prontuário por compartimento. A psicologia sai completa e marcada aqui (a regra de MFA
+   * recente da tela não se aplica ao pacote). Tipado pelo enum: compartimento novo aparece sem passo extra.
+   */
+  readonly compartments: Readonly<Record<RecordCompartment, CompartmentSection>>;
   readonly files: typeof EXPORT_FILES;
   readonly encoding: 'utf-8';
+}
+
+/** Uma seção do prontuário no manifesto: quantos itens do compartimento estão no pacote e quais atendimentos. */
+export interface CompartmentSection {
+  readonly encounters: number;
+  readonly clinicalRecordVersions: number;
+  readonly clinicalAddenda: number;
+  readonly encounterIds: readonly string[];
+}
+
+/** Agrupa atendimentos, versões e adendos do pacote por compartimento (G2, R12 do parecer do #123). */
+export function secoesPorCompartimento(
+  ats: readonly Pick<ExportedEncounter, 'id' | 'compartment'>[],
+  versoes: readonly Pick<ExportedClinicalRecordVersion, 'encounterId'>[],
+  adendos: readonly Pick<ExportedClinicalAddendum, 'encounterId'>[],
+): Record<RecordCompartment, CompartmentSection> {
+  const doAtendimento = new Map(ats.map((a) => [a.id, a.compartment]));
+  const secoes = {} as Record<RecordCompartment, CompartmentSection>;
+  for (const c of RECORD_COMPARTMENTS) {
+    const ids = ats.filter((a) => a.compartment === c).map((a) => a.id);
+    secoes[c] = {
+      encounters: ids.length,
+      clinicalRecordVersions: versoes.filter((v) => doAtendimento.get(v.encounterId) === c).length,
+      clinicalAddenda: adendos.filter((d) => doAtendimento.get(d.encounterId) === c).length,
+      encounterIds: ids,
+    };
+  }
+  // Item com compartimento fora do enum (ou versão órfã) não pode sumir do manifesto em silêncio.
+  const contados = RECORD_COMPARTMENTS.reduce((n, c) => n + secoes[c].encounters, 0);
+  if (contados !== ats.length) throw new Error('atendimento com compartimento desconhecido na exportação');
+  if (versoes.some((v) => !doAtendimento.has(v.encounterId)) || adendos.some((d) => !doAtendimento.has(d.encounterId))) {
+    throw new Error('versão ou adendo sem atendimento na exportação');
+  }
+  return secoes;
 }
 
 export interface ExportedPatient {
@@ -725,13 +769,10 @@ export async function exportInTransaction(
       .orderBy(asc(packageProfessionalChanges.changedAt), asc(packageProfessionalChanges.id)),
   );
   const settingsRows = doTenant(await tx.select().from(clinicalSettings).where(eq(clinicalSettings.tenantId, ctx.tenantId)));
-  const encounterRows = doTenant(
-    await tx
-      .select()
-      .from(encounters)
-      .where(eq(encounters.tenantId, ctx.tenantId))
-      .orderBy(asc(encounters.openedAt), asc(encounters.id)),
-  );
+  // ORDEM DAS LEITURAS (B1 do parecer do #126): versões e adendos ANTES dos atendimentos. A trilha exige
+  // READ COMMITTED (0005), então cada comando vê um instante próprio; atendimento nunca é apagado, logo toda
+  // versão ou adendo lido antes tem o atendimento lido depois. Na ordem inversa, um atendimento aberto entre
+  // as leituras deixaria versão "órfã" e a falha fechada de `secoesPorCompartimento` derrubaria a G2.
   const versionRows = doTenant(
     await tx
       .select()
@@ -745,6 +786,13 @@ export async function exportInTransaction(
       .from(clinicalAddenda)
       .where(eq(clinicalAddenda.tenantId, ctx.tenantId))
       .orderBy(asc(clinicalAddenda.createdAt), asc(clinicalAddenda.id)),
+  );
+  const encounterRows = doTenant(
+    await tx
+      .select()
+      .from(encounters)
+      .where(eq(encounters.tenantId, ctx.tenantId))
+      .orderBy(asc(encounters.openedAt), asc(encounters.id)),
   );
   const noteRows = doTenant(
     await tx
@@ -1177,6 +1225,7 @@ export async function exportInTransaction(
       auditEvents: auditEvents.length,
     },
     auditChain: { head: auditHead, legacy: auditEvents.filter((e) => e.seq === null).length },
+    compartments: secoesPorCompartimento(exportedEncounters, exportedVersions, exportedAddenda),
     files: EXPORT_FILES,
     encoding: 'utf-8',
   };
@@ -1269,7 +1318,11 @@ export async function exportInTransaction(
   };
 }
 
-/** G2: exportação total, sem custo; inadimplente sempre, cancelado só dentro da janela de saída. */
+/**
+ * G2: exportação total, sem custo; inadimplente sempre, cancelado só dentro da janela de saída.
+ * Só para testes e scripts: NÃO registra a falha na trilha. A aplicação usa `ExportsService.exportTenantData`
+ * (R1 do parecer do #127; um teste reprova import desta função em `src`).
+ */
 export function exportTenantData(
   db: Database,
   ctx: RequestContext,

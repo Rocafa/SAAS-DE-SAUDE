@@ -82,6 +82,7 @@ import {
   vinculoParaPortal,
 } from './portal-respostas';
 import { PortalVigilanciaService } from './portal-vigilancia';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 
 /** Contexto do titular, resolvido NO SERVIDOR (sessão + banco). Nada daqui vem do cliente. */
 export interface ContextoPortal {
@@ -149,7 +150,7 @@ export class PortalService {
   // ------------------------------------------------------------ sessão e vínculos
 
   async vinculos(sessao: SessaoDoPortal): Promise<RespostaPortal<'GET /portal/vinculos'>> {
-    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId, sessao.origem);
     const ids = await this.vinculosDaConta(sessao.contaId);
     const itens: VinculoDaConta[] = [];
     for (const id of ids) {
@@ -172,7 +173,7 @@ export class PortalService {
 
   /** Escolha da clínica/paciente NA SESSÃO do servidor (nunca por cabeçalho). */
   async escolherVinculo(sessao: SessaoDoPortal, req: RequisicaoParaSessao, vinculoId: string): Promise<RespostaPortal<'POST /portal/sessao/vinculo'>> {
-    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, sessao.vinculoId, sessao.origem);
     if (!(await this.vinculosDaConta(sessao.contaId)).includes(vinculoId)) throw new NaoEncontradoError();
     const dto = await this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
       const ctx = await this.contexto(tx, sessao.contaId, vinculoId);
@@ -184,9 +185,14 @@ export class PortalService {
     return dto;
   }
 
+  /**
+   * Saudação da sessão (nome da clínica e primeiro nome do paciente). Grava a leitura na trilha (R1 do parecer de
+   * 03/11 sobre o #119): quando quem entra é o responsável, o nome do paciente vai para um terceiro.
+   */
   sessaoAtual(sessao: SessaoDoPortal, req: RequisicaoParaSessao): Promise<RespostaPortal<'GET /portal/sessao'>> {
     return this.noVinculo(sessao, req, async (tx, ctx) => {
       const d = await this.dadosDaSaudacao(tx, ctx);
+      await this.auditar(tx, ctx, { action: AuditAction.Read, scope: 'portal_session', metadata: { op: 'session_greeting', link_id: ctx.vinculoId } });
       return vinculoParaPortal(ctx.vinculoId, d.clinica, d.primeiroNome, ctx.agindoComo);
     });
   }
@@ -196,8 +202,9 @@ export class PortalService {
    * único ao telefone DO CADASTRO do paciente (destino nunca informado por quem resgata). Devolve só o canal
    * e o destino mascarado. Falha sempre igual (409 convite_invalido), inclusive paciente sem telefone.
    */
-  async iniciarResgate(sessao: SessaoDoPortal, token: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
-    await this.vigilancia.resgate(sessao.contaId);
+  /** `origem`: HMAC do IP (log de segurança, R7 do parecer do #129); nunca o IP. */
+  async iniciarResgate(sessao: SessaoDoPortal, token: string, origem?: string): Promise<RespostaPortal<'POST /portal/convites/resgate'>> {
+    await this.vigilancia.resgate(sessao.contaId, origem ?? sessao.origem);
     if (!TOKEN_CONVITE_RE.test(token)) throw new ConflitoError('convite_invalido');
     const codigo = novoCodigoOtp();
     const telefone = await this.db.semContextoDoPortal(async (tx) => {
@@ -223,6 +230,7 @@ export class PortalService {
     });
     if (!telefone) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO', { origem });
       throw new ConflitoError('convite_invalido');
     }
     await this.otp.enviar({ canal: 'sms', valor: telefone }, codigo);
@@ -235,8 +243,9 @@ export class PortalService {
     req: RequisicaoParaSessao,
     token: string,
     codigo: string,
+    origem?: string,
   ): Promise<RespostaPortal<'POST /portal/convites/resgate/confirmar'>> {
-    await this.vigilancia.resgate(sessao.contaId);
+    await this.vigilancia.resgate(sessao.contaId, origem ?? sessao.origem);
     if (!TOKEN_CONVITE_RE.test(token) || !OTP_CODIGO_RE.test(codigo)) throw new ConflitoError('convite_invalido');
     const vinculo = await this.db.semContextoDoPortal(async (tx) => {
       const r = await tx.execute<{ v: string | null }>(
@@ -246,6 +255,7 @@ export class PortalService {
     });
     if (!vinculo) {
       this.logger.warn('PORTAL_RESGATE_RECUSADO');
+      registrarEventoDeSeguranca('PORTAL_RESGATE_RECUSADO', { origem });
       throw new ConflitoError('convite_invalido');
     }
     await this.provider.escolherVinculo(req, vinculo);
@@ -451,7 +461,7 @@ export class PortalService {
       if (e instanceof TetoDePedidosError) teto = { vinculoId: e.vinculoId };
       else throw e;
     }
-    if (teto) return this.vigilancia.tetoDePedidos(sessao.contaId, teto.vinculoId, TETO_DIARIO_PEDIDOS);
+    if (teto) return this.vigilancia.tetoDePedidos(sessao.contaId, teto.vinculoId, TETO_DIARIO_PEDIDOS, sessao.origem);
     const { dto, tenantId } = aberto as { dto: PedidoPortalDto; tenantId: TenantId };
     // Aviso aos admins numa transação de SISTEMA da clínica (o portal não vê a equipe). O pedido já está
     // gravado: se o aviso falhar, fica o log e a lista de pedidos abertos da clínica.
@@ -466,6 +476,7 @@ export class PortalService {
       });
     } catch (err) {
       this.logger.error(`AVISO_PEDIDO_TITULAR_NAO_GRAVADO (${err instanceof Error ? err.name : typeof err})`);
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'aviso_pedido_titular' });
     }
     return dto;
   }
@@ -621,6 +632,9 @@ export class PortalService {
   /**
    * Abre a transação do portal no vínculo da sessão. Sem vínculo escolhido: com um só, escolhe; com
    * vários, 409 `escolher_vinculo`; com nenhum, 409 `sem_vinculo`. Vínculo revogado: 403 `vinculo_inativo`.
+   * A escolha automática grava `select_link` com `auto: true` na mesma transação da ação, e a sessão só guarda o
+   * vínculo depois que ela confirma (R1 do parecer de 03/11 sobre o #119: abrir o contexto do paciente sempre deixa
+   * registro).
    * Leitura respeita a janela de saída da clínica (G4); conta no limite por conta.
    */
   private async noVinculo<T>(
@@ -629,23 +643,37 @@ export class PortalService {
     fn: (tx: TenantTx, ctx: ContextoPortal) => Promise<T>,
   ): Promise<T> {
     let vinculoId = sessao.vinculoId;
-    await this.vigilancia.requisicao(sessao.contaId, vinculoId);
+    await this.vigilancia.requisicao(sessao.contaId, vinculoId, sessao.origem);
+    let automatico = false;
     if (!vinculoId) {
       const ids = await this.vinculosDaConta(sessao.contaId);
       if (ids.length === 0) throw new ConflitoError('sem_vinculo');
       if (ids.length > 1) throw new ConflitoError('escolher_vinculo');
       vinculoId = ids[0] as string;
-      await this.provider.escolherVinculo(req, vinculoId);
+      automatico = true;
     }
     let aberta = false;
     try {
-      return await comPoliticaDeAssinatura(this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
+      const r = await comPoliticaDeAssinatura(this.db.runPortal(sessao.contaId, vinculoId, async (tx) => {
         aberta = true;
         const ctx = await this.contexto(tx, sessao.contaId, vinculoId);
         const t = await loadTenantSubscription(tx, ctx.tenantId);
         if (!canRead(t.status, t.cancelledAt, new Date(), EXIT_WINDOW_DAYS)) throw new ExitWindowClosedError();
+        if (automatico) {
+          await this.auditar(tx, ctx, { action: AuditAction.Login, scope: 'portal_session', metadata: { op: 'select_link', link_id: vinculoId, auto: true } });
+        }
         return fn(tx, ctx);
       }));
+      if (automatico) {
+        // Melhor esforço (R7 do parecer de 03/11 sobre o #119): a ação já foi gravada; falhar aqui daria 500 e o
+        // paciente repetiria (pedido do titular em dobro). Sem guardar, a próxima requisição escolhe e grava de novo.
+        try {
+          await this.provider.escolherVinculo(req, vinculoId);
+        } catch (err) {
+          this.logger.warn(`PORTAL_VINCULO_NAO_GUARDADO_NA_SESSAO (${err instanceof Error ? err.name : typeof err})`);
+        }
+      }
+      return r;
     } catch (e) {
       if (!aberta && codigoPg(e) === PG_INSUFFICIENT_PRIVILEGE) throw new ProibidoError('vinculo_inativo');
       throw e;

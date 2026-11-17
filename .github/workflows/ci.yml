@@ -76,6 +76,7 @@ jobs:
       POSTGRES_PASSWORD: ci-efemero
       DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
       DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
+      DATABASE_AUTH_URL: postgresql://app_auth:ci-efemero@localhost:5432/plataforma_saude
       # Só o teste dos operadores nominais (O-R17b, 0047) usa: cria/remove papéis LOGIN membros de app_migrator,
       # como o usuário mestre faz no RDS. Container efêmero, senha descartável.
       DATABASE_ADMIN_URL: postgresql://postgres:ci-efemero@localhost:5432/plataforma_saude

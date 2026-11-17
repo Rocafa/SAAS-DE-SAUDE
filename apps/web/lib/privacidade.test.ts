@@ -37,3 +37,40 @@ describe('privacidade do Ajudante', () => {
     expect(busca).not.toMatch(/from ['"](axios|ky|ofetch|node:http)/);
   });
 });
+
+/**
+ * As telas da clínica mostram prontuário, CPF e nome de paciente. O portal já tem varredura própria
+ * (lib/portal.test.ts); esta é a rede de proteção do lado da equipe, para o primeiro `console.log` de
+ * depuração numa tela de prontuário não passar no CI.
+ */
+const TELAS_DA_CLINICA = (function listar(dir: string): string[] {
+  return readdirSync(join(raiz, dir), { withFileTypes: true }).flatMap((e) => {
+    const caminho = `${dir}/${e.name}`;
+    if (e.isDirectory()) return listar(caminho);
+    if (!/\.tsx?$/.test(e.name) || /\.test\.tsx?$/.test(e.name)) return [];
+    return [caminho];
+  });
+})('app/(app)').concat(
+  readdirSync(join(raiz, 'components/app'))
+    .filter((f) => /\.tsx$/.test(f) && !f.endsWith('.test.tsx'))
+    .map((f) => `components/app/${f}`),
+  ['lib/api/fake.ts'],
+);
+
+const PROIBIDO_NAS_TELAS: [RegExp, string][] = [
+  [/\bconsole\./, 'console'],
+  [/localStorage|sessionStorage|indexedDB|document\.cookie/, 'armazenamento do navegador'],
+  [/gtag|dataLayer|posthog|analytics|sentry/i, 'analytics'],
+  [/dangerouslySetInnerHTML|\.innerHTML/, 'HTML cru'],
+];
+
+describe('privacidade das telas da clínica', () => {
+  it('a varredura cobre as telas e os componentes do app', () => {
+    expect(TELAS_DA_CLINICA.length).toBeGreaterThan(20);
+  });
+
+  it.each(TELAS_DA_CLINICA)('%s não registra, guarda nem injeta HTML', (arquivo) => {
+    const codigo = readFileSync(join(raiz, arquivo), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+    for (const [re, motivo] of PROIBIDO_NAS_TELAS) expect(re.test(codigo), `${arquivo}: ${motivo}`).toBe(false);
+  });
+});

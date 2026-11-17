@@ -20,6 +20,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { validarCorpoVazio } from './financeiro.validation';
@@ -109,6 +110,7 @@ export class RetencaoFiscalController {
   @Post('execucao')
   @HttpCode(200)
   @Permissao('financeiro:configurar')
+  @ExigeMfaRecente() // E8 (parecer do #131): rota de poder
   executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ResultadoDaRetencaoFiscal> {
     validarCorpoVazio(corpo);
     return this.service.executar(paraRequestContext(auth));

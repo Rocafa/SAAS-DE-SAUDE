@@ -38,6 +38,8 @@ import {
   type NovoProfissional,
   type NovoTipoAtendimento,
 } from './scheduling.validation';
+import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
+import { avisarAdminsDeAnomalia, avisarAreaSensivelDesmarcada } from '../records/avisos';
 
 export interface AgendamentoDto {
   readonly id: string;
@@ -202,9 +204,12 @@ export class SchedulingService {
         patient_id: linha.patientId,
         walk_in: linha.isWalkIn,
         self_scheduled: profissional.userId === ctx.userId,
+        // R6 do parecer do #61 / E12 de 04/11: o perfil de quem criou (o alerta de vínculo cruzado olha isto).
+        creator_role: papelDoCriador(ctx.roles),
         ...(importBatchId ? { import_batch_id: importBatchId } : {}),
       },
     });
+    if (!importBatchId) await this.alertarVinculoCruzado(tx, ctx, linha.id, profissional, 'create');
     return paraDto(linha);
   }
 
@@ -244,7 +249,7 @@ export class SchedulingService {
         .set({ startsAt: inicio, endsAt: fim, rescheduledBy: ctx.userId, updatedAt: new Date() })
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
       const [profissional] = await tx
-        .select({ userId: professionals.userId })
+        .select({ id: professionals.id, userId: professionals.userId })
         .from(professionals)
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, atual.professionalId)));
       await recordAudit(tx, ctx, {
@@ -252,6 +257,8 @@ export class SchedulingService {
         scope: SCOPE,
         metadata: { appointment_id: id, op: 'reschedule', self_rescheduled: profissional?.userId === ctx.userId },
       });
+      // R4 do parecer do #134: remarcar para hoje também reabre a leitura do colega.
+      if (profissional) await this.alertarVinculoCruzado(tx, ctx, id, profissional, 'reschedule');
       return noFusoDaClinica(atual.startsAt);
     });
   }
@@ -379,13 +386,25 @@ export class SchedulingService {
    */
   marcarAreaSensivel(ctx: RequestContext, id: string, areaSensivel: boolean): Promise<ProfissionalDto> {
     return this.escrita(ctx, async (tx) => {
+      const [antes] = await tx
+        .select({ sensitiveArea: professionals.sensitiveArea })
+        .from(professionals)
+        .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
+        .for('update');
+      if (!antes) throw new NaoEncontradoError();
       const [p] = await tx
         .update(professionals)
         .set({ sensitiveArea: areaSensivel })
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, id)))
         .returning();
       if (!p) throw new NaoEncontradoError();
-      await recordAudit(tx, ctx, { action: AuditAction.Update, scope: 'professionals', metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea } });
+      // E8 de 04/11 (0060): desmarcar tira o MFA recente e o sigilo do profissional; avisa ele e os outros admins.
+      const avisados = antes.sensitiveArea && !p.sensitiveArea ? await avisarAreaSensivelDesmarcada(tx, ctx, p.id, p.userId) : 0;
+      await recordAudit(tx, ctx, {
+        action: AuditAction.Update,
+        scope: 'professionals',
+        metadata: { professional_id: id, op: 'sensitive_area', sensitive_area: p.sensitiveArea, notified: avisados },
+      });
       return this.profissionalDto(p);
     });
   }
@@ -415,6 +434,30 @@ export class SchedulingService {
       await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'appointment_types', metadata: { type_id: t.id } });
       return { id: t.id, nome: t.name, minutos: t.durationMinutes, capacidade: t.capacity };
     });
+  }
+
+  /**
+   * E12 de 04/11 (R6 do #61, parecer do #134): quem não cuida da agenda (sem recepção nem admin na sessão, que o guard
+   * já filtrou pelo banco) cria ou remarca agendamento de OUTRO profissional: o colega ganha leitura do prontuário do
+   * paciente (`agenda_do_dia`) na hora. Alerta na trilha (mesma transação) e no log de segurança, decidido pelos perfis
+   * de AGORA. Não bloqueia (pode ser encaminhamento legítimo). Profissional sem usuário não ganha acesso: não alerta.
+   */
+  private async alertarVinculoCruzado(
+    tx: TenantTx,
+    ctx: RequestContext,
+    agendamentoId: string,
+    profissional: { readonly id: string; readonly userId: string | null },
+    op: 'create' | 'reschedule',
+  ): Promise<void> {
+    if (!profissional.userId || profissional.userId === ctx.userId) return;
+    if (ctx.roles.includes('recepcao') || ctx.roles.includes('admin')) return;
+    await recordAudit(tx, ctx, {
+      action: AuditAction.AnomalyAlert,
+      scope: SCOPE,
+      metadata: { rule: 'vinculo_cruzado', op, appointment_id: agendamentoId, professional_id: profissional.id, actor_id: ctx.userId },
+    });
+    await avisarAdminsDeAnomalia(tx, ctx, 'vinculo_cruzado');
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { tenantId: ctx.tenantId, regra: 'vinculo_cruzado' });
   }
 
   private async profissionalAtivo(tx: TenantTx, ctx: RequestContext, id: string) {
@@ -494,11 +537,13 @@ export class SchedulingService {
     const limiar = this.janela.alertaAutoagendadosPorDia;
     if (contagem <= limiar) return;
     this.logger.warn('ALERTA_ANOMALIA regra=vinculo_autoagendado');
+    registrarEventoDeSeguranca('ALERTA_ANOMALIA', { regra: 'vinculo_autoagendado' });
     await recordAudit(tx, ctx, {
       action: AuditAction.AnomalyAlert,
       scope: SCOPE,
       metadata: { rule: 'vinculo_autoagendado', window_s: DIA_MS / 1000, threshold: limiar, count: contagem },
     });
+    await avisarAdminsDeAnomalia(tx, ctx, 'vinculo_autoagendado');
   }
 
   private async autoagendado(tx: TenantTx, ctx: RequestContext, id: string): Promise<boolean> {
@@ -516,4 +561,11 @@ export class SchedulingService {
   private escrita<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
     return escreverNaClinica(this.db, ctx, fn);
   }
+}
+
+/** Perfil que resume quem criou o agendamento (R6 do #61): quem cuida da agenda vem antes de quem atende. */
+export function papelDoCriador(perfis: readonly string[]): string {
+  // R3 do parecer do #134: profissional antes de financeiro (quem também é financeiro não escapa do critério).
+  for (const p of ['recepcao', 'admin', 'profissional', 'financeiro']) if (perfis.includes(p)) return p;
+  return 'outro';
 }

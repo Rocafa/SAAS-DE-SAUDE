@@ -3,13 +3,14 @@ import { exigirUuid } from '../../common/validacao';
 import type { PsychCompartmentMode } from '../../db/schema';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
+import { ExigeMfaRecente } from '../auth/mfa';
 import { VigilanciaDeLeituraService } from '../patients/vigilancia-de-leitura';
 import { AvisosService, type AvisoDto } from './avisos';
 import { CicloNotasPrivadasService, type ResultadoDoCiclo } from './ciclo-notas-privadas';
 import { CustodiaService, type CustodiaDto, type DecisaoDaCustodia, type NotaLacradaDto } from './custodia';
 import { RetencaoLegalService, type EstadoDaRetencao } from './retencao-legal';
 import { NotasPrivadasService, type NotaPrivadaDto } from './notas-privadas.service';
-import { ProntuarioService, type AtendimentoDto, type PaginaDeHistorico, type RespostaConfiguracao, type VersaoDto } from './prontuario.service';
+import { ProntuarioService, type AtendimentoDoAgendamentoDto, type AtendimentoDto, type PaginaDeHistorico, type RespostaConfiguracao, type VersaoDto } from './prontuario.service';
 import {
   validarAbertura,
   validarAdendo,
@@ -35,7 +36,10 @@ import {
 @Controller('atendimentos')
 @UseGuards(SessaoGuard)
 export class AtendimentosController {
-  constructor(@Inject(ProntuarioService) private readonly service: ProntuarioService) {}
+  constructor(
+    @Inject(ProntuarioService) private readonly service: ProntuarioService,
+    @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+  ) {}
 
   /** Abre a partir do agendamento com check-in (idempotente: devolve o já aberto). */
   @Post()
@@ -45,12 +49,29 @@ export class AtendimentosController {
     return this.service.abrir(paraRequestContext(auth), validarAbertura(corpo));
   }
 
+  /** Atendimento do agendamento (#180): `{ atendimento: null }` se ainda não foi aberto. Trilha de leitura sempre. */
+  @Get('do-agendamento/:agendamentoId')
+  @Permissao('prontuario:acessar')
+  async obterDoAgendamento(@Sessao() auth: AuthContext, @Param('agendamentoId') agendamentoId: string, @Query() query: unknown): Promise<AtendimentoDoAgendamentoDto> {
+    const alvo = exigirUuid(agendamentoId);
+    validarQueryVaziaClinica(query);
+    const ctx = paraRequestContext(auth);
+    const res = await this.service.obterDoAgendamento(ctx, alvo);
+    // R8 do parecer do #63: ler o registro conta como ficha aberta na vigilância de leitura, como o histórico.
+    if (res.atendimento) await this.vigilancia.ficha(ctx, `prontuario:${res.atendimento.pacienteId}`);
+    return res;
+  }
+
   @Get(':id')
   @Permissao('prontuario:acessar')
-  obter(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<AtendimentoDto> {
+  async obter(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<AtendimentoDto> {
     const alvo = exigirUuid(id);
     validarQueryVaziaClinica(query);
-    return this.service.obter(paraRequestContext(auth), alvo);
+    const ctx = paraRequestContext(auth);
+    const dto = await this.service.obter(ctx, alvo);
+    // R8 do parecer do #63: conta como ficha aberta na vigilância de leitura (antes só o histórico contava).
+    await this.vigilancia.ficha(ctx, `prontuario:${dto.pacienteId}`);
+    return dto;
   }
 
   /** Salvar/editar a evolução (também o salvamento automático): cria uma versão nova. */
@@ -63,10 +84,14 @@ export class AtendimentosController {
 
   @Get(':id/versoes')
   @Permissao('prontuario:acessar')
-  versoes(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<VersaoDto[]> {
+  async versoes(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<VersaoDto[]> {
     const alvo = exigirUuid(id);
     validarQueryVaziaClinica(query);
-    return this.service.versoes(paraRequestContext(auth), alvo);
+    const ctx = paraRequestContext(auth);
+    const res = await this.service.versoes(ctx, alvo);
+    // R8 do parecer do #63 (completo com o R1 do parecer de 13/11): todas as versões também contam como ficha aberta.
+    await this.vigilancia.ficha(ctx, `prontuario:${res.pacienteId}`);
+    return res.versoes;
   }
 
   @Post(':id/finalizar')
@@ -109,6 +134,7 @@ export class ProntuarioDoPacienteController {
 
   @Get(':id/notas-privadas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   listarNotas(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<NotaPrivadaDto[]> {
     const paciente = exigirUuid(id);
     validarQueryVaziaClinica(query);
@@ -117,15 +143,17 @@ export class ProntuarioDoPacienteController {
 
   @Post(':id/notas-privadas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   criarNota(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<NotaPrivadaDto> {
     const paciente = exigirUuid(id);
     return this.notas.criar(paraRequestContext(auth), paciente, validarNovaNota(corpo));
   }
 }
 
-/** Nota privada pelo id: só o autor (outro autor = 404 + tentativa auditada). */
+/** Nota privada pelo id: só o autor (outro autor = 404 + tentativa auditada). MFA recente em todas (issue #106). */
 @Controller('notas-privadas')
 @UseGuards(SessaoGuard)
+@ExigeMfaRecente()
 export class NotasPrivadasController {
   constructor(@Inject(NotasPrivadasService) private readonly notas: NotasPrivadasService) {}
 
@@ -169,6 +197,7 @@ export class ConfiguracaoProntuarioController {
   }
 
   @Put('configuracao')
+  @ExigeMfaRecente()
   @Permissao('prontuario:configurar')
   definir(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<RespostaConfiguracao> {
     return this.service.definirConfiguracao(paraRequestContext(auth), validarConfiguracao(corpo));
@@ -186,6 +215,7 @@ export class CicloNotasPrivadasController {
 
   /** Prazos de custódia e expurgo sob demanda (o job diário chama o mesmo serviço). Idempotente. */
   @Post('notas-privadas/ciclo')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   executar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ResultadoDoCiclo> {
@@ -195,6 +225,7 @@ export class CicloNotasPrivadasController {
 
   /** Desligamento do profissional: as notas dele ficam aguardando decisão por 30 dias (só a contagem). */
   @Post('profissionais/:id/desligamento')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   desligar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<{ notas: number; prazo: string }> {
@@ -223,6 +254,7 @@ export class RetencaoLegalController {
 
   /** 1ª etapa: pedido de retirada, com motivo. */
   @Post(':id/retencao-legal/retirada')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   pedirRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
@@ -232,6 +264,7 @@ export class RetencaoLegalController {
 
   /** 2ª etapa: aprovação por OUTRO admin. */
   @Post(':id/retencao-legal/retirada/aprovacao')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:configurar')
   aprovarRetirada(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<EstadoDaRetencao> {
@@ -251,6 +284,7 @@ export class CustodiaController {
   constructor(@Inject(CustodiaService) private readonly custodia: CustodiaService) {}
 
   @Post('prontuario/custodias')
+  @ExigeMfaRecente()
   @Permissao('prontuario:configurar')
   designar(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<CustodiaDto> {
     const d = validarDesignacaoDeCustodia(corpo);
@@ -258,6 +292,7 @@ export class CustodiaController {
   }
 
   @Post('custodias/:id/aceite')
+  @ExigeMfaRecente()
   @HttpCode(200)
   @Permissao('prontuario:acessar')
   aceitar(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<CustodiaDto> {
@@ -268,6 +303,7 @@ export class CustodiaController {
 
   @Get('custodias/:id/notas')
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   notas(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<NotaLacradaDto[]> {
     const alvo = exigirUuid(id);
     validarQueryVaziaClinica(query);
@@ -277,6 +313,7 @@ export class CustodiaController {
   @Post('custodias/:id/notas/:notaId/decisao')
   @HttpCode(200)
   @Permissao('prontuario:acessar')
+  @ExigeMfaRecente()
   decidir(
     @Sessao() auth: AuthContext,
     @Param('id') id: string,

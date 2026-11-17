@@ -36,7 +36,7 @@ su_psql -d postgres -c "CREATE DATABASE controle OWNER rds_master"
 
 run_bootstrap() {
   PGHOST=127.0.0.1 PGPORT="$PORT" PGDATABASE="$DB" PGUSER=rds_master PGPASSWORD="$MASTER_PW" \
-  PGSSLMODE=disable APP_MIGRATOR_PASSWORD="$MIG_PW" APP_USER_PASSWORD="$USER_PW" \
+  PGSSLMODE=disable APP_MIGRATOR_PASSWORD="$MIG_PW" APP_USER_PASSWORD="$USER_PW" APP_AUTH_PASSWORD="$USER_PW" \
   PATH="$PG_BIN:$PATH" sh "$DIR/bootstrap.sh"
 }
 
@@ -86,7 +86,7 @@ check "senha nova aceita"                      permite app_user "$USER_PW" "$DB"
 
 echo "7. senha ausente aborta"
 if PGHOST=127.0.0.1 PGPORT="$PORT" PGDATABASE="$DB" PGUSER=rds_master PGPASSWORD="$MASTER_PW" \
-   PGSSLMODE=disable APP_MIGRATOR_PASSWORD= APP_USER_PASSWORD= PATH="$PG_BIN:$PATH" \
+   PGSSLMODE=disable APP_MIGRATOR_PASSWORD= APP_USER_PASSWORD= APP_AUTH_PASSWORD= PATH="$PG_BIN:$PATH" \
    sh "$DIR/bootstrap.sh" >/dev/null 2>&1; then fail=$((fail+1)); echo "  FALHA aceitou senha vazia"
 else ok=$((ok+1)); echo "  ok    recusa senha vazia"; fi
 
