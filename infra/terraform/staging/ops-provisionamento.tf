@@ -641,6 +641,31 @@ resource "aws_cloudwatch_event_target" "ops_provisionamento_entrega" {
   arn  = aws_sns_topic.alertas_seguranca.arn
 }
 
+# 4. <nome>-ops-entrega-vencida (C2 do parecer 2026-11-17-codigo-infra-ops-provisionamento): a
+#    entrega que ninguém retirou vence pela política Expiration do PutParameter (72 h no
+#    provisionamento, 24 h na recuperação, #206) e o SSM a apaga. O alerta avisa quem opera que o
+#    token não chegou ao destinatário e o chamado precisa de nova rodada. Vale para os dois fluxos.
+resource "aws_cloudwatch_event_rule" "ops_entrega_vencida" {
+  name        = "${local.nome}-ops-entrega-vencida"
+  description = "Entrega de token (provisionamento ou recuperação) vencida sem retirada pela política Expiration."
+  event_pattern = jsonencode({
+    source        = ["aws.ssm"]
+    "detail-type" = ["Parameter Store Policy Action"]
+    detail = {
+      "policy-type" = ["Expiration"]
+      "$or" = [
+        { "parameter-name" = [{ wildcard = "/provisionamento/*/entrega" }] },
+        { "parameter-name" = [{ wildcard = "/recuperacao-suporte/*/entrega" }] },
+      ]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "ops_entrega_vencida" {
+  rule = aws_cloudwatch_event_rule.ops_entrega_vencida.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
+
 # --- Papéis de máquina NUNCA rodam esta tarefa nem tocam os parâmetros (R7) ---------------------
 # Mesma lista de papéis de máquina do B10 (local.ops_anon_papeis_sem_acesso). O Deny explícito
 # garante que uma ampliação futura (curinga) não alcance o provisionamento.
