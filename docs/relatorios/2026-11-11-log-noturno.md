@@ -440,3 +440,12 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#174 com CI verde (16/16)** depois das duas correções de trava.
 - **#205 aberto (PR 3, expurgo das ativações)** sobre o #203. A2(a) fechada: uma ativação não usada só sai com `founder_activated` na trilha; se a leitura da trilha falhar, a linha fica. Migration 0079 (só `GRANT DELETE` ao app_auth). O HMAC do e-mail das vencidas é anulado e sai o evento ATIVACAO_VENCIDA. 5 testes RLS; unit 1194 e RLS 885/885 com exit 0. Ficam de fora: cliente SSM (C4), runbook, papel dedicado (A1) e reemissão. Achado lateral: `provisionamento.rls.test.ts` não roda duas vezes no mesmo banco (hash fixo), problema que já existia. Mandei ao Guardião.
 - **Guardião no #205: VETADO só por falta de testes.** O código fecha a A2. V1: nenhum teste passa pela falha de leitura da trilha. V2: o teste dos 30 dias passaria mesmo sem o corte. R1: a ativação de clínica nunca ativada fica sem prazo e precisa entrar no RIPD. R2: a linha retida por falha de leitura precisa de um evento. Mandei à engenharia. Também: o `provisionamento.rls.test.ts` passa a usar hash aleatório, e a engenharia valida em duas rodadas antes do commit.
+- **#205 respondido** (`da0041b`). Testes novos: V1 (falha de leitura da trilha) e V2 (29 dias fica, 31 sai). Ressalvas atendidas: R1 (RIPD §3), R2 (evento `TRILHA_NAO_LIDA`) e R3 (a segunda rodada não repete `ATIVACAO_VENCIDA`). Unit 1194, RLS 886/886, exit 0. O teste do hash do provisionamento foi corrigido (`c4a7145`) e passou em 2 rodadas seguidas. Falta: reconferência do Guardião no #205, R4 (guarda dos grants do app_auth) e A1 (papel app_provisionamento). O V1 tem uma janela pequena de instabilidade, se um expurgo de outro arquivo rodar ao mesmo tempo.
+
+## Parada por limite de uso (17/11)
+Pendente para a próxima sessão:
+1. Reconferência do Guardião no #205.
+2. Sócios: aprovar o #194 e o #155; conferir a mudança na trava do `AUTH_PROVIDER` no #174; ajustar o tfvars aos papéis novos do #204.
+3. PR do cliente SSM: C2 (vencimento) e C3 (runbooks) do #204, e ligar o `endpoint_ssm`.
+4. A1 (papel dedicado) e R4 do #205.
+5. Dependabot depois da pilha; #182 parte 2; votos de D13 e D15.
