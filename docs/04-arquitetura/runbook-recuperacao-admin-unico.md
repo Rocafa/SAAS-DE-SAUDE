@@ -59,7 +59,9 @@ aws ecs run-task --cluster <cluster> --task-definition <ops_recuperacao_task_def
 
 **Saída** (uma linha): `ok <usuario> expira=<data> sessoes=<n>` ou um código fixo: `ha_outro_admin`, `nao_e_admin`, `conta_inativa`, `clinica_nao_encontrada`, `teto`, `chamado_invalido`, `motivo_invalido`, `derrubar_sessoes_obrigatorio`, `trava_incorreta`, `uso_incorreto`, `entrega_pendente`, `ssm_nao_configurado`, `erro`. Código diferente de 0 na falha.
 
-- `entrega_pendente`: a entrega de uma rodada anterior ainda está no SSM e nunca é sobrescrita; esta rodada foi desfeita, então o token anterior segue o único válido. Se ele já foi entregue ao titular, encerre. Se não, o **entregador** apaga `/recuperacao-suporte/<usuario>/entrega` **sem ler** e o executor roda de novo (a emissão nova invalida a pendente, R4).
+- `entrega_pendente`: a entrega de uma rodada anterior ainda está no SSM e nunca é sobrescrita; esta rodada foi desfeita (não consome o teto nem invalida o token anterior). **Decida pelo log da rodada anterior** (C1 do parecer 2026-11-17-codigo-cliente-ssm):
+  - **Há `RECUPERACAO_PELO_SUPORTE` da rodada anterior para este chamado:** o token pendente é válido. **Não rode de novo** (a nova rodada sairia `teto` ou gastaria a 2ª emissão do ano). O **entregador** retira e entrega normalmente, pelo passo de entrega.
+  - **Não há o evento** (a rodada anterior falhou depois de gravar): o **entregador** apaga `/recuperacao-suporte/<usuario>/entrega` **sem ler** e o executor roda de novo (a emissão nova invalida qualquer pendente, R4).
 - `erro`: banco ou SSM fora. Se a entrega chegou a ser gravada, o comando a apagou. Rode de novo.
 - `ssm_nao_configurado`: falta `SSM_KMS_KEY_ID`/`AWS_REGION` na definição ou há variável AWS proibida. É problema de infra; não insista.
 
@@ -91,4 +93,4 @@ aws ecs run-task --cluster <cluster> --task-definition <ops_recuperacao_task_def
 
 ## Custo do SSM (ESTIMATIVA)
 
-Parâmetro Advanced: da ordem de US$ 0,05 por parâmetro por mês, rateado pelas horas em que existe, mais US$ 0,05 por 10 mil chamadas. A entrega vive no máximo 24 h: menos de US$ 0,01 por recuperação. O endpoint `ssm` da VPC custa à parte (comentário em `rede.tf`). Conferir na página de preços do AWS Systems Manager para sa-east-1.
+Parâmetro Advanced: da ordem de US$ 0,05 por parâmetro por mês, rateado pelas horas em que existe, mais US$ 0,05 por 10 mil chamadas. A entrega vive no máximo 24 h: menos de US$ 0,01 por recuperação. O endpoint `ssm` da VPC custa à parte (comentário em `rede.tf`). As chaves KMS do provisionamento e da recuperação (uma por fluxo, `kms.tf` do #204) custam cerca de US$ 1 por chave por mês, mais as chamadas. Conferir nas páginas de preços do AWS Systems Manager e do KMS para sa-east-1.

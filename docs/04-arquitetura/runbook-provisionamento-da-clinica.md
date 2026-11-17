@@ -111,4 +111,4 @@ aws ssm delete-parameter --name /provisionamento/<pedido>/entrega
 
 ## Custo do SSM (ESTIMATIVA)
 
-Parâmetro Advanced: da ordem de US$ 0,05 por parâmetro por mês, rateado pelas horas em que existe, mais US$ 0,05 por 10 mil chamadas. Pedido e entrega vivem no máximo 72 h: menos de US$ 0,01 por clínica. O endpoint `ssm` da VPC custa à parte (comentário em `rede.tf`). Conferir na página de preços do AWS Systems Manager para sa-east-1 antes do orçamento.
+Parâmetro Advanced: da ordem de US$ 0,05 por parâmetro por mês, rateado pelas horas em que existe, mais US$ 0,05 por 10 mil chamadas. Pedido e entrega vivem no máximo 72 h: menos de US$ 0,01 por clínica. O endpoint `ssm` da VPC custa à parte (comentário em `rede.tf`). As chaves KMS do provisionamento e da recuperação (uma por fluxo, `kms.tf` do #204) custam cerca de US$ 1 por chave por mês, mais as chamadas. Conferir nas páginas de preços do AWS Systems Manager e do KMS para sa-east-1 antes do orçamento.
