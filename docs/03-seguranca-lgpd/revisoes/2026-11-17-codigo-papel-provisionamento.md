@@ -122,3 +122,29 @@ Por que tem prazo:
 | Segredos fora do código | Sim. Senha por variável de ambiente no bootstrap e por Secrets Manager no ECS. No CI, só a senha efêmera `ci-efemero`, já padrão. |
 | Dados reais fora do git e de prompts | Sim. Só dados fictícios nos testes. |
 | CFM, ANS e ICP-Brasil | Não aplicável a esta mudança. |
+
+## Reconferência (17/11/2026, commit a3f4835)
+
+**Veredito: APROVADO.** G1 fechada (bloqueio do merge removido). G2 continua obrigatória antes do go-live, no #204. G3 está registrada no RIPD com prazo e continua obrigatória antes da primeira clínica real, em PR próprio.
+
+- Revisado: `git diff HEAD~1..HEAD` (6 arquivos, +271/-55). **Executei** `guarda-papeis.rls.test.ts` e `provisionamento.rls.test.ts` contra o Postgres 16 local (porta 54410, 0080 nova aplicada): 34/34 verdes. Também conferi o catálogo direto.
+- **G1: fechada.** A guarda agora confere o privilégio efetivo, que inclui PUBLIC, posse e pertença:
+  - `has_table_privilege`, `has_any_column_privilege` e `has_sequence_privilege` em todas as relações de `public` e `identidade`;
+  - `has_function_privilege` nas funções não-trigger, com a lista de PUBLIC explícita;
+  - `has_schema_privilege` (USAGE só em `public` e `identidade`, CREATE em nenhum);
+  - `has_database_privilege` (sem TEMPORARY e sem CREATE).
+
+  Há também a asserção global "nenhuma SECURITY DEFINER aberta a PUBLIC", que usa `acldefault` e por isso pega `proacl` nulo. Os autotestes com `GRANT EXECUTE ... TO PUBLIC` e `GRANT SELECT ON patients TO PUBLIC` provam que a leitura direta não vê esses grants e a efetiva vê.
+- **R1: fechada.** `identidade.conta_por_email(text)` e `identidade.email_da_conta_confere(uuid, text)` conferidas no catálogo:
+  - `prosecdef = true`;
+  - `search_path = pg_catalog, identidade`, com a tabela qualificada por schema (pg_temp não sombreia);
+  - dono `app_migrator`;
+  - ACL só `app_migrator` e `app_provisionamento`, o que confirma o `REVOKE ALL ... FROM PUBLIC`;
+  - `app_auth` sem EXECUTE.
+
+  O SELECT de `email` e `ativo` saiu (`has_column_privilege(...email...) = false`, com teste 42501).
+- **Enumeração.** Não há listagem nem curinga: a comparação é por `=` sobre `lower(email)`, com índice único, e não por LIKE. `email_da_conta_confere` exige o UUID e devolve só um booleano. O oráculo que resta, "este e-mail tem conta, ativa ou não", é inerente ao R2. Só serve a ataque de dicionário por quem já executa a tarefa (portão IAM com duas pessoas e MFA). Risco aceitável.
+- **R2 e O2: fechadas.** Há conferência de "ninguém é membro" para os dois papéis, com autoteste `GRANT app_auth TO app_user`. O runbook traz a pertença do master e a ordem do deploy.
+- **O1 e G3:** registradas no RIPD-identidade.
+- **N1 (recomendação, não bloqueia).** `SO_ADMIN_DO_CRIADOR` tolera *qualquer* papel com ADMIN OPTION puro, não só o criador. Esse papel não herda nem usa o papel, mas pode concedê-lo a outro, e a guarda pega isso na rodada seguinte. Se a guarda for rodada contra staging, fixar a tolerância ao master (por exemplo, `r.rolname = current_setting('rds.master_user', true)` ou uma lista explícita).
+- **N2 (opcional).** Acrescentar `pg_temp` ao fim do `search_path` das duas funções, como endurecimento padrão. Hoje é inócuo, porque tudo está qualificado.
