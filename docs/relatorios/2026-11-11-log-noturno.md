@@ -493,3 +493,7 @@ Pendente para a próxima sessão:
 ## Checagem de 17/11 08:14
 
 - Nada mudou: o #155 segue sem aprovação (BLOCKED); #153 e #154 sem aprovação; #158, #143 e #157 sem commit novo do sócio; #189 espera a pilha; nenhum merge.
+
+## Checagem de 17/11 10:14
+
+- Nada mudou: #155 segue BLOCKED sem aprovação; #153, #154, #158, #143 e #157 sem novidade; nenhum merge.
