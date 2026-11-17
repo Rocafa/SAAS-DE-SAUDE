@@ -172,7 +172,8 @@ export async function emitirRecuperacaoPeloSuporte(
         .update(recuperacao)
         .set({ usadoEm: new Date() })
         .where(and(eq(recuperacao.tokenHash, tokenHash), isNull(recuperacao.usadoEm)))
-        .catch(() => undefined);
+        // A2 do parecer de 17/11: se nem anular deu certo, o token vale sem trilha; o alarme é imediato.
+        .catch(() => registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'recuperacao_nao_anulada', tenantId: clinicaId, userId: usuarioId, chamado }));
     }
     if (err instanceof RecuperacaoPeloSuporteRecusada && err.codigo === 'teto') {
       // Acima do teto, revisão manual (DPO e os dois sócios): o alarme avisa na hora.

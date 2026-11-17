@@ -113,6 +113,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   // B12: recuperação do fator do admin único pelo suporte e o teto dela (1 por clínica em 30 dias, 2 por pessoa em 12 meses).
   'recuperacao_pelo_suporte',
   'teto_do_suporte',
+  // A2 do parecer do #199: o token do suporte não pôde ser anulado depois de a trilha falhar.
+  'recuperacao_nao_anulada',
   'pedido_do_titular',
   'conferencia_indisponivel',
   'expurgo_de_credencial',
