@@ -69,6 +69,15 @@ export interface AtendimentoDto {
   readonly motivoOculto?: 'sigilo_psicologia' | 'mfa_recente_obrigatorio';
 }
 
+/**
+ * Leitura pelo agendamento (#180, item 1): a tela de atendimento conhece o AGENDAMENTO, não o atendimento.
+ * `atendimento: null` quando o agendamento existe, o porteiro deixou passar e ainda não há atendimento aberto; a tela
+ * só abre vazia nesse caso (nunca por um 404 de outro motivo).
+ */
+export interface AtendimentoDoAgendamentoDto {
+  readonly atendimento: AtendimentoDto | null;
+}
+
 /** Pedido de troca do sigilo da psicologia (B1 do #63). */
 export interface ConfiguracaoDeSigilo {
   readonly psicologia: PsychCompartmentMode;
@@ -222,6 +231,53 @@ export class ProntuarioService {
     );
   }
 
+  /**
+   * Atendimento do agendamento, para a tela que só conhece o agendamento (#180). Mesmas regras do `obter`: perfil não
+   * clínico negado antes de consultar; porteiro (vínculo de cuidado) ANTES de dizer se há atendimento, para que a
+   * resposta não revele nada sobre paciente fora do vínculo; MFA do registro; trilha de leitura também quando não há
+   * atendimento (quem consultou o agendamento de qual paciente). Devolve a `versao` que a tela manda de volta no
+   * `versaoBase` ao salvar.
+   */
+  obterDoAgendamento(ctx: RequestContext, agendamentoId: string): Promise<AtendimentoDoAgendamentoDto> {
+    return comNegacaoAuditada(this.db, ctx, { op: 'ler_atendimento_do_agendamento', targetId: agendamentoId }, () =>
+      lerNaClinica(this.db, ctx, async (tx) => {
+        const [ag] = await tx
+          .select({ id: appointments.id, patientId: appointments.patientId })
+          .from(appointments)
+          .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, agendamentoId)));
+        if (!ag) throw new NaoEncontradoError();
+        const vinculo = await exigirConteudoClinico(tx, ctx, ag.patientId);
+        const [e] = await tx
+          .select()
+          .from(encounters)
+          .where(and(eq(encounters.tenantId, ctx.tenantId), eq(encounters.appointmentId, ag.id)));
+        if (!e) {
+          await recordAudit(tx, ctx, {
+            action: AuditAction.Read,
+            scope: SCOPE_REGISTROS,
+            metadata: { appointment_id: ag.id, patient_id: ag.patientId, found: false, care_basis: vinculo.base },
+          });
+          return { atendimento: null };
+        }
+        conferirMfaDoRegistro(ctx, e);
+        const dto = await this.montar(tx, ctx, e);
+        await recordAudit(tx, ctx, {
+          action: AuditAction.Read,
+          scope: SCOPE_REGISTROS,
+          metadata: {
+            encounter_id: e.id,
+            appointment_id: ag.id,
+            patient_id: e.patientId,
+            version: e.currentVersion,
+            hidden: dto.conteudoOculto,
+            care_basis: vinculo.base,
+          },
+        });
+        return { atendimento: dto };
+      }),
+    );
+  }
+
   /** Salvamento (inclui o automático): cada chamada grava uma VERSÃO nova; nada é sobrescrito. */
   salvar(ctx: RequestContext, id: string, dados: SalvamentoDeRegistro): Promise<AtendimentoDto> {
     return comNegacaoAuditada(this.db, ctx, { op: 'salvar_registro', targetId: id }, () =>
@@ -326,7 +382,8 @@ export class ProntuarioService {
   }
 
   /** Todas as versões do registro (a mais antiga primeiro): prova de que nada foi reescrito. */
-  versoes(ctx: RequestContext, id: string): Promise<VersaoDto[]> {
+  /** Todas as versões do registro, com o paciente (para a vigilância de leitura contar a ficha; R1 do parecer de 13/11). */
+  versoes(ctx: RequestContext, id: string): Promise<{ readonly pacienteId: string; readonly versoes: VersaoDto[] }> {
     return comNegacaoAuditada(this.db, ctx, { op: 'versoes', targetId: id }, () =>
       lerNaClinica(this.db, ctx, async (tx) => {
         const e = await this.atendimento(tx, ctx, id, false);
@@ -353,7 +410,7 @@ export class ProntuarioService {
           scope: SCOPE_REGISTROS,
           metadata: { encounter_id: e.id, patient_id: e.patientId, op: 'versions', count: out.length, care_basis: vinculo.base },
         });
-        return out;
+        return { pacienteId: e.patientId, versoes: out };
       }),
     );
   }
