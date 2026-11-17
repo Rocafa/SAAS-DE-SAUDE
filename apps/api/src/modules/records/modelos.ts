@@ -4,8 +4,14 @@
  * dão 400 com o nome do campo (nunca o valor). Cada versão gravada guarda o modelo e a versão do
  * modelo (PRO-01.4): mudar um modelo não reinterpreta registros antigos.
  *
- * - fisio/TO: queixa, avaliação, conduta, resposta, orientações, medidas/escalas (EVA, goniometria,
- *   força, perimetria, escala de domínio público pelo nome) e plano de sessões com metas (HU-PRO-021/022).
+ * - fisio (v2, #167): queixa, avaliação, diagnóstico e prognóstico fisioterapêuticos (Res. COFFITO 414/2012, art. 1º
+ *   §1º V), exames complementares realizados ou solicitados (inciso IV), conduta, resposta, orientações, próximos passos,
+ *   medidas/escalas e plano de sessões com metas (HU-PRO-021/022).
+ * - TO (v2, #167): modelo próprio, não mais os textos da fisioterapia. Pela Res. COFFITO 415/2012 (art. 1º §1º,
+ *   conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026): diagnóstico e prognóstico terapêutico
+ *   ocupacional (V), exames complementares (IV), objetivos do plano (VI). Desempenho, nível de assistência e as
+ *   atividades da sessão são escolha de produto (a tela já pede), não exigência da norma.
+ * - Escalas: instrumento conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); os demais, faixa larga.
  * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
  *   As ANOTAÇÕES PRIVADAS do psicólogo não são registro: ficam em `private_notes` (notas-privadas.service.ts).
  */
@@ -20,6 +26,8 @@ export interface Medida {
   /** Ex.: "flexão de joelho D", "Escala de Berg". Obrigatório para goniometria, perimetria e escala. */
   readonly rotulo?: string;
   readonly valor: number;
+  /** Instrumento conhecido, explícito (lista fechada `INSTRUMENTOS_CONHECIDOS`); só para `escala`. Sem ele, o rótulo decide. */
+  readonly instrumento?: string;
 }
 
 export interface MetaDoPlano {
@@ -44,26 +52,37 @@ interface DefinicaoModelo {
   readonly versao: number;
   readonly textos: readonly string[];
   readonly obrigatoriosParaFinalizar: readonly string[];
+  /**
+   * Obrigatórios de versões ANTERIORES do modelo: o registro aberto numa versão é finalizado pela regra dela (PRO-01.4,
+   * mudar o modelo não reinterpreta registro antigo).
+   */
+  readonly obrigatoriosAnteriores?: Readonly<Record<number, readonly string[]>>;
   readonly medidas: boolean;
   readonly plano: boolean;
 }
 
+/** Textos da versão 1 (fisio e TO compartilhavam). Continuam aceitos: a mudança é só aditiva. */
 const TEXTOS_REABILITACAO = ['queixa', 'avaliacao', 'conduta', 'resposta', 'orientacoes'] as const;
 
 export const MODELOS: Readonly<Record<RecordTemplate, DefinicaoModelo>> = {
   fisio: {
     nome: 'Evolução de fisioterapia',
-    versao: 1,
-    textos: TEXTOS_REABILITACAO,
+    versao: 2,
+    // #167: diagnóstico e prognóstico (COFFITO 414 art. 1º §1º V), exames complementares (IV) e os próximos passos
+    // que a tela já pede (`plano`; texto, diferente do `planoDeSessoes`, que é o plano numérico com metas).
+    textos: [...TEXTOS_REABILITACAO, 'diagnostico', 'exames', 'plano'],
     obrigatoriosParaFinalizar: ['queixa', 'conduta'],
     medidas: true,
     plano: true,
   },
   to: {
     nome: 'Evolução de terapia ocupacional',
-    versao: 1,
-    textos: TEXTOS_REABILITACAO,
-    obrigatoriosParaFinalizar: ['queixa', 'conduta'],
+    versao: 2,
+    // #167: COFFITO 415/2012 art. 1º §1º IV e V (exames; diagnóstico e prognóstico) e VI (objetivos), mais o que a tela
+    // já pede (atividades, desempenho, nível de assistência, próximos passos). Os textos da v1 continuam aceitos.
+    textos: [...TEXTOS_REABILITACAO, 'diagnostico', 'exames', 'objetivo', 'atividades', 'desempenho', 'nivel_assistencia', 'plano'],
+    obrigatoriosParaFinalizar: ['objetivo', 'atividades'],
+    obrigatoriosAnteriores: { 1: ['queixa', 'conduta'] },
     medidas: true,
     plano: true,
   },
@@ -92,6 +111,41 @@ const FAIXAS: Readonly<Record<TipoDeMedida, { min: number; max: number; inteiro:
   perimetria: { min: 0, max: 300, inteiro: false, rotulo: true },
   escala: { min: -1000, max: 10_000, inteiro: false, rotulo: true },
 };
+
+/**
+ * Instrumentos conhecidos (pelo rótulo da medida `escala`): faixa e inteiro próprios, para o gráfico não mentir (#167).
+ * Só instrumentos de uso livre. A COPM não entra (tem dono; licença no Brasil não confirmada). Psicologia não tem
+ * medidas: instrumento psicológico é do SATEPSI e privativo do psicólogo (Res. CFP 31/2022).
+ */
+const INSTRUMENTOS: Readonly<Record<string, { min: number; max: number }>> = {
+  barthel: { min: 0, max: 100 },
+  mif: { min: 18, max: 126 },
+  // C2 do parecer de 13/11: as subescalas da MIF têm faixa própria (13 itens motores e 5 cognitivos, de 1 a 7).
+  mif_motora: { min: 13, max: 91 },
+  mif_cognitiva: { min: 5, max: 35 },
+  berg: { min: 0, max: 56 },
+  nprs: { min: 0, max: 10 },
+};
+
+/** Lista fechada aceita no campo `instrumento` da medida (o front oferece estes). */
+export const INSTRUMENTOS_CONHECIDOS: readonly string[] = Object.keys(INSTRUMENTOS);
+
+/**
+ * Instrumento pelo rótulo: "Índice de Barthel", "MIF total", "MIF motora", "Escala de Berg" e "NPRS" casam pela palavra.
+ * É a reserva para quem não manda o campo `instrumento` explícito, que vence o rótulo quando vem.
+ */
+export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS | undefined {
+  const palavras = rotulo
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/);
+  if (palavras.includes('mif')) {
+    if (palavras.some((p) => p.startsWith('motor'))) return 'mif_motora';
+    if (palavras.some((p) => p.startsWith('cognit'))) return 'mif_cognitiva';
+  }
+  return Object.keys(INSTRUMENTOS).find((i) => palavras.includes(i));
+}
 
 /** Modelo padrão pela especialidade do profissional (o front faz igual). */
 export function modeloPelaEspecialidade(especialidade: string): RecordTemplate {
@@ -139,7 +193,7 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
   const out: Medida[] = [];
   valor.forEach((m: unknown, i) => {
     const campo = `conteudo.medidas.${i}`;
-    if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor'].includes(k))) {
+    if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor', 'instrumento'].includes(k))) {
       erros.push(campo);
       return;
     }
@@ -167,7 +221,24 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
       erros.push(`${campo}.rotulo`);
       return;
     }
-    out.push({ tipo: tipo as TipoDeMedida, valor: v, ...(rotulo ? { rotulo } : {}) });
+    // Instrumento explícito (parecer de 13/11): da lista fechada e só para `escala`; vence o rótulo.
+    let explicito: string | undefined;
+    if (m.instrumento !== undefined) {
+      if (tipo !== 'escala' || typeof m.instrumento !== 'string' || !Object.hasOwn(INSTRUMENTOS, m.instrumento)) {
+        erros.push(`${campo}.instrumento`);
+        return;
+      }
+      explicito = m.instrumento;
+    }
+    if (tipo === 'escala') {
+      const instrumento = explicito ?? (rotulo ? instrumentoDoRotulo(rotulo) : undefined);
+      const propria = instrumento ? INSTRUMENTOS[instrumento] : undefined;
+      if (propria && (v < propria.min || v > propria.max || !Number.isInteger(v))) {
+        erros.push(`${campo}.valor`);
+        return;
+      }
+    }
+    out.push({ tipo: tipo as TipoDeMedida, valor: v, ...(rotulo ? { rotulo } : {}), ...(explicito ? { instrumento: explicito } : {}) });
   });
   return out;
 }
@@ -240,7 +311,12 @@ export function validarConteudo(modelo: RecordTemplate, valor: unknown): Conteud
   return out;
 }
 
-/** Campos obrigatórios ainda vazios (nomes, para o front orientar). Vazio = pode finalizar. */
-export function faltasParaFinalizar(modelo: RecordTemplate, conteudo: ConteudoRegistro): string[] {
-  return MODELOS[modelo].obrigatoriosParaFinalizar.filter((c) => typeof conteudo[c] !== 'string');
+/**
+ * Campos obrigatórios ainda vazios (nomes, para o front orientar). Vazio = pode finalizar. `versaoModelo` é a da versão
+ * do registro: registro da v1 segue a regra da v1.
+ */
+export function faltasParaFinalizar(modelo: RecordTemplate, conteudo: ConteudoRegistro, versaoModelo?: number): string[] {
+  const def = MODELOS[modelo];
+  const obrigatorios = versaoModelo !== undefined && versaoModelo !== def.versao ? (def.obrigatoriosAnteriores?.[versaoModelo] ?? def.obrigatoriosParaFinalizar) : def.obrigatoriosParaFinalizar;
+  return obrigatorios.filter((c) => typeof conteudo[c] !== 'string');
 }
