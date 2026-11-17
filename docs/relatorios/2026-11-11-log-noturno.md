@@ -399,3 +399,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   
   Os dois mexem em linhas vizinhas de `configuracoes.tsx`, então o segundo a entrar terá conflito.
 - **#195, A1 a A3 feitos:** chave própria `ativacao-email`, o e-mail conferido ao repetir depois de falha parcial e o `pedido` nos dois eventos. 1166 testes de unidade verdes. Falta a reconferência do Guardião sobre a C1 e o A1 a A3.
+- **#195, reconferência do Guardião (17/11): aprovado com ressalvas.** A C1 está resolvida de verdade: nenhuma rota dá acesso à clínica antes de ativar. A1 e A3 estão resolvidas.
+  - Corrigi as duas sobras: a escolha automática de clínica ignora a pendente, e entrou o teste do A2 (outro e-mail ao repetir dá `parametro_invalido`).
+  - C2 a C4 continuam bloqueando o PR que ligar o SSM e o PR 2.
+- **#155 atualizado com a `main`** (sem aprovação a perder) e a pilha inteira propagada, até o #195, sem conflito.
