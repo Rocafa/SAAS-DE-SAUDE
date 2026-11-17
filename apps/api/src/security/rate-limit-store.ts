@@ -24,6 +24,10 @@ export type RateLimitMode = 'compartilhado' | 'fallback' | 'memoria' | 'instanci
  */
 export interface RateLimitStore {
   hit(key: string, windowMs: number): Promise<RateLimitHit>;
+  /** Quantas batidas a chave já tem na janela atual, SEM contar uma nova (consulta do bloqueio de login). */
+  peek(key: string, windowMs: number): Promise<number>;
+  /** Devolve uma batida reservada (decremento com piso 0): a tentativa reservada que deu certo não conta como falha. */
+  release(key: string, windowMs: number): Promise<void>;
   mode(): RateLimitMode;
   /** Espera a conexão ficar pronta (best-effort). true = pronta; false = seguiu sem ela. */
   ready?(timeoutMs?: number): Promise<boolean>;
@@ -56,6 +60,19 @@ export class MemoryRateLimitStore implements RateLimitStore {
     return Promise.resolve({ count, resetMs: w.start + windowMs - now });
   }
 
+  peek(key: string, windowMs: number): Promise<number> {
+    const w = this.windows.get(windowMs);
+    if (!w || Date.now() - w.start >= windowMs) return Promise.resolve(0);
+    return Promise.resolve(w.hits.get(key) ?? 0);
+  }
+
+  release(key: string, windowMs: number): Promise<void> {
+    const w = this.windows.get(windowMs);
+    const atual = w && Date.now() - w.start < windowMs ? (w.hits.get(key) ?? 0) : 0;
+    if (w && atual > 0) w.hits.set(key, atual - 1);
+    return Promise.resolve();
+  }
+
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -74,6 +91,13 @@ if t < 0 then
   t = tonumber(ARGV[1])
 end
 return {c, t}
+`;
+
+/** DECR com piso 0, sem criar a chave nem mexer no prazo. */
+const RELEASE_SCRIPT = `
+local c = tonumber(redis.call('GET', KEYS[1]) or '0')
+if c > 0 then return redis.call('DECR', KEYS[1]) end
+return 0
 `;
 
 /**
@@ -156,6 +180,15 @@ export class RedisRateLimitStore implements RateLimitStore {
     return { count: Number(result[0]), resetMs: Number(result[1]) };
   }
 
+  async peek(key: string): Promise<number> {
+    const v = await this.client.get(key);
+    return v === null ? 0 : Number(v) || 0;
+  }
+
+  async release(key: string): Promise<void> {
+    await this.client.eval(RELEASE_SCRIPT, 1, key);
+  }
+
   close(): Promise<void> {
     this.client.disconnect();
     return Promise.resolve();
@@ -214,6 +247,29 @@ export class FallbackRateLimitStore implements RateLimitStore {
       }
     }
     return this.fallback.hit(key, windowMs);
+  }
+
+  async peek(key: string, windowMs: number): Promise<number> {
+    if (!this.usingFallback) {
+      try {
+        return await this.primary.peek(key, windowMs);
+      } catch {
+        this.primaryDownUntil = Date.now() + this.cooldownMs;
+      }
+    }
+    return this.fallback.peek(key, windowMs);
+  }
+
+  async release(key: string, windowMs: number): Promise<void> {
+    if (!this.usingFallback) {
+      try {
+        await this.primary.release(key, windowMs);
+        return;
+      } catch {
+        this.primaryDownUntil = Date.now() + this.cooldownMs;
+      }
+    }
+    await this.fallback.release(key, windowMs);
   }
 
   ready(timeoutMs?: number): Promise<boolean> {
