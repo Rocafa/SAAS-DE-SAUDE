@@ -418,3 +418,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#191 MESCLADO na `main`**: o CodeQL volta a funcionar com o `init` e o `analyze` juntos. Fechei o #183 e o #185 do Dependabot, que ele substitui.
 - **#199: CI verde.** Falta só o sócio (ele depende do #195 e do resto da pilha).
 - **#194 atualizado** de novo com a `main`. É o último da leva e espera a aprovação do sócio.
+- **#155 atualizado com a `main`** (com o #191 a #193) e a pilha inteira propagada, até o #199, sem conflito. Topo: tipos e lint limpos e vitest saindo com 0 (1178 verdes).
