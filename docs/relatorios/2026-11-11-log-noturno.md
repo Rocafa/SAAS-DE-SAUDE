@@ -489,3 +489,7 @@ Pendente para a próxima sessão:
   5. Uma rodada de cada fluxo em staging com dado fictício.
   6. Volta ao Guardião.
 - **Backlog:** R6 (decidido acima); Dependabot (#188, #189, #116, #201, #202) depois da pilha.
+
+## Checagem de 17/11 08:14
+
+- Nada mudou: o #155 segue sem aprovação (BLOCKED); #153 e #154 sem aprovação; #158, #143 e #157 sem commit novo do sócio; #189 espera a pilha; nenhum merge.
