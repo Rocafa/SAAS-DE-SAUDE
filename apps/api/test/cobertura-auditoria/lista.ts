@@ -138,6 +138,7 @@ export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /agendamentos',
   'GET /clinica/auditoria',
   'GET /atendimentos/:id',
+  'GET /atendimentos/do-agendamento/:agendamentoId',
   'GET /atendimentos/:id/versoes',
   'GET /clinica/portal/pacientes/:id/consentimentos',
   'GET /clinica/portal/pacientes/:id/vinculos',
