@@ -399,10 +399,10 @@ export function conferirRespostaPortal(rota: RotaPortal, corpo: unknown): string
 }
 
 /** Campos clínicos proibidos que aparecem em alguma resposta do contrato (deve ser sempre vazio). */
-export function camposClinicosNoContrato(): string[] {
+export function camposClinicosNoContrato(contrato: typeof CONTRATO_PORTAL = CONTRATO_PORTAL): string[] {
   const proibidos = new Set<string>(CAMPOS_CLINICOS_PROIBIDOS);
   const achados = new Set<string>();
-  for (const def of Object.values(CONTRATO_PORTAL) as readonly DefinicaoDeRota[]) {
+  for (const def of Object.values(contrato) as readonly DefinicaoDeRota[]) {
     for (const k of chavesDaForma(def.resposta as Forma | FormaOpcional)) if (proibidos.has(k)) achados.add(k);
   }
   return [...achados];
