@@ -23,6 +23,7 @@ function servicos(chamadas: string[]): ServicosDosJobs {
     responsaveis: { descartarAnuladosComoSistema: marca('responsaveis', { descartados: 0 }) },
     pacientes: { reindexarIndiceCpfComoSistema: marca('cpf-indice', { reindexados: 0, pendentes: 0, chavesDescartadas: 0, chaveDestruida: 0 }) },
     identidade: { expurgarComoSistema: marca('identidade', { sessoes: 0, verificacoes: 0, cadastrosNaoConcluidos: 0 }) },
+    convites: { descartarEncerradosComoSistema: marca('convites', { descartados: 0 }) },
   };
 }
 
@@ -34,7 +35,7 @@ describe('registro central dos jobs', () => {
       const r = j.porClinica ? await j.porClinica(T) : await j.daPlataforma();
       for (const v of Object.values(r)) expect(['number', 'boolean']).toContain(typeof v);
     }
-    expect(chamadas).toEqual(['lembretes', 'retencao', 'portal', 'titular-menor', 'importador', 'notas', 'fiscal', 'responsaveis', 'cpf-indice'].map((n) => `${n}:${T}`).concat(['identidade:undefined']));
+    expect(chamadas).toEqual(['lembretes', 'retencao', 'portal', 'titular-menor', 'importador', 'notas', 'fiscal', 'responsaveis', 'cpf-indice'].map((n) => `${n}:${T}`).concat(['identidade:undefined', `convites:${T}`]));
   });
 
   it('a tabela do api-dominio §14 lista exatamente os jobs do registro, com a mesma periodicidade', () => {

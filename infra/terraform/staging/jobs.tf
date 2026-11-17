@@ -135,6 +135,7 @@ locals {
     "retencao-fiscal",
     "responsaveis-descarte",
     "portal-representacoes",
+    "convites-descarte",  # D4: pseudônimo dos convites encerrados (R3 do 3b-1)
     "identidade-expurgo", # D4: sessões, tokens e cadastros de TOTP vencidos (ressalva 7 do parecer do 3c)
   ]
 

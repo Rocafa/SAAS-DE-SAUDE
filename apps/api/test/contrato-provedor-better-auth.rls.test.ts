@@ -1080,6 +1080,70 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
   });
 });
 
+describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3 do 3b-1)', () => {
+  const credenciais = (): CredenciaisService => new CredenciaisService(new TenantDatabase(api.db), provedor);
+  const convites = (): ConvitesService => new ConvitesService(new TenantDatabase(api.db), provedor);
+
+  it('veto do #173: conta desligada (com TOTP) há mais de 90 dias perde credencial e fator e libera o e-mail; a recontratação cria conta NOVA', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
+    await api.http().delete(`/clinica/membros/${p.userId}/recepcao`).set({ Authorization: adm.Authorization }).expect(204);
+    await dbAuth.db.update(usuario).set({ inativaDesde: new Date(Date.now() - 91 * 24 * 3_600_000) }).where(eq(usuario.id, p.userId));
+    expect((await provedor.expurgarComoSistema()).credenciaisDeInativas).toBeGreaterThanOrEqual(1);
+    const [velha] = await dbAuth.db.select({ email: usuario.email, fator: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(velha).toEqual({ email: `desligada-${p.userId}@desligada.invalid`, fator: false });
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+    // Segunda passada não reprocessa a mesma conta.
+    const antes = (await provedor.expurgarComoSistema()).credenciaisDeInativas;
+    expect(antes).toBe(0);
+    const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, p.email, 'recepcao');
+    await convites().aceitar({ token: conv.token, email: p.email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [nova] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, p.email));
+    expect(nova?.id).toBeDefined();
+    expect(nova?.id).not.toBe(p.userId);
+    expect(await provedor.clinicasDoUsuario(nova?.id ?? '')).toEqual([tenantId]);
+  });
+
+  it('R9: senha atual errada na troca conta no bloqueio de login (5 erros travam a 6ª, mesmo certa)', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    const base = { headers: c as Record<string, string>, userId: p.userId };
+    for (let k = 0; k < 5; k++) await expect(credenciais().trocarSenha({ ...base, atual: SENHA_ERRADA_TROCA, nova: SENHA_NOVA })).rejects.toBeInstanceOf(ConflitoError);
+    await expect(credenciais().trocarSenha({ ...base, atual: SENHA, nova: SENHA_NOVA })).rejects.toBeInstanceOf(ConflitoError);
+  });
+
+  it('R10: token novo de recuperação invalida o anterior da mesma pessoa', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const primeiro = await credenciais().emitirRecuperacao(ctx, p.userId, 'fator', 'perdeu_o_aparelho');
+    await credenciais().emitirRecuperacao(ctx, p.userId, 'fator', 'perdeu_o_aparelho');
+    await expect(credenciais().usarRecuperacao({ token: primeiro.token, senhaAtual: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+
+  it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+    const velho = await convites().criar(ctx, `velho-${randomUUID().slice(0, 6)}@exemplo.test`, 'recepcao');
+    const novo = await convites().criar(ctx, `novo-${randomUUID().slice(0, 6)}@exemplo.test`, 'recepcao');
+    await convites().revogar(ctx, velho.conviteId);
+    await withTenant(api.db.db, tenantId, (tx) =>
+      tx.execute(sql`update team_invites set revoked_at = now() - interval '31 days', created_at = now() - interval '33 days', expires_at = now() - interval '31 days' where id = ${velho.conviteId}`),
+      adm.userId,
+    );
+    expect((await convites().descartarEncerradosComoSistema(tenantId)).descartados).toBe(1);
+    const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ id: string; email_hmac: string }>(sql`select id, email_hmac from team_invites`));
+    expect(linhas.find((l) => l.id === velho.conviteId)?.email_hmac).toBe('0'.repeat(32));
+    expect(linhas.find((l) => l.id === novo.conviteId)?.email_hmac).not.toBe('0'.repeat(32));
+  });
+});
+
 async function sequencial<T>(tarefas: (() => Promise<T>)[]): Promise<T[]> {
   const saida: T[] = [];
   for (const t of tarefas) saida.push(await t());

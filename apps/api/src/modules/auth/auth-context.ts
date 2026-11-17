@@ -109,7 +109,7 @@ export interface ProvedorDeCredencial {
     userId: string;
     atual: string;
     nova: string;
-  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada'>;
+  }): Promise<string[] | 'senha_atual_errada' | 'senha_vazada' | 'bloqueado' | 'indisponivel'>;
   /** Desbloqueio pelo admin (R4 do #152): só zera os contadores (e-mail e fator), sem trocar senha nem fator. */
   desbloquear(userId: string): Promise<void>;
 }
@@ -119,7 +119,7 @@ export type ResultadoDaRecuperacao = { readonly tipo: TipoDeRecuperacao; readonl
 
 /** Recuperação pelo admin (R17; R1 do desenho do PR 3): nenhum token restaura os dois fatores. */
 export interface ProvedorDeRecuperacao {
-  emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string }>;
+  emitirRecuperacao(e: { userId: string; tipo: TipoDeRecuperacao; clinicaId: string; criadoPor: string }): Promise<{ token: string; expiraEm: string } | 'teto'>;
   invalidarRecuperacao(token: string): Promise<void>;
   usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao>;
 }

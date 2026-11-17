@@ -78,7 +78,9 @@ export class CredenciaisService {
           scope: 'clinic_members',
           metadata: { op: 'credential_recovery_issued', user_id: usuarioId, kind: tipo, reason: motivo },
         });
-        emitido = await recuperacoes.emitirRecuperacao({ userId: usuarioId, tipo, clinicaId: ctx.tenantId, criadoPor: ctx.userId });
+        const r = await recuperacoes.emitirRecuperacao({ userId: usuarioId, tipo, clinicaId: ctx.tenantId, criadoPor: ctx.userId });
+        if (r === 'teto') throw new ConflitoError('teto_diario_de_recuperacoes');
+        emitido = r;
         registrarEventoDeSeguranca('RECUPERACAO_EMITIDA', { motivo: 'recuperacao_pelo_admin', tenantId: ctx.tenantId, userId: usuarioId });
       });
     } catch (err) {
@@ -102,7 +104,9 @@ export class CredenciaisService {
 
   async trocarSenha(e: { headers: Record<string, string | string[] | undefined>; userId: string; atual: string; nova: string }): Promise<string[]> {
     const r = await this.credenciais.trocarSenhaDaPessoa(e);
-    if (r === 'senha_atual_errada') throw new ConflitoError('senha_atual_errada', ['senhaAtual']);
+    // Senha errada e bloqueio respondem igual; contador fora do ar falha fechado.
+    if (r === 'senha_atual_errada' || r === 'bloqueado') throw new ConflitoError('senha_atual_errada', ['senhaAtual']);
+    if (r === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
     if (r === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senhaNova']);
     return r;
   }

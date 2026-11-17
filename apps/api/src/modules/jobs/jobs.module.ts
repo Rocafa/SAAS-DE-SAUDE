@@ -25,6 +25,7 @@ import { PortalClinicaService } from '../portal/portal-clinica.service';
 import { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
 import { ClinicasDoAgendador, TenantDatabase } from '../tenancy/tenancy.module';
 import { AUTH_PROVIDER } from '../auth/auth-context';
+import { ConvitesService } from '../auth/convites';
 import { AgendadorBullMQ, fabricasReais, RegistroRedis, TravaRedis } from './agendador-bullmq';
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
 import { codigoDoErro, type AgendadorPort, type DefinicaoDeJob, type ModoDoAgendador, type RegistroDeExecucoes, type TravaDeJob } from './agendador.port';
@@ -127,6 +128,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
       responsaveis: get(ResponsaveisService),
       pacientes: get(PatientsService),
       identidade: this.expurgoDaIdentidade(),
+      convites: get(ConvitesService),
     });
     this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;

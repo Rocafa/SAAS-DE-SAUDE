@@ -60,6 +60,7 @@ describe('agendador em teste', () => {
       'responsaveis-descarte',
       'cpf-indice-reindexacao',
       'identidade-expurgo',
+      'convites-descarte',
     ]);
   });
 });
