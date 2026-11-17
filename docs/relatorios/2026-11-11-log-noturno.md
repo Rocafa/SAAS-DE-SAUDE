@@ -423,3 +423,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Provisionamento PR 2** (rota de ativação do fundador, ajuste da 0022 para o ator sistema e a C3) **passado ao agente de engenharia**, no branch `eng/ativacao-do-fundador`, sobre o #199.
 - **#203 aberto (provisionamento PR 2, B11)**, empilhado sobre o #199. O código veio do agente de engenharia: migração 0078 (fundação pelo sistema só com `via` e `contract`), rota pública `POST /ativacao/usar` (mesmo 404, bloqueio na 5ª falha, 503 sem Redis, conta nova e conta existente) e a C3. O vitest saiu com 0 (1178). Mandei ao Guardião.
 - **Dependabot novo:** #200 (imagem do Node na API, digest; não mexe no lockfile e pode entrar antes), #201 (Next 16.4.5) e #202 (18 dependências). O #201 e o #202 ficam para depois da pilha, junto com o #188, o #189 e o #116, por causa do lockfile.
+- **#203: o Guardião aprovou com ressalvas.** R4, R5, R7/C2 e C3 estão conformes. Resolvi o que era condição do merge:
+  - **T1:** as asserções genéricas viraram códigos específicos (42501 com a regra da trilha, `conta_existente_exige_login`, `credenciais_invalidas`). A corrida confere que o perdedor recusou com 404 e que há um só `founder_activated`.
+  - **A4:** o e-mail tomado por outra conta sai como `email_em_uso` no log, com a resposta ainda no mesmo 404.
+  - O vitest saiu com 0.
+  - Ficam para o PR 3: A1 (papel de banco próprio para a tarefa), A2 (o expurgo não pode apagar ativação nunca usada, senão a C1 cai), A3 e os testes da T2.
