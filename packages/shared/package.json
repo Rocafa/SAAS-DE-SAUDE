@@ -12,12 +12,16 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "echo \"shared: sem lint ainda\"",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "echo \"shared: sem testes ainda\""
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
   },
   "files": [
     "dist",
