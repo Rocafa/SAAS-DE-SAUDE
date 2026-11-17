@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ConflitoError, NaoEncontradoError } from '../src/common/erros-dominio';
 import { ativacaoDoFundador, conta, sessao, usuario } from '../src/db/identidade';
@@ -15,6 +16,8 @@ import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenan
 import { SYSTEM_ACTOR_ID } from '../src/modules/audit/audit-log';
 import { AtivacaoService } from '../src/modules/auth/ativacao';
 import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao } from '../src/modules/auth/better-auth/instancia';
+import { chaveDoBloqueio } from '../src/modules/auth/better-auth/chaves-do-bloqueio';
+import { JANELA_DE_BLOQUEIO_MS, TETO_DE_FALHAS_POR_ORIGEM } from '../src/modules/auth/better-auth/protecao';
 import { BetterAuthProvider, TETO_DE_FALHAS_DA_ATIVACAO } from '../src/modules/auth/better-auth/provedor';
 import { clinicaDoPedido, provisionarClinica, type BancosDoProvisionamento, type PedidoDeProvisionamento } from '../src/modules/auth/better-auth/provisionamento';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
@@ -140,7 +143,7 @@ async function entrar(email: string): Promise<Cabecalhos> {
 }
 
 /** Pessoa fictícia que já trabalha em outra clínica, com senha e TOTP cadastrado de verdade. */
-async function pessoaComFator(): Promise<{ userId: string; email: string; segredo: Buffer; usados: Set<number> }> {
+async function pessoaComFator(): Promise<{ userId: string; email: string; segredo: Buffer; usados: Set<number>; tenantId: TenantId }> {
   const tenantId = await api.novaClinica();
   const userId = randomUUID();
   const email = `pessoa.${userId.slice(0, 8)}@exemplo.test`;
@@ -156,7 +159,7 @@ async function pessoaComFator(): Promise<{ userId: string; email: string; segred
   const periodo = Math.floor(Date.now() / 30_000);
   const fim = await postar('/two-factor/verify-totp', inicio.cookies, { code: codigoTotp(segredo, 0) });
   expect(fim.status, JSON.stringify(fim.json)).toBe(200);
-  return { userId, email, segredo, usados: new Set([periodo]) };
+  return { userId, email, segredo, usados: new Set([periodo]), tenantId };
 }
 
 /** Código ainda não apresentado (a marca de reuso recusa o mesmo período duas vezes). */
@@ -427,5 +430,159 @@ describe('B11 PR 2: clínica ativada não recebe token novo (C3 do #195)', () =>
     expect(tokens).toEqual([]);
     expect(await linhaDa(p.pedido)).toBeUndefined();
     expect(clinicaDoPedido(p.pedido)).toBe(clinicaId);
+  });
+});
+
+/**
+ * Mexe na clínica como o operador faria fora do fluxo (revogar o fundador, trocar o fundador). O runtime não consegue
+ * (gatilhos 0022/0047): superusuário do container efêmero, gatilhos desligados só nesta transação, só no teste.
+ */
+async function comoOperador(fn: (t: postgres.TransactionSql) => Promise<unknown>): Promise<void> {
+  const url = process.env.DATABASE_ADMIN_URL;
+  if (!url) throw new Error('DATABASE_ADMIN_URL é obrigatória para simular a revogação ou a troca do fundador');
+  const adm = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await adm.begin(async (t) => {
+      await t`set local session_replication_role = replica`;
+      await fn(t);
+    });
+  } finally {
+    await adm.end();
+  }
+}
+
+async function ativacoesNaTrilha(clinicaId: TenantId): Promise<number> {
+  return (await trilha(clinicaId)).filter((l) => l.meta['op'] === 'founder_activated').length;
+}
+
+/** Captura a rejeição para conferir a classe e o status, sem `rejects.toThrow()` genérico. */
+function recusa(p: Promise<unknown>): Promise<unknown> {
+  return p.then(
+    () => undefined,
+    (x: unknown) => x,
+  );
+}
+
+describe('T2 do parecer de 17/11: casos de recusa da ativação e resíduo da C1', () => {
+  it('fundador revogado ou trocado antes da ativação (FundadorNaoConfere): 404, conta nova não criada, token não consumido', async () => {
+    type Mexida = (c: { clinicaId: TenantId; usuarioId: string }) => (t: postgres.TransactionSql) => Promise<unknown>;
+    const casos: { nome: string; mexer: Mexida }[] = [
+      {
+        nome: 'revogado',
+        mexer: (c) => (t) =>
+          t`update clinic_members set revoked_at = now(), revoked_by = ${c.usuarioId}::uuid where tenant_id = ${c.clinicaId}::uuid and user_id = ${c.usuarioId}::uuid`,
+      },
+      { nome: 'trocado', mexer: (c) => (t) => t`update tenants set founder_user_id = ${randomUUID()}::uuid where id = ${c.clinicaId}::uuid` },
+    ];
+    for (const caso of casos) {
+      const p = pedidoFicticio();
+      const c = await provisionar(p);
+      await comoOperador(caso.mexer(c));
+      const antes = await linhaDa(p.pedido);
+      let erro: unknown;
+      const eventos = await eventosDurante(async () => {
+        erro = await recusa(ativacao().usar({ token: c.token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() }));
+      });
+      expect(erro, caso.nome).toBeInstanceOf(NaoEncontradoError);
+      expect((erro as NaoEncontradoError).getStatus(), caso.nome).toBe(404);
+      expect(eventos.some((l) => l.includes('"evento":"ATIVACAO_FALHOU"') && l.includes('"motivo":"fundador_nao_confere"')), caso.nome).toBe(true);
+      // A transação do app_auth desfez tudo: sem conta, sem credencial, token intacto e sem founder_activated.
+      expect(await dbAuth.db.select().from(usuario).where(eq(usuario.id, c.usuarioId)), caso.nome).toEqual([]);
+      expect(await dbAuth.db.select().from(conta).where(eq(conta.userId, c.usuarioId)), caso.nome).toEqual([]);
+      expect(await linhaDa(p.pedido), caso.nome).toEqual(antes);
+      expect(antes, caso.nome).toMatchObject({ usadoEm: null, falhas: 0 });
+      expect(await ativacoesNaTrilha(c.clinicaId), caso.nome).toBe(0);
+    }
+  });
+
+  it('conta existente cujo login resolve para OUTRA conta (login.userId !== usuarioId reservado): 404, sem consumo e sem acesso', async () => {
+    const fundadora = await pessoaComFator();
+    const outra = await pessoaComFator();
+    const emailOriginal = fundadora.email;
+    const p = pedidoFicticio({ email: emailOriginal });
+    const { token, clinicaId, usuarioId } = await provisionar(p);
+    expect(usuarioId).toBe(fundadora.userId);
+    // Depois do provisionamento, o e-mail da fundadora passa para a OUTRA conta (troca de e-mail fora do fluxo).
+    await dbAuth.db.update(usuario).set({ email: `trocado.${randomUUID().slice(0, 8)}@exemplo.test` }).where(eq(usuario.id, fundadora.userId));
+    await dbAuth.db.update(usuario).set({ email: emailOriginal }).where(eq(usuario.id, outra.userId));
+    let erro: unknown;
+    const eventos = await eventosDurante(async () => {
+      // Token e e-mail conferem; senha e código são os da OUTRA conta, que o login resolve pelo e-mail.
+      erro = await recusa(ativacao().usar({ token, email: emailOriginal, senha: SENHA, codigo: codigoLivre(outra), cabecalhos: cabecalhos() }));
+    });
+    expect(erro).toBeInstanceOf(NaoEncontradoError);
+    expect(eventos.some((l) => l.includes('"evento":"ATIVACAO_FALHOU"') && l.includes('"motivo":"fundador_nao_confere"'))).toBe(true);
+    expect(await linhaDa(p.pedido)).toMatchObject({ usadoEm: null, falhas: 0 });
+    expect(await ativacoesNaTrilha(clinicaId)).toBe(0);
+    // Nem a outra conta (nunca vinculada) nem a fundadora (ativação pendente) veem a clínica.
+    expect((await provedor.clinicasDaPessoa(outra.userId)).map((c) => c.id)).toEqual([outra.tenantId]);
+    expect((await provedor.clinicasDaPessoa(fundadora.userId)).map((c) => c.id)).not.toContain(clinicaId);
+    expect(await provedor.clinicasDoUsuario(outra.userId)).toEqual([outra.tenantId]);
+  });
+
+  it('contador por origem no teto: 404 sem tocar a linha, mesmo com o e-mail certo; a reserva barrada é devolvida', async () => {
+    const p = pedidoFicticio();
+    const { token, usuarioId } = await provisionar(p);
+    const origem = randomBytes(8).toString('hex');
+    const chave = chaveDoBloqueio(CHAVE_DO_BLOQUEIO, 'ativacao-origem', origem);
+    for (let k = 0; k < TETO_DE_FALHAS_POR_ORIGEM; k++) await STORE.hit(chave, JANELA_DE_BLOQUEIO_MS);
+    expect(await STORE.peek(chave, JANELA_DE_BLOQUEIO_MS)).toBe(TETO_DE_FALHAS_POR_ORIGEM);
+    const antes = await linhaDa(p.pedido);
+    const tentar = (email: string) =>
+      recusa(ativacao().usar({ token, email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: new Headers({ [CABECALHO_ORIGEM]: origem }) }));
+    let certo: unknown;
+    let errado: unknown;
+    const eventos = await eventosDurante(async () => {
+      certo = await tentar(p.email);
+      errado = await tentar(`outra.${randomUUID().slice(0, 8)}@exemplo.test`);
+    });
+    expect(certo).toBeInstanceOf(NaoEncontradoError);
+    expect(errado).toBeInstanceOf(NaoEncontradoError);
+    expect(eventos.filter((l) => l.includes('"evento":"ATIVACAO_FALHOU"') && l.includes('"motivo":"bloqueio_da_ativacao"'))).toHaveLength(2);
+    expect(eventos.some((l) => l.includes('"motivo":"email_diferente"') || l.includes('"motivo":"token_invalido"'))).toBe(false);
+    // A linha nem foi lida para escrita: falhas, HMAC e uso iguais; nenhuma conta criada.
+    expect(antes).toMatchObject({ falhas: 0, usadoEm: null });
+    expect(await linhaDa(p.pedido)).toEqual(antes);
+    expect(await dbAuth.db.select().from(usuario).where(eq(usuario.id, usuarioId))).toEqual([]);
+    expect(await STORE.peek(chave, JANELA_DE_BLOQUEIO_MS)).toBe(TETO_DE_FALHAS_POR_ORIGEM);
+  });
+
+  it('C1 depois do bloqueio na 5ª falha: a conta existente continua sem ver nem escolher a clínica', async () => {
+    const pessoa = await pessoaComFator();
+    const p = pedidoFicticio({ email: pessoa.email });
+    const { token, clinicaId } = await provisionar(p);
+    const origem = cabecalhos();
+    const errado = { token, email: `outra.${randomUUID().slice(0, 8)}@exemplo.test`, senha: SENHA };
+    for (let k = 0; k < TETO_DE_FALHAS_DA_ATIVACAO; k++) {
+      expect(await recusa(ativacao().usar({ ...errado, cabecalhos: origem }))).toBeInstanceOf(NaoEncontradoError);
+    }
+    expect(await linhaDa(p.pedido)).toMatchObject({ falhas: TETO_DE_FALHAS_DA_ATIVACAO, usadoEm: null, emailHmac: '0'.repeat(32) });
+    // A pessoa é admin no banco desde o provisionamento, mas a clínica fica fora da lista, da escolha automática e da escolha.
+    expect((await provedor.clinicasDaPessoa(pessoa.userId)).map((c) => c.id)).toEqual([pessoa.tenantId]);
+    expect(await provedor.clinicasDoUsuario(pessoa.userId)).toEqual([pessoa.tenantId]);
+    expect(await provedor.definirClinica(randomUUID(), pessoa.userId, clinicaId)).toBe(false);
+    // Nem o login completo com o e-mail certo destrava depois do bloqueio.
+    expect(await recusa(ativacao().usar({ token, email: pessoa.email, senha: SENHA, codigo: codigoLivre(pessoa), cabecalhos: cabecalhos() }))).toBeInstanceOf(NaoEncontradoError);
+    expect((await provedor.clinicasDaPessoa(pessoa.userId)).map((c) => c.id)).not.toContain(clinicaId);
+    expect(await ativacoesNaTrilha(clinicaId)).toBe(0);
+  });
+
+  it('resíduo da C1: pessoa com uma clínica e uma ativação pendente mantém a escolha automática (clinicasDoUsuario)', async () => {
+    // Conta existente sem TOTP (o login abre a sessão direto), vinculada a uma clínica só.
+    const tenantId = await api.novaClinica();
+    const userId = randomUUID();
+    const email = `pessoa.${userId.slice(0, 8)}@exemplo.test`;
+    await dbAuth.db.insert(usuario).values({ id: userId, name: 'Pessoa Ficticia', email, emailVerified: true });
+    await dbAuth.db.insert(conta).values({ id: randomUUID(), accountId: userId, providerId: 'credential', userId, password: await gerarHashDeSenha(SENHA) });
+    await api.membro(tenantId, { userId }, 'recepcao');
+    const p = pedidoFicticio({ email });
+    const { clinicaId } = await provisionar(p);
+    expect(clinicaId).not.toBe(tenantId);
+    // O vínculo de admin na nova já existe; ainda assim só a antiga conta para a escolha automática.
+    expect(await provedor.clinicasDoUsuario(userId)).toEqual([tenantId]);
+    expect((await provedor.clinicasDaPessoa(userId)).map((c) => c.id)).toEqual([tenantId]);
+    const ctx = await provedor.resolver({ headers: await entrar(email) });
+    expect(ctx).toMatchObject({ tenantId, userId });
+    expect(ctx?.perfis).toEqual(['recepcao']);
   });
 });
