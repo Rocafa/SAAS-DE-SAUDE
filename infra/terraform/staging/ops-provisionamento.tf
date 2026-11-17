@@ -1,8 +1,8 @@
 # Tarefa avulsa do ECS para o provisionamento da clínica (B11 do checklist do login real), no padrão
 # da anonimização (ops-anonimizacao.tf, B10). Parecer do Guardião de 16/11/2026
 # (revisoes/2026-11-16-desenho-provisionamento-da-clinica.md), R1, R3, R7 e R8:
-#   - definição de tarefa, papel de execução e papel de tarefa PRÓPRIOS; segredos só DATABASE_AUTH_URL
-#     (app_auth), DATABASE_URL (app_user) e RATE_LIMIT_HASH_KEY (raiz do HMAC por uso: a tarefa deriva
+#   - definição de tarefa, papel de execução e papel de tarefa PRÓPRIOS; segredos só
+#     DATABASE_PROVISIONAMENTO_URL (papel app_provisionamento, A1 do #207) e RATE_LIMIT_HASH_KEY (raiz do HMAC por uso: a tarefa deriva
 #     chaveDeHmac('ativacao-email') para o HMAC do e-mail do fundador). Nada de BETTER_AUTH_SECRET,
 #     Redis, KMS de clínica ou WhatsApp;
 #   - quem roda é provado pela AWS (principal do ecs:RunTask no CloudTrail): só o papel
@@ -61,14 +61,13 @@ locals {
   # gravado write-only) quando a API aceitar lê-la direto; a precondição troca junto. Não muda aqui
   # porque exige mudança no código da API.
   ops_prov_segredos_origem = {
-    DATABASE_AUTH_URL   = { segredo = aws_secretsmanager_secret.app["banco-app-auth"].arn, campo = "url" }
-    DATABASE_URL        = { segredo = aws_secretsmanager_secret.app["banco-app-user"].arn, campo = "url" }
-    RATE_LIMIT_HASH_KEY = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
+    # A1 (#207): a tarefa conecta só como app_provisionamento; sai o app_auth e o app_user.
+    DATABASE_PROVISIONAMENTO_URL = { segredo = aws_secretsmanager_secret.app["banco-app-provisionamento"].arn, campo = "url" }
+    RATE_LIMIT_HASH_KEY          = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
   }
   ops_prov_segredos_permitidos = {
-    DATABASE_AUTH_URL   = aws_secretsmanager_secret.app["banco-app-auth"].arn
-    DATABASE_URL        = aws_secretsmanager_secret.app["banco-app-user"].arn
-    RATE_LIMIT_HASH_KEY = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn
+    DATABASE_PROVISIONAMENTO_URL = aws_secretsmanager_secret.app["banco-app-provisionamento"].arn
+    RATE_LIMIT_HASH_KEY          = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn
   }
   ops_prov_segredos      = [for nome, s in local.ops_prov_segredos_origem : { name = nome, valueFrom = "${s.segredo}:${s.campo}::" }]
   ops_prov_segredos_arns = distinct([for s in local.ops_prov_segredos_origem : s.segredo])
@@ -140,7 +139,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_da_ops_provisionamento" {
 # EXECUÇÃO: o agente do ECS puxa a imagem, lê SÓ os três segredos e escreve o log.
 resource "aws_iam_role" "ops_provisionamento_execucao" {
   name               = "${local.ops_prov_nome}-execucao"
-  description        = "Execução da tarefa avulsa do provisionamento (B11): só banco-app-auth, banco-app-user e rate-limit-hash-key."
+  description        = "Execução da tarefa avulsa do provisionamento (B11): só banco-app-provisionamento e rate-limit-hash-key."
   assume_role_policy = data.aws_iam_policy_document.ecs_confianca.json
 }
 
@@ -291,16 +290,16 @@ resource "aws_ecs_task_definition" "ops_provisionamento" {
   }])
 
   lifecycle {
-    # R8: SÓ DATABASE_AUTH_URL, DATABASE_URL e RATE_LIMIT_HASH_KEY, e só em `secrets`.
+    # R8 e A1: SÓ DATABASE_PROVISIONAMENTO_URL e RATE_LIMIT_HASH_KEY, e só em `secrets`.
     precondition {
       condition = (
-        length(local.ops_prov_segredos_origem) == 3
+        length(local.ops_prov_segredos_origem) == 2
         && length(setsubtract(keys(local.ops_prov_segredos_origem), keys(local.ops_prov_segredos_permitidos))) == 0
         && length(setsubtract(keys(local.ops_prov_segredos_permitidos), keys(local.ops_prov_segredos_origem))) == 0
         && alltrue([for n, s in local.ops_prov_segredos_origem : s.segredo == local.ops_prov_segredos_permitidos[n]])
         && length(setsubtract(local.ops_prov_segredos_arns, values(local.ops_prov_segredos_permitidos))) == 0
       )
-      error_message = "A tarefa do provisionamento só pode ter os segredos DATABASE_AUTH_URL (banco-app-auth), DATABASE_URL (banco-app-user) e RATE_LIMIT_HASH_KEY (rate-limit-hash-key). Nada de BETTER_AUTH_SECRET, REDIS_URL, KMS de clínica ou WhatsApp (R8 do parecer de 16/11/2026)."
+      error_message = "A tarefa do provisionamento só pode ter os segredos DATABASE_PROVISIONAMENTO_URL (banco-app-provisionamento) e RATE_LIMIT_HASH_KEY (rate-limit-hash-key). Nada de BETTER_AUTH_SECRET, REDIS_URL, KMS de clínica ou WhatsApp (R8 do parecer de 16/11/2026)."
     }
     # Ambiente fechado: nenhum segredo em texto claro, nenhuma porta da cadeia de credenciais AWS,
     # nenhuma trava pré-preenchida.

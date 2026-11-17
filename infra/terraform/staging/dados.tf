@@ -294,7 +294,8 @@ resource "aws_elasticache_replication_group" "this" {
 
 ephemeral "random_password" "banco" {
   # app_auth (D4, 0064): papel do schema identidade, só para o Better Auth.
-  for_each = toset(["app_user", "app_migrator", "app_auth"])
+  # app_provisionamento (A1, 0080 do #207): só a tarefa avulsa de provisionamento da clínica.
+  for_each = toset(["app_user", "app_migrator", "app_auth", "app_provisionamento"])
   length   = 40
   special  = false # vai dentro de URL; sem especiais não precisa de escape
 }
@@ -324,6 +325,10 @@ locals {
     }
     "banco-app-auth" = {
       descricao = "DATABASE_AUTH_URL da API (papel app_auth: só o schema identidade, D4)"
+      versao    = var.banco_senhas_versao
+    }
+    "banco-app-provisionamento" = {
+      descricao = "DATABASE_PROVISIONAMENTO_URL da tarefa de provisionamento (papel app_provisionamento, A1)"
       versao    = var.banco_senhas_versao
     }
     "better-auth-secret" = {
@@ -360,6 +365,11 @@ locals {
       username = "app_auth"
       password = ephemeral.random_password.banco["app_auth"].result
       url      = "postgres://app_auth:${ephemeral.random_password.banco["app_auth"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
+    })
+    "banco-app-provisionamento" = jsonencode({
+      username = "app_provisionamento"
+      password = ephemeral.random_password.banco["app_provisionamento"].result
+      url      = "postgres://app_provisionamento:${ephemeral.random_password.banco["app_provisionamento"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
     })
     "better-auth-secret" = jsonencode({ chave = ephemeral.random_password.chave_api["better-auth-secret"].result })
     "redis" = jsonencode({
