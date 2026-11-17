@@ -15,6 +15,7 @@ import type { FieldCipher } from '../src/modules/crypto/field-cipher';
 import { CicloNotasPrivadasService } from '../src/modules/records/ciclo-notas-privadas';
 import { CAMPO_NOTA, decifrarCampoClinico } from '../src/modules/records/record-fields';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
+import { criarClinicaSemFundador } from './apoio-clinica';
 
 type Sessao = { Authorization: string; userId: string };
 const DIA = 86_400_000;
@@ -470,7 +471,8 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
   it('R15: clínica sem fundador não aceita "qualquer usuário" como 1º admin; fundador é imutável', async () => {
     // Clínica antiga (criada sem fundador, como antes da 0022): nenhum membro.
     const antiga = randomUUID() as TenantId;
-    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Antiga' }));
+    // Clínica sem fundador só nasce pelo papel de migração (0081, G3 do #207).
+    await criarClinicaSemFundador(antiga, { displayName: 'Clinica Ficticia Antiga' });
     const recepcao = randomUUID();
     const semFundador = withTenant(api.db.db, antiga, (tx) =>
       tx.insert(clinicMembers).values({ tenantId: antiga, userId: recepcao, role: 'admin', grantedBy: recepcao }), recepcao);
@@ -496,7 +498,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
     if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
     const antiga = randomUUID() as TenantId;
-    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Runbook' }));
+    await criarClinicaSemFundador(antiga, { displayName: 'Clinica Ficticia Runbook' });
     const fundadorId = randomUUID();
     // O runtime não executa o runbook.
     const peloRuntime = withTenant(api.db.db, antiga, (tx) => tx.execute(sql`select app_runbook_registrar_fundador(${antiga}::uuid, ${fundadorId}::uuid, 'OPS-1')`), fundadorId);
@@ -520,7 +522,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
     if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
     const antiga = randomUUID() as TenantId;
-    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Correcao' }));
+    await criarClinicaSemFundador(antiga, { displayName: 'Clinica Ficticia Correcao' });
     const errado = randomUUID();
     const correto = randomUUID();
     const a = await operadorNominal();
@@ -607,7 +609,7 @@ describe('R13: o banco sabe quem é admin e psicólogo da clínica (0020)', () =
     const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
     if (!migratorUrl) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para o teste do runbook');
     const antiga = randomUUID() as TenantId;
-    await withTenant(api.db.db, antiga, (tx) => tx.insert(tenants).values({ id: antiga, displayName: 'Clinica Ficticia Forja' }));
+    await criarClinicaSemFundador(antiga, { displayName: 'Clinica Ficticia Forja' });
     const errado = randomUUID();
     const correto = randomUUID();
     const forjado = randomUUID();

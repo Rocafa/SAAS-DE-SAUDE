@@ -9,6 +9,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { patients, tenants } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
+import { criarClinicaSemFundador } from './apoio-clinica';
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória para o teste de RLS');
@@ -45,8 +46,8 @@ beforeAll(async () => {
     [tenantA, patientA, 'Paciente Ficticio A'],
     [tenantB, patientB, 'Paciente Ficticio B'],
   ] as const) {
+    await criarClinicaSemFundador(tenantId, { displayName: `Clinica Ficticia ${tenantId.slice(0, 8)}` });
     await withTenant(h.db, tenantId, async (tx) => {
-      await tx.insert(tenants).values({ id: tenantId, displayName: `Clinica Ficticia ${tenantId.slice(0, 8)}` });
       await tx.insert(patients).values({ id: patientId, tenantId, displayName: nome });
     });
   }

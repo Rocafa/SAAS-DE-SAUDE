@@ -21,9 +21,10 @@ import { count, sql } from 'drizzle-orm';
 import { AppModule } from '../../src/app.module';
 import type { AppConfig } from '../../src/config';
 import { DEFAULT_DATABASE_TUNING, type DatabaseTuning } from '../../src/db/pool-config';
-import { patients, tenants } from '../../src/db/schema';
+import { patients } from '../../src/db/schema';
 import { createDatabase, withTenant } from '../../src/db/tenant-transaction';
 import { TenantDatabase } from '../../src/modules/tenancy/tenancy.module';
+import { criarClinicaSemFundador } from '../apoio-clinica';
 
 export function urlDoAmbiente(): string {
   const url = process.env.DATABASE_URL;
@@ -102,8 +103,8 @@ export async function semearTenant(nPacientes = 2): Promise<TenantId> {
   const tenantId = randomUUID() as TenantId;
   const tag = tenantId.slice(0, 8);
   try {
+    await criarClinicaSemFundador(tenantId, { displayName: `Clinica Ficticia ${tag}` });
     await withTenant(h.db, tenantId, async (tx) => {
-      await tx.insert(tenants).values({ id: tenantId, displayName: `Clinica Ficticia ${tag}` });
       for (let i = 0; i < nPacientes; i++) {
         await tx.insert(patients).values({ tenantId, displayName: `Paciente Ficticio ${tag}-${i}` });
       }

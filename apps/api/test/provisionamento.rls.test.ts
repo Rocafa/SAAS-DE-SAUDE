@@ -20,6 +20,7 @@ import {
 } from '../src/modules/auth/better-auth/provisionamento';
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { subirApi, type ApiDeTeste } from './apoio-api';
+import { criarClinicaSemFundador } from './apoio-clinica';
 
 let api: ApiDeTeste;
 let dbAuth: DatabaseHandle;
@@ -254,5 +255,37 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
   it('app_user (rotas de negócio) não lê nem escreve a tabela (R1)', async () => {
     await expect(api.db.db.execute(sql`select token_hash from identidade.ativacao_do_fundador limit 1`)).rejects.toThrow();
     await expect(api.db.db.execute(sql`update identidade.ativacao_do_fundador set falhas = 0`)).rejects.toThrow();
+  });
+
+  it('G3 do #207 (0081): clínica sem fundador só pelo app_migrator; runtime, autenticação e provisionamento recebem 42501', async () => {
+    const codigo = async (p: Promise<unknown>) => {
+      const e: unknown = await p.then(
+        () => null,
+        (x: unknown) => x,
+      );
+      expect(e, 'era esperada recusa').not.toBeNull();
+      let c: unknown;
+      for (let x: unknown = e; x && !c; x = (x as { cause?: unknown }).cause) c = (x as { code?: unknown }).code;
+      return c;
+    };
+    const semFundador = (db: DatabaseHandle['db'], id: TenantId, usuario?: string) =>
+      withTenant(db, id, (tx) => tx.insert(tenants).values({ id, displayName: 'Clinica Ficticia Sem Fundador' }), usuario);
+    const ids = Array.from({ length: 4 }, () => randomUUID() as TenantId);
+    const tentativas: [string, () => Promise<unknown>][] = [
+      // Na sessão de sistema (como a tarefa) e na de usuário.
+      ['app_user (sistema)', () => semFundador(api.db.db, ids[0]!)],
+      ['app_user (usuário)', () => semFundador(api.db.db, ids[1]!, randomUUID())],
+      ['app_provisionamento (sistema)', () => semFundador(dbProv.db, ids[2]!)],
+      ['app_auth', () => dbAuth.db.execute(sql`insert into tenants (id, display_name) values (${ids[3]}::uuid, 'Clinica Ficticia Sem Fundador')`)],
+    ];
+    for (const [nome, tentar] of tentativas) expect(await codigo(tentar()), nome).toBe('42501');
+    // Nenhuma das tentativas deixou linha.
+    for (const id of ids) expect(await contarClinicas(id)).toBe(0);
+
+    // O caminho permitido (migrações e seeds): o papel de migração.
+    const pelaMigracao = randomUUID() as TenantId;
+    await criarClinicaSemFundador(pelaMigracao, { displayName: 'Clinica Ficticia Pela Migracao' });
+    const [linha] = await withTenant(api.db.db, pelaMigracao, (tx) => tx.select().from(tenants).where(eq(tenants.id, pelaMigracao)));
+    expect(linha).toMatchObject({ id: pelaMigracao, founderUserId: null });
   });
 });
