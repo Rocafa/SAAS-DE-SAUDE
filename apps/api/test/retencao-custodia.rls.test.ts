@@ -136,7 +136,7 @@ function comoOperador<T>(conn: Conexao, fn: (t: postgres.TransactionSql) => Prom
   return conn.begin(async (t) => {
     await t`set local role app_migrator`;
     return fn(t);
-  }) as Promise<T>;
+  });
 }
 
 beforeAll(async () => {
