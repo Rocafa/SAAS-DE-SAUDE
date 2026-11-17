@@ -43,6 +43,7 @@ export const EVENTOS_DE_SEGURANCA = {
   RATE_LIMIT_FAIL_OPEN: { severidade: 'alto', alarme: 'imediato', descricao: 'contador indisponível; requisição seguiu sem limite' },
   WEBHOOK_ASSINATURA_INVALIDA: { severidade: 'alto', alarme: 'volume', descricao: 'webhook com assinatura inválida' },
   ALERTA_ANOMALIA: { severidade: 'alto', alarme: 'imediato', descricao: 'regra de vigilância disparou (detalhe na trilha)' },
+  TRILHA_NAO_LIDA: { severidade: 'alto', alarme: 'volume', descricao: 'leitura da trilha da clínica falhou num job; o job reteve o dado em vez de apagá-lo (falha fechada; R2 do parecer do #205)' },
   TRILHA_NAO_GRAVADA: { severidade: 'critico', alarme: 'imediato', descricao: 'evento que devia ir para a trilha de auditoria não gravou' },
   EXPORTACAO_FALHOU: { severidade: 'alto', alarme: 'imediato', descricao: 'exportação total falhou (motivo genérico)' },
   PERFIS_NAO_CONFERIDOS: { severidade: 'alto', alarme: 'imediato', descricao: 'leitura de clinic_members falhou; requisição negada' },
@@ -53,6 +54,7 @@ export const EVENTOS_DE_SEGURANCA = {
   ATIVACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador emitido pela tarefa de provisionamento (B11; só o hash no banco)' },
   ATIVACAO_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'uso do token de ativação do fundador recusado (B11; o usuário recebe sempre o mesmo 404)' },
   ATIVACAO_BLOQUEADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de ativação do fundador invalidado na 5ª conferência de e-mail errada (B11; volta só por reemissão)' },
+  ATIVACAO_VENCIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador venceu sem uso; o expurgo zerou o HMAC do e-mail (B11, PR 3; a clínica segue fora do alcance do fundador)' },
   FUNDADOR_ATIVADO: { severidade: 'alto', alarme: 'imediato', descricao: 'fundador ativou a clínica provisionada (B11; dispara a confirmação fora de banda antes do importador)' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 
@@ -138,6 +140,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   'fundador_nao_confere',
   'conta_nova',
   'conta_existente',
+  // R2 do parecer do #205: o expurgo das ativações não leu a trilha e reteve a linha.
+  'expurgo_da_ativacao',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

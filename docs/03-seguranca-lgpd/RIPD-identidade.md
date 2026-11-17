@@ -36,7 +36,8 @@
 | Cadastro de TOTP não concluído | 24 h | expurgo diário |
 | Token de recuperação | 30 dias depois de vencer | expurgo diário |
 | Token de recuperação emitido pelo suporte (`origem = suporte`, B12) | 13 meses (o teto de 2 por pessoa em 12 meses cruza clínicas e só esta tabela o conta) | expurgo diário |
-| Ativação do fundador (`ativacao_do_fundador`: hash do token e HMAC do e-mail, B11) | 30 dias depois de vencer ou ser usada; o HMAC do e-mail é zerado na ativação ou no vencimento | expurgo diário |
+| Ativação do fundador (`ativacao_do_fundador`: hash do token e HMAC do e-mail, B11) | 30 dias depois de vencer ou ser usada; o HMAC do e-mail é zerado na ativação, no bloqueio ou no vencimento | expurgo diário (0079) |
+| Ativação **não usada** de clínica nunca ativada (sem `founder_activated` na trilha; A2 do parecer de 17/11, R1 do #205) | **sem prazo**, até a ativação ou o encerramento do contrato: é a pendência que mantém a clínica fora do alcance do fundador. Fica só `usuario_id`, `clinica_id`, `contrato` e o hash do token, com o HMAC do e-mail zerado | o expurgo diário retém e conta (`ativacoesRetidas`); falha ao ler a trilha retém e gera `TRILHA_NAO_LIDA` |
 | Convite da equipe (`team_invites`, na clínica) | 30 dias depois do estado final (aceito, revogado ou vencido) | job `convites-descarte` zera o HMAC do e-mail e grava `invite_pseudonym_dropped` na trilha da clínica, na mesma transação do UPDATE (art. 37) |
 | Espelho dos convites aceitos (`identidade.convite_aceito`, só ids, 0073) | enquanto houver convite aceito com HMAC vivo naquela clínica (no máximo 30 dias depois do aceite) ou até a anonimização | o trigger apaga a linha quando o `convites-descarte` ou a anonimização zera o HMAC; a anonimização apaga o que restar da pessoa |
 | Contadores de bloqueio (Redis) | até 15 min | TTL da janela |
