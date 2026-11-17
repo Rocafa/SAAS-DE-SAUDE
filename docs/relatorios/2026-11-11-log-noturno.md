@@ -471,3 +471,4 @@ Pendente para a próxima sessão:
 - **#208: R1, R2 e R3 feitos (9d4a0b1).** RLS 914, exit 0. A pilha #203 a #208 está toda aprovada pelo Guardião, sem pendências de código, e espera a base (#155 e #194, aprovação do sócio).
 - **#207 e #208 caíram no autoteste das guardas do banco:** o `verificar-guardas.sh` não passava APP_PROVISIONAMENTO_PASSWORD ao bootstrap. Corrigido no #207 e propagado ao #208 por merge; CI rodando.
 - **Segunda causa no autoteste das guardas:** no PG16, o ALTER ROLE do app_provisionamento declarava NOBYPASSRLS, o que só um papel com BYPASSRLS pode fazer (o master do RDS também não poderia). Removido do ALTER; o CREATE já nega o atributo e a guarda confere. **#207 e #208 verdes (16/16).** Esse erro também quebraria o bootstrap no RDS real.
+- **R6 iniciado:** os testes do expurgo das ativações passam a usar o relógio injetado adiantado (linhas recentes), sem corrida com os expurgos de outros arquivos. Depois, cascata #205 → #206 → #207 → #208.
