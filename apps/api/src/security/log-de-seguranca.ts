@@ -159,6 +159,8 @@ const FORMATOS = {
   operador: (v: unknown) => typeof v === 'string' && UUID.test(v),
   /** B11: contrato da clínica provisionada (`CTR-<número>`), nunca nome ou e-mail. */
   contrato: (v: unknown) => typeof v === 'string' && /^CTR-\d{1,7}$/.test(v),
+  /** A3 do parecer do #195: id do pedido de provisionamento, para casar o evento com o RunTask no CloudTrail. */
+  pedido: (v: unknown) => typeof v === 'string' && UUID.test(v),
 } as const;
 
 export type CampoDeSeguranca = keyof typeof FORMATOS;

@@ -65,7 +65,7 @@ export interface BancosDoProvisionamento {
 }
 
 export interface OpcoesDoProvisionamento {
-  /** Chave do HMAC do e-mail; padrão: `chaveDeHmac('convite-email')`, a mesma que a ativação vai usar para conferir. */
+  /** Chave do HMAC do e-mail; padrão: `chaveDeHmac('ativacao-email')` (A1), a mesma que a ativação vai usar para conferir. */
   readonly chaveDoEmail?: Uint8Array;
 }
 
@@ -106,7 +106,7 @@ export async function provisionarClinica(
   const [ja] = await bancos.dbAuth.select({ id: ativacaoDoFundador.id }).from(ativacaoDoFundador).where(eq(ativacaoDoFundador.id, pedido));
   if (ja) throw new ProvisionamentoRecusado('ja_provisionado');
 
-  const chave = opcoes.chaveDoEmail ?? chaveDeHmac('convite-email');
+  const chave = opcoes.chaveDoEmail ?? chaveDeHmac('ativacao-email');
   const emailHmac = hmacDoEmail(email, chave);
   const clinicaId = clinicaDoPedido(pedido);
 
@@ -133,10 +133,13 @@ export async function provisionarClinica(
     // na metadata. O PR 2 ajusta a conferência da 0022 para aceitar o ator sistema só com `via: 'provisionamento'`.
     await criarClinica({ run: (t, fn, u) => withTenant(bancos.dbClinica, t, fn, u) }, { clinicaId, nome, fundadorUserId: usuarioId });
     // O operador não é declarado (R7): a prova é o principal da tarefa no CloudTrail.
-    registrarEventoDeSeguranca('CLINICA_PROVISIONADA', { tenantId: clinicaId, userId: usuarioId, contrato });
+    registrarEventoDeSeguranca('CLINICA_PROVISIONADA', { tenantId: clinicaId, userId: usuarioId, contrato, pedido });
   }
-  const [contaDoFundador] = await bancos.dbAuth.select({ id: usuario.id }).from(usuario).where(eq(usuario.id, usuarioId));
+  const [contaDoFundador] = await bancos.dbAuth.select({ id: usuario.id, email: usuario.email }).from(usuario).where(eq(usuario.id, usuarioId));
   const contaExistente = !!contaDoFundador;
+  // A2 do parecer do #195: ao repetir depois de falha parcial, o parâmetro foi recriado. Se o fundador já é uma conta,
+  // o e-mail novo tem de ser o dela; senão, o HMAC de outra pessoa ficaria ligado a esta conta.
+  if (existente?.fundador && contaDoFundador && contaDoFundador.email.toLowerCase() !== email) throw new ProvisionamentoRecusado('parametro_invalido');
 
   // 32 bytes aleatórios; no banco, só o SHA-256 (R3).
   const token = randomBytes(32).toString('base64url');
@@ -160,6 +163,6 @@ export async function provisionarClinica(
     if (ehViolacaoDeUnicidade(err)) throw new ProvisionamentoRecusado('ja_provisionado');
     throw err;
   }
-  registrarEventoDeSeguranca('ATIVACAO_EMITIDA', { tenantId: clinicaId, userId: usuarioId, contrato });
+  registrarEventoDeSeguranca('ATIVACAO_EMITIDA', { tenantId: clinicaId, userId: usuarioId, contrato, pedido });
   return { clinicaId, pedido, contaExistente };
 }
