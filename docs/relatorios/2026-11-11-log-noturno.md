@@ -403,3 +403,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
   - Corrigi as duas sobras: a escolha automática de clínica ignora a pendente, e entrou o teste do A2 (outro e-mail ao repetir dá `parametro_invalido`).
   - C2 a C4 continuam bloqueando o PR que ligar o SSM e o PR 2.
 - **#155 atualizado com a `main`** (sem aprovação a perder) e a pilha inteira propagada, até o #195, sem conflito.
+- **Erro meu, corrigido em seguida:** o commit das sobras da C1 subiu com 4 testes de unidade quebrados no `provedor.test.ts`. Eu tinha encadeado o commit num `grep` da saída do vitest, e não no código de saída dele. A consulta nova virou um método próprio, com dublê nesses testes; agora o vitest sai com 0 (1166 verdes). **Regra mantida:** o commit depende do `exit` do vitest, nunca de um `grep` da saída.
