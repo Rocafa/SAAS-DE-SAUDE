@@ -30,6 +30,9 @@ importers:
       '@aws-sdk/client-kms':
         specifier: 3.1156.0
         version: 3.1156.0
+      '@aws-sdk/client-ssm':
+        specifier: 3.1156.0
+        version: 3.1156.0
       '@nestjs/common':
         specifier: ^12.2.0
         version: 12.2.0(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -185,6 +188,10 @@ packages:
 
   '@aws-sdk/client-kms@3.1156.0':
     resolution: {integrity: sha512-dXzmgG3FIZsLD5L+IVntcZW0BBuNBBqq9kImu2kjr4EX/x3yNT4JzNIFb3vUYq2i/URQKbP1vHnN2dksw3TqMw==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-ssm@3.1156.0':
+    resolution: {integrity: sha512-bDLjYr1TVJNQXjHdKBEWlYyk+kqTlcicNJ4BylHA3M6SFO5Ji/xsGOrrU4AfcPRG+yob7KZ8V72giyrab0P1Ew==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.978.6':
@@ -2792,6 +2799,17 @@ snapshots:
   '@alloc/quick-lru@5.3.0': {}
 
   '@aws-sdk/client-kms@3.1156.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.6
+      '@aws-sdk/credential-provider-node': 3.972.89
+      '@aws-sdk/types': 3.975.0
+      '@smithy/core': 3.37.0
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.13.0
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-ssm@3.1156.0':
     dependencies:
       '@aws-sdk/core': 3.978.6
       '@aws-sdk/credential-provider-node': 3.972.89

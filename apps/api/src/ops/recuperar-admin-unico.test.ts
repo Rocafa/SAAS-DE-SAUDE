@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RecuperacaoPeloSuporteRecusada } from '../modules/auth/better-auth/recuperacao-pelo-suporte';
+import { EntregaPendente, FalhaDoSsm } from './parametros-ssm';
 import { executarComando, parametroDaEntrega, type DependenciasDoComando } from './recuperar-admin-unico';
 
 const CLINICA = '2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -88,6 +89,20 @@ describe('comando da recuperação do fator do admin único (B12, R3, R4, R5 e R
     const saida = await executarComando(ARGS, ENV, d);
     expect(saida).toEqual({ codigo: 'erro', linha: 'erro' });
     expect(saida.linha).not.toContain('@');
+    expect(d.parametros.apagar).toHaveBeenCalledWith(parametroDaEntrega(USUARIO));
+  });
+
+  it('entrega pendente de rodada anterior: entrega_pendente e o parâmetro anterior NÃO é apagado', async () => {
+    const d = deps();
+    d.parametros.gravar.mockRejectedValueOnce(new EntregaPendente());
+    expect(await executarComando(ARGS, ENV, d)).toEqual({ codigo: 'entrega_pendente', linha: 'entrega_pendente' });
+    expect(d.parametros.apagar).not.toHaveBeenCalled();
+  });
+
+  it('falha ambígua do SSM ao gravar (pode ter gravado): apaga o parâmetro desta rodada e sai com erro', async () => {
+    const d = deps();
+    d.parametros.gravar.mockRejectedValueOnce(new FalhaDoSsm('gravar'));
+    expect(await executarComando(ARGS, ENV, d)).toEqual({ codigo: 'erro', linha: 'erro' });
     expect(d.parametros.apagar).toHaveBeenCalledWith(parametroDaEntrega(USUARIO));
   });
 

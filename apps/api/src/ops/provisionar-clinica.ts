@@ -24,6 +24,7 @@ import {
   type PedidoDeProvisionamento,
   type ResultadoDoProvisionamento,
 } from '../modules/auth/better-auth/provisionamento';
+import { EntregaPendente, parametrosSsmDoAmbiente, VALIDADE_DA_ENTREGA_HORAS } from './parametros-ssm';
 
 export type CodigoDoComando =
   | 'ok'
@@ -35,13 +36,17 @@ export type CodigoDoComando =
   | 'ja_provisionado'
   | 'conta_inativa'
   | 'erro_parcial_rodar_de_novo'
+  | 'entrega_pendente'
   | 'ssm_nao_configurado';
 
 /** Acesso ao SSM, injetado (o teste usa dublês; a tarefa, o cliente real). */
 export interface ParametrosSeguros {
   /** Valor decifrado do SecureString, ou `null` se o parâmetro não existe. */
   readonly ler: (nome: string) => Promise<string | null>;
-  /** SecureString; sobrescreve o de uma rodada anterior cuja linha de ativação não gravou (aquele token não vale nada). */
+  /**
+   * SecureString com a chave KMS do fluxo, vencimento de 72 h e sem sobrescrever: a entrega de uma rodada anterior
+   * (cuja linha de ativação não gravou, então o token dela não vale nada) faz lançar `EntregaPendente`.
+   */
   readonly gravar: (nome: string, valor: string) => Promise<void>;
   readonly apagar: (nome: string) => Promise<void>;
 }
@@ -121,7 +126,10 @@ export async function executarComando(argv: readonly string[], env: NodeJS.Proce
       saida = { codigo: 'ok', linha: `ok ${r.clinicaId} ${r.pedido}` };
     }
   } catch (err) {
-    if (err instanceof ProvisionamentoRecusado) {
+    if (err instanceof EntregaPendente) {
+      // A transação desfez a linha: o token desta rodada não existiu. Quem entrega apaga a entrega antiga sem ler (runbook).
+      saida = falha('entrega_pendente');
+    } else if (err instanceof ProvisionamentoRecusado) {
       saida = falha(err.codigo === 'entrada_invalida' ? 'uso_incorreto' : err.codigo);
     } else {
       // Erro do banco ou do SSM: a tarefa é idempotente, então a saída é rodar de novo. Nunca a mensagem do driver.
@@ -138,14 +146,12 @@ export async function executarComando(argv: readonly string[], env: NodeJS.Proce
 }
 
 /**
- * Cliente real do SSM. `@aws-sdk/client-ssm` ainda não é dependência da API (só `client-kms`), e este PR não adiciona
- * pacote.
- * TODO(B11, PR do Terraform `ops-provisionamento`): adicionar `@aws-sdk/client-ssm` e implementar `ler`
- * (GetParameter com WithDecryption), `gravar` (PutParameter SecureString, Overwrite true, chave KMS própria) e `apagar`
- * (DeleteParameter), com o papel da tarefa restrito a `/provisionamento/*`.
+ * Cliente real do SSM (parametros-ssm.ts): papel da tarefa restrito a `/provisionamento/*` (lê e apaga o pedido, só grava
+ * a entrega), chave KMS própria em `SSM_KMS_KEY_ID` e vencimento de 72 h na entrega (C4 do parecer de 16/11, C2 do
+ * parecer de 17/11). Sem configuração válida, `null`: a tarefa sai com `ssm_nao_configurado` antes de abrir o banco.
  */
 function parametrosDoSsm(): ParametrosSeguros | null {
-  return null;
+  return parametrosSsmDoAmbiente(process.env, VALIDADE_DA_ENTREGA_HORAS.provisionamento);
 }
 
 async function principal(): Promise<void> {

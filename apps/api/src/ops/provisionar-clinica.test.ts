@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TenantId } from '@plataforma/shared';
 import { ProvisionamentoRecusado } from '../modules/auth/better-auth/provisionamento';
+import { EntregaPendente } from './parametros-ssm';
 import { executarComando, parametroDaEntrega, parametroDoPedido, type DependenciasDoComando, type ParametrosSeguros } from './provisionar-clinica';
 
 // Dados fictícios.
@@ -119,6 +120,14 @@ describe('comando de provisionamento da clínica (B11; R3, R8 e R9 do parecer de
     p.gravar.mockRejectedValue(new Error('AccessDenied'));
     const d = deps(p);
     expect((await executarComando(ARGS, ENV, d)).codigo).toBe('erro_parcial_rodar_de_novo');
+    expect(p.valores.has(parametroDoPedido(PEDIDO))).toBe(false);
+  });
+
+  it('entrega de rodada anterior ainda no SSM: entrega_pendente, sem sobrescrever, e o e-mail é apagado', async () => {
+    const p = ssm();
+    p.gravar.mockRejectedValue(new EntregaPendente());
+    const d = deps(p);
+    expect(await executarComando(ARGS, ENV, d)).toEqual({ codigo: 'entrega_pendente', linha: 'entrega_pendente' });
     expect(p.valores.has(parametroDoPedido(PEDIDO))).toBe(false);
   });
 
