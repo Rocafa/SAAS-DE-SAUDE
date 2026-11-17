@@ -15,11 +15,12 @@ locals {
   }
 
   # Chaves dos parâmetros SSM das tarefas avulsas (B11, B12): SÓ estes papéis decifram, cifram de
-  # novo ou dão grant (Deny na key policy, abaixo). Os papéis humanos ops-* entram pelo ARN fixo,
-  # mesmo quando a lista de principais está vazia e o papel não existe.
+  # novo ou dão grant (Deny na key policy, abaixo). Os papéis humanos de ENTREGA entram pelo ARN fixo,
+  # mesmo quando a lista de principais está vazia e o papel não existe. O executor não decifra (C1:
+  # quem roda não lê a entrega), e a tarefa da recuperação também não (só cifra; A2).
   chaves_ops_ssm = {
-    ops-provisionamento = [aws_iam_role.ops_provisionamento_tarefa.arn, local.ops_prov_papel_humano_arn]
-    ops-recuperacao     = [aws_iam_role.ops_recuperacao_tarefa.arn, local.ops_rec_papel_humano_arn]
+    ops-provisionamento = [aws_iam_role.ops_provisionamento_tarefa.arn, local.ops_prov_papel_entrega_arn]
+    ops-recuperacao     = [local.ops_rec_papel_entrega_arn]
   }
 
   # Chaves que guardam dado de clínica ou credencial: humano não decifra (R4 do PR #58).

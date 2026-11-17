@@ -5,8 +5,9 @@
 #     (app_auth e app_user). Nada de BETTER_AUTH_SECRET (a emissão não precisa), Redis, chaves HMAC,
 #     KMS de clínica ou WhatsApp;
 #   - quem roda é provado pela AWS (principal do ecs:RunTask no CloudTrail): só o papel
-#     ops-recuperacao (humano nominal, MFA, SourceIdentity). Nenhum papel de máquina roda esta
-#     tarefa, passa os papéis dela ou toca os parâmetros /recuperacao-suporte/*.
+#     ops-recuperacao-executor (humano nominal, MFA, SourceIdentity); quem lê a entrega é OUTRO papel,
+#     ops-recuperacao-entrega, com lista de principais disjunta (C1 do parecer de 17/11). Nenhum
+#     papel de máquina roda esta tarefa, passa os papéis dela ou toca os parâmetros /recuperacao-suporte/*.
 #
 # Saída do token (R3, R7): SecureString com a chave KMS própria "ops-recuperacao" em
 #   /recuperacao-suporte/<usuario>/entrega
@@ -18,8 +19,9 @@
 # PARÂMETRO, que nasce no PutParameter da tarefa, não no Terraform. Fica no cliente SSM da tarefa
 # (TODO B12 em recuperar-admin-unico.ts): PutParameter com Type=SecureString, KeyId=$SSM_KMS_KEY_ID,
 # Tier=Advanced e Policies=[{"Type":"Expiration","Version":"1.0","Attributes":{"Timestamp":"<agora + 24 h>"}}].
-# Controle de duas pessoas (R6): o IAM não distingue as duas sessões do mesmo papel; fica no chamado,
-# conferido pelo SourceIdentity do RunTask e do GetParameter no CloudTrail.
+# Controle de duas pessoas (R6): dois papéis com listas disjuntas (precondição na definição de
+# tarefa); o chamado confere o SourceIdentity do RunTask e do GetParameter no CloudTrail, e as duas
+# pontas geram alerta (execução e entrega lida/apagada).
 #
 # Execução (runbook docs/04-arquitetura/runbook-recuperacao-admin-unico.md): RunTask com
 #   containerOverrides[0].command     = ["--clinica", "<uuid>", "--usuario", "<uuid>", "--chamado", "SUP-<n>",
@@ -32,9 +34,12 @@ locals {
   ops_rec_conteiner = "ops-recuperacao"
   ops_rec_prefixo   = "ops-recuperacao"
 
-  # Nome e ARN fixos do papel humano (a key policy da chave "ops-recuperacao" o cita mesmo sem o papel).
-  ops_rec_papel_humano     = "${local.nome}-ops-recuperacao"
-  ops_rec_papel_humano_arn = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_rec_papel_humano}"
+  # Nomes e ARNs fixos dos papéis humanos (C1: quem roda não entrega). A key policy da chave
+  # "ops-recuperacao" e local.principais_humanos os citam mesmo quando o papel não existe.
+  ops_rec_papel_executor     = "${local.nome}-ops-recuperacao-executor"
+  ops_rec_papel_entrega      = "${local.nome}-ops-recuperacao-entrega"
+  ops_rec_papel_executor_arn = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_rec_papel_executor}"
+  ops_rec_papel_entrega_arn  = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_rec_papel_entrega}"
 
   # Parâmetros SSM do fluxo: só a entrega.
   ops_rec_parametros = "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/recuperacao-suporte"
@@ -167,11 +172,18 @@ resource "aws_iam_role" "ops_recuperacao_tarefa" {
 }
 
 data "aws_iam_policy_document" "ops_recuperacao_tarefa" {
-  # Sem leitura: a tarefa nunca relê o token (GetParameter fica de fora).
   statement {
     sid       = "GravarEApagarAEntrega"
     actions   = ["ssm:PutParameter", "ssm:DeleteParameter"]
     resources = [local.ops_rec_entregas]
+  }
+  # A2: a tarefa nunca relê o token. Deny explícito (não só a falta de Allow), para uma ampliação
+  # futura por curinga não abrir a leitura; a key policy também não deixa este papel decifrar.
+  statement {
+    sid       = "EntregaNaoVolta"
+    effect    = "Deny"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:GetParametersByPath"]
+    resources = [local.ops_rec_parametros, "${local.ops_rec_parametros}/*"]
   }
   statement {
     sid       = "CifrarAEntrega"
@@ -257,24 +269,44 @@ resource "aws_ecs_task_definition" "ops_recuperacao" {
       condition     = length(setsubtract(local.ops_rec_nomes_ambiente, local.ops_rec_ambiente_permitido)) == 0 && length(setintersection(local.ops_rec_nomes_ambiente, local.ops_rec_nomes_segredos)) == 0
       error_message = "O environment da tarefa da recuperação só aceita NODE_ENV, NODE_EXTRA_CA_CERTS, AWS_REGION e SSM_KMS_KEY_ID. CONFIRMA_RECUPERACAO vem só pelo containerOverrides do RunTask."
     }
+    # C1: quem roda não entrega. As duas listas preenchidas (ou as duas vazias: ninguém recupera) e
+    # sem nenhum principal em comum. A validação das variáveis recusa curinga, então comparar os ARNs
+    # como texto basta.
+    precondition {
+      condition = (
+        (length(var.principais_ops_recuperacao_executor) == 0) == (length(var.principais_ops_recuperacao_entrega) == 0)
+        && length(setintersection(var.principais_ops_recuperacao_executor, var.principais_ops_recuperacao_entrega)) == 0
+      )
+      error_message = "principais_ops_recuperacao_executor e principais_ops_recuperacao_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda a recuperação não lê a entrega do token (C1 do parecer de 17/11/2026)."
+    }
   }
 }
 
-# --- Papel ops-recuperacao (R4 do parecer do desenho) -------------------------------------------
-# Mesmo desenho do ops-lgpd (ops-anonimizacao.tf): só a conta, só os principais de
-# var.principais_ops_recuperacao (fora do git, no tfvars), MFA recente, SourceIdentity obrigatório
-# (igual ao aws:username no usuário IAM; presente no papel do SSO), sessão de 1 h.
-# Sem principal na lista, o papel não existe (ninguém recupera).
+# --- Papéis humanos ops-recuperacao-executor e ops-recuperacao-entrega ---------------------------
+# R4 e R6 do parecer do desenho e C1 do parecer do código (revisoes/2026-11-17-codigo-infra-ops-provisionamento.md):
+# quem roda NÃO entrega, separado por máquina, não só pelo chamado.
+#   - executor: roda a tarefa e acompanha. Não toca /recuperacao-suporte/* e não decifra nada (a key
+#     policy só deixa o papel de entrega decifrar);
+#   - entrega: lê a entrega uma vez e apaga. Não roda a tarefa, não passa papel e não grava nada.
+# Cada papel tem a sua lista de principais (fora do git, no tfvars); a precondição da definição de
+# tarefa exige as duas listas preenchidas (ou as duas vazias) e disjuntas. Mesmo desenho de confiança
+# do ops-lgpd (ops-anonimizacao.tf): só a conta, MFA de menos de 1 h, SourceIdentity obrigatório
+# (igual ao aws:username no usuário IAM; presente no papel do SSO), sessão de 1 h. Sem principal na
+# lista, o papel não existe.
 
 locals {
-  ops_rec_usuarios = [for a in var.principais_ops_recuperacao : a if can(regex(":user/", a))]
-  ops_rec_sso      = [for a in var.principais_ops_recuperacao : a if !can(regex(":user/", a))]
-  ops_rec_ativo    = length(var.principais_ops_recuperacao) > 0
+  ops_rec_papeis_humanos = {
+    executor = { nome = local.ops_rec_papel_executor, principais = var.principais_ops_recuperacao_executor }
+    entrega  = { nome = local.ops_rec_papel_entrega, principais = var.principais_ops_recuperacao_entrega }
+  }
+  ops_rec_papeis_ativos = { for k, p in local.ops_rec_papeis_humanos : k => p if length(p.principais) > 0 }
 }
 
 data "aws_iam_policy_document" "confianca_ops_recuperacao" {
+  for_each = local.ops_rec_papeis_humanos
+
   dynamic "statement" {
-    for_each = length(local.ops_rec_usuarios) > 0 ? [1] : []
+    for_each = length([for a in each.value.principais : a if can(regex(":user/", a))]) > 0 ? [1] : []
     content {
       sid     = "UsuarioNominalComMfa"
       actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
@@ -285,7 +317,7 @@ data "aws_iam_policy_document" "confianca_ops_recuperacao" {
       condition {
         test     = "ArnLike"
         variable = "aws:PrincipalArn"
-        values   = local.ops_rec_usuarios
+        values   = [for a in each.value.principais : a if can(regex(":user/", a))]
       }
       condition {
         test     = "StringEquals"
@@ -305,7 +337,7 @@ data "aws_iam_policy_document" "confianca_ops_recuperacao" {
     }
   }
   dynamic "statement" {
-    for_each = length(local.ops_rec_sso) > 0 ? [1] : []
+    for_each = length([for a in each.value.principais : a if !can(regex(":user/", a))]) > 0 ? [1] : []
     content {
       sid     = "SsoComMfaESourceIdentity"
       actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
@@ -316,7 +348,7 @@ data "aws_iam_policy_document" "confianca_ops_recuperacao" {
       condition {
         test     = "ArnLike"
         variable = "aws:PrincipalArn"
-        values   = local.ops_rec_sso
+        values   = [for a in each.value.principais : a if !can(regex(":user/", a))]
       }
       condition {
         test     = "Null"
@@ -338,14 +370,43 @@ data "aws_iam_policy_document" "confianca_ops_recuperacao" {
 }
 
 resource "aws_iam_role" "ops_recuperacao" {
-  count                = local.ops_rec_ativo ? 1 : 0
-  name                 = local.ops_rec_papel_humano
-  description          = "Roda a recuperação do fator do admin único e entrega o token (B12): humano nominal com MFA e SourceIdentity, sessão de 1 h, todo RunTask gera alerta."
-  assume_role_policy   = data.aws_iam_policy_document.confianca_ops_recuperacao.json
+  for_each             = local.ops_rec_papeis_ativos
+  name                 = each.value.nome
+  description          = each.key == "executor" ? "Roda a recuperação do fator do admin único (B12), sem ler a entrega: humano nominal com MFA e SourceIdentity, sessão de 1 h, todo RunTask gera alerta." : "Lê uma vez e apaga a entrega do token da recuperação do admin único (B12), sem rodar a tarefa: humano nominal com MFA e SourceIdentity, sessão de 1 h, toda leitura gera alerta."
+  assume_role_policy   = data.aws_iam_policy_document.confianca_ops_recuperacao[each.key].json
   max_session_duration = 3600
 }
 
-data "aws_iam_policy_document" "ops_recuperacao" {
+# Comum aos dois papéis: sem MFA nada, só São Paulo.
+data "aws_iam_policy_document" "ops_recuperacao_comum" {
+  # Mesmo que alguém amplie a confiança: sessão sem MFA não roda, não passa papel e não toca o SSM.
+  statement {
+    sid       = "SemMfaNada"
+    effect    = "Deny"
+    actions   = ["ecs:RunTask", "iam:PassRole", "ssm:GetParameter", "ssm:DeleteParameter", "kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "BoolIfExists"
+      variable = "aws:MultiFactorAuthPresent"
+      values   = ["false"]
+    }
+  }
+  statement {
+    sid         = "SomenteSaoPaulo"
+    effect      = "Deny"
+    not_actions = ["iam:*", "sts:*"]
+    resources   = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestedRegion"
+      values   = ["sa-east-1"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "ops_recuperacao_executor" {
+  source_policy_documents = [data.aws_iam_policy_document.ops_recuperacao_comum.json]
+
   # Roda SÓ a revisão atual desta definição (ARN com revisão), SÓ neste cluster.
   statement {
     sid       = "RodarRecuperacao"
@@ -377,18 +438,23 @@ data "aws_iam_policy_document" "ops_recuperacao" {
     actions   = ["logs:GetLogEvents"]
     resources = ["${aws_cloudwatch_log_group.api.arn}:log-stream:${local.ops_rec_prefixo}/*"]
   }
-  # Quem entrega lê a entrega uma vez e apaga (R6, R7).
+  # C1: quem roda não toca a entrega (nem forja, nem lê, nem apaga).
+  statement {
+    sid       = "NaoTocaAEntrega"
+    effect    = "Deny"
+    actions   = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:GetParametersByPath", "ssm:DeleteParameter", "ssm:DeleteParameters"]
+    resources = [local.ops_rec_parametros, "${local.ops_rec_parametros}/*"]
+  }
+}
+
+data "aws_iam_policy_document" "ops_recuperacao_entrega" {
+  source_policy_documents = [data.aws_iam_policy_document.ops_recuperacao_comum.json]
+
+  # Lê a entrega uma vez, entrega fora de banda e apaga (R6, R7).
   statement {
     sid       = "LerEApagarAEntrega"
     actions   = ["ssm:GetParameter", "ssm:DeleteParameter"]
     resources = [local.ops_rec_entregas]
-  }
-  # O humano não forja a entrega: o token só nasce na tarefa.
-  statement {
-    sid       = "NaoForjaAEntrega"
-    effect    = "Deny"
-    actions   = ["ssm:PutParameter"]
-    resources = [local.ops_rec_parametros, "${local.ops_rec_parametros}/*"]
   }
   statement {
     sid       = "DecifrarAEntrega"
@@ -405,36 +471,28 @@ data "aws_iam_policy_document" "ops_recuperacao" {
       values   = [local.ops_rec_entregas]
     }
   }
-  # Mesmo que alguém amplie a confiança: sessão sem MFA não roda, não passa papel e não toca o SSM.
+  # C1: quem entrega não roda a tarefa, não passa os papéis dela e não forja a entrega (o token só
+  # nasce na tarefa).
   statement {
-    sid       = "SemMfaNada"
+    sid       = "NaoRodaENaoGrava"
     effect    = "Deny"
-    actions   = ["ecs:RunTask", "iam:PassRole", "ssm:GetParameter", "ssm:DeleteParameter", "kms:Decrypt"]
+    actions   = ["ecs:RunTask", "ecs:StartTask", "iam:PassRole", "ssm:PutParameter"]
     resources = ["*"]
-    condition {
-      test     = "BoolIfExists"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["false"]
-    }
   }
-  statement {
-    sid         = "SomenteSaoPaulo"
-    effect      = "Deny"
-    not_actions = ["iam:*", "sts:*"]
-    resources   = ["*"]
-    condition {
-      test     = "StringNotEquals"
-      variable = "aws:RequestedRegion"
-      values   = ["sa-east-1"]
-    }
+}
+
+locals {
+  ops_rec_politicas = {
+    executor = data.aws_iam_policy_document.ops_recuperacao_executor.json
+    entrega  = data.aws_iam_policy_document.ops_recuperacao_entrega.json
   }
 }
 
 resource "aws_iam_role_policy" "ops_recuperacao" {
-  count  = local.ops_rec_ativo ? 1 : 0
-  name   = "rodar-recuperacao"
-  role   = aws_iam_role.ops_recuperacao[0].id
-  policy = data.aws_iam_policy_document.ops_recuperacao.json
+  for_each = local.ops_rec_papeis_ativos
+  name     = each.key == "executor" ? "rodar-recuperacao" : "entregar-token-da-recuperacao"
+  role     = aws_iam_role.ops_recuperacao[each.key].id
+  policy   = local.ops_rec_politicas[each.key]
 }
 
 # --- Alerta a cada execução (padrão R-B do parecer do código do #190) ------------------------------
@@ -490,6 +548,33 @@ resource "aws_cloudwatch_event_rule" "ops_recuperacao_override_suspeito" {
 
 resource "aws_cloudwatch_event_target" "ops_recuperacao_override_suspeito" {
   rule = aws_cloudwatch_event_rule.ops_recuperacao_override_suspeito.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
+
+# 3. <nome>-ops-recuperacao-entrega (A6, trilha do "entregue em" de C1): toda leitura ou apagamento de
+#    /recuperacao-suporte/*/entrega (inclui o apagamento pela própria tarefa quando falha depois de
+#    gravar). Mesmo desenho da regra do provisionamento: estado ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS
+#    para receber o GetParameter (evento de leitura).
+resource "aws_cloudwatch_event_rule" "ops_recuperacao_entrega" {
+  name        = "${local.ops_rec_nome}-entrega"
+  description = "Leitura ou apagamento da entrega do token da recuperação do admin único (B12)."
+  state       = "ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS"
+  event_pattern = jsonencode({
+    source        = ["aws.ssm"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["ssm.amazonaws.com"]
+      eventName   = ["GetParameter", "GetParameters", "GetParameterHistory", "DeleteParameter", "DeleteParameters"]
+      "$or" = [
+        { requestParameters = { name = [{ wildcard = "/recuperacao-suporte/*/entrega" }] } },
+        { requestParameters = { names = [{ wildcard = "/recuperacao-suporte/*/entrega" }] } },
+      ]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "ops_recuperacao_entrega" {
+  rule = aws_cloudwatch_event_rule.ops_recuperacao_entrega.name
   arn  = aws_sns_topic.alertas_seguranca.arn
 }
 

@@ -89,7 +89,7 @@ output "papel_ops_lgpd" {
 }
 
 output "ops_provisionamento_task_definition" {
-  description = "Definição de tarefa (com revisão) do provisionamento da clínica (B11). Só o papel ops-provisionamento, com MFA, roda; argumentos por containerOverrides."
+  description = "Definição de tarefa (com revisão) do provisionamento da clínica (B11). Só o papel ops-provisionamento-executor, com MFA, roda; argumentos por containerOverrides."
   value       = aws_ecs_task_definition.ops_provisionamento.arn
 }
 
@@ -103,13 +103,13 @@ output "ops_provisionamento_rede" {
   }
 }
 
-output "papel_ops_provisionamento" {
-  description = "Papel que roda o provisionamento e entrega o token (B11): humano de principais_ops_provisionamento, com MFA e --source-identity, sessão de 1 h. null quando a lista está vazia."
-  value       = one(aws_iam_role.ops_provisionamento[*].arn)
+output "papeis_ops_provisionamento" {
+  description = "Papéis humanos do provisionamento (B11, C1): executor (cria o pedido e roda; principais_ops_provisionamento_executor) e entrega (lê e apaga a entrega; principais_ops_provisionamento_entrega). MFA e --source-identity, sessão de 1 h. Vazio quando as listas estão vazias."
+  value       = { for k, r in aws_iam_role.ops_provisionamento : k => r.arn }
 }
 
 output "ops_recuperacao_task_definition" {
-  description = "Definição de tarefa (com revisão) da recuperação do fator do admin único (B12). Só o papel ops-recuperacao, com MFA, roda; argumentos por containerOverrides."
+  description = "Definição de tarefa (com revisão) da recuperação do fator do admin único (B12). Só o papel ops-recuperacao-executor, com MFA, roda; argumentos por containerOverrides."
   value       = aws_ecs_task_definition.ops_recuperacao.arn
 }
 
@@ -123,7 +123,7 @@ output "ops_recuperacao_rede" {
   }
 }
 
-output "papel_ops_recuperacao" {
-  description = "Papel que roda a recuperação do admin único e entrega o token (B12): humano de principais_ops_recuperacao, com MFA e --source-identity, sessão de 1 h. null quando a lista está vazia."
-  value       = one(aws_iam_role.ops_recuperacao[*].arn)
+output "papeis_ops_recuperacao" {
+  description = "Papéis humanos da recuperação do admin único (B12, C1): executor (roda; principais_ops_recuperacao_executor) e entrega (lê e apaga a entrega; principais_ops_recuperacao_entrega). MFA e --source-identity, sessão de 1 h. Vazio quando as listas estão vazias."
+  value       = { for k, r in aws_iam_role.ops_recuperacao : k => r.arn }
 }

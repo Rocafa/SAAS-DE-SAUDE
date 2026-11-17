@@ -102,24 +102,50 @@ variable "principais_ops_lgpd" {
   }
 }
 
-variable "principais_ops_provisionamento" {
-  description = "ARNs (ArnLike) de quem pode assumir o papel ops-provisionamento, rodar o provisionamento da clínica e entregar o token (B11, R7 do parecer de 16/11/2026): usuário IAM nominal (user/<nome>) ou papel do SSO. Uma pessoa por entrada; ao menos duas pessoas (quem roda não entrega). Só no tfvars, fora do git. Vazio = o papel não existe."
+variable "principais_ops_provisionamento_executor" {
+  description = "ARNs EXATOS de quem pode assumir o papel ops-provisionamento-executor: cria o pedido e roda o provisionamento da clínica, sem ler a entrega (B11, R7 e C1 do parecer de 17/11/2026). Usuário IAM nominal (user/<nome>) ou papel do SSO de um permission set só de executor. Uma pessoa por entrada, sem curinga; disjunta de principais_ops_provisionamento_entrega (precondição). Só no tfvars, fora do git. Vazio = o papel não existe."
   type        = list(string)
   default     = []
   validation {
-    condition     = alltrue([for a in var.principais_ops_provisionamento : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/.+)$", a))])
-    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> (sem curinga) ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...)."
+    condition     = alltrue([for a in var.principais_ops_provisionamento_executor : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/[^*?]+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...), sem curinga (* ou ?)."
   }
 }
 
-variable "principais_ops_recuperacao" {
-  description = "ARNs (ArnLike) de quem pode assumir o papel ops-recuperacao, rodar a recuperação do fator do admin único e entregar o token (B12, R4 e R6 do parecer de 16/11/2026): usuário IAM nominal (user/<nome>) ou papel do SSO. Uma pessoa por entrada; ao menos duas pessoas (quem roda não entrega). Só no tfvars, fora do git. Vazio = o papel não existe."
+variable "principais_ops_provisionamento_entrega" {
+  description = "ARNs EXATOS de quem pode assumir o papel ops-provisionamento-entrega: lê uma vez e apaga a entrega do token do provisionamento, sem rodar a tarefa (B11, R3 e C1 do parecer de 17/11/2026). Usuário IAM nominal ou papel do SSO de um permission set só de entrega. Uma pessoa por entrada, sem curinga; disjunta de principais_ops_provisionamento_executor (precondição). Só no tfvars, fora do git. Vazio = o papel não existe."
   type        = list(string)
   default     = []
   validation {
-    condition     = alltrue([for a in var.principais_ops_recuperacao : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/.+)$", a))])
-    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> (sem curinga) ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...)."
+    condition     = alltrue([for a in var.principais_ops_provisionamento_entrega : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/[^*?]+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...), sem curinga (* ou ?)."
   }
+}
+
+variable "principais_ops_recuperacao_executor" {
+  description = "ARNs EXATOS de quem pode assumir o papel ops-recuperacao-executor: roda a recuperação do fator do admin único, sem ler a entrega (B12, R4, R6 e C1 do parecer de 17/11/2026). Usuário IAM nominal ou papel do SSO de um permission set só de executor. Uma pessoa por entrada, sem curinga; disjunta de principais_ops_recuperacao_entrega (precondição). Só no tfvars, fora do git. Vazio = o papel não existe."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.principais_ops_recuperacao_executor : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/[^*?]+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...), sem curinga (* ou ?)."
+  }
+}
+
+variable "principais_ops_recuperacao_entrega" {
+  description = "ARNs EXATOS de quem pode assumir o papel ops-recuperacao-entrega: lê uma vez e apaga a entrega do token da recuperação, sem rodar a tarefa (B12, R6 e C1 do parecer de 17/11/2026). Usuário IAM nominal ou papel do SSO de um permission set só de entrega. Uma pessoa por entrada, sem curinga; disjunta de principais_ops_recuperacao_executor (precondição). Só no tfvars, fora do git. Vazio = o papel não existe."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.principais_ops_recuperacao_entrega : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/[^*?]+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...), sem curinga (* ou ?)."
+  }
+}
+
+variable "endpoint_ssm" {
+  description = "Cria o VPC endpoint ssm (com política só desta conta e dos parâmetros /provisionamento/* e /recuperacao-suporte/*) para as tarefas avulsas B11/B12 (A4 do parecer de 17/11/2026). Custo por AZ (ver rede.tf). Desligado, as tarefas não alcançam o SSM e falham fechado; ligar com o PR do cliente SSM."
+  type        = bool
+  default     = false
 }
 
 variable "backup_mensal_retencao_dias" {

@@ -6,16 +6,18 @@
 #     chaveDeHmac('ativacao-email') para o HMAC do e-mail do fundador). Nada de BETTER_AUTH_SECRET,
 #     Redis, KMS de clínica ou WhatsApp;
 #   - quem roda é provado pela AWS (principal do ecs:RunTask no CloudTrail): só o papel
-#     ops-provisionamento (humano nominal, MFA, SourceIdentity). Nenhum papel de máquina roda esta
-#     tarefa, passa os papéis dela ou toca os parâmetros /provisionamento/*.
+#     ops-provisionamento-executor (humano nominal, MFA, SourceIdentity); quem lê a entrega é OUTRO
+#     papel, ops-provisionamento-entrega, com lista de principais disjunta (C1 do parecer de 17/11).
+#     Nenhum papel de máquina roda esta tarefa, passa os papéis dela ou toca os parâmetros
+#     /provisionamento/*.
 #
 # Dados pessoais só no SSM (R1, P1), em SecureString com a chave KMS própria "ops-provisionamento":
 #   /provisionamento/<pedido>          {"email": ..., "clinica": ...}: o operador cria; a tarefa lê e apaga
 #                                      (com sucesso ou falha, R9);
 #   /provisionamento/<pedido>/entrega  o token: a tarefa grava; a SEGUNDA pessoa lê uma vez, entrega fora
 #                                      de banda e apaga (R3).
-# O papel da tarefa só lê e apaga o pedido e só grava a entrega; o papel humano só cria o pedido, lê a
-# entrega e apaga os dois. Nenhum dos dois forja o lado do outro (Deny explícito).
+# O papel da tarefa só lê e apaga o pedido e só grava a entrega; o executor só cria e apaga o pedido;
+# o papel de entrega só lê e apaga a entrega. Nenhum forja o lado do outro (Deny explícito).
 #
 # Vencimento de 72 h no parâmetro de entrega (R3: "a tarefa agenda o apagamento no vencimento"): a
 # política de expiração do SSM é do PARÂMETRO, e o parâmetro nasce no PutParameter da tarefa, não no
@@ -23,8 +25,9 @@
 # PutParameter com Type=SecureString, KeyId=$SSM_KMS_KEY_ID, Tier=Advanced e
 # Policies=[{"Type":"Expiration","Version":"1.0","Attributes":{"Timestamp":"<agora + 72 h>"}}]. O
 # runbook pede o mesmo no pedido criado pelo operador (vence em 72 h se a tarefa não rodar).
-# Controle de duas pessoas (quem roda não entrega): o IAM não distingue as duas sessões do mesmo papel;
-# fica no chamado, conferido pelo SourceIdentity do RunTask e do GetParameter no CloudTrail.
+# Controle de duas pessoas (quem roda não entrega): dois papéis com listas disjuntas (precondição na
+# definição de tarefa); o chamado confere o SourceIdentity do RunTask e do GetParameter no CloudTrail,
+# e as duas pontas geram alerta (execução e entrega lida/apagada).
 #
 # Execução (desenho em docs/04-arquitetura/provisionamento-da-clinica.md; o runbook ainda falta): RunTask com
 #   containerOverrides[0].command     = ["--pedido", "<uuid>", "--contrato", "CTR-<n>"]
@@ -36,9 +39,12 @@ locals {
   ops_prov_conteiner = "ops-provisionamento"
   ops_prov_prefixo   = "ops-provisionamento"
 
-  # Nome e ARN fixos do papel humano (a key policy da chave "ops-provisionamento" o cita mesmo sem o papel).
-  ops_prov_papel_humano     = "${local.nome}-ops-provisionamento"
-  ops_prov_papel_humano_arn = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_prov_papel_humano}"
+  # Nomes e ARNs fixos dos papéis humanos (C1: quem roda não entrega). A key policy da chave
+  # "ops-provisionamento" e local.principais_humanos os citam mesmo quando o papel não existe.
+  ops_prov_papel_executor     = "${local.nome}-ops-provisionamento-executor"
+  ops_prov_papel_entrega      = "${local.nome}-ops-provisionamento-entrega"
+  ops_prov_papel_executor_arn = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_prov_papel_executor}"
+  ops_prov_papel_entrega_arn  = "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.ops_prov_papel_entrega}"
 
   # Parâmetros SSM do fluxo. `*` no IAM atravessa a barra: ops_prov_pedidos inclui as entregas.
   ops_prov_parametros = "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/provisionamento"
@@ -48,6 +54,12 @@ locals {
 
   # Segredo -> segredo do Secrets Manager. SÓ estes três (R8). A política de leitura do papel de
   # execução é derivada deste mapa; a precondição abaixo falha se entrar qualquer outro.
+  # TODO(A1 do parecer de 17/11/2026, eng/hmac-por-uso): RATE_LIMIT_HASH_KEY é a RAIZ do HMAC por uso.
+  # A tarefa só precisa de chaveDeHmac('ativacao-email') (HKDF em rate-limit-store.ts), mas com a raiz
+  # consegue derivar todos os usos (rate-limit, bloqueio, sessao-ua, convite-email). Trocar por um
+  # segredo próprio com a chave já derivada (ATIVACAO_EMAIL_HMAC_KEY, gerado uma vez por script e
+  # gravado write-only) quando a API aceitar lê-la direto; a precondição troca junto. Não muda aqui
+  # porque exige mudança no código da API.
   ops_prov_segredos_origem = {
     DATABASE_AUTH_URL   = { segredo = aws_secretsmanager_secret.app["banco-app-auth"].arn, campo = "url" }
     DATABASE_URL        = { segredo = aws_secretsmanager_secret.app["banco-app-user"].arn, campo = "url" }
@@ -205,6 +217,12 @@ data "aws_iam_policy_document" "ops_provisionamento_tarefa" {
       variable = "kms:EncryptionContext:PARAMETER_ARN"
       values   = [local.ops_prov_pedidos]
     }
+    # A3: `*` atravessa a barra; a entrega fica de fora também no KMS (igual ao Deny do SSM).
+    condition {
+      test     = "ArnNotLike"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = [local.ops_prov_entregas]
+    }
   }
   statement {
     sid       = "CifrarAEntrega"
@@ -290,24 +308,45 @@ resource "aws_ecs_task_definition" "ops_provisionamento" {
       condition     = length(setsubtract(local.ops_prov_nomes_ambiente, local.ops_prov_ambiente_permitido)) == 0 && length(setintersection(local.ops_prov_nomes_ambiente, local.ops_prov_nomes_segredos)) == 0
       error_message = "O environment da tarefa do provisionamento só aceita NODE_ENV, NODE_EXTRA_CA_CERTS, AWS_REGION e SSM_KMS_KEY_ID. CONFIRMA_PROVISIONAMENTO vem só pelo containerOverrides do RunTask."
     }
+    # C1: quem roda não entrega. As duas listas preenchidas (ou as duas vazias: ninguém provisiona)
+    # e sem nenhum principal em comum. A validação das variáveis recusa curinga, então comparar os
+    # ARNs como texto basta.
+    precondition {
+      condition = (
+        (length(var.principais_ops_provisionamento_executor) == 0) == (length(var.principais_ops_provisionamento_entrega) == 0)
+        && length(setintersection(var.principais_ops_provisionamento_executor, var.principais_ops_provisionamento_entrega)) == 0
+      )
+      error_message = "principais_ops_provisionamento_executor e principais_ops_provisionamento_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda o provisionamento não lê a entrega do token (C1 do parecer de 17/11/2026)."
+    }
   }
 }
 
-# --- Papel ops-provisionamento (R7 do parecer do desenho) ---------------------------------------
-# Mesmo desenho do ops-lgpd (ops-anonimizacao.tf): só a conta, só os principais de
-# var.principais_ops_provisionamento (fora do git, no tfvars), MFA recente, SourceIdentity
-# obrigatório (igual ao aws:username no usuário IAM; presente no papel do SSO), sessão de 1 h.
-# Sem principal na lista, o papel não existe (ninguém provisiona).
+# --- Papéis humanos ops-provisionamento-executor e ops-provisionamento-entrega -------------------
+# R7 do parecer do desenho e C1 do parecer do código (revisoes/2026-11-17-codigo-infra-ops-provisionamento.md):
+# quem roda NÃO entrega, separado por máquina, não só pelo chamado.
+#   - executor: cria o pedido, roda a tarefa, acompanha e apaga o pedido. Não lê nem apaga a entrega
+#     e não decifra nada (a key policy só deixa a tarefa e o papel de entrega decifrarem);
+#   - entrega: lê a entrega uma vez e apaga. Não roda a tarefa, não passa papel e não grava nada em
+#     /provisionamento/*.
+# Cada papel tem a sua lista de principais (fora do git, no tfvars); a precondição da definição de
+# tarefa exige as duas listas preenchidas (ou as duas vazias) e disjuntas. Mesmo desenho de confiança
+# do ops-lgpd (ops-anonimizacao.tf): só a conta, MFA de menos de 1 h, SourceIdentity obrigatório
+# (igual ao aws:username no usuário IAM; presente no papel do SSO), sessão de 1 h. Sem principal na
+# lista, o papel não existe.
 
 locals {
-  ops_prov_usuarios = [for a in var.principais_ops_provisionamento : a if can(regex(":user/", a))]
-  ops_prov_sso      = [for a in var.principais_ops_provisionamento : a if !can(regex(":user/", a))]
-  ops_prov_ativo    = length(var.principais_ops_provisionamento) > 0
+  ops_prov_papeis_humanos = {
+    executor = { nome = local.ops_prov_papel_executor, principais = var.principais_ops_provisionamento_executor }
+    entrega  = { nome = local.ops_prov_papel_entrega, principais = var.principais_ops_provisionamento_entrega }
+  }
+  ops_prov_papeis_ativos = { for k, p in local.ops_prov_papeis_humanos : k => p if length(p.principais) > 0 }
 }
 
 data "aws_iam_policy_document" "confianca_ops_provisionamento" {
+  for_each = local.ops_prov_papeis_humanos
+
   dynamic "statement" {
-    for_each = length(local.ops_prov_usuarios) > 0 ? [1] : []
+    for_each = length([for a in each.value.principais : a if can(regex(":user/", a))]) > 0 ? [1] : []
     content {
       sid     = "UsuarioNominalComMfa"
       actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
@@ -318,7 +357,7 @@ data "aws_iam_policy_document" "confianca_ops_provisionamento" {
       condition {
         test     = "ArnLike"
         variable = "aws:PrincipalArn"
-        values   = local.ops_prov_usuarios
+        values   = [for a in each.value.principais : a if can(regex(":user/", a))]
       }
       condition {
         test     = "StringEquals"
@@ -338,7 +377,7 @@ data "aws_iam_policy_document" "confianca_ops_provisionamento" {
     }
   }
   dynamic "statement" {
-    for_each = length(local.ops_prov_sso) > 0 ? [1] : []
+    for_each = length([for a in each.value.principais : a if !can(regex(":user/", a))]) > 0 ? [1] : []
     content {
       sid     = "SsoComMfaESourceIdentity"
       actions = ["sts:AssumeRole", "sts:SetSourceIdentity"]
@@ -349,7 +388,7 @@ data "aws_iam_policy_document" "confianca_ops_provisionamento" {
       condition {
         test     = "ArnLike"
         variable = "aws:PrincipalArn"
-        values   = local.ops_prov_sso
+        values   = [for a in each.value.principais : a if !can(regex(":user/", a))]
       }
       condition {
         test     = "Null"
@@ -371,14 +410,43 @@ data "aws_iam_policy_document" "confianca_ops_provisionamento" {
 }
 
 resource "aws_iam_role" "ops_provisionamento" {
-  count                = local.ops_prov_ativo ? 1 : 0
-  name                 = local.ops_prov_papel_humano
-  description          = "Roda o provisionamento da clínica e entrega o token (B11): humano nominal com MFA e SourceIdentity, sessão de 1 h, todo RunTask gera alerta."
-  assume_role_policy   = data.aws_iam_policy_document.confianca_ops_provisionamento.json
+  for_each             = local.ops_prov_papeis_ativos
+  name                 = each.value.nome
+  description          = each.key == "executor" ? "Cria o pedido e roda o provisionamento da clínica (B11), sem ler a entrega: humano nominal com MFA e SourceIdentity, sessão de 1 h, todo RunTask gera alerta." : "Lê uma vez e apaga a entrega do token do provisionamento (B11), sem rodar a tarefa: humano nominal com MFA e SourceIdentity, sessão de 1 h, toda leitura gera alerta."
+  assume_role_policy   = data.aws_iam_policy_document.confianca_ops_provisionamento[each.key].json
   max_session_duration = 3600
 }
 
-data "aws_iam_policy_document" "ops_provisionamento" {
+# Comum aos dois papéis: sem MFA nada, só São Paulo.
+data "aws_iam_policy_document" "ops_provisionamento_comum" {
+  # Mesmo que alguém amplie a confiança: sessão sem MFA não roda, não passa papel e não toca o SSM.
+  statement {
+    sid       = "SemMfaNada"
+    effect    = "Deny"
+    actions   = ["ecs:RunTask", "iam:PassRole", "ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter", "kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "BoolIfExists"
+      variable = "aws:MultiFactorAuthPresent"
+      values   = ["false"]
+    }
+  }
+  statement {
+    sid         = "SomenteSaoPaulo"
+    effect      = "Deny"
+    not_actions = ["iam:*", "sts:*"]
+    resources   = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestedRegion"
+      values   = ["sa-east-1"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "ops_provisionamento_executor" {
+  source_policy_documents = [data.aws_iam_policy_document.ops_provisionamento_comum.json]
+
   # Roda SÓ a revisão atual desta definição (ARN com revisão), SÓ neste cluster.
   statement {
     sid       = "RodarProvisionamento"
@@ -410,30 +478,11 @@ data "aws_iam_policy_document" "ops_provisionamento" {
     actions   = ["logs:GetLogEvents"]
     resources = ["${aws_cloudwatch_log_group.api.arn}:log-stream:${local.ops_prov_prefixo}/*"]
   }
-  # Quem provisiona cria o pedido; quem entrega lê a entrega uma vez e apaga. Apagar vale para os
-  # dois (pedido criado errado; entrega feita).
+  # Cria o pedido e o apaga se nasceu errado. `*` atravessa a barra: o Deny abaixo tira a entrega.
   statement {
-    sid       = "CriarOPedido"
-    actions   = ["ssm:PutParameter"]
+    sid       = "CriarEApagarOPedido"
+    actions   = ["ssm:PutParameter", "ssm:DeleteParameter"]
     resources = [local.ops_prov_pedidos]
-  }
-  statement {
-    sid       = "LerAEntrega"
-    actions   = ["ssm:GetParameter"]
-    resources = [local.ops_prov_entregas]
-  }
-  statement {
-    sid       = "ApagarPedidoEEntrega"
-    actions   = ["ssm:DeleteParameter"]
-    resources = [local.ops_prov_pedidos]
-  }
-  # O humano não forja a entrega: o token só nasce na tarefa. Reler o pedido (e-mail em claro) já
-  # fica de fora, porque a leitura liberada é só a da entrega.
-  statement {
-    sid       = "NaoForjaAEntrega"
-    effect    = "Deny"
-    actions   = ["ssm:PutParameter"]
-    resources = [local.ops_prov_entregas]
   }
   statement {
     sid       = "CifrarOPedido"
@@ -450,6 +499,25 @@ data "aws_iam_policy_document" "ops_provisionamento" {
       values   = [local.ops_prov_pedidos]
     }
   }
+  # C1: quem roda não toca a entrega (nem forja, nem lê, nem apaga). Reler o pedido (e-mail em
+  # claro) também fica de fora: não há Get liberado, e a key policy nega o Decrypt a este papel.
+  statement {
+    sid       = "NaoTocaAEntrega"
+    effect    = "Deny"
+    actions   = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:DeleteParameter"]
+    resources = [local.ops_prov_entregas]
+  }
+}
+
+data "aws_iam_policy_document" "ops_provisionamento_entrega" {
+  source_policy_documents = [data.aws_iam_policy_document.ops_provisionamento_comum.json]
+
+  # Lê a entrega uma vez, entrega fora de banda e apaga (R3).
+  statement {
+    sid       = "LerEApagarAEntrega"
+    actions   = ["ssm:GetParameter", "ssm:DeleteParameter"]
+    resources = [local.ops_prov_entregas]
+  }
   statement {
     sid       = "DecifrarAEntrega"
     actions   = ["kms:Decrypt"]
@@ -465,36 +533,28 @@ data "aws_iam_policy_document" "ops_provisionamento" {
       values   = [local.ops_prov_entregas]
     }
   }
-  # Mesmo que alguém amplie a confiança: sessão sem MFA não roda, não passa papel e não toca o SSM.
+  # C1: quem entrega não roda a tarefa, não passa os papéis dela e não grava nada no fluxo (nem
+  # pedido, nem entrega forjada).
   statement {
-    sid       = "SemMfaNada"
+    sid       = "NaoRodaENaoGrava"
     effect    = "Deny"
-    actions   = ["ecs:RunTask", "iam:PassRole", "ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter", "kms:Decrypt"]
+    actions   = ["ecs:RunTask", "ecs:StartTask", "iam:PassRole", "ssm:PutParameter"]
     resources = ["*"]
-    condition {
-      test     = "BoolIfExists"
-      variable = "aws:MultiFactorAuthPresent"
-      values   = ["false"]
-    }
   }
-  statement {
-    sid         = "SomenteSaoPaulo"
-    effect      = "Deny"
-    not_actions = ["iam:*", "sts:*"]
-    resources   = ["*"]
-    condition {
-      test     = "StringNotEquals"
-      variable = "aws:RequestedRegion"
-      values   = ["sa-east-1"]
-    }
+}
+
+locals {
+  ops_prov_politicas = {
+    executor = data.aws_iam_policy_document.ops_provisionamento_executor.json
+    entrega  = data.aws_iam_policy_document.ops_provisionamento_entrega.json
   }
 }
 
 resource "aws_iam_role_policy" "ops_provisionamento" {
-  count  = local.ops_prov_ativo ? 1 : 0
-  name   = "rodar-provisionamento"
-  role   = aws_iam_role.ops_provisionamento[0].id
-  policy = data.aws_iam_policy_document.ops_provisionamento.json
+  for_each = local.ops_prov_papeis_ativos
+  name     = each.key == "executor" ? "rodar-provisionamento" : "entregar-token-do-provisionamento"
+  role     = aws_iam_role.ops_provisionamento[each.key].id
+  policy   = local.ops_prov_politicas[each.key]
 }
 
 # --- Alerta a cada execução (padrão R-B do parecer do código do #190) ------------------------------
@@ -550,6 +610,34 @@ resource "aws_cloudwatch_event_rule" "ops_provisionamento_override_suspeito" {
 
 resource "aws_cloudwatch_event_target" "ops_provisionamento_override_suspeito" {
   rule = aws_cloudwatch_event_rule.ops_provisionamento_override_suspeito.name
+  arn  = aws_sns_topic.alertas_seguranca.arn
+}
+
+# 3. <nome>-ops-provisionamento-entrega (A6, trilha do "entregue em" de C1): toda leitura ou
+#    apagamento de /provisionamento/*/entrega. GetParameter é evento de leitura: o EventBridge só o
+#    recebe com a regra no estado ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS (o trail já grava
+#    os eventos de gerenciamento de leitura, cloudtrail.tf). O alerta leva o SourceIdentity; quem
+#    confere o chamado compara com o do RunTask (a separação em si já é garantida pelos dois papéis).
+resource "aws_cloudwatch_event_rule" "ops_provisionamento_entrega" {
+  name        = "${local.ops_prov_nome}-entrega"
+  description = "Leitura ou apagamento da entrega do token do provisionamento (B11)."
+  state       = "ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS"
+  event_pattern = jsonencode({
+    source        = ["aws.ssm"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
+    detail = {
+      eventSource = ["ssm.amazonaws.com"]
+      eventName   = ["GetParameter", "GetParameters", "GetParameterHistory", "DeleteParameter", "DeleteParameters"]
+      "$or" = [
+        { requestParameters = { name = [{ wildcard = "/provisionamento/*/entrega" }] } },
+        { requestParameters = { names = [{ wildcard = "/provisionamento/*/entrega" }] } },
+      ]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "ops_provisionamento_entrega" {
+  rule = aws_cloudwatch_event_rule.ops_provisionamento_entrega.name
   arn  = aws_sns_topic.alertas_seguranca.arn
 }
 

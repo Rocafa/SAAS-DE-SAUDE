@@ -84,3 +84,18 @@ Os checks de Terraform (fmt, validate, tflint e checkov) estão verdes no #204. 
 | Segredos fora do código | Conforme (Secrets Manager, tfvars fora do git, gitleaks verde). |
 | Dados reais fora do git e de prompts | Conforme. |
 | CFM/ANS/ICP-Brasil | Não se aplica a este PR. |
+
+## Resposta do executor (devops-ci, 17/11/2026)
+
+Correções no próprio #204 (Terraform de `infra/terraform/staging/`; nada no código da API):
+
+- **C1 (a), feito.** Cada fluxo tem dois papéis: `ops-*-executor` (provisionamento: cria e apaga o pedido, roda, acompanha; recuperação: roda e acompanha) e `ops-*-entrega` (lê uma vez e apaga a entrega, `kms:Decrypt` só na entrega). Listas próprias (`principais_ops_{provisionamento,recuperacao}_{executor,entrega}`), validação sem curinga e `precondition` na definição de tarefa que exige as duas listas preenchidas (ou as duas vazias) e disjuntas, o que já implica ao menos duas pessoas. MFA, `SourceIdentity`, sessão de 1 h, `SemMfaNada` e `SomenteSaoPaulo` nos quatro papéis. Deny cruzado: o executor não lê, não apaga e não grava a entrega; quem entrega não roda, não passa papel e não grava nada. A key policy (`kms.tf`, `chaves_ops_ssm`) só deixa decifrar a tarefa do provisionamento (pedido) e os papéis de entrega.
+- **Alerta "mesmo SourceIdentity rodou e leu", não feito.** O EventBridge casa um evento por vez e não correlaciona o `RunTask` com o `GetParameter` posterior. Fazer isso exige Lambda ou Step Functions com estado (ou uma consulta agendada no CloudTrail Lake), o que não é simples nem barato para staging. Com a separação por papel e listas disjuntas o caso fica impedido por máquina. O que entrou é o A6: regra `<nome>-ops-*-entrega` (estado `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`, para receber o evento de leitura) que alerta no tópico de segurança toda leitura ou apagamento de `*/entrega`, com o `SourceIdentity` no evento. A comparação com o do `RunTask` continua no chamado (C3, runbook).
+- **A2, feito.** A tarefa da recuperação saiu da key policy (só cifra) e ganhou o Deny `EntregaNaoVolta` (Get, GetParameters, GetParameterHistory, GetParametersByPath).
+- **A3, feito.** `DecifrarOPedido` ganhou `ArnNotLike kms:EncryptionContext:PARAMETER_ARN = */entrega`.
+- **A4, feito.** O endpoint `ssm` saiu do conjunto comum e virou recurso próprio, criado só com `var.endpoint_ssm = true` (default false; custo ESTIMADO no comentário de `rede.tf`), com política de endpoint que aceita só `aws:PrincipalAccount` e `aws:ResourceAccount` iguais à conta, só Get/Put/Delete e só `parameter/provisionamento/*` e `parameter/recuperacao-suporte/*`. Desligado, as tarefas não alcançam o SSM (o grupo de segurança delas não sai da VPC) e falham fechado: ligar com o PR do cliente SSM. A mesma política nos endpoints antigos segue como pendência geral.
+- **A5, feito no Terraform.** Os cinco ARNs fixos (`ops-lgpd` e os quatro novos) entram em `local.principais_humanos` (Deny `HumanoNaoDecifra` e `HumanoNaoCalculaPseudonimo`). A confiança dos papéis de exceção (investigação e break-glass) usa a mesma lista sem eles, para não abrir encadeamento a partir de uma sessão `ops-*`. Para as KEKs das clínicas (API), basta pôr os mesmos ARNs em `papeis_humanos_extra` no tfvars; não mudei `app.tf`.
+- **A1, não feito (exige código da API).** TODO no mapa de segredos de `ops-provisionamento.tf`: trocar a raiz `RATE_LIMIT_HASH_KEY` por um segredo com a chave já derivada de `ativacao-email`.
+- **C2 e C3** ficam para o PR do cliente SSM, como o parecer pede.
+
+Validação local: o `terraform` não está instalado nesta máquina; `fmt`, `validate`, `tflint` e `checkov` ficam com o CI do #204.

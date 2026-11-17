@@ -125,9 +125,9 @@ resource "aws_security_group" "endpoints" {
 }
 
 locals {
-  # ecr.dkr + ecr.api: pull de imagem; secretsmanager: segredos da task; kms: decifrar; logs: awslogs;
-  # ssm: parâmetros das tarefas avulsas do provisionamento e da recuperação (B11, B12).
-  endpoints_interface = toset(["ecr.api", "ecr.dkr", "secretsmanager", "kms", "logs", "ssm"])
+  # ecr.dkr + ecr.api: pull de imagem; secretsmanager: segredos da task; kms: decifrar; logs: awslogs.
+  # O ssm (tarefas avulsas B11/B12) é à parte, condicional e com política de endpoint (abaixo).
+  endpoints_interface = toset(["ecr.api", "ecr.dkr", "secretsmanager", "kms", "logs"])
 }
 
 resource "aws_vpc_endpoint" "interface" {
@@ -140,6 +140,52 @@ resource "aws_vpc_endpoint" "interface" {
   subnet_ids          = slice(aws_subnet.app[*].id, 0, var.zonas_dos_endpoints)
   security_group_ids  = [aws_security_group.endpoints.id]
   tags                = { Name = "${local.nome}-${each.key}" }
+}
+
+# Endpoint ssm das tarefas avulsas do provisionamento e da recuperação (B11, B12; A4 do parecer de
+# 17/11/2026). Só com var.endpoint_ssm = true. Custo (ESTIMATIVA, conferir na página de preços do AWS
+# PrivateLink para sa-east-1 antes de ligar): da ordem de US$ 7 a 12 por mês por AZ, mais o tráfego;
+# staging tem zonas_dos_endpoints = 1, prod teria 3. Desligado, as tarefas NÃO chegam ao SSM (o grupo
+# de segurança delas só sai para 443 dentro da VPC, sem NAT) e falham fechado: ligar junto com o PR
+# do cliente SSM, antes da primeira execução real.
+# A política de endpoint fecha o canal: só principal E recurso DESTA conta (sem ela, uma credencial de
+# fora usaria o endpoint para gravar no SSM de outra conta) e só os parâmetros dos dois fluxos.
+data "aws_iam_policy_document" "endpoint_ssm" {
+  statement {
+    sid     = "SoParametrosDasTarefasAvulsasDestaConta"
+    actions = ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"]
+    resources = [
+      "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/provisionamento/*",
+      "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/recuperacao-suporte/*",
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [local.conta]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceAccount"
+      values   = [local.conta]
+    }
+  }
+}
+
+resource "aws_vpc_endpoint" "ssm" {
+  count = var.endpoint_ssm ? 1 : 0
+
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${local.regiao}.ssm"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = slice(aws_subnet.app[*].id, 0, var.zonas_dos_endpoints)
+  security_group_ids  = [aws_security_group.endpoints.id]
+  policy              = data.aws_iam_policy_document.endpoint_ssm.json
+  tags                = { Name = "${local.nome}-ssm" }
 }
 
 # --- VPC flow logs (rejeitados e aceitos), cifrados ----------------------------------------
