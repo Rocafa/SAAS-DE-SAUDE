@@ -1,15 +1,25 @@
 # Uma chave KMS por domínio: revogar ou auditar uma não afeta as outras.
 locals {
   chaves_kms = {
-    rds         = "RDS PostgreSQL (dados e Performance Insights)"
-    redis       = "ElastiCache Redis"
-    s3          = "Bucket S3 de documentos assinados"
-    exportacoes = "Bucket S3 de exportações (efêmero; chave própria para revogar o acesso a todas de uma vez)"
-    segredos    = "Secrets Manager"
-    logs        = "CloudWatch Logs (app, RDS, Redis, Container Insights, VPC flow logs, WAF)"
-    ecr         = "Imagens no ECR"
-    alertas     = "Tópico SNS de alertas de segurança (uso do break-glass)"
-    backup      = "Cofre do AWS Backup (backup mensal imutável, R7)"
+    rds                 = "RDS PostgreSQL (dados e Performance Insights)"
+    redis               = "ElastiCache Redis"
+    s3                  = "Bucket S3 de documentos assinados"
+    exportacoes         = "Bucket S3 de exportações (efêmero; chave própria para revogar o acesso a todas de uma vez)"
+    segredos            = "Secrets Manager"
+    logs                = "CloudWatch Logs (app, RDS, Redis, Container Insights, VPC flow logs, WAF)"
+    ecr                 = "Imagens no ECR"
+    alertas             = "Tópico SNS de alertas de segurança (uso do break-glass)"
+    backup              = "Cofre do AWS Backup (backup mensal imutável, R7)"
+    ops-provisionamento = "Parâmetros SSM do provisionamento da clínica (B11): pedido e entrega do token, vida curta"
+    ops-recuperacao     = "Parâmetros SSM da recuperação do admin único (B12): entrega do token, vida curta"
+  }
+
+  # Chaves dos parâmetros SSM das tarefas avulsas (B11, B12): SÓ estes papéis decifram, cifram de
+  # novo ou dão grant (Deny na key policy, abaixo). Os papéis humanos ops-* entram pelo ARN fixo,
+  # mesmo quando a lista de principais está vazia e o papel não existe.
+  chaves_ops_ssm = {
+    ops-provisionamento = [aws_iam_role.ops_provisionamento_tarefa.arn, local.ops_prov_papel_humano_arn]
+    ops-recuperacao     = [aws_iam_role.ops_recuperacao_tarefa.arn, local.ops_rec_papel_humano_arn]
   }
 
   # Chaves que guardam dado de clínica ou credencial: humano não decifra (R4 do PR #58).
@@ -127,6 +137,27 @@ data "aws_iam_policy_document" "kms" {
         test     = "ArnLike"
         variable = "kms:EncryptionContext:aws:logs:arn"
         values   = ["arn:${data.aws_partition.atual.partition}:logs:${local.regiao}:${local.conta}:log-group:*"]
+      }
+    }
+  }
+
+  # Parâmetros SSM das tarefas avulsas: o SSM chama o KMS com a credencial de quem pede, então
+  # aws:PrincipalArn é o papel que lê ou grava. Ninguém fora de local.chaves_ops_ssm decifra.
+  dynamic "statement" {
+    for_each = contains(keys(local.chaves_ops_ssm), each.key) ? [local.chaves_ops_ssm[each.key]] : []
+    content {
+      sid       = "SoQuemOperaDecifra"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt", "kms:ReEncrypt*", "kms:CreateGrant"]
+      resources = ["*"]
+      principals {
+        type        = "AWS"
+        identifiers = ["*"]
+      }
+      condition {
+        test     = "ArnNotLike"
+        variable = "aws:PrincipalArn"
+        values   = statement.value
       }
     }
   }

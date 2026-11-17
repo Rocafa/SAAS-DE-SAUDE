@@ -125,8 +125,9 @@ resource "aws_security_group" "endpoints" {
 }
 
 locals {
-  # ecr.dkr + ecr.api: pull de imagem; secretsmanager: segredos da task; kms: decifrar; logs: awslogs.
-  endpoints_interface = toset(["ecr.api", "ecr.dkr", "secretsmanager", "kms", "logs"])
+  # ecr.dkr + ecr.api: pull de imagem; secretsmanager: segredos da task; kms: decifrar; logs: awslogs;
+  # ssm: parâmetros das tarefas avulsas do provisionamento e da recuperação (B11, B12).
+  endpoints_interface = toset(["ecr.api", "ecr.dkr", "secretsmanager", "kms", "logs", "ssm"])
 }
 
 resource "aws_vpc_endpoint" "interface" {

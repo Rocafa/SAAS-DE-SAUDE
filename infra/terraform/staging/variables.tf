@@ -102,6 +102,26 @@ variable "principais_ops_lgpd" {
   }
 }
 
+variable "principais_ops_provisionamento" {
+  description = "ARNs (ArnLike) de quem pode assumir o papel ops-provisionamento, rodar o provisionamento da clínica e entregar o token (B11, R7 do parecer de 16/11/2026): usuário IAM nominal (user/<nome>) ou papel do SSO. Uma pessoa por entrada; ao menos duas pessoas (quem roda não entrega). Só no tfvars, fora do git. Vazio = o papel não existe."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.principais_ops_provisionamento : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/.+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> (sem curinga) ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...)."
+  }
+}
+
+variable "principais_ops_recuperacao" {
+  description = "ARNs (ArnLike) de quem pode assumir o papel ops-recuperacao, rodar a recuperação do fator do admin único e entregar o token (B12, R4 e R6 do parecer de 16/11/2026): usuário IAM nominal (user/<nome>) ou papel do SSO. Uma pessoa por entrada; ao menos duas pessoas (quem roda não entrega). Só no tfvars, fora do git. Vazio = o papel não existe."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.principais_ops_recuperacao : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/.+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> (sem curinga) ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...)."
+  }
+}
+
 variable "backup_mensal_retencao_dias" {
   description = "Prazo de cada ponto de recuperação MENSAL do AWS Backup (R7 do PR #58). G3 promete até 12 meses: prod 365. Staging (dado sintético): 35."
   type        = number
