@@ -206,8 +206,11 @@ async function tabelasEfetivasDo(db: Leitor, papel: Papel): Promise<Record<strin
 /**
  * Pertença tolerada (O2 do #207): no RDS 16, o master que cria o papel fica membro dele com ADMIN OPTION e sem INHERIT
  * nem SET (concessão implícita ao criador). Não dá os privilégios do papel; qualquer outra linha falha.
+ * N1 da reconferência: só vale para a concessão implícita, cujo concedente é o superusuário de bootstrap (no RDS, o
+ * rdsadmin). Um GRANT ... WITH ADMIN OPTION feito por qualquer outro papel não é tolerado.
  */
-const SO_ADMIN_DO_CRIADOR = 'm.admin_option AND NOT m.inherit_option AND NOT m.set_option';
+const SO_ADMIN_DO_CRIADOR =
+  'm.admin_option AND NOT m.inherit_option AND NOT m.set_option AND (SELECT g.rolsuper FROM pg_roles g WHERE g.oid = m.grantor)';
 
 describe('guarda dos papéis da identidade (R4): privilégios diretos exatos', () => {
   it('os dois papéis existem', async () => {

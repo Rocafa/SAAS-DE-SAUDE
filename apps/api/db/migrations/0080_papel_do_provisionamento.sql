@@ -49,7 +49,7 @@ CREATE FUNCTION identidade.conta_por_email(p_email text) RETURNS TABLE (id uuid,
   LANGUAGE sql
   STABLE
   SECURITY DEFINER
-  SET search_path = pg_catalog, identidade
+  SET search_path = pg_catalog, identidade, pg_temp
 AS $$
   SELECT u.id, u.ativo FROM identidade.usuario u WHERE lower(u.email) = lower(p_email)
 $$;
@@ -59,7 +59,7 @@ CREATE FUNCTION identidade.email_da_conta_confere(p_conta uuid, p_email text) RE
   LANGUAGE sql
   STABLE
   SECURITY DEFINER
-  SET search_path = pg_catalog, identidade
+  SET search_path = pg_catalog, identidade, pg_temp
 AS $$
   SELECT EXISTS (SELECT 1 FROM identidade.usuario u WHERE u.id = p_conta AND lower(u.email) = lower(p_email))
 $$;
