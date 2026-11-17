@@ -2,7 +2,7 @@
  * Provisionamento da clínica e emissão da ativação do fundador (B11, PR 1). Desenho v2:
  * docs/04-arquitetura/provisionamento-da-clinica.md; parecer do Guardião de 16/11/2026 (R1 a R10).
  *
- * Recebe só os dois pools de banco (R8): a tarefa que a chama não carrega `BETTER_AUTH_SECRET`; a conta nova nasce na
+ * Recebe só os pools de banco (R8): a tarefa que a chama não carrega `BETTER_AUTH_SECRET`; a conta nova nasce na
  * ativação, pela API (R2, PR 2). Do e-mail do fundador fica só o HMAC (R1); do token, só o SHA-256 (R3). O token volta
  * apenas para quem chamou, pela função `guardarToken`, que roda DENTRO da transação que grava a linha: se guardar
  * falhar, a linha não existe e a repetição emite outro token; se a linha falhar depois, o token guardado não vale nada.
@@ -57,10 +57,15 @@ export interface ResultadoDoProvisionamento {
   readonly contaExistente: boolean;
 }
 
+/**
+ * Na tarefa, os dois apontam para a mesma conexão do papel `app_provisionamento` (0080; A1 do parecer de 17/11 sobre a
+ * ativação do fundador): só SELECT do `id` e INSERT na ativação, SELECT de quatro colunas da conta e SELECT/INSERT em
+ * clínica, vínculo e trilha, sob o RLS. A fundação pela sessão de sistema só passa com esse papel.
+ */
 export interface BancosDoProvisionamento {
-  /** Papel `app_auth` (schema identidade). */
+  /** Schema identidade (na tarefa, `app_provisionamento`). */
   readonly dbAuth: Database;
-  /** Papel `app_user` (RLS por clínica). */
+  /** Clínica, sob o RLS (na tarefa, `app_provisionamento`). */
   readonly dbClinica: Database;
 }
 
