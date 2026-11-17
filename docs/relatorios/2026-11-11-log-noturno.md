@@ -505,3 +505,4 @@ Pendente para a próxima sessão:
 ## Checagem de 17/11 14:13
 
 - Nada mudou: #155 e #194 seguem BLOCKED sem aprovação; #153, #154, #158, #143 e #157 sem novidade; nenhum merge.
+- **Novo bloqueio na CI de todos os PRs:** o GHSA-fc5q-39xc-vjpf (picomatch, alta) foi atualizado hoje às 15:56 UTC para `<= 4.0.7`, sem correção. Ele vem só do ferramental (vitest, vite, tinyglobby, fdir). Preparei a exceção `eng/excecao-picomatch`: `auditConfig.ignoreGhsas`, o documento `excecoes-de-auditoria.md` com FATO e fonte, e um passo na CI que falha depois de 01/12 ou com GHSA não documentado. Audit local com exit 0. Mandei ao Guardião antes do PR. Também atualizei o #189 (minimatch, aprovado), o #153 e o #154; o #189 caiu justamente nesse audit.
