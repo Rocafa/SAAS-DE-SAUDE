@@ -57,6 +57,8 @@ function montar(opcoes: { trilhaFora: boolean }) {
   };
   const auth = { api: { getSession: () => Promise.resolve({ session: { id: SESSAO } }) } } as unknown as Autenticacao;
   const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+  // C1 do #195: sem ativação de fundador pendente nestes cenários.
+  vi.spyOn(provedor as unknown as { clinicasComAtivacaoPendente: () => Promise<Set<string>> }, 'clinicasComAtivacaoPendente').mockResolvedValue(new Set());
   // H3 do #176: a regra da clínica cancelada lê `tenants`; aqui a clínica está liberada.
   vi.spyOn(provedor as unknown as { clinicaLiberada: () => Promise<{ nome: string }> }, 'clinicaLiberada').mockResolvedValue({ nome: 'Clinica Ficticia' });
   return { provedor, ordem };
@@ -130,6 +132,8 @@ function montarComTotp(agora: Date) {
   };
   const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
   const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never, agora: () => agora });
+  // C1 do #195: sem ativação de fundador pendente nestes cenários.
+  vi.spyOn(provedor as unknown as { clinicasComAtivacaoPendente: () => Promise<Set<string>> }, 'clinicasComAtivacaoPendente').mockResolvedValue(new Set());
   // H3 do #176: a regra da clínica cancelada lê `tenants`; aqui a clínica está liberada.
   vi.spyOn(provedor as unknown as { clinicaLiberada: () => Promise<{ nome: string }> }, 'clinicaLiberada').mockResolvedValue({ nome: 'Clinica Ficticia' });
   const marcarMfa = vi.spyOn(provedor, 'marcarMfa').mockResolvedValue(true);
@@ -198,6 +202,8 @@ function montarLogout(opcoes: { falhaNa: string | null }) {
   };
   const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
   const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+  // C1 do #195: sem ativação de fundador pendente nestes cenários.
+  vi.spyOn(provedor as unknown as { clinicasComAtivacaoPendente: () => Promise<Set<string>> }, 'clinicasComAtivacaoPendente').mockResolvedValue(new Set());
   return { provedor, gravadas };
 }
 
@@ -249,6 +255,8 @@ describe('aposMfaVerificado: trilha do fator fora desfaz o MFA', () => {
     };
     const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
     const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+    // C1 do #195: sem ativação de fundador pendente nestes cenários.
+    vi.spyOn(provedor as unknown as { clinicasComAtivacaoPendente: () => Promise<Set<string>> }, 'clinicasComAtivacaoPendente').mockResolvedValue(new Set());
     return { provedor, sets };
   }
 

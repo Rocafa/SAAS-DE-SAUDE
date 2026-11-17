@@ -944,12 +944,17 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     const linhas = await this.d.dbAuth.selectDistinct({ clinicaId: vinculo.clinicaId }).from(vinculo).where(eq(vinculo.usuarioId, userId)).orderBy(vinculo.clinicaId);
     // Sobra da C1 do parecer do #195 (reconferência de 17/11): a clínica com ativação do fundador ainda pendente não conta,
     // senão quem já tinha uma clínica perdia a escolha automática até ativar a nova.
+    const fora = await this.clinicasComAtivacaoPendente(userId);
+    return linhas.map((l) => l.clinicaId).filter((c) => !fora.has(c));
+  }
+
+  /** Clínicas em que a pessoa é fundadora com ativação ainda não usada (C1 do parecer do #195). */
+  private async clinicasComAtivacaoPendente(userId: string): Promise<Set<string>> {
     const pendentes = await this.d.dbAuth
       .select({ clinicaId: ativacaoDoFundador.clinicaId })
       .from(ativacaoDoFundador)
       .where(and(eq(ativacaoDoFundador.usuarioId, userId), isNull(ativacaoDoFundador.usadoEm)));
-    const fora = new Set(pendentes.map((p) => p.clinicaId));
-    return linhas.map((l) => l.clinicaId).filter((c) => !fora.has(c));
+    return new Set(pendentes.map((p) => p.clinicaId));
   }
 
   /** Perfis de sessão ATIVOS na clínica (RLS da clínica, usuário travado na transação). */
