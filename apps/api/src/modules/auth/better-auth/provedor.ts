@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -299,9 +299,14 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .delete(doisFatores)
       .where(and(eq(doisFatores.verified, false), lt(doisFatores.criadoEm, umDia)))
       .returning({ id: doisFatores.id });
-    // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias.
+    // R7 do código do 3b-2: token de recuperação vencido há mais de 30 dias. B12 (0077): o do suporte fica 13 meses, porque
+    // o teto por pessoa (2 em 12 meses) conta essas linhas.
     const trintaDias = new Date(agora.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const recuperacoes = await this.d.dbAuth.delete(recuperacao).where(lt(recuperacao.expiraEm, trintaDias)).returning({ id: recuperacao.id });
+    const trezeMeses = new Date(agora.getTime() - 395 * 24 * 60 * 60 * 1000);
+    const recuperacoes = await this.d.dbAuth
+      .delete(recuperacao)
+      .where(and(lt(recuperacao.expiraEm, trintaDias), or(eq(recuperacao.origem, 'admin'), lt(recuperacao.expiraEm, trezeMeses))))
+      .returning({ id: recuperacao.id });
     // Ressalva 4 do parecer do 3c (RIPD-identidade §3): conta desligada há mais de 90 dias perde senha e TOTP e LIBERA o
     // e-mail; o id fica, preso ao histórico clínico (R18). B2 do veto do #173: a conta antiga nunca é reaproveitada; quem
     // volta recebe conta nova pelo convite. B1: tudo numa transação por conta, com o fator desmarcado.
@@ -530,11 +535,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .select()
       .from(recuperacao)
       .where(and(eq(recuperacao.tokenHash, hash), isNull(recuperacao.usadoEm), gt(recuperacao.expiraEm, agora)));
-    if (!r) return 'invalido';
+    // B12: o suporte só emite recuperação de FATOR (o CHECK da 0077 já recusa outra); defesa em profundidade.
+    if (!r || (r.origem === 'suporte' && r.tipo !== 'fator')) return 'invalido';
     const [u] = await this.d.dbAuth.select({ email: usuario.email, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, r.usuarioId));
     if (!u?.ativo) return 'invalido';
     // R5 do código do 3b-2: no USO, a pessoa ainda tem vínculo ativo na clínica do token e quem emitiu ainda é admin.
-    if (!(await this.vinculoEAdminSeguemAtivos(r.clinicaId, r.usuarioId, r.criadoPor))) return 'invalido';
+    // B12 (R2 do parecer de 16/11): o token do suporte não tem admin emissor; no lugar, a PESSOA segue admin ativo.
+    if (!(await this.vinculoEAdminSeguemAtivos(r.clinicaId, r.usuarioId, r.origem === 'suporte' ? null : r.criadoPor))) return 'invalido';
 
     const b = this.d.bloqueio;
     const origemBruta = e.cabecalhos.get(CABECALHO_ORIGEM) ?? '';
@@ -608,15 +615,22 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       return true;
     });
     if (!consumiu) return 'invalido';
-    registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+    if (r.origem === 'suporte') {
+      registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_suporte', userId: r.usuarioId, chamado: r.chamado ?? undefined });
+    } else {
+      registrarEventoDeSeguranca('RECUPERACAO_USADA', { motivo: 'recuperacao_pelo_admin', userId: r.usuarioId });
+    }
     await this.trilhaDaRecuperacao(r.clinicaId, r.usuarioId, r.tipo);
     if (r.tipo === 'senha') return { tipo: 'senha', cookies: [] };
     const cookies = await this.abrirSessaoDeCadastro({ email: u.email, senha: e.senhaAtual ?? '', cabecalhos: e.cabecalhos });
     return { tipo: 'fator', cookies };
   }
 
-  /** R5 do código do 3b-2: pessoa com vínculo ativo na clínica do token e quem emitiu ainda admin ativo nela. */
-  private async vinculoEAdminSeguemAtivos(clinicaId: string, userId: string, criadoPor: string): Promise<boolean> {
+  /**
+   * R5 do código do 3b-2: pessoa com vínculo ativo na clínica do token e quem emitiu ainda admin ativo nela. Sem emissor
+   * (`criadoPor = null`, token do suporte, B12): a própria pessoa precisa seguir admin ativo na clínica.
+   */
+  private async vinculoEAdminSeguemAtivos(clinicaId: string, userId: string, criadoPor: string | null): Promise<boolean> {
     const linhas = await withTenant(
       this.d.dbClinica,
       clinicaId as TenantId,
@@ -624,9 +638,10 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         tx
           .select({ userId: clinicMembers.userId, role: clinicMembers.role })
           .from(clinicMembers)
-          .where(and(eq(clinicMembers.tenantId, clinicaId), isNull(clinicMembers.revokedAt), inArray(clinicMembers.userId, [userId, criadoPor]))),
+          .where(and(eq(clinicMembers.tenantId, clinicaId), isNull(clinicMembers.revokedAt), inArray(clinicMembers.userId, criadoPor ? [userId, criadoPor] : [userId]))),
       userId,
     );
+    if (criadoPor === null) return linhas.some((l) => l.userId === userId && l.role === 'admin');
     return linhas.some((l) => l.userId === userId) && linhas.some((l) => l.userId === criadoPor && l.role === 'admin');
   }
 

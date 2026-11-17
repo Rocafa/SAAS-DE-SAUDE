@@ -48,8 +48,9 @@ O log de segurança **não substitui** a trilha. Um acesso negado, por exemplo, 
 | `MFA_FALHOU` | aviso | volume | código errado, código reutilizado ou senha errada no cadastro do fator |
 | `MFA_BLOQUEADO` | alto | imediato | segundo fator bloqueado por 5 falhas em 15 min por pessoa (30 por origem) |
 | `RECUPERACAO_EMITIDA` | aviso | volume | admin emitiu token de recuperação de senha ou de fator (D4 PR 3b-2) |
-| `RECUPERACAO_USADA` | alto | imediato | token de recuperação usado: senha trocada ou fator removido (D4 PR 3b-2) |
-| `RECUPERACAO_TETO` | alto | imediato | admin bateu no teto de 10 tokens de recuperação em 24 h (`motivo: teto_diario`); sinal de abuso (fila do #173) |
+| `RECUPERACAO_USADA` | alto | imediato | token de recuperação usado: senha trocada ou fator removido (D4 PR 3b-2). Token do suporte (B12): `motivo: recuperacao_pelo_suporte` e o `chamado` |
+| `RECUPERACAO_TETO` | alto | imediato | admin bateu no teto de 10 tokens de recuperação em 24 h (`motivo: teto_diario`); sinal de abuso (fila do #173). B12: o suporte bateu no teto (1 por clínica em 30 dias, 2 por pessoa em 12 meses; `motivo: teto_do_suporte`) |
+| `RECUPERACAO_PELO_SUPORTE` | alto | imediato | B12: o comando `ops/recuperar-admin-unico` emitiu recuperação do fator do admin único; leva `operador` e `chamado` (`SUP-<n>`), que nunca vão para a trilha da clínica. Toda emissão alarma |
 | `SENHA_VAZADA_RECUSADA` | aviso | volume | senha nova recusada por aparecer na base de senhas vazadas (k-anonimato, R15) |
 | `CONFERENCIA_DE_SENHA_INDISPONIVEL` | alto | volume | base de senhas vazadas fora do ar; a troca seguiu sem a conferência |
 | `SESSAO_INVALIDA` | aviso | volume | guard de sessão (401) |
