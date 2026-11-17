@@ -38,6 +38,7 @@ export const AUDITADAS: readonly string[] = [
   'POST /clinica/membros/:usuarioId/recuperacao',
   'POST /convites/aceitar',
   'POST /recuperacao/usar',
+  'POST /ativacao/usar',
   'POST /sessao/senha',
   'POST /sessao/clinica',
   'POST /sessao/encerrar-todas',

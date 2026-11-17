@@ -124,6 +124,29 @@ export interface ProvedorDeRecuperacao {
   usarRecuperacao(e: { token: string; senhaNova?: string; senhaAtual?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaRecuperacao>;
 }
 
+/**
+ * Ativação do fundador da clínica provisionada (B11, PR 2; R2, R4, R5 e R8 do parecer de 16/11/2026). `invalido` é a
+ * MESMA resposta para token inválido, vencido, usado, bloqueado, e-mail diferente ou fundador que não confere.
+ */
+export type ResultadoDaAtivacao =
+  | { readonly cookies: string[]; readonly contaExistente: boolean }
+  | 'invalido'
+  | 'entrada_invalida'
+  | 'nome_obrigatorio'
+  | 'codigo_obrigatorio'
+  | 'senha_vazada'
+  | 'credencial_errada'
+  | 'conta_sem_fator'
+  | 'indisponivel';
+
+export interface ProvedorDeAtivacao {
+  usarAtivacao(e: { token: string; email: string; senha: string; nome?: string; codigo?: string; cabecalhos: Headers }): Promise<ResultadoDaAtivacao>;
+}
+
+export function ehProvedorDeAtivacao(p: AuthProvider): p is AuthProvider & ProvedorDeAtivacao {
+  return typeof (p as Partial<ProvedorDeAtivacao>).usarAtivacao === 'function';
+}
+
 export function ehProvedorDeRecuperacao(p: AuthProvider): p is AuthProvider & ProvedorDeRecuperacao {
   return typeof (p as Partial<ProvedorDeRecuperacao>).usarRecuperacao === 'function';
 }
