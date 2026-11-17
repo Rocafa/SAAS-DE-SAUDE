@@ -386,3 +386,10 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 ## Checagem de 16/11 22:14
 
 - Nada mudou desde 20:16: o #155 segue sem aprovação (BLOCKED); avulsos, PRs do sócio e #189/#116 iguais; nenhum merge.
+
+## 17/11 (00:00)
+
+- **O @Lopesloro mesclou o #152 na `main`** (MFA real com TOTP, PR 2 do login) e aprovou o #191, o #192, o #193 e o #194. O #172 entrou na `main`, mesclado pela checagem automática. Ele também mesclou o #196, uma correção dele, no branch do provisionamento.
+- **#191 a #194:** ficaram atrás da `main`. Trouxe a `main` (só o merge), o que derrubou as aprovações, e pedi a reaprovação no #155. Mesclo quando o CI passar e ele reaprovar.
+- **#155** agora aponta para a `main` e espera a aprovação dele.
+- PRs novos do sócio para a `main`: #197 (equipe e trilha de acesso na API real) e #198 (código de demonstração só no modo fake). Vou revisar.
