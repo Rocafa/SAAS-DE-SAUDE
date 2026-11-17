@@ -313,6 +313,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     contasReativadas: number;
     ativacoesExpurgadas: number;
     ativacoesRetidas: number;
+    ativacoesSemLeituraDaTrilha: number;
   }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
@@ -453,9 +454,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    *   Sem essa prova a linha fica: é a pendência (`usado_em IS NULL`) que mantém a clínica fora da lista e da escolha
    *   do fundador com conta existente (C1 do #195); apagá-la daria a clínica a quem nunca ativou. A bloqueada não tem
    *   data própria; vence no máximo 72 h depois de emitida, então `expira_em` serve de marco para as duas.
-   * - Leitura da trilha que falha: a linha fica (falha fechada) e a próxima rodada tenta de novo.
+   * - Leitura da trilha que falha: a linha fica (falha fechada), sai `TRILHA_NAO_LIDA` e a próxima rodada tenta de novo.
    */
-  private async expurgarAtivacoesDoFundador(agora: Date, trintaDias: Date): Promise<{ ativacoesExpurgadas: number; ativacoesRetidas: number }> {
+  private async expurgarAtivacoesDoFundador(
+    agora: Date,
+    trintaDias: Date,
+  ): Promise<{ ativacoesExpurgadas: number; ativacoesRetidas: number; ativacoesSemLeituraDaTrilha: number }> {
     const vencidas = await this.d.dbAuth
       .update(ativacaoDoFundador)
       .set({ emailHmac: EMAIL_DESCARTADO })
@@ -473,8 +477,14 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .where(and(isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, trintaDias)));
     let expurgadas = usadas.length;
     let retidas = 0;
+    let semLeitura = 0;
     for (const { id, clinicaId } of pendentes) {
-      const ativada = await fundadorAtivadoNaTrilha(this.d.dbClinica, clinicaId as TenantId).catch(() => false);
+      const ativada = await fundadorAtivadoNaTrilha(this.d.dbClinica, clinicaId as TenantId).catch(() => null);
+      if (ativada === null) {
+        // R2 do parecer do #205: a retenção por falha de leitura não pode se confundir com a da clínica nunca ativada.
+        semLeitura += 1;
+        registrarEventoDeSeguranca('TRILHA_NAO_LIDA', { motivo: 'expurgo_da_ativacao', tenantId: clinicaId, pedido: id });
+      }
       if (!ativada) {
         retidas += 1;
         continue;
@@ -485,7 +495,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         .returning({ id: ativacaoDoFundador.id });
       expurgadas += apagada.length;
     }
-    return { ativacoesExpurgadas: expurgadas, ativacoesRetidas: retidas };
+    return { ativacoesExpurgadas: expurgadas, ativacoesRetidas: retidas, ativacoesSemLeituraDaTrilha: semLeitura };
   }
 
   async trocarSenhaDaPessoa(e: {

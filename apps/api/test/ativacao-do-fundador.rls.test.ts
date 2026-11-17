@@ -602,6 +602,47 @@ async function envelhecer(pedido: string, dias: number, usado = false): Promise<
     .where(eq(ativacaoDoFundador.id, pedido));
 }
 
+/**
+ * Clínica JÁ ativada (`founder_activated` na trilha) com a linha de volta a pendente, como numa ativação incompleta
+ * (A3: COMMIT do app_auth perdido), envelhecida `dias` dias. É o único caso em que o expurgo apaga linha não usada.
+ */
+async function pendenteDeClinicaAtivada(dias: number): Promise<{ pedido: string; clinicaId: TenantId }> {
+  const p = pedidoFicticio();
+  const { token, clinicaId } = await provisionar(p);
+  await ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
+  expect(await ativacoesNaTrilha(clinicaId)).toBe(1);
+  await dbAuth.db.update(ativacaoDoFundador).set({ usadoEm: null }).where(eq(ativacaoDoFundador.id, p.pedido));
+  await envelhecer(p.pedido, dias);
+  return { pedido: p.pedido, clinicaId };
+}
+
+/**
+ * V1 do parecer do #205: o mesmo banco da clínica, mas toda leitura (`select`) dentro da transação falha. As escritas
+ * (trilha do expurgo de 90 dias) seguem, para não mexer no que outros arquivos da bancada esperam do mesmo job.
+ */
+function dbClinicaSemLeitura(): BancosDoProvisionamento['dbClinica'] {
+  const real = api.db.db;
+  return new Proxy(real, {
+    get(alvo, prop, rec) {
+      if (prop !== 'transaction') return Reflect.get(alvo, prop, rec) as unknown;
+      return (fn: (tx: unknown) => Promise<unknown>, ...resto: unknown[]) =>
+        (real.transaction as (f: (tx: unknown) => Promise<unknown>, ...r: unknown[]) => Promise<unknown>)(
+          (tx) =>
+            fn(
+              new Proxy(tx as object, {
+                get(t, p, r) {
+                  if (p === 'select') return () => { throw new Error('leitura da trilha fora do ar (bancada)'); };
+                  const v = Reflect.get(t, p, r) as unknown;
+                  return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+                },
+              }),
+            ),
+          ...resto,
+        );
+    },
+  });
+}
+
 describe('B11 PR 3: expurgo de 30 dias das linhas de ativação (A2 do parecer de 17/11; R6; 0079)', () => {
   it('A2: conta existente com ativação vencida ou bloqueada há mais de 30 dias: a linha continua e a clínica segue fora da lista e da escolha', async () => {
     const pessoa = await pessoaComFator();
@@ -644,8 +685,9 @@ describe('B11 PR 3: expurgo de 30 dias das linhas de ativação (A2 do parecer d
     }
     // A escolha automática continua só com a clínica de antes.
     expect(await provedor.clinicasDoUsuario(pessoa.userId)).toEqual([pessoa.tenantId]);
-    // Rodar de novo não muda nada.
-    await provedor.expurgarComoSistema();
+    // Rodar de novo não muda nada, nem repete ATIVACAO_VENCIDA (R3 do parecer do #205).
+    const segunda = await eventosDurante(() => provedor.expurgarComoSistema());
+    expect(segunda.some((l) => l.includes('"evento":"ATIVACAO_VENCIDA"') && (l.includes(vencida.pedido) || l.includes(bloqueada.pedido)))).toBe(false);
     expect(await linhaDa(vencida.pedido)).toMatchObject({ usadoEm: null });
     expect(await linhaDa(bloqueada.pedido)).toMatchObject({ usadoEm: null });
   });
@@ -665,7 +707,10 @@ describe('B11 PR 3: expurgo de 30 dias das linhas de ativação (A2 do parecer d
     expect(tokens).toEqual([]);
   });
 
-  it('dentro dos 30 dias nada é apagado: usada há 29 dias e vencida há 29 dias continuam', async () => {
+  it('dentro dos 30 dias nada é apagado: usada há 29 dias, vencida há 29 dias e pendente de clínica JÁ ativada há 29 dias continuam (V2)', async () => {
+    // V2 do parecer do #205: só a clínica com founder_activated cai no ramo que apaga; 29 dias fica, 31 dias sai.
+    const recente = await pendenteDeClinicaAtivada(29);
+    const antiga = await pendenteDeClinicaAtivada(31);
     const usada = pedidoFicticio();
     const u = await provisionar(usada);
     await ativacao().usar({ token: u.token, email: usada.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
@@ -678,18 +723,43 @@ describe('B11 PR 3: expurgo de 30 dias das linhas de ativação (A2 do parecer d
     expect((await linhaDa(usada.pedido))?.usadoEm).not.toBeNull();
     // A vencida perde o HMAC já no vencimento (R6), mas a linha fica.
     expect(await linhaDa(vencida.pedido)).toMatchObject({ usadoEm: null, emailHmac: '0'.repeat(32) });
+    expect(await linhaDa(recente.pedido)).toMatchObject({ usadoEm: null });
+    expect(await linhaDa(antiga.pedido)).toBeUndefined();
   });
 
   it('linha pendente de clínica COM founder_activated na trilha (ativação incompleta, A3): apagada depois de 30 dias', async () => {
-    const p = pedidoFicticio();
-    const { token, clinicaId } = await provisionar(p);
-    await ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
-    expect(await ativacoesNaTrilha(clinicaId)).toBe(1);
-    // A trilha diz "ativado", mas o consumo não ficou (COMMIT do app_auth perdido): a linha volta a pendente.
-    await dbAuth.db.update(ativacaoDoFundador).set({ usadoEm: null }).where(eq(ativacaoDoFundador.id, p.pedido));
-    await envelhecer(p.pedido, 40);
+    const { pedido } = await pendenteDeClinicaAtivada(40);
     await provedor.expurgarComoSistema();
-    expect(await linhaDa(p.pedido)).toBeUndefined();
+    expect(await linhaDa(pedido)).toBeUndefined();
+  });
+
+  it('V1/R2: a leitura da trilha falha: a linha fica (falha fechada), sai TRILHA_NAO_LIDA e a rodada normal seguinte apaga', async () => {
+    // Clínica COM prova de propósito: só a falha de leitura explica a linha ter ficado.
+    const { pedido, clinicaId } = await pendenteDeClinicaAtivada(40);
+    const semLeitura = new BetterAuthProvider({
+      auth,
+      dbAuth: dbAuth.db,
+      dbClinica: dbClinicaSemLeitura(),
+      conferirSenhaVazada: senhaVazadaFicticia,
+      bloqueio: { store: STORE, chaveHmac: CHAVE_DO_BLOQUEIO },
+      segredoDaInstancia: SEGREDO,
+      chaveDoEmailDaAtivacao: CHAVE_DO_EMAIL,
+    });
+    let r: Awaited<ReturnType<BetterAuthProvider['expurgarComoSistema']>> | undefined;
+    const eventos = await eventosDurante(async () => {
+      r = await semLeitura.expurgarComoSistema();
+    });
+    expect(await linhaDa(pedido)).toMatchObject({ usadoEm: null });
+    expect(r?.ativacoesRetidas).toBeGreaterThanOrEqual(1);
+    expect(r?.ativacoesSemLeituraDaTrilha).toBeGreaterThanOrEqual(1);
+    const alarme = eventos.filter((l) => l.includes('"evento":"TRILHA_NAO_LIDA"') && l.includes(`"pedido":"${pedido}"`));
+    expect(alarme).toHaveLength(1);
+    expect(alarme[0]).toContain('"motivo":"expurgo_da_ativacao"');
+    expect(alarme[0]).toContain(`"tenantId":"${clinicaId}"`);
+    expect(alarme[0]).not.toContain('@');
+    // Com a leitura de volta, a mesma linha sai.
+    await provedor.expurgarComoSistema();
+    expect(await linhaDa(pedido)).toBeUndefined();
   });
 
   it('a pendente recente (ainda válida) não é tocada: HMAC intacto e o token continua servindo', async () => {
