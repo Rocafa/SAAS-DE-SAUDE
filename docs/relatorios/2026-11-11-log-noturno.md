@@ -514,3 +514,7 @@ Pendente para a próxima sessão:
 - **#116 (postgres.js v4) retomado** com a engenharia: o prazo de 12/11 passou. Merge da main, escolha da versão (a 4.0.0 cumpre as 2 semanas; a 4.1.0 e a 4.1.1 ainda não), compatibilidade do drizzle, e RLS, segurança e resiliência locais.
 - **#116 atualizado (d3d94f1):** postgres.js fixado em `~4.0.0` (a única versão com 2 semanas de maturidade; a 4.1.x não corrige nada que nos afete e fica para depois de 19/11 e 25/11, com fonte na §8.1). Drizzle 0.45.4 compatível. Localmente: unit 1133+412, RLS 787, security 92, resiliência 26, exit 0. CI verde, exceto a auditoria (picomatch, #209). A aprovação antiga caiu com o push; precisa de nova aprovação do sócio.
 - **Guia de revisão atualizado** (seção de 17/11 no topo de `2026-11-13-guia-de-revisao.md`): a ordem para o sócio (#209 primeiro, porque destrava a auditoria de todos; depois #189, #210, #116, #155 e #194), a pilha nova #195 a #208 com tamanhos, a ação do tfvars e a trava do #174.
+
+## Checagem de 17/11 16:13
+
+- Nada mudou: #155, #194, #209, #210, #116, #153 e #154 seguem BLOCKED sem aprovação; #189 aprovado, mas espera a pilha e o #209; #158, #143 e #157 sem commit novo; nenhum merge.
