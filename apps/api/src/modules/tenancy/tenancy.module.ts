@@ -6,6 +6,7 @@ import {
   isTenantId,
   withTenant,
   type DatabaseHandle,
+  listarClinicasDoAgendador,
   type TenantTx,
 } from '../../db/tenant-transaction';
 import type { DatabaseTuning } from '../../db/pool-config';
@@ -80,8 +81,7 @@ export class ClinicasDoAgendador {
   constructor(@Inject(DATABASE_HANDLE) private readonly handle: DatabaseHandle) {}
 
   async listar(): Promise<TenantId[]> {
-    const linhas = await this.handle.db.execute<{ t: string }>(sql`select t from app_job_tenants() as t`);
-    return linhas.map((r) => r.t).filter(isTenantId);
+    return listarClinicasDoAgendador(this.handle.db);
   }
 }
 

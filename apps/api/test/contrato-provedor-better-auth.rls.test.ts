@@ -8,7 +8,12 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { Logger } from '@nestjs/common';
+import { Controller, Get, Logger, UseGuards, type INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import type { Server } from 'node:http';
+import request from 'supertest';
+import { AUTH_PROVIDER } from '../src/modules/auth/auth-context';
+import { Permissao, SemRenovarSessao, SessaoGuard } from '../src/modules/auth/sessao.guard';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
 import { auditLog, tenants } from '../src/db/schema';
@@ -204,6 +209,23 @@ async function novaPessoa(tenantId: string, perfis: readonly Perfil[]): Promise<
 
 async function entrar(email: string, senha = SENHA): Promise<Response> {
   return auth.api.signInEmail({ body: { email, password: senha }, asResponse: true });
+}
+
+@Controller('teste-cookie')
+@UseGuards(SessaoGuard)
+class AlvoDoCookie {
+  @Get('comum')
+  @Permissao('pacientes:ler')
+  comum(): { ok: true } {
+    return { ok: true };
+  }
+
+  @Get('polling')
+  @Permissao('pacientes:ler')
+  @SemRenovarSessao()
+  polling(): { ok: true } {
+    return { ok: true };
+  }
 }
 
 function bancada(): Promise<BancadaDoProvedor> {
@@ -706,6 +728,61 @@ describe('PR 3a: cookie renovado e polling sem renovar (pendência do #149; R19;
     expect(linha?.expira.getTime()).toBeGreaterThan(antes.getTime());
     expect(cookies.length).toBeGreaterThan(0);
     expect(cookies.every((x) => x.startsWith(`${nomeDoCookie(false)}=`))).toBe(true);
+  });
+});
+
+describe('R4 do 3a: pela HTTP, a resposta leva SÓ o Set-Cookie da sessão; o polling não leva nenhum', () => {
+  let app: INestApplication;
+  beforeAll(async () => {
+    const ref = await Test.createTestingModule({
+      controllers: [AlvoDoCookie],
+      providers: [
+        { provide: AUTH_PROVIDER, useValue: provedor },
+        // O TenantDatabase fecha o handle no shutdown do app: um handle só deste teste, nunca o compartilhado.
+        { provide: TenantDatabase, useValue: new TenantDatabase(createDatabase(process.env.DATABASE_URL ?? '', { max: 2 })) },
+      ],
+    }).compile();
+    app = ref.createNestApplication({ logger: false });
+    await app.init();
+  });
+  afterAll(async () => {
+    await app.close();
+  });
+
+  async function sessaoParaRenovar(): Promise<{ cookie: string; id: string; antes: Date }> {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    const comFator = await cadastrarFator(c, p.userId);
+    const id = await sessaoId(comFator);
+    // Passou do updateAge (60 s): a próxima leitura numa rota comum estende a sessão.
+    const antes = new Date(Date.now() + 13 * 60_000);
+    await dbAuth.db.update(sessao).set({ expiresAt: antes }).where(eq(sessao.id, id));
+    return { cookie: String((soSessao(comFator) as Record<string, string>)['cookie'] ?? ''), id, antes };
+  }
+
+  it('rota comum: 200 com um Set-Cookie só, o da sessão, HttpOnly, SameSite=Strict e Path=/', async () => {
+    const { cookie, id, antes } = await sessaoParaRenovar();
+    const r = await request(app.getHttpServer() as Server).get('/teste-cookie/comum').set('Cookie', cookie);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const setCookie = ([] as string[]).concat(r.headers['set-cookie'] ?? []);
+    expect(setCookie).toHaveLength(1);
+    expect(setCookie[0]).toMatch(new RegExp(`^${nomeDoCookie(false)}=`));
+    expect(setCookie[0]).toMatch(/HttpOnly/i);
+    expect(setCookie[0]).toMatch(/SameSite=Strict/i);
+    expect(setCookie[0]).toMatch(/Path=\//);
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBeGreaterThan(antes.getTime());
+  });
+
+  it('rota de polling: 200 sem nenhum Set-Cookie e sem estender a sessão', async () => {
+    const { cookie, id, antes } = await sessaoParaRenovar();
+    const r = await request(app.getHttpServer() as Server).get('/teste-cookie/polling').set('Cookie', cookie);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.headers['set-cookie']).toBeUndefined();
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBe(antes.getTime());
   });
 });
 
@@ -1264,6 +1341,33 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     await provedor.anonimizarConta(u?.id ?? '');
     const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${conv.conviteId}`), adm.userId);
     expect([...linhas][0]?.email_hmac).toBe('0'.repeat(32));
+  });
+
+  it('G3 completa do #176: anonimizar zera o HMAC do convite aceito numa clínica de onde a pessoa já saiu', async () => {
+    const origem = await api.novaClinica();
+    const outra = await api.novaClinica();
+    const admO = await api.membro(origem, api.sessao(origem, 'admin'), 'admin');
+    const admX = await api.membro(outra, api.sessao(outra, 'admin'), 'admin');
+    const email = `g3-${randomUUID().slice(0, 8)}@exemplo.test`;
+    const c1 = await convites().criar({ tenantId: origem, userId: admO.userId, roles: ['admin'] } as never, email, 'recepcao');
+    await convites().aceitar({ token: c1.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
+    const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
+    const userId = u?.id ?? '';
+    // Segunda clínica: concede direto (o convite aceito nela é simulado na tabela) e depois desliga.
+    await api.membro(outra, { userId }, 'recepcao');
+    const c2 = await convites().criar({ tenantId: outra, userId: admX.userId, roles: ['admin'] } as never, `outro-${email}`, 'recepcao');
+    await withTenant(api.db.db, outra, (tx) => tx.execute(sql`update team_invites set accepted_at = now(), accepted_user_id = ${userId} where id = ${c2.conviteId}`), admX.userId);
+    await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: admX.Authorization }).expect(204);
+    await provedor.anonimizarConta(userId);
+    const hmac = await withTenant(api.db.db, outra, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${c2.conviteId}`), admX.userId);
+    expect([...hmac][0]?.email_hmac).toBe('0'.repeat(32));
+    // V2 do #177: a clínica sem vínculo registra o descarte na trilha, com ator sistema (art. 37).
+    const prova = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
+    expect([...prova][0]?.n).toBe(1);
+    // V1 do #177: rodar de novo (com muitas clínicas na base) não lança e não grava trilha repetida.
+    await provedor.anonimizarConta(userId);
+    const de2 = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
+    expect([...de2][0]?.n).toBe(1);
   });
 
   it('R3 do 3a: clínica cancelada fora da janela de saída some da lista e da escolha; dentro da janela, fica', async () => {
