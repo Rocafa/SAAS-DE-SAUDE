@@ -136,8 +136,23 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
     // C1 do parecer do #195: já é admin, mas a clínica fica fora da lista e da escolha até ativar.
     const provedor = new BetterAuthProvider({ auth: null as never, dbAuth: dbAuth.db, dbClinica: api.db.db });
     expect((await provedor.clinicasDaPessoa(id)).map((c) => c.id)).not.toContain(r.clinicaId);
+    // Sobra da C1 (17/11): a clínica pendente também não conta para a escolha automática.
+    expect(await provedor.clinicasDoUsuario(id)).not.toContain(r.clinicaId);
     await dbAuth.db.update(ativacaoDoFundador).set({ usadoEm: new Date() }).where(eq(ativacaoDoFundador.id, p.pedido));
     expect((await provedor.clinicasDaPessoa(id)).map((c) => c.id)).toContain(r.clinicaId);
+    expect(await provedor.clinicasDoUsuario(id)).toContain(r.clinicaId);
+  });
+
+  it('A2: repetir depois de falha parcial com outro e-mail no parâmetro recriado é recusado (parametro_invalido)', async () => {
+    const id = randomUUID();
+    const email = `repetir.${id.slice(0, 8)}@exemplo.test`;
+    await dbAuth.db.insert(usuario).values({ id, name: 'Pessoa Ficticia', email, emailVerified: true });
+    const p = pedidoFicticio({ email });
+    // 1ª rodada: a clínica nasce, mas guardar o token falha (a linha de ativação não fica).
+    await expect(provisionar(p, () => Promise.reject(new Error('ssm fora')))).rejects.toThrow();
+    // 2ª rodada com o parâmetro recriado com OUTRO e-mail: recusada antes de gravar o HMAC errado.
+    await expect(provisionar({ ...p, email: `outra.${id.slice(0, 8)}@exemplo.test` }, guarda().guardar)).rejects.toMatchObject({ codigo: 'parametro_invalido' });
+    expect(await dbAuth.db.select().from(ativacaoDoFundador).where(eq(ativacaoDoFundador.id, p.pedido))).toEqual([]);
   });
 
   it('conta inativa com o e-mail não é reaproveitada: conta_inativa, sem clínica', async () => {

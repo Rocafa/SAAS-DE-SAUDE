@@ -106,3 +106,24 @@ O PR cumpre o que promete de R1, R2 (parte da emissão), R3, R8 e R9 (parte da t
 | Retenção | Prontuário não é tocado (20 anos). O expurgo de 30 dias vem no PR 3 com a **C3**. |
 | Segredos fora do código e dados reais fora do git | Conforme: nenhum segredo, testes com `exemplo.test`, token e e-mail fora de argumento, log e stdout. |
 | CFM, ANS e ICP-Brasil | MFA do admin desde o primeiro acesso, que depende do PR 2 e da **C1**. ICP-Brasil não é tocada. |
+
+## Reconferência (17/11/2026)
+
+Commits conferidos: `e2a003d` (C1) e `9da9910` (A1 a A3). O merge do #196 (trilha dos jobs de retenção) entrou no branch e não toca o provisionamento.
+
+### Veredito: **APROVADO COM RESSALVAS**. C1 resolvida. A1 e A3 resolvidas. A2 resolvida no código, sem teste e sem runbook. C2, C3 e C4 seguem abertas e continuam bloqueando o PR que ligar o cliente SSM e o PR 2.
+
+- **C1: resolvida (opção b).** `clinicaLiberada` (`provedor.ts:193`) recusa a clínica com ativação de `usado_em IS NULL` para aquele `usuario_id`. Conferi as rotas por onde a conta existente chegaria à clínica antes de ativar:
+  - a escolha automática do `resolver` (`provedor.ts:131-137`) e a de `aposMfaVerificado` (`:1047`) passam por `definirClinica`, que chama `clinicaLiberada` (`:976`);
+  - a lista e a escolha do PR 3a (`clinicasDaPessoa`, `escolherClinica`) passam pelo mesmo filtro;
+  - `sessao.clinica_ativa` só é gravada por `definirClinica`, e o `SessaoGuard` não lê cabeçalho de clínica. Por isso o `resolver`, que não repete `clinicaLiberada` quando já há clínica ativa, não vira atalho.
+  - As outras leituras de `clinicasDoUsuario` (`:259`, `:679`, `:894`) só gravam trilha ou aviso na clínica pendente e não dão acesso.
+  - O teste de bancada cobre: fora da lista antes, dentro depois de `usado_em`.
+- **Resíduo de C1 (média, entra no PR 2).** `clinicasDoUsuario` ainda conta a clínica pendente. Quem tinha uma clínica passa a ter duas e perde a escolha automática no `resolver` e no MFA (`sem_clinica`) até ativar. Isso afeta a disponibilidade, não o acesso.
+  - **Correção:** a escolha automática usa a lista já filtrada (`clinicasDaPessoa` ou um filtro de pendente em `clinicasDoUsuario`).
+  - **Teste:** pessoa com uma clínica e uma ativação pendente continua com escolha automática.
+- **A1: resolvida.** `ativacao-email` foi incluído em `VERSOES_DE_HMAC`, e a emissão usa a chave própria. O prefixo `convite-email:` dentro de `hmacDoEmail` é só cosmético, porque a separação vem da chave. A conferência do PR 2 tem de usar `chaveDeHmac('ativacao-email')`.
+- **A2: resolvida no código.** `provisionamento.ts:142` compara com o e-mail já normalizado (`:101`).
+  - **Pendências:** não há teste do caso (clínica existente + conta existente + e-mail diferente dá `parametro_invalido`), e o runbook ainda não diz que `erro_parcial_rodar_de_novo` pede recriar o parâmetro. Os dois entram antes do PR 2.
+- **A3: resolvida.** O campo `pedido` usa formato UUID na lista fechada e aparece em `CLINICA_PROVISIONADA` e em `ATIVACAO_EMITIDA`.
+- **Não executei a bancada nesta reconferência.** A leitura é do código e do teste.
