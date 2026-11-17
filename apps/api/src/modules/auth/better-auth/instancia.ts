@@ -10,20 +10,24 @@
  */
 import { createHmac, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { betterAuth } from 'better-auth';
+import { betterAuth, type Auth, type BetterAuthOptions } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { twoFactor } from 'better-auth/plugins/two-factor';
 import type { Database } from '../../../db/tenant-transaction';
 
-import { conta, sessao, usuario, verificacao } from '../../../db/identidade';
+import { conta, doisFatores, sessao, usuario, verificacao } from '../../../db/identidade';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
+import type { RateLimitStore } from '../../../security/rate-limit-store';
+import { CABECALHO_ORIGEM, criarProtecao, JANELA_DE_BLOQUEIO_MS, TETO_DE_FALHAS, type DependenciasDaProtecao } from './protecao';
 import { conferirSenha, gerarHashDeSenha } from './senha';
 
 /** Inatividade (E5): sem uso por 15 min, a sessão morre no servidor. */
 export const INATIVIDADE_S = 15 * 60;
 /** Prazo absoluto (R3): nenhuma sessão vive mais que 12 h, mesmo em uso. */
 export const PRAZO_ABSOLUTO_MS = 12 * 60 * 60 * 1000;
-/** Cabeçalho que a NOSSA montagem preenche com o HMAC da origem (o do cliente é apagado antes). */
-export const CABECALHO_ORIGEM = 'x-plataforma-origem';
+export { CABECALHO_ORIGEM };
+/** Nome do emissor no aplicativo autenticador (sem dado de clínica). */
+export const EMISSOR_DO_TOTP = 'Plataforma Saude';
 
 export interface OpcoesDaAutenticacao {
   /** Drizzle no pool do papel `app_auth` (R1): o único com acesso ao schema identidade. */
@@ -38,6 +42,12 @@ export interface OpcoesDaAutenticacao {
   readonly producao: boolean;
   /** Segredo do HMAC de origem e user-agent (R10). */
   readonly chaveHmac: Uint8Array;
+  /** Store dos contadores de bloqueio (o do rate limit: Redis em produção). */
+  readonly store: RateLimitStore;
+  /** Ganchos do provedor para o código aceito ou recusado (mfa_em e trilha). */
+  readonly fator: Pick<DependenciasDaProtecao, 'aoVerificarMfa' | 'aoFalharMfa'>;
+  /** Conferência de senha vazada (R15): k-anonimato em produção; dublê nos testes. */
+  readonly conferirSenhaVazada: DependenciasDaProtecao['conferirSenhaVazada'];
 }
 
 export const TAMANHO_MINIMO_DO_SEGREDO = 32;
@@ -53,19 +63,20 @@ export function hmacCurto(chave: Uint8Array, valor: string): string {
 
 const HEX16 = /^[0-9a-f]{16}$/;
 
-export function criarAutenticacao(o: OpcoesDaAutenticacao) {
+export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
   if (Buffer.byteLength(o.segredo, 'utf8') < TAMANHO_MINIMO_DO_SEGREDO) {
     throw new Error(`BETTER_AUTH_SECRET precisa de ao menos ${TAMANHO_MINIMO_DO_SEGREDO} bytes`);
   }
   if (o.origensConfiaveis.some((x) => x.includes('*'))) throw new Error('trustedOrigins com curinga é proibido');
-  return betterAuth({
+  const protecao = criarProtecao({ store: o.store, chaveHmac: o.chaveHmac, gastarTempoDeSenha: gerarHashDeSenha, conferirSenhaVazada: o.conferirSenhaVazada, ...o.fator });
+  const opcoes: BetterAuthOptions = {
     appName: 'plataforma-saude',
     baseURL: o.baseURL,
     basePath: '/api/auth',
     secret: o.segredo,
     telemetry: { enabled: false },
     trustedOrigins: [...o.origensConfiaveis],
-    database: drizzleAdapter(o.db, { provider: 'pg', schema: { usuario, sessao, conta, verificacao } }),
+    database: drizzleAdapter(o.db, { provider: 'pg', schema: { usuario, sessao, conta, verificacao, doisFatores } }),
     user: {
       modelName: 'usuario',
       additionalFields: { ativo: { type: 'boolean', input: false, required: false, defaultValue: true } },
@@ -94,6 +105,21 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao) {
       revokeSessionsOnPasswordReset: true,
       password: { hash: gerarHashDeSenha, verify: conferirSenha },
     },
+    // PR 2: TOTP. A OBRIGATORIEDADE do MFA continua nossa (mfa.ts); a biblioteca só confere o código. Sem OTP por
+    // e-mail/SMS (sem sendOTP) e sem "lembrar este aparelho" (recusado no gancho). O bloqueio da biblioteca no login
+    // em duas etapas fica em 5 falhas e 15 min, igual ao nosso.
+    plugins: [
+      twoFactor({
+        issuer: EMISSOR_DO_TOTP,
+        totpOptions: { digits: 6, period: 30 },
+        accountLockout: { enabled: true, maxFailedAttempts: TETO_DE_FALHAS, durationSeconds: JANELA_DE_BLOQUEIO_MS / 1000 },
+        twoFactorCookieMaxAge: 5 * 60,
+        trustDeviceMaxAge: 1,
+        // As chaves JS da tabela já são os nomes da biblioteca (colunas em português no SQL, 0065).
+        schema: { twoFactor: { modelName: 'doisFatores' } },
+      }),
+    ],
+    hooks: { before: protecao.antes, after: protecao.depois },
     // R10: o rate limit da biblioteca (em memória, por instância) fica desligado; o bloqueio é nosso, no Redis.
     rateLimit: { enabled: false },
     advanced: {
@@ -138,7 +164,9 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao) {
         },
       },
     },
-  });
+  };
+  return betterAuth(opcoes);
 }
 
-export type Autenticacao = ReturnType<typeof criarAutenticacao>;
+/** Tipo público da biblioteca (o inferido citaria tipos internos do zod; os endpoints do plugin vão pela HTTP). */
+export type Autenticacao = Auth;
