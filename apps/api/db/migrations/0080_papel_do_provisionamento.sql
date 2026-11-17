@@ -10,7 +10,8 @@
 --    NOBYPASSRLS, sem CREATEDB/CREATEROLE e membro de nenhum papel) recebe SÓ o que `provisionarClinica` usa:
 --    - identidade.ativacao_do_fundador: SELECT do `id` (repetição do pedido) e INSERT. Sem UPDATE, sem DELETE e sem
 --      leitura do hash do token ou do HMAC do e-mail;
---    - identidade.usuario: SELECT de `id`, `email`, `ativo` e `clinica_de_origem` (conta existente pelo e-mail, R2 e C3);
+--    - identidade.usuario: SELECT de `id` e `clinica_de_origem` (C3); a conta pelo e-mail (R2) e a conferência do
+--      e-mail (A2) só por duas funções pela chave, sem listar e-mails (R1 do parecer do #207);
 --    - tenants, clinic_members e audit_log: SELECT e INSERT, sob o RLS da clínica do contexto;
 --    - EXECUTE só nas funções do contexto (clínica e sessão de SISTEMA; sem `app_set_user`), nas lidas pelas policies e
 --      triggers desse caminho e na prova da trilha (0078).
@@ -39,7 +40,32 @@ $$;
 -- Schema identidade (USAGE vem do bootstrap, como o do app_auth).
 GRANT SELECT (id) ON identidade.ativacao_do_fundador TO app_provisionamento;
 GRANT INSERT ON identidade.ativacao_do_fundador TO app_provisionamento;
-GRANT SELECT (id, email, ativo, clinica_de_origem) ON identidade.usuario TO app_provisionamento;
+-- Sem a coluna `email` (R1 do parecer do #207): a busca pelo e-mail e a conferência do e-mail da conta são funções
+-- pela chave, abaixo; a tarefa não lista os e-mails das contas.
+GRANT SELECT (id, clinica_de_origem) ON identidade.usuario TO app_provisionamento;
+
+-- Conta pelo e-mail (R2): id e situação da conta com aquele e-mail, sem diferenciar maiúsculas. Só pela chave.
+CREATE FUNCTION identidade.conta_por_email(p_email text) RETURNS TABLE (id uuid, ativo boolean)
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = pg_catalog, identidade
+AS $$
+  SELECT u.id, u.ativo FROM identidade.usuario u WHERE lower(u.email) = lower(p_email)
+$$;
+
+-- A2 do parecer do #195: o e-mail do parâmetro recriado é o da conta do fundador? Só sim ou não.
+CREATE FUNCTION identidade.email_da_conta_confere(p_conta uuid, p_email text) RETURNS boolean
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = pg_catalog, identidade
+AS $$
+  SELECT EXISTS (SELECT 1 FROM identidade.usuario u WHERE u.id = p_conta AND lower(u.email) = lower(p_email))
+$$;
+
+REVOKE ALL ON FUNCTION identidade.conta_por_email(text), identidade.email_da_conta_confere(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION identidade.conta_por_email(text), identidade.email_da_conta_confere(uuid, text) TO app_provisionamento;
 
 -- Clínica (RLS forçado; USAGE em public vem do bootstrap).
 GRANT SELECT, INSERT ON tenants, clinic_members, audit_log TO app_provisionamento;

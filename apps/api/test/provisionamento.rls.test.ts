@@ -231,6 +231,9 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
       sql`update identidade.ativacao_do_fundador set usado_em = now() where id = ${p.pedido}::uuid`,
       sql`delete from identidade.ativacao_do_fundador where id = ${p.pedido}::uuid`,
       sql`select nome from identidade.usuario limit 1`,
+      // R1 do parecer do #207: a tarefa não lista e-mails; busca só pela chave (identidade.conta_por_email).
+      sql`select email from identidade.usuario limit 1`,
+      sql`select ativo from identidade.usuario limit 1`,
       sql`update identidade.usuario set ativo = false where id = ${randomUUID()}::uuid`,
       sql`select 1 from identidade.conta limit 1`,
       sql`select 1 from identidade.sessao limit 1`,

@@ -99,6 +99,8 @@ O risco residual é aceitável **depois** do checklist do 3c: segredos versionad
 | Conferência de senha vazada desligada até a decisão do egresso (B2) | sócios | _pendente_ |
 | Quem entrega o token de ativação conhece o token e o e-mail e poderia ativar no lugar do fundador (B11, R3) | encarregado | _pendente_ |
 | O `--operador` do comando do suporte é declarado; a prova é o CloudTrail (B12) | encarregado | _pendente_ |
+| Clínica sem fundador criada na sessão de sistema sem trilha (G3 do parecer do #207). Risco baixo: a linha fica inerte (nenhum vínculo, nenhum dado pessoal) e quem consegue isso (`app_user`) já escreve em qualquer clínica. **Prazo: fechar em PR próprio antes da primeira clínica real** (recusa no `tenants_founder_guard` salvo `app_migrator`) | encarregado | _pendente_ |
+| O papel `app_provisionamento` pode abrir o contexto de qualquer clínica e ler `tenants`, `clinic_members` e `audit_log` dela (O1 do parecer do #207); não chega a paciente, prontuário nem financeiro. Portão: IAM da tarefa com duas pessoas e MFA | encarregado | _pendente_ |
 
 Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, B5).
 
