@@ -48,6 +48,8 @@ export const EVENTOS_DE_SEGURANCA = {
   PERFIS_NAO_CONFERIDOS: { severidade: 'alto', alarme: 'imediato', descricao: 'leitura de clinic_members falhou; requisição negada' },
   CSRF_RECUSADO: { severidade: 'alto', alarme: 'volume', descricao: 'escrita vinda de origem fora da allowlist (403)' },
   PORTAL_RESGATE_RECUSADO: { severidade: 'aviso', alarme: 'volume', descricao: 'resgate de convite do portal recusado' },
+  CLINICA_PROVISIONADA: { severidade: 'alto', alarme: 'volume', descricao: 'tarefa de provisionamento criou clínica com o fundador como admin (B11; quem rodou: principal no CloudTrail)' },
+  ATIVACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador emitido pela tarefa de provisionamento (B11; só o hash no banco)' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 
 export type EventoDeSeguranca = keyof typeof EVENTOS_DE_SEGURANCA;
@@ -109,6 +111,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'recuperacao_pelo_admin',
   'pedido_do_titular',
   'conferencia_indisponivel',
+  'expurgo_de_credencial',
   'teto_diario',
   'conta_sem_vinculo',
   'conta_com_vinculo',
@@ -154,6 +157,10 @@ const FORMATOS = {
   chamado: (v: unknown) => typeof v === 'string' && /^LGPD-\d{1,7}$/.test(v),
   /** B10: id interno de quem executou a anonimização. Só no log de segurança, nunca na trilha da clínica (R2). */
   operador: (v: unknown) => typeof v === 'string' && UUID.test(v),
+  /** B11: contrato da clínica provisionada (`CTR-<número>`), nunca nome ou e-mail. */
+  contrato: (v: unknown) => typeof v === 'string' && /^CTR-\d{1,7}$/.test(v),
+  /** A3 do parecer do #195: id do pedido de provisionamento, para casar o evento com o RunTask no CloudTrail. */
+  pedido: (v: unknown) => typeof v === 'string' && UUID.test(v),
 } as const;
 
 export type CampoDeSeguranca = keyof typeof FORMATOS;

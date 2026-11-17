@@ -141,7 +141,8 @@ export function loadRateLimitHashKey(env: NodeJS.ProcessEnv = process.env): Buff
  * contadores por origem (`origem`), o bloqueio 5/15 e a marca de reuso (`bloqueio`), o user-agent da sessão
  * (`sessao-ua`) e o e-mail do convite (`convite-email`).
  */
-export const VERSOES_DE_HMAC = { 'rate-limit': 1, origem: 1, bloqueio: 1, 'sessao-ua': 1, 'convite-email': 1 } as const;
+// `ativacao-email` (A1 do parecer do #195): o e-mail do fundador na ativação tem chave própria, separada do convite.
+export const VERSOES_DE_HMAC = { 'rate-limit': 1, origem: 1, bloqueio: 1, 'sessao-ua': 1, 'convite-email': 1, 'ativacao-email': 1 } as const;
 export type UsoDeHmac = keyof typeof VERSOES_DE_HMAC;
 const SAL_DO_HMAC = 'plataforma-saude/hmac';
 

@@ -122,3 +122,21 @@ export const recuperacao = identidade.table('recuperacao', {
   expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
   usadoEm: timestamp('usado_em', { withTimezone: true }),
 });
+
+/**
+ * Ativação do fundador da clínica provisionada (0076; B11, R1 do parecer de 16/11/2026). `id` = uuid do pedido. Só o
+ * HMAC do e-mail e o SHA-256 do token, 72 h, uso único; no máximo uma pendente por clínica.
+ */
+export const ativacaoDoFundador = identidade.table('ativacao_do_fundador', {
+  id: uuid('id').primaryKey(),
+  clinicaId: uuid('clinica_id').notNull(),
+  usuarioId: uuid('usuario_id').notNull(),
+  emailHmac: text('email_hmac').notNull(),
+  contaExistente: boolean('conta_existente').notNull(),
+  tokenHash: text('token_hash').notNull(),
+  contrato: text('contrato').notNull(),
+  criadoEm: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
+  expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
+  usadoEm: timestamp('usado_em', { withTimezone: true }),
+  falhas: integer('falhas').notNull().default(0),
+});

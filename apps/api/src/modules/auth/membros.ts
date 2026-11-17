@@ -103,19 +103,8 @@ export class MembrosService {
    * transação, registra-o como o primeiro admin. Auditado (`tenant_create` e `member_found`).
    * Chamado pelo provisionamento/onboarding (não há rota pública: quem cria clínica é a plataforma).
    */
-  async criarClinica(entrada: { readonly nome: string; readonly fundadorUserId: string }): Promise<{ clinicaId: TenantId; fundador: MembroDto }> {
-    const clinicaId = randomUUID() as TenantId;
-    const ctx: RequestContext = { tenantId: clinicaId, userId: entrada.fundadorUserId as UserId, roles: ['admin'] };
-    const fundador = await this.db.run(
-      clinicaId,
-      async (tx) => {
-        await tx.insert(tenants).values({ id: clinicaId, displayName: entrada.nome, founderUserId: entrada.fundadorUserId });
-        await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'tenants', metadata: { op: 'tenant_create' } });
-        return this.inserir(tx, ctx, entrada.fundadorUserId, 'admin', 'member_found');
-      },
-      entrada.fundadorUserId,
-    );
-    return { clinicaId, fundador };
+  criarClinica(entrada: EntradaDaCriacaoDeClinica): Promise<{ clinicaId: TenantId; fundador: MembroDto }> {
+    return criarClinica(this.db, entrada);
   }
 
   conceder(ctx: RequestContext, usuarioId: string, perfil: ClinicMemberRole): Promise<MembroDto> {
@@ -181,6 +170,35 @@ export class MembrosService {
   private inserir(tx: TenantTx, ctx: RequestContext, usuarioId: string, perfil: ClinicMemberRole, op: string): Promise<MembroDto> {
     return gravarConcessao(tx, ctx, usuarioId, perfil, op);
   }
+}
+
+export interface EntradaDaCriacaoDeClinica {
+  readonly nome: string;
+  readonly fundadorUserId: string;
+  /** Id da clínica escolhido por quem chama (o provisionamento deriva do pedido, para ser idempotente). Padrão: novo. */
+  readonly clinicaId?: TenantId;
+}
+
+/**
+ * Corpo de `MembrosService.criarClinica`, também usado pela tarefa de provisionamento (B11), que não sobe o Nest: só
+ * precisa de quem abra a transação da clínica com o fundador como usuário.
+ */
+export async function criarClinica(
+  db: Pick<TenantDatabase, 'run'>,
+  entrada: EntradaDaCriacaoDeClinica,
+): Promise<{ clinicaId: TenantId; fundador: MembroDto }> {
+  const clinicaId = entrada.clinicaId ?? (randomUUID() as TenantId);
+  const ctx: RequestContext = { tenantId: clinicaId, userId: entrada.fundadorUserId as UserId, roles: ['admin'] };
+  const fundador = await db.run(
+    clinicaId,
+    async (tx) => {
+      await tx.insert(tenants).values({ id: clinicaId, displayName: entrada.nome, founderUserId: entrada.fundadorUserId });
+      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: 'tenants', metadata: { op: 'tenant_create' } });
+      return gravarConcessao(tx, ctx, entrada.fundadorUserId, 'admin', 'member_found');
+    },
+    entrada.fundadorUserId,
+  );
+  return { clinicaId, fundador };
 }
 
 /**

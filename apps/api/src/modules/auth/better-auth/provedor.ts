@@ -14,10 +14,10 @@ import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
-import { conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
-import { recordAudit } from '../../audit/audit-log';
+import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
 import type { ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import type { AuthContext, AuthProvider, ClinicaDaPessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDePessoa, RequisicaoParaSessao, SessaoDePessoa, SessaoListada } from '../auth-context';
@@ -191,6 +191,13 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * ser escolhida só dentro da janela de saída (portabilidade); fora dela some da lista e da escolha.
    */
   private async clinicaLiberada(id: string, userId: string): Promise<{ nome: string } | null> {
+    // C1 do parecer do #195: o fundador com conta existente já é admin desde o provisionamento, mas só entra na clínica
+    // DEPOIS de ativar (token + conferência do e-mail). Ativação ainda não usada = clínica fora da lista e da escolha.
+    const [pendente] = await this.d.dbAuth
+      .select({ id: ativacaoDoFundador.id })
+      .from(ativacaoDoFundador)
+      .where(and(eq(ativacaoDoFundador.clinicaId, id), eq(ativacaoDoFundador.usuarioId, userId), isNull(ativacaoDoFundador.usadoEm)));
+    if (pendente) return null;
     const [t] = await withTenant(
       this.d.dbClinica,
       id as TenantId,
@@ -274,7 +281,16 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * Expurgo diário do schema identidade (job `identidade-expurgo`): sessões vencidas, tokens de uso único vencidos há
    * mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Devolve só contagens.
    */
-  async expurgarComoSistema(): Promise<{ sessoes: number; verificacoes: number; cadastrosNaoConcluidos: number; recuperacoes: number; credenciaisDeInativas: number; contasSemVinculo: number; contasReativadas: number }> {
+  async expurgarComoSistema(): Promise<{
+    sessoes: number;
+    verificacoes: number;
+    cadastrosNaoConcluidos: number;
+    recuperacoes: number;
+    credenciaisDeInativas: number;
+    expurgosSemTrilha: number;
+    contasSemVinculo: number;
+    contasReativadas: number;
+  }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
     const sessoes = await this.d.dbAuth.delete(sessao).where(lt(sessao.expiresAt, agora)).returning({ id: sessao.id });
@@ -331,7 +347,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     for (const { id } of reativadas) registrarEventoDeSeguranca('CONTA_REATIVADA_COM_VINCULO', { motivo: 'conta_com_vinculo', userId: id });
     const noventaDias = new Date(agora.getTime() - 90 * 24 * 60 * 60 * 1000);
     const inativas = await this.d.dbAuth
-      .select({ id: usuario.id })
+      .select({ id: usuario.id, clinicaDeOrigem: usuario.clinicaDeOrigem })
       .from(usuario)
       .where(
         and(
@@ -341,7 +357,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         ),
       );
     let credenciaisDeInativas = 0;
-    for (const { id } of inativas) {
+    let expurgosSemTrilha = 0;
+    for (const { id, clinicaDeOrigem } of inativas) {
       const expurgou = await this.d.dbAuth.transaction(async (tx) => {
         // Ressalvas 7 e 8 da reconferência do #173: a marca 'expurgada' recusa nova concessão (0072) e o nome sai junto com
         // o e-mail (art. 16); a autoria clínica está em `professionals` da clínica. F1 do #175: a marca vai PRIMEIRO, com a
@@ -359,14 +376,39 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
         await tx.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, id), isNull(recuperacao.usadoEm)));
         return true;
       });
-      if (expurgou) credenciaisDeInativas += 1;
+      if (!expurgou) continue;
+      credenciaisDeInativas += 1;
+      // Parecer do #173: este passo apaga dado pessoal (senha, TOTP, nome e e-mail) e devolvia só a contagem — nada na
+      // trilha, e o art. 37 da LGPD pede a prova. A linha vai na clínica de ORIGEM da conta (0067): é a clínica que a
+      // cadastrou, e a essa altura a conta não tem vínculo nenhum para onde apontar. Conta anterior à 0067 não tem
+      // clínica de origem; aí não existe trilha de clínica possível e sobra o evento de segurança.
+      //
+      // De propósito NÃO é fail-closed: segurar o expurgo guardaria dado pessoal além do prazo, que é a violação maior.
+      // A falha vira `TRILHA_NAO_GRAVADA` (crítico, alarme imediato), como no `anonimizarConta`, e sai contada.
+      const trilhado = clinicaDeOrigem
+        ? await withTenant(this.d.dbClinica, clinicaDeOrigem as TenantId, (tx) =>
+            recordAudit(tx, { tenantId: clinicaDeOrigem as TenantId, userId: SYSTEM_ACTOR_ID, roles: [] }, {
+              action: AuditAction.Update,
+              scope: 'identidade.conta',
+              metadata: { op: 'account_credentials_purged', user_id: id },
+            }),
+          )
+            .then(() => true)
+            .catch(() => false)
+        : false;
+      if (!trilhado) {
+        expurgosSemTrilha += 1;
+        registrarNoMaximoUmaVez(`expurgo-credencial:${id}`, 60_000, 'TRILHA_NAO_GRAVADA', { userId: id, motivo: 'expurgo_de_credencial' });
+      }
     }
+    if (expurgosSemTrilha > 0) registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'expurgo_de_credencial', contagem: expurgosSemTrilha });
     return {
       sessoes: sessoes.length,
       verificacoes: verificacoes.length,
       cadastrosNaoConcluidos: cadastros.length,
       recuperacoes: recuperacoes.length,
       credenciaisDeInativas,
+      expurgosSemTrilha,
       contasSemVinculo: semVinculo.length,
       contasReativadas: reativadas.length,
     };
@@ -900,7 +942,19 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /** Clínicas com vínculo ativo, pelo espelho `identidade.vinculo` (0064, só ids). */
   async clinicasDoUsuario(userId: string): Promise<string[]> {
     const linhas = await this.d.dbAuth.selectDistinct({ clinicaId: vinculo.clinicaId }).from(vinculo).where(eq(vinculo.usuarioId, userId)).orderBy(vinculo.clinicaId);
-    return linhas.map((l) => l.clinicaId);
+    // Sobra da C1 do parecer do #195 (reconferência de 17/11): a clínica com ativação do fundador ainda pendente não conta,
+    // senão quem já tinha uma clínica perdia a escolha automática até ativar a nova.
+    const fora = await this.clinicasComAtivacaoPendente(userId);
+    return linhas.map((l) => l.clinicaId).filter((c) => !fora.has(c));
+  }
+
+  /** Clínicas em que a pessoa é fundadora com ativação ainda não usada (C1 do parecer do #195). */
+  private async clinicasComAtivacaoPendente(userId: string): Promise<Set<string>> {
+    const pendentes = await this.d.dbAuth
+      .select({ clinicaId: ativacaoDoFundador.clinicaId })
+      .from(ativacaoDoFundador)
+      .where(and(eq(ativacaoDoFundador.usuarioId, userId), isNull(ativacaoDoFundador.usadoEm)));
+    return new Set(pendentes.map((p) => p.clinicaId));
   }
 
   /** Perfis de sessão ATIVOS na clínica (RLS da clínica, usuário travado na transação). */
