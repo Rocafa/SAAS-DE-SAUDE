@@ -11,13 +11,13 @@
  * - Teto diário de convites por admin (R9).
  */
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext, type TenantId } from '@plataforma/shared';
 import { and, asc, count, eq, gt, isNull, sql } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
-import { teamInvites, type ClinicMemberRole } from '../../db/schema';
+import { clinicMembers, teamInvites, type ClinicMemberRole } from '../../db/schema';
 import { origemDaRequisicao } from '../../security/log-de-seguranca';
 import { loadRateLimitHashKey } from '../../security/rate-limit-store';
 import { CABECALHO_ORIGEM } from './better-auth/protecao';
@@ -128,7 +128,7 @@ export class ConvitesService {
    * Aceite de pessoa NOVA (a conta existente é o PR 3b-2: exige login completo). Mesmo erro (404) para token
    * inválido, vencido, usado, revogado ou e-mail diferente. Devolve os `Set-Cookie` da sessão de cadastro.
    */
-  async aceitar(e: { token: string; email: string; nome: string; senha: string; cabecalhos: Headers }): Promise<string[]> {
+  async aceitar(e: { token: string; email: string; nome?: string; senha: string; codigo?: string; cabecalhos: Headers }): Promise<string[]> {
     const provedor = this.provider;
     if (!ehProvedorDeConvite(provedor)) throw new NaoEncontradoError();
     const tenantId = clinicaDoToken(e.token);
@@ -144,8 +144,10 @@ export class ConvitesService {
     if (!ehPerfilDoBanco(convite.role)) throw new NaoEncontradoError();
     const perfil = convite.role;
     const id = await provedor.idParaContaDoConvite(e.email);
-    // R18: quem usa o token percebe se a conta já existe (registrado no RIPD); a conta existente entra no 3b-2.
-    if (id === 'conta_existente') throw new ConflitoError('conta_existente_exige_login');
+    // R18: quem usa o token percebe se a conta já existe (registrado no RIPD). Conta existente: login COMPLETO.
+    if (id === 'conta_existente') return this.aceitarComContaExistente(e, convite, perfil, tenantId);
+    if (!e.nome) throw new ConflitoError('nome_obrigatorio', ['nome']);
+    const nome = e.nome;
     const { userId, reaproveita } = id;
     let contaCriada = false;
     const ctx: RequestContext = { tenantId: tenantId as TenantId, userId: convite.createdBy as RequestContext['userId'], roles: [] };
@@ -167,7 +169,7 @@ export class ConvitesService {
       if (marcado.length === 0) throw new NaoEncontradoError();
       // R1 do código do 3b-1: o vínculo ANTES e a conta POR ÚLTIMO (ela vive em outra transação, no app_auth).
       await gravarConcessao(tx, ctx, userId, perfil, 'member_grant', { via: 'convite', invite_id: convite.id });
-      const conta = await provedor.criarContaDoConvite({ userId, reaproveita, email: e.email, nome: e.nome, senha: e.senha, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
+      const conta = await provedor.criarContaDoConvite({ userId, reaproveita, email: e.email, nome, senha: e.senha, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
       if (conta === 'conta_existente') throw new ConflitoError('conta_existente_exige_login');
       if (conta === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senha']);
       contaCriada = true;
@@ -179,7 +181,48 @@ export class ConvitesService {
         throw err;
       })
       .catch(naoAdmin);
+    if (reaproveita) await provedor.completarContaReaproveitada({ userId, nome, clinicaDeOrigem: tenantId, conviteDeOrigem: convite.id });
     return provedor.abrirSessaoDeCadastro({ email: e.email, senha: e.senha, cabecalhos: e.cabecalhos });
+  }
+
+  /**
+   * Aceite por quem JÁ tem conta (R1 e R2 do desenho do PR 3; R15 e R16): senha e código TOTP, pelos bloqueios de
+   * login e de fator. Ver o token não basta. Mesmo erro para senha ou código errados. A conta autenticada é a do e-mail
+   * do convite (o HMAC já conferiu o e-mail usado no login). O vínculo nasce na transação da clínica, como o admin que
+   * convidou; perfil já ativo não duplica.
+   */
+  private async aceitarComContaExistente(
+    e: { email: string; senha: string; codigo?: string; cabecalhos: Headers },
+    convite: { id: string; createdBy: string },
+    perfil: ClinicMemberRole,
+    tenantId: string,
+  ): Promise<string[]> {
+    const provedor = this.provider;
+    if (!ehProvedorDeConvite(provedor)) throw new NaoEncontradoError();
+    if (!e.codigo || !/^[0-9]{6}$/.test(e.codigo)) throw new ConflitoError('conta_existente_exige_login', ['codigo']);
+    // Sem abrir sessão (vale também para a conta desligada que está sendo recontratada); a pessoa entra depois.
+    const login = await provedor.conferirCredenciais({ email: e.email, senha: e.senha, codigo: e.codigo, cabecalhos: e.cabecalhos });
+    if (login === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
+    if (login === 'falhou' || login === 'bloqueado') throw new ConflitoError('credenciais_invalidas');
+    if (login === 'sem_fator') throw new ConflitoError('conta_sem_fator');
+    const ctx: RequestContext = { tenantId: tenantId as TenantId, userId: convite.createdBy as RequestContext['userId'], roles: [] };
+    await escreverNaClinica(this.db, ctx, async (tx) => {
+      await exigirPerfilNoBanco(tx, ctx, 'admin');
+      const marcado = await tx
+        .update(teamInvites)
+        .set({ acceptedAt: new Date(), acceptedUserId: login.userId })
+        .where(and(eq(teamInvites.id, convite.id), isNull(teamInvites.acceptedAt), isNull(teamInvites.revokedAt), gt(teamInvites.expiresAt, new Date())))
+        .returning({ id: teamInvites.id });
+      if (marcado.length === 0) throw new NaoEncontradoError();
+      const [ja] = await tx
+        .select({ id: clinicMembers.id })
+        .from(clinicMembers)
+        .where(and(eq(clinicMembers.tenantId, ctx.tenantId), eq(clinicMembers.userId, login.userId), eq(clinicMembers.role, perfil), isNull(clinicMembers.revokedAt)));
+      if (!ja) await gravarConcessao(tx, ctx, login.userId, perfil, 'member_grant', { via: 'convite', invite_id: convite.id });
+    }).catch((err: unknown) => {
+      throw err instanceof ProibidoError ? new NaoEncontradoError() : err;
+    });
+    return [];
   }
 }
 
@@ -232,11 +275,12 @@ export class AceiteDeConviteController {
     @Req() req: { headers: Record<string, string | string[] | undefined>; ip?: string },
     @Res({ passthrough: true }) res: { append(nome: string, valor: string[]): void },
   ): Promise<void> {
-    const v = new Validador(exigirObjeto(corpo, ['token', 'email', 'nome', 'senha']));
+    const v = new Validador(exigirObjeto(corpo, ['token', 'email', 'nome', 'senha', 'codigo']));
     const token = v.texto('token', { max: 100, obrigatorio: true });
     const email = v.texto('email', { max: 320, obrigatorio: true });
-    const nome = v.texto('nome', { max: 200, obrigatorio: true });
+    const nome = v.texto('nome', { max: 200 });
     const senha = v.texto('senha', { max: 128, obrigatorio: true });
+    const codigo = v.texto('codigo', { max: 6 });
     v.concluir();
     if (senha.length < 12) throw new ConflitoError('senha_curta', ['senha']);
     const cabecalhos = new Headers();
@@ -245,6 +289,6 @@ export class AceiteDeConviteController {
     if (typeof ua === 'string') cabecalhos.set('user-agent', ua);
     const origem = origemDaRequisicao(req.ip);
     if (origem) cabecalhos.set(CABECALHO_ORIGEM, origem);
-    res.append('Set-Cookie', await this.convites.aceitar({ token, email, nome, senha, cabecalhos }));
+    res.append('Set-Cookie', await this.convites.aceitar({ token, email, senha, cabecalhos, ...(nome ? { nome } : {}), ...(codigo ? { codigo } : {}) }));
   }
 }

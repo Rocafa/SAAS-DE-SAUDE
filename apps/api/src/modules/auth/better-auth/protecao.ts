@@ -16,7 +16,7 @@
  *
  * Os contadores ficam no store do rate limit (Redis em produção), com chaves em HMAC: nenhum e-mail ou id em claro.
  */
-import { createHmac } from 'node:crypto';
+import { chaveDoBloqueio, type TipoDeContador } from './chaves-do-bloqueio';
 import { APIError, createAuthMiddleware, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
@@ -53,6 +53,8 @@ export interface DependenciasDaProtecao {
   readonly conferirSenhaVazada: ConferirSenhaVazada;
   /** Código aceito pela biblioteca: grava `mfa_em` e a trilha (provedor). Erro aqui derruba a resposta (falha fechada). */
   readonly aoVerificarMfa: (e: { sessaoId: string; userId: string; motivo: MotivoDaVerificacao }) => Promise<unknown>;
+  /** R6 do #152: fator trancado por pessoa identificada vira aviso aos admins das clínicas dela (1 por dia). */
+  readonly aoBloquearFator?: (userId: string) => Promise<void>;
   /** R8 do desenho do PR 3: o cadastro do TOTP só numa sessão aberta pelo convite ou pela recuperação, no prazo. */
   readonly podeCadastrarFator: (sessaoId: string) => Promise<boolean>;
   /** Código ou senha do cadastro recusados, com sessão aberta: trilha da clínica (provedor). */
@@ -80,8 +82,7 @@ type Situacao = { readonly sessaoId?: string; readonly userId?: string; readonly
 const HEX16 = /^[0-9a-f]{16}$/;
 
 export function criarProtecao(d: DependenciasDaProtecao) {
-  const chave = (tipo: string, valor: string): string =>
-    `bl:v1:${tipo}:${createHmac('sha256', d.chaveHmac).update(`${tipo}:${valor}`).digest('hex').slice(0, 32)}`;
+  const chave = (tipo: TipoDeContador, valor: string): string => chaveDoBloqueio(d.chaveHmac, tipo, valor);
 
   /** Situação da sessão vista no `before`, para o `after` da mesma requisição (cadastro x reverificação). */
   const situacoes = new WeakMap<object, Situacao>();
@@ -307,6 +308,11 @@ export function criarProtecao(d: DependenciasDaProtecao) {
       const ids = { ...(situacao.userId ? { userId: situacao.userId } : {}), ...(origem ? { origem } : {}) };
       registrarEventoDeSeguranca('MFA_FALHOU', { motivo: ctx.path === ROTA_VERIFICACAO_DO_FATOR ? 'codigo_errado' : 'senha_errada', ...ids });
       for (const c of travaram) registrarEventoDeSeguranca('MFA_BLOQUEADO', { motivo: 'bloqueio_do_fator', regra: c.regra, ...ids });
+      if (situacao.userId && d.aoBloquearFator && travaram.some((c) => c.regra === 'fator_por_pessoa')) {
+        await d.aoBloquearFator(situacao.userId).catch(() => {
+          registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'aviso_de_anomalia', userId: situacao.userId });
+        });
+      }
       if (situacao.sessaoId && situacao.userId) {
         await d.aoFalharMfa({ sessaoId: situacao.sessaoId, userId: situacao.userId, bloqueou: travaram.length > 0 }).catch(() => {
           registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'codigo_errado', userId: situacao.userId });
