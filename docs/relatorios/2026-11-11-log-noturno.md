@@ -324,3 +324,78 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **Item B11 no checklist da abertura:** primeiro fator de quem não nasce de convite, sem afrouxar a R8. O fundador recebe um token de cadastro no provisionamento, e o membro adicionado recebe a recuperação de fator do admin. Depende do desenho do provisionamento (`criarClinica` ainda não tem chamador, então hoje ninguém fica preso).
 - **#194, pendências do parecer resolvidas:** um teste da troca de número (a trilha marca `had_registration: true`, sem o número) e um teste da exportação total com o registro congelado na assinatura. O CI está rodando.
 - **#194: CI 16/16 verde** com os testes novos da troca de número e da exportação.
+- **#181, ressalvas R2 e R3 (no branch do #155, propagadas pela pilha):** o alarme `TRILHA_NAO_GRAVADA` do fator agora diz se a linha perdida era a do cadastro (`trilha_do_cadastro_do_fator`) e se o desfazer do MFA também falhou (`mfa_sem_trilha`, o pior caso). O topo passa no typecheck.
+- **#194, mais ressalvas resolvidas:**
+  - **R1:** o recibo passa a usar o registro do cadastro do profissional, e o campo do perfil fiscal fica como legado (o recibo já emitido não muda). Com teste de bancada.
+  - **R5:** o admin pode apagar um registro informado errado (os dois nulos). Com testes de unidade e de bancada.
+  - A R3 (o profissional ver o próprio registro e ser avisado da troca) fica na fila: precisa de um tipo novo de aviso.
+- **Desenho do provisionamento da clínica (B11)** em `docs/04-arquitetura/provisionamento-da-clinica.md`, enviado ao Guardião.
+  - O pedido de provisionamento guarda o e-mail cifrado e só entra por uma rota interna.
+  - O comando avulso no ECS recebe só o id do pedido, então nada de e-mail vai para o CloudTrail. Ele cria a conta sem senha nem fator, chama o `criarClinica` e emite um token de ativação de uso único, com validade de 72 h.
+  - A ativação abre a sessão de cadastro pendente de 15 min (senha nova e TOTP), sem afrouxar a R8.
+- **#193:** a medida de escala aceita `instrumento` explícito (lista fechada: Barthel, MIF total, motora e cognitiva, Berg, NPRS). Ele vence o rótulo, e o rótulo fica livre; sem o campo, o rótulo continua como reserva. 16 testes do modelo verdes.
+- **Provisionamento: o Guardião aprovou o desenho com ressalvas (R1 a R10)**, e reescrevi como v2:
+  - o e-mail entra por um parâmetro cifrado do SSM e fica só em HMAC;
+  - a conta nasce na ativação (e o fundador que já tem conta faz login completo);
+  - o token é entregue por uma segunda pessoa;
+  - a rota de ativação devolve o mesmo 404 do convite, bloqueia na 5ª falha e falha fechada sem Redis;
+  - a regra do D15 vale para a senha nova;
+  - o importador só roda depois da confirmação da ativação.
+  
+  Isso virou condição do B8. **Lacuna nova: B12**, o admin único que perde o fator, que vai precisar de um procedimento operacional.
+- **Provisionamento, PR 1** (tabela `ativacao_do_fundador`, função, comando, eventos e testes) **passado ao agente de engenharia**, no branch `eng/provisionamento-clinica`, empilhado sobre o #190. A rota de ativação, o ajuste da 0022 e o Terraform ficam para os PRs 2 e 3.
+- **CI verde em toda a pilha (#152 a #179, #190) e no #194**, depois da entrada do #181 e das correções R1 a R3. Nenhuma falha.
+- **Desenho do B12** (o admin único que perde o fator) em `docs/04-arquitetura/recuperacao-do-admin-unico.md`, enviado ao Guardião. É um comando no padrão do B10, só quando não há outro admin com fator. Usa a identidade conferida pelo contrato, o mesmo token do #159 entregue por uma segunda pessoa e um teto de uma recuperação por clínica a cada 30 dias.
+- **B12, parecer do Guardião:** a recuperação só do fator foi **aprovada com ressalvas**, e a recuperação completa (senha e fator) foi **vetada**, porque nenhum token restaura os dois.
+  - Ele corrigiu a minha descrição do #159: o token vale 15 min, o teto é por quem emite, e o uso exige que quem emitiu seja admin ativo. Por isso o token do suporte precisa de `origem` e `chamado` e de um ajuste no `usarRecuperacao`.
+  - Validade de 24 h, opção `--derrubar-sessoes`, teto também por pessoa e alarme em toda emissão.
+  - **Item B13 novo:** quem perdeu senha e fator recebe conta nova pelo provisionamento, com o vínculo antigo revogado e 48 h de espera.
+- **#195 aberto (PR 1 do provisionamento, B11), empilhado sobre o #190.** O código veio do agente de engenharia:
+  - migração 0076 `ativacao_do_fundador`, sem e-mail (só o HMAC) e com o token só em hash;
+  - função idempotente pelo id do pedido;
+  - comando avulso que lê o e-mail e o nome do SSM, apaga o parâmetro e grava o token num segundo parâmetro;
+  - eventos `CLINICA_PROVISIONADA` e `ATIVACAO_EMITIDA`.
+  
+  Tipos, lint e 1163 testes de unidade verdes. Mandei ao Guardião. Ficam para os PRs 2 e 3: a rota de ativação, o ajuste da 0022 (ator sistema), o cliente SSM real (o pacote não está instalado), o expurgo e o Terraform.
+- **#195: CI 16/16 verde e o Guardião aprovou com ressalvas.** A tarefa não roda em ambiente nenhum até o cliente SSM entrar, e é isso que impede o veto.
+  - **C1 (alta, primeira coisa da próxima rodada):** o fundador que já tem conta vira admin com vínculo ativo no provisionamento, antes de ativar. Um e-mail errado que caia na conta de outra pessoa daria admin a ela. Correção: a sessão recusa a clínica com ativação pendente para aquela pessoa, ou o vínculo nasce bloqueado.
+  - C2 a C4 bloqueiam só o PR que ligar o SSM: o ator sistema da R7, a reemissão depois do expurgo e o IAM e a expiração do parâmetro de entrega.
+  - A1 a A3 são pequenos (HMAC próprio `ativacao-email`, conferir o e-mail da conta existente ao repetir, `pedido` nos eventos).
+- **89% do limite de 5 h às 19:00.** Tudo commitado e enviado. Retomada agendada para depois do reset (19:55).
+- **#195, C1 corrigida:** a lista e a escolha de clínica recusam a clínica com ativação ainda não usada para aquela pessoa, então o fundador com conta existente só entra depois de ativar. Com teste de bancada. A reconferência do Guardião fica para depois do reset.
+
+## Checagem de 16/11 16:13
+
+- Nada mudou desde 14:59: o #152 segue sem aprovação (BLOCKED); avulsos e PRs do sócio sem novidade; nenhum merge.
+
+## Checagem de 16/11 18:20
+
+- **#152 entrou na main** às 16:27 (merge feito pelo @Lopesloro). A branch `eng/better-auth-mfa` ficou de pé.
+- **#155 redirecionado para a main** e com a main mesclada, sem conflito. Tipos, lint e 1138 testes verdes. Push feito e comentário pedindo nova aprovação.
+- **#172:** estava aprovado mas BEHIND. Trouxe a main, bateria verde, push e comentário pedindo nova aprovação.
+- #153 e #154 seguem sem aprovação. #158, #143 e #157 sem mudança do sócio.
+- #189 aprovado, mas só entra depois da pilha. #116 em conflito (DIRTY). #151 foi fechado pelo Dependabot em 12/11.
+
+## Checagem de 16/11 20:16
+
+- **#172 entrou na main** (aprovado, CLEAN, CI 13 verdes e 3 pulados). Merge sem `--delete-branch`, conferido MERGED.
+- **#155:** trouxe a main de novo, sem conflito. Tipos, lint e 1138 testes verdes. Push e comentário pedindo nova aprovação. Segue sem aprovação.
+- #153 e #154 sem aprovação (BEHIND). #158, #143 e #157 sem mudança do sócio.
+- #189 aprovado, espera a pilha. #116 segue em conflito (DIRTY).
+
+## Checagem de 16/11 22:14
+
+- Nada mudou desde 20:16: o #155 segue sem aprovação (BLOCKED); avulsos, PRs do sócio e #189/#116 iguais; nenhum merge.
+
+## 17/11 (00:00)
+
+- **O @Lopesloro mesclou o #152 na `main`** (MFA real com TOTP, PR 2 do login) e aprovou o #191, o #192, o #193 e o #194. O #172 entrou na `main`, mesclado pela checagem automática. Ele também mesclou o #196, uma correção dele, no branch do provisionamento.
+- **#191 a #194:** ficaram atrás da `main`. Trouxe a `main` (só o merge), o que derrubou as aprovações, e pedi a reaprovação no #155. Mesclo quando o CI passar e ele reaprovar.
+- **#155** agora aponta para a `main` e espera a aprovação dele.
+- PRs novos do sócio para a `main`: #197 (equipe e trilha de acesso na API real) e #198 (código de demonstração só no modo fake). Vou revisar.
+- **#197 e #198 do sócio: aprovados por nós**, depois de o Guardião aprovar com ressalvas (parecer `revisoes/2026-11-17-codigo-197-198-do-socio.md`). As ressalvas para depois ficaram nos PRs:
+  - #197: a trilha mostra só 12 meses sem avisar quando não trunca;
+  - #198: a exportação em modo http deveria responder 501.
+  
+  Os dois mexem em linhas vizinhas de `configuracoes.tsx`, então o segundo a entrar terá conflito.
+- **#195, A1 a A3 feitos:** chave própria `ativacao-email`, o e-mail conferido ao repetir depois de falha parcial e o `pedido` nos dois eventos. 1166 testes de unidade verdes. Falta a reconferência do Guardião sobre a C1 e o A1 a A3.

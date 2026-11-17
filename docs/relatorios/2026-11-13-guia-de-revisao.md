@@ -51,3 +51,16 @@ O #174 (abertura do login) só entra depois do checklist B1–B10 e do parecer f
 | D13 — orçamento da AWS | **B**: só o staging até o piloto | o teu voto; destrava o staging (B1, B3, B4, B8, B10) |
 | D15 — login real: senha vazada e Redis caído | **D** no piloto; Redis: sem preferência | o teu voto |
 | Supervisor do estagiário (COFFITO 414 e 415, art. 1º §2º) | — | **a clínica do piloto tem estagiário atendendo?** Se não tiver, basta uma declaração no termo de adesão |
+
+## Atualização de 16/11
+
+- **O teu #181 entrou** no branch do #155, com as ressalvas do Guardião corrigidas por cima (R1 a R3) e propagado pela pilha. **O #155 está pronto para a tua aprovação** assim que o #152 entrar.
+- **O teu #182: a parte 1 foi vetada pelo Guardião** (liberar o `enable` só com a senha permite tomar a conta). O parecer e o caminho certo estão no PR. **A parte 2 foi aprovada.** Separa ela num PR próprio para o branch do #156, e eu mesclo. O caminho do fundador virou o item **B11** do checklist, e o desenho do provisionamento está com o Guardião (`docs/04-arquitetura/provisionamento-da-clinica.md`).
+- **PRs novos para a `main`, todos com o CI verde:**
+
+| PR | O quê | Guardião |
+|---|---|---|
+| #191 | ações do CodeQL num grupo só (substitui o #183 e o #185) | — |
+| #192 | atendimento pelo agendamento, com a `versao` (destrava a tua fatia S1) | aprovado |
+| #193 | modelos v2 de fisio e TO (COFFITO 414 e 415, conferidas), escalas com faixa e instrumento explícito | aprovado |
+| #194 | conselho e número de registro do profissional, congelados na assinatura; o recibo usa o cadastro | aprovado (o veto caiu em 16/11) |

@@ -1,9 +1,5 @@
 import { expect, test } from '@playwright/test';
-
-function hojeIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+import { hojeIso } from './datas';
 
 test.describe('Agenda', () => {
   test('check-in no dia, com desfazer', async ({ page }) => {
