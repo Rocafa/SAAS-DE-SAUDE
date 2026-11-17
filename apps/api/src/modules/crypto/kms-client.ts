@@ -55,8 +55,8 @@ export const VARIAVEIS_AWS_PROIBIDAS: readonly string[] = [
 /** Prefixos vetados por `startsWith` (`api_prefixos_aws_proibidos` do Terraform): endpoint de qualquer serviço. */
 export const PREFIXOS_AWS_PROIBIDOS: readonly string[] = ['AWS_ENDPOINT_URL'];
 
-/** Nomes das variáveis proibidas presentes (não vazias) no ambiente. */
-function variaveisAwsProibidasPresentes(env: NodeJS.ProcessEnv): string[] {
+/** Nomes das variáveis proibidas presentes (não vazias) no ambiente. Usada também pelo cliente SSM das tarefas avulsas. */
+export function variaveisAwsProibidasPresentes(env: NodeJS.ProcessEnv): string[] {
   return Object.keys(env)
     .filter((n) => VARIAVEIS_AWS_PROIBIDAS.includes(n) || PREFIXOS_AWS_PROIBIDOS.some((p) => n.startsWith(p)))
     .filter((n) => env[n]?.trim())

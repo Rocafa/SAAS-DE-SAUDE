@@ -22,12 +22,16 @@ import {
   type PedidoDeRecuperacaoPeloSuporte,
   type ResultadoDaRecuperacaoPeloSuporte,
 } from '../modules/auth/better-auth/recuperacao-pelo-suporte';
+import { EntregaPendente, parametrosSsmDoAmbiente, VALIDADE_DA_ENTREGA_HORAS } from './parametros-ssm';
 
-export type CodigoDoComando = 'ok' | 'uso_incorreto' | 'trava_incorreta' | 'erro' | 'ssm_nao_configurado' | RecuperacaoPeloSuporteRecusada['codigo'];
+export type CodigoDoComando = 'ok' | 'uso_incorreto' | 'trava_incorreta' | 'erro' | 'ssm_nao_configurado' | 'entrega_pendente' | RecuperacaoPeloSuporteRecusada['codigo'];
 
 /** Acesso ao SSM, injetado (o teste usa dublês; a tarefa, o cliente real). */
 export interface ParametroDeEntrega {
-  /** SecureString com chave KMS própria; sobrescreve o de uma rodada anterior (aquele token já foi invalidado). */
+  /**
+   * SecureString com a chave KMS do fluxo, vencimento de 24 h e sem sobrescrever: a entrega ainda pendente de uma rodada
+   * anterior faz lançar `EntregaPendente` (e esta rodada desfaz a emissão, então o token pendente segue o único).
+   */
   readonly gravar: (nome: string, valor: string) => Promise<void>;
   readonly apagar: (nome: string) => Promise<void>;
 }
@@ -94,14 +98,29 @@ export async function executarComando(argv: readonly string[], env: NodeJS.Proce
         derrubarSessoes: args.derrubarSessoes,
       },
       async (token) => {
+        // Conta como gravado também o erro ambíguo (o SSM pode ter gravado antes de falhar). Só a recusa por entrega
+        // pendente garante que nada desta rodada ficou: aí o parâmetro é o da rodada anterior e não pode ser apagado.
         gravou = true;
-        await deps.parametros.gravar(nome, token);
+        try {
+          await deps.parametros.gravar(nome, token);
+        } catch (err) {
+          if (err instanceof EntregaPendente) gravou = false;
+          throw err;
+        }
       },
     );
     return { codigo: 'ok', linha: `ok ${usuarioId} expira=${r.expiraEm} sessoes=${r.sessoesDerrubadas}` };
   } catch (err) {
     // Nunca a mensagem do driver ou do SSM: só o código fixo.
-    saida = falha(err instanceof RecuperacaoPeloSuporteRecusada ? (err.codigo === 'entrada_invalida' ? 'uso_incorreto' : err.codigo) : 'erro');
+    saida = falha(
+      err instanceof EntregaPendente
+        ? 'entrega_pendente'
+        : err instanceof RecuperacaoPeloSuporteRecusada
+          ? err.codigo === 'entrada_invalida'
+            ? 'uso_incorreto'
+            : err.codigo
+          : 'erro',
+    );
   }
   // R7: o parâmetro desta rodada sai quando a tarefa falha depois de gravá-lo (o token já foi invalidado ou não ficou).
   // Só o desta rodada: uma recusa (teto, outro admin) não apaga a entrega pendente de uma rodada anterior.
@@ -116,14 +135,13 @@ export async function executarComando(argv: readonly string[], env: NodeJS.Proce
 }
 
 /**
- * Cliente real do SSM. `@aws-sdk/client-ssm` ainda não é dependência da API (só `client-kms`), e este PR não adiciona
- * pacote.
- * TODO(B12, PR do Terraform `ops-recuperacao`): adicionar `@aws-sdk/client-ssm` e implementar `gravar` (PutParameter
- * SecureString, Overwrite true, chave KMS própria, com a política de vencimento em 24 h) e `apagar` (DeleteParameter,
- * ignorando ParameterNotFound), com o papel da tarefa restrito a `/recuperacao-suporte/*`.
+ * Cliente real do SSM (parametros-ssm.ts): papel da tarefa restrito a `/recuperacao-suporte/<usuario>/entrega` (grava e, na
+ * falha, apaga; nunca lê), chave KMS própria em `SSM_KMS_KEY_ID`, vencimento de 24 h e `DeleteParameter` que ignora
+ * `ParameterNotFound` (R7 do parecer de 16/11, C2 do parecer de 17/11). Sem configuração válida, `null`: a tarefa sai
+ * com `ssm_nao_configurado` antes de abrir o banco.
  */
 function parametrosDoSsm(): ParametroDeEntrega | null {
-  return null;
+  return parametrosSsmDoAmbiente(process.env, VALIDADE_DA_ENTREGA_HORAS.recuperacao);
 }
 
 async function principal(): Promise<void> {
