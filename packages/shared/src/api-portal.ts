@@ -264,6 +264,8 @@ interface DefinicaoDeRota {
   readonly noVinculo: boolean;
 }
 
+export type ContratoPortal = Readonly<Record<string, DefinicaoDeRota>>;
+
 /** Erros que qualquer rota do portal pode devolver. */
 export const PORTAL_ERROS_COMUNS = [
   { status: 400, codigo: undefined, quando: 'query em GET, corpo com campo a mais ou inválido (`campos` = nomes)' },
@@ -399,7 +401,7 @@ export function conferirRespostaPortal(rota: RotaPortal, corpo: unknown): string
 }
 
 /** Campos clínicos proibidos que aparecem em alguma resposta do contrato (deve ser sempre vazio). */
-export function camposClinicosNoContrato(contrato: typeof CONTRATO_PORTAL = CONTRATO_PORTAL): string[] {
+export function camposClinicosNoContrato(contrato: ContratoPortal = CONTRATO_PORTAL): string[] {
   const proibidos = new Set<string>(CAMPOS_CLINICOS_PROIBIDOS);
   const achados = new Set<string>();
   for (const def of Object.values(contrato) as readonly DefinicaoDeRota[]) {
