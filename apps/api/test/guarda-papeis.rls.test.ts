@@ -209,6 +209,17 @@ async function tabelasEfetivasDo(db: Leitor, papel: Papel): Promise<Record<strin
  * N1 da reconferência: só vale para a concessão implícita, cujo concedente é o superusuário de bootstrap (no RDS, o
  * rdsadmin). Um GRANT ... WITH ADMIN OPTION feito por qualquer outro papel não é tolerado.
  */
+/**
+ * R3 do parecer do #208: a 0081 deixa clínica sem fundador só para o login membro de app_migrator. Os papéis do
+ * runtime não podem ser membros dele, nem por cadeia (`pg_has_role` com MEMBER segue a pertença indireta).
+ */
+const RUNTIME = ['app_user', 'app_auth', 'app_provisionamento'] as const;
+async function runtimeMembroDoMigrator(q: postgres.Sql | postgres.TransactionSql): Promise<string[]> {
+  const linhas = await q<{ rolname: string }[]>`
+    SELECT rolname FROM pg_roles WHERE rolname IN ${q(RUNTIME)} AND pg_has_role(oid, 'app_migrator', 'MEMBER') ORDER BY 1`;
+  return linhas.map((l) => l.rolname);
+}
+
 const SO_ADMIN_DO_CRIADOR =
   'm.admin_option AND NOT m.inherit_option AND NOT m.set_option AND (SELECT g.rolsuper FROM pg_roles g WHERE g.oid = m.grantor)';
 
@@ -284,6 +295,10 @@ describe('guarda dos papéis da identidade (G1): privilégio efetivo, com PUBLIC
   it('app_provisionamento: NOINHERIT (a fundação pelo sistema exige o login membro, 0080)', async () => {
     const [r] = await sql<{ herda: boolean }[]>`SELECT rolinherit AS herda FROM pg_roles WHERE rolname = 'app_provisionamento'`;
     expect(r?.herda).toBe(false);
+  });
+
+  it('R3 do #208: nenhum papel do runtime é membro de app_migrator, nem indireto (senão reabre a G3 da 0081)', async () => {
+    expect(await runtimeMembroDoMigrator(sql)).toEqual([]);
   });
 
   it('nenhuma função SECURITY DEFINER (não-trigger) de public ou identidade é executável por PUBLIC', async () => {
@@ -388,5 +403,20 @@ describe('guarda dos papéis: autoteste (a guarda mede algo; tudo desfeito no RO
       'DATABASE_ADMIN_URL',
     );
     expect(visto.map((l) => l.rolname)).toEqual(['app_user']);
+  });
+
+  it('R3 do #208: GRANT app_migrator a um papel do runtime, direto ou por cadeia, aparece na guarda', async () => {
+    const visto = await dentroDeRollback(
+      async (tx) => {
+        await tx`GRANT app_migrator TO app_user`;
+        // Por cadeia: app_auth membro de app_provisionamento, que vira membro de app_migrator.
+        await tx`GRANT app_migrator TO app_provisionamento`;
+        await tx`GRANT app_provisionamento TO app_auth`;
+      },
+      (tx) => runtimeMembroDoMigrator(tx),
+      'DATABASE_ADMIN_URL',
+    );
+    expect(visto).toEqual(['app_auth', 'app_provisionamento', 'app_user']);
+    expect(await runtimeMembroDoMigrator(sql)).toEqual([]);
   });
 });

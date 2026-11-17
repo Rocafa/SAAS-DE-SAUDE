@@ -100,6 +100,7 @@ O risco residual é aceitável **depois** do checklist do 3c: segredos versionad
 | Conferência de senha vazada desligada até a decisão do egresso (B2) | sócios | _pendente_ |
 | Quem entrega o token de ativação conhece o token e o e-mail e poderia ativar no lugar do fundador (B11, R3) | encarregado | _pendente_ |
 | O `--operador` do comando do suporte é declarado; a prova é o CloudTrail (B12) | encarregado | _pendente_ |
+| Clínica criada à mão pelo `app_migrator` (único caminho sem fundador, 0081) não grava `tenant_create` na trilha (R2 do parecer do #208). **Antes da primeira clínica real:** toda criação manual por esse papel registra o chamado e o operador nominal (CloudTrail da tarefa de migração) | encarregado | _pendente_ |
 | O papel `app_provisionamento` pode abrir o contexto de qualquer clínica e ler `tenants`, `clinic_members` e `audit_log` dela (O1 do parecer do #207); não chega a paciente, prontuário nem financeiro. Portão: IAM da tarefa com duas pessoas e MFA | encarregado | _pendente_ |
 
 Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, B5).
