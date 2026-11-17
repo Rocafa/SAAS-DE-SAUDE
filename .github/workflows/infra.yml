@@ -293,7 +293,8 @@ jobs:
             v=${par%%:*}; s=${par#*:}
             grep -Eq "^\s*$v += \{ segredo = aws_secretsmanager_secret.app\[\"$s\"\].arn," staging/app.tf \
               || { echo "segredo $v fora de api_segredos_origem (ou de outro segredo)"; exit 1; }
-            grep -E '^\s*api_segredos_obrigatorios *=' staging/app.tf | grep -q "\"$v\"" \
+            # A lista pode vir num concat(...) (base fixa na linha seguinte): lê o bloco até o ")".
+            sed -n '/^\s*api_segredos_obrigatorios *=/,/^\s*)/p' staging/app.tf | grep -q "\"$v\"" \
               || { echo "$v fora de api_segredos_obrigatorios"; exit 1; }
             grep -Eq "^\s*\"$s\" = \{" staging/dados.tf || { echo "segredo $s ausente em segredos_app"; exit 1; }
           done
@@ -313,10 +314,18 @@ jobs:
           grep -q 'local.api_segredos_origem\["PAGINATION_CURSOR_KEY"\].segredo != local.api_segredos_origem\["RATE_LIMIT_HASH_KEY"\].segredo' staging/app.tf
           grep -q 'setintersection(local.api_variaveis_proibidas,' staging/app.tf
           for v in DATABASE_ADMIN_URL DATABASE_MIGRATOR_URL SUPPORT_PSEUDONYM_KEY FIELD_KEYS_DEV_ROOT_SECRET \
-                   RATE_LIMIT_ALLOW_SINGLE_INSTANCE JOBS_HABILITADOS NODE_TLS_REJECT_UNAUTHORIZE[D] AUTH_PROVIDER; do
+                   RATE_LIMIT_ALLOW_SINGLE_INSTANCE JOBS_HABILITADOS NODE_TLS_REJECT_UNAUTHORIZE[D] PORTAL_AUTH_PROVIDER; do
             grep -A3 '^\s*api_variaveis_proibidas *=' staging/app.tf | grep -q "\"$v\"" \
               || { echo "$v fora de api_variaveis_proibidas"; exit 1; }
           done
+          # 3c: AUTH_PROVIDER só pela variável login_real_habilitado (desligada por padrão), numa linha só.
+          n=$(grep -rEc --include='*.tf' '"AUTH_PROVIDER"' . | awk -F: '{s+=$2} END {print s+0}')
+          [ "$n" = "1" ] || { echo "AUTH_PROVIDER definido $n vezes (esperado 1, só pela login_real_habilitado)"; exit 1; }
+          grep -Eq '^\s*var\.login_real_habilitado \? \[\{ name = "AUTH_PROVIDER", value = "better-auth" \}\] : \[\],' staging/app.tf \
+            || { echo "AUTH_PROVIDER fora da condição login_real_habilitado"; exit 1; }
+          grep -Eq 'variable "login_real_habilitado"' staging/variables.tf \
+            && grep -A4 'variable "login_real_habilitado"' staging/variables.tf | grep -Eq 'default *= *false' \
+            || { echo "login_real_habilitado precisa existir com default = false"; exit 1; }
           if grep -rEn --include='*.tf' 'name *= *"(DATABASE_ADMIN_URL|DATABASE_MIGRATOR_URL|SUPPORT_PSEUDONYM_KEY|FIELD_KEYS_DEV_ROOT_SECRET|RATE_LIMIT_ALLOW_SINGLE_INSTANCE)"' .; then
             echo "variável proibida na tarefa da API (§4.5)"; exit 1
           fi

@@ -46,8 +46,13 @@ describe('provedor de autenticação plugável', () => {
   it('fora de produção usa a sessão fictícia; provedor desconhecido é erro', () => {
     expect(createAuthProvider({ NODE_ENV: 'test' }).tipo).toBe('dev');
     expect(() => createAuthProvider({ NODE_ENV: 'development', AUTH_PROVIDER: 'zitadel' })).toThrow();
-    // D4 (R13 do parecer do desenho): o Better Auth não sobe em produção antes do PR 3, e exige a instância do boot.
-    expect(() => createAuthProvider({ NODE_ENV: 'production', AUTH_PROVIDER: 'better-auth' }, { betterAuth: () => createAuthProvider({ NODE_ENV: 'test' }) })).toThrow(/PR 3/);
+    // D4, 3c: o Better Auth sobe em produção e staging (com a instância do boot); um ambiente desconhecido continua recusado.
+    const real = { betterAuth: () => createAuthProvider({ NODE_ENV: 'test' }) };
+    expect(createAuthProvider({ NODE_ENV: 'production', AUTH_PROVIDER: 'better-auth' }, real).tipo).toBe('dev');
+    expect(createAuthProvider({ NODE_ENV: 'staging', AUTH_PROVIDER: 'better-auth' }, real).tipo).toBe('dev');
+    expect(() => createAuthProvider({ NODE_ENV: 'qualquer', AUTH_PROVIDER: 'better-auth' }, real)).toThrow();
+    // O dev provider continua proibido fora de development/test.
+    expect(() => createAuthProvider({ NODE_ENV: 'production', AUTH_PROVIDER: 'dev' })).toThrow();
     expect(() => createAuthProvider({ NODE_ENV: 'test', AUTH_PROVIDER: 'better-auth' })).toThrow(/main.ts/);
   });
 });
