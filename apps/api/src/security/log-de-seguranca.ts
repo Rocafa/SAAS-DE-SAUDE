@@ -132,6 +132,8 @@ export const MOTIVOS_DE_SEGURANCA = [
   // B11, PR 2: ativação do fundador (o motivo fica só no log; o usuário recebe sempre o mesmo 404).
   'bloqueio_da_ativacao',
   'token_invalido',
+  // A4 do parecer do #203: outra conta tomou o e-mail do fundador de conta nova antes da ativação.
+  'email_em_uso',
   'email_diferente',
   'fundador_nao_confere',
   'conta_nova',

@@ -223,17 +223,31 @@ describe('B11 PR 2: trilha do provisionamento com ator sistema (R7; C2 do #195)'
         });
       });
     };
-    await expect(fundar({})).rejects.toThrow();
-    await expect(fundar({ via: 'provisionamento' })).rejects.toThrow();
-    await expect(fundar({ via: 'runbook', contract: 'CTR-1' })).rejects.toThrow();
-    await expect(fundar({ via: 'provisionamento', contract: 'CTR-1' }, randomUUID())).rejects.toThrow();
+    // T1 do parecer de 17/11: conferir o código e a regra, não "qualquer erro".
+    const errosPg = async (p: Promise<unknown>) => {
+      const e: unknown = await p.then(
+        () => undefined,
+        (x: unknown) => x,
+      );
+      const out: { code: unknown; message: string }[] = [];
+      for (let x: unknown = e; x instanceof Error; x = x.cause) out.push({ code: (x as { code?: unknown }).code, message: x.message });
+      return out;
+    };
+    const pelaTrilha = (erros: { code: unknown; message: string }[]) => erros.some((x) => x.code === '42501' && /sem a trilha/.test(x.message));
+    for (const meta of [{}, { via: 'provisionamento' }, { via: 'runbook', contract: 'CTR-1' }]) {
+      const erros = await errosPg(fundar(meta));
+      expect(pelaTrilha(erros), JSON.stringify(meta)).toBe(true);
+    }
+    // Membro diferente do fundador: a recusa vem do clinic_members_guard (0022), antes da trilha.
+    expect((await errosPg(fundar({ via: 'provisionamento', contract: 'CTR-1' }, randomUUID()))).some((x) => x.code === '42501')).toBe(true);
     // O caminho completo passa (prova de que as recusas acima são pela trilha, não por outra regra).
     await fundar({ via: 'provisionamento', contract: 'CTR-1' });
     // Fora da fundação, a sessão de sistema continua sem conceder perfil.
     const outra = await api.novaClinica();
-    await expect(
+    const semFundacao = await errosPg(
       withTenant(api.db.db, outra, (tx) => tx.insert(clinicMembers).values({ tenantId: outra, userId: randomUUID(), role: 'admin', grantedBy: SYSTEM_ACTOR_ID })),
-    ).rejects.toThrow();
+    );
+    expect(semFundacao.some((x) => x.code === '42501')).toBe(true);
   });
 });
 
@@ -280,9 +294,9 @@ describe('B11 PR 2: POST /ativacao/usar (R2, R4, R5, R8 e R9)', () => {
     const p = pedidoFicticio({ email: pessoa.email });
     const { token, clinicaId } = await provisionar(p);
     // Sem código: pede login completo, sem consumir.
-    await expect(ativacao().usar({ token, email: pessoa.email, senha: SENHA, cabecalhos: cabecalhos() })).rejects.toBeInstanceOf(ConflitoError);
+    await expect(ativacao().usar({ token, email: pessoa.email, senha: SENHA, cabecalhos: cabecalhos() })).rejects.toMatchObject({ codigo: 'conta_existente_exige_login' });
     // Código errado: recusado, sem consumir.
-    await expect(ativacao().usar({ token, email: pessoa.email, senha: SENHA, codigo: codigoErrado(pessoa.segredo, 3), cabecalhos: cabecalhos() })).rejects.toBeInstanceOf(ConflitoError);
+    await expect(ativacao().usar({ token, email: pessoa.email, senha: SENHA, codigo: codigoErrado(pessoa.segredo, 3), cabecalhos: cabecalhos() })).rejects.toMatchObject({ codigo: 'credenciais_invalidas' });
     expect((await linhaDa(p.pedido))?.usadoEm).toBeNull();
     expect((await provedor.clinicasDaPessoa(pessoa.userId)).map((c) => c.id)).not.toContain(clinicaId);
 
@@ -380,9 +394,16 @@ describe('B11 PR 2: POST /ativacao/usar (R2, R4, R5, R8 e R9)', () => {
 
   it('dois usos ao mesmo tempo: só um passa (consumo atômico)', async () => {
     const p = pedidoFicticio();
-    const { token } = await provisionar(p);
+    const { token, clinicaId } = await provisionar(p);
     const usos = await Promise.allSettled([0, 1].map(() => ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() })));
     expect(usos.filter((u) => u.status === 'fulfilled')).toHaveLength(1);
+    // T1: o perdedor recusou com o 404 da regra (não erro de pool nem 23505 sem tratamento), e a fundação ativou uma vez.
+    const perdedor = usos.find((u) => u.status === 'rejected');
+    expect(perdedor?.status === 'rejected' ? perdedor.reason : undefined).toBeInstanceOf(NaoEncontradoError);
+    const ativacoes = await withTenant(api.db.db, clinicaId, (tx) =>
+      tx.select({ id: auditLog.id }).from(auditLog).where(sql`${auditLog.metadata}->>'op' = 'founder_activated'`),
+    );
+    expect(ativacoes).toHaveLength(1);
   });
 });
 

@@ -852,7 +852,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     a: { id: string; clinicaId: string; usuarioId: string; contrato: string },
     email: string,
     contaNova: { nome: string; hash: string } | null,
-  ): Promise<true | 'token_invalido' | 'fundador_nao_confere'> {
+  ): Promise<true | 'token_invalido' | 'fundador_nao_confere' | 'email_em_uso'> {
     try {
       return await this.d.dbAuth.transaction(async (tx) => {
         const usado = await tx
@@ -896,7 +896,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     } catch (err) {
       if (err instanceof FundadorNaoConfere) return 'fundador_nao_confere';
       // Índice único do e-mail: outra conta ficou com ele no meio do caminho. Nada foi consumido.
-      if (contaNova && ehViolacaoDeUnicidade(err)) return 'token_invalido';
+      // A4 do parecer de 17/11: motivo próprio no log (a resposta continua o mesmo 404); runbook pede reemissão.
+      if (contaNova && ehViolacaoDeUnicidade(err)) return 'email_em_uso';
       throw err;
     }
   }
