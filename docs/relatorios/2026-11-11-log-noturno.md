@@ -501,3 +501,7 @@ Pendente para a próxima sessão:
 ## Checagem de 17/11 12:13
 
 - Nada mudou: #155 e #194 seguem BLOCKED sem aprovação; #153, #154, #158, #143 e #157 sem novidade; nenhum merge.
+
+## Checagem de 17/11 14:13
+
+- Nada mudou: #155 e #194 seguem BLOCKED sem aprovação; #153, #154, #158, #143 e #157 sem novidade; nenhum merge.
