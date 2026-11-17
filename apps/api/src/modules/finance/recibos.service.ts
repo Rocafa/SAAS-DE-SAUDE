@@ -470,7 +470,7 @@ export class RecibosService {
     let emitente: EmitenteDoRecibo;
     if (c.attendanceKind === 'pf' && c.professionalId) {
       const [prof] = await tx
-        .select({ nome: professionals.displayName })
+        .select({ nome: professionals.displayName, conselho: professionals.council, registro: professionals.councilRegistration })
         .from(professionals)
         .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, c.professionalId)));
       const [perfil] = await tx
@@ -482,7 +482,14 @@ export class RecibosService {
         nome: prof?.nome ?? '',
         documento: await decifrarCampoFinanceiro(this.cipher, tx, ctx.tenantId, c.professionalId, CAMPO_CPF_PROFISSIONAL, perfil?.cpfEnc ?? null),
         // R2: por recibo (padrão oculto); a chave da clínica só habilita a opção.
-        registroConselho: incluirRegistroConselho && config.mostrarRegistroConselho ? (perfil?.councilRegistration ?? null) : null,
+        // R1 do parecer do #194: a fonte é o cadastro do profissional (0074, conselho + número com formato fechado); o
+        // campo do perfil fiscal (0018) fica só como legado, para quem ainda não preencheu o cadastro.
+        registroConselho:
+          incluirRegistroConselho && config.mostrarRegistroConselho
+            ? prof?.conselho && prof.registro
+              ? `${prof.conselho} ${prof.registro}`
+              : (perfil?.councilRegistration ?? null)
+            : null,
         profissionalId: c.professionalId,
       };
     } else {

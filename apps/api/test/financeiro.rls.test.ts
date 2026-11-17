@@ -833,6 +833,13 @@ describe('R2 do #65: registro no conselho escolhido por recibo', () => {
       expect(comConselho.body).toMatchObject({ emitente: { registroConselho: CONSELHO } });
       expect((await get(finA, `/financeiro/recibos/${id(comConselho)}`)).body).toMatchObject({ emitente: { registroConselho: CONSELHO } });
       expect((await post(recepA, `/financeiro/recebimentos/${p1}/recibo`, { incluirRegistroConselho: 'sim' })).status).toBe(400);
+      // R1 do parecer do #194: com o registro no CADASTRO do profissional (0074), ele vence o campo legado do perfil
+      // fiscal; o recibo já emitido continua com o que gravou no retrato.
+      await api.http().post(`/profissionais/${profissionalPfA}/conselho`).set(cab(adminA)).send({ conselho: 'CRP', registro: '06/99999' }).expect(201);
+      const p2 = await pagamento();
+      const doCadastro = await post(recepA, `/financeiro/recebimentos/${p2}/recibo`, { incluirRegistroConselho: true });
+      expect(doCadastro.body).toMatchObject({ emitente: { registroConselho: 'CRP 06/99999' } });
+      expect((await get(finA, `/financeiro/recibos/${id(comConselho)}`)).body).toMatchObject({ emitente: { registroConselho: CONSELHO } });
     } finally {
       await api.http().put('/financeiro/configuracao').set(cab(adminA)).send({ mostrarRegistroConselho: false }).expect(200);
     }

@@ -77,6 +77,10 @@ export const patientCpfIndexKeys = pgTable(
 );
 
 /** Profissionais (migração 0007). `capacity` = atendimentos simultâneos (AGD-01.5). */
+/** Conselhos profissionais aceitos (0074). Mesma lista do CHECK no banco. */
+export const CONSELHOS = ['CREFITO', 'CRP', 'CRFa', 'CRN', 'CRO', 'CRM', 'COREN'] as const;
+export type Conselho = (typeof CONSELHOS)[number];
+
 export const professionals = pgTable('professionals', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id')
@@ -88,6 +92,9 @@ export const professionals = pgTable('professionals', {
   specialty: text('specialty').notNull(),
   /** 0033 (R2 do #68): área sensível (psicologia, psiquiatria, saúde mental) marcada pela clínica; a especialidade só reforça. */
   sensitiveArea: boolean('sensitive_area').notNull().default(false),
+  /** 0074: conselho e número de registro (COFFITO 414/415 art. 1º §1º VIII). Os dois juntos ou nenhum. */
+  council: text('council', { enum: CONSELHOS }),
+  councilRegistration: text('council_registration'),
   capacity: integer('capacity').notNull().default(1),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -347,6 +354,9 @@ export const encounters = pgTable('encounters', {
   signedBy: uuid('signed_by'),
   signedVersion: integer('signed_version'),
   signedHash: text('signed_hash'),
+  /** 0075: conselho e número do profissional congelados pelo banco na assinatura (B1 do parecer do #194). */
+  signedCouncil: text('signed_council'),
+  signedCouncilRegistration: text('signed_council_registration'),
   /**
    * Migração 0015 (B1 do #63): modo de sigilo da psicologia vigente na ABERTURA. A leitura decide por
    * ele, nunca pela configuração atual. Só pode ficar mais restrito (trigger).
