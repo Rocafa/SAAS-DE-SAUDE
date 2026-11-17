@@ -278,6 +278,7 @@ Nenhuma rota devolve conteúdo clínico: guia e pacote não guardam procedimento
 |---|---|---|
 | `POST /atendimentos` | profissional DO agendamento, com vínculo | `{agendamentoId, modelo?, consentimentoIa?}`; agendamento em chegou/em atendimento/atendido (senão 409 `agendamento_sem_chegada`); modelo padrão pela especialidade; **idempotente** (200 com o já aberto) |
 | `GET /atendimentos/:id` | clínico com vínculo | registro atual + adendos; psicologia restrita vem com `conteudoOculto: true, motivoOculto: 'sigilo_psicologia'` |
+| `GET /atendimentos/do-agendamento/:agendamentoId` | clínico com vínculo | `{ atendimento }` com o mesmo corpo do `GET /atendimentos/:id` (inclusive a `versao` para o `versaoBase`), ou `{ atendimento: null }` se o agendamento ainda não tem atendimento. Porteiro antes de dizer se existe; trilha de leitura também sem atendimento (#180) |
 | `PUT /atendimentos/:id/registro` | autor | `{conteudo, versaoBase}`; cada chamada = **versão nova** (serve ao salvamento automático); `versaoBase` diferente da atual: 409 `versao_desatualizada`; finalizado: 409 `registro_finalizado` |
 | `GET /atendimentos/:id/versoes` | clínico com vínculo que pode ver o conteúdo | todas as versões, da 1ª à atual |
 | `POST /atendimentos/:id/finalizar` | autor | exige os obrigatórios do modelo (409 `registro_incompleto` com `campos`); grava `signed_version` e `signed_hash` (SHA-256 do registro canônico com o conteúdo **cifrado**, `prontuario-regras.ts`); auditoria `sign` (evento "encounter_record_signed" da HU-PRO-007) |
