@@ -21,6 +21,7 @@ import {
   type AppointmentStatusDb,
 } from '../src/db/schema';
 import { withTenant } from '../src/db/tenant-transaction';
+import { MODELOS } from '../src/modules/records/modelos';
 import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 type Sessao = { Authorization: string; userId: string };
@@ -262,7 +263,7 @@ describe('evolução versionada e cifrada', () => {
   it('cada salvamento cria uma versão; versão base desatualizada: 409', async () => {
     const v1 = await api.http().put(`/atendimentos/${atFisio}/registro`).set(cab(fisioA)).send({ versaoBase: 0, conteudo: { queixa: QUEIXA_V1 } });
     expect(v1.status).toBe(200);
-    expect(v1.body).toMatchObject({ versao: 1, conteudo: { queixa: QUEIXA_V1 }, versaoModelo: 1 });
+    expect(v1.body).toMatchObject({ versao: 1, conteudo: { queixa: QUEIXA_V1 }, versaoModelo: MODELOS.fisio.versao });
     const v2 = await api
       .http()
       .put(`/atendimentos/${atFisio}/registro`)
