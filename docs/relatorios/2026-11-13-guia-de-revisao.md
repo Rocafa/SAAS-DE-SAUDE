@@ -1,5 +1,45 @@
 # Guia de revisão para o @Lopesloro — 13/11/2026
 
+## Atualização de 17/11/2026, comece por aqui
+
+**Urgente: o #209 destrava a CI de todos os PRs.** Desde 17/11 às 15:56 UTC, o alerta GHSA-fc5q-39xc-vjpf (picomatch,
+alta, ainda **sem versão corrigida**) faz o job "Auditoria de dependências" falhar em qualquer PR. O #209 adiciona uma
+exceção que **vence sozinha em 01/12**, porque a CI falha depois dessa data, com a análise de alcance e o parecer do Guardião.
+
+| Ordem | PR | O quê | Tamanho | Guardião | O que fazer |
+|---|---|---|---|---|---|
+| 1 | #209 | exceção datada para o picomatch (sem correção publicada) | +148 / 4 | aprovado | **revisar**: destrava a auditoria de todos |
+| 2 | #189 | minimatch 11.0.1+ por override (Dependabot) | +16 / 2 | — | já aprovado; entra assim que o #209 entrar |
+| 3 | #210 | imagem da API sem os peers de teste do better-auth (268 → 82 MB, sai o picomatch) | +71 / 7 | aprovado | **revisar** |
+| 4 | #116 | postgres.js 4.0.0, sai o patch da 3.4.9 | +110 / 8 | — (só dependência) | **reaprovar**: a aprovação caiu com o merge da main |
+| 5 | #155 | Better Auth PR 3a: sessão e escolha de clínica | +1225 / 30 | aprovado | **revisar**: base de toda a pilha abaixo |
+| 6 | #194 | conselho e registro do profissional (COFFITO) | +489 / 17 | aprovado | **reaprovar** |
+
+**Pilha nova, empilhada na do login** (cada PR mira a branch do PR de baixo e vira PR para a `main` quando ela entra).
+Todos têm parecer favorável do Guardião e CI verde, e não há pendência de código:
+
+| PR | O quê | Tamanho |
+|---|---|---|
+| #195 | provisionamento da clínica, PR 1 (tabela, função e comando) | +1102 / 15 |
+| #199 | recuperação do fator do admin único pelo suporte (B12) | +991 / 14 |
+| #203 | ativação do fundador e fundação pelo sistema (B11) | +1407 / 13 |
+| #204 | Terraform das tarefas avulsas (papéis executor e entrega separados, KMS por fluxo, alertas) | +1638 / 9 |
+| #205 | expurgo de 30 dias das ativações, sem abrir a clínica | +388 / 9 |
+| #206 | cliente SSM real (SecureString, vencimento de 72 h e 24 h) e runbooks | +572 / 12 |
+| #207 | papel `app_provisionamento` dedicado e guarda dos privilégios | +871 / 17 |
+| #208 | clínica nova sem fundador só pelo `app_migrator` | +304 / 16 |
+
+**Ação de infraestrutura** quando o #204 entrar: as variáveis dos papéis mudaram de nome (`ops-*-executor` e
+`ops-*-entrega`), então o tfvars precisa ser ajustado. A ordem de deploy do provisionamento está no fim do log noturno
+(`2026-11-11-log-noturno.md`).
+
+**Conferir no #174:** mudei a trava da CI que proibia `AUTH_PROVIDER`. Ela agora exige uma única definição, dentro da
+condição `login_real_habilitado`, com essa variável desligada por padrão. É trava de segurança, então vale o teu olho.
+
+---
+
+(Versão de 13/11 abaixo, mantida para histórico.)
+
 > Maestro (@Rocafa). O que está esperando a tua revisão, na ordem que destrava mais, com o tamanho de cada PR e o que já foi conferido. **Todos os PRs abaixo estão com o CI verde.** O Guardião LGPD aprovou todos que tocam dado pessoal. A checagem automática a cada 2 h mescla o que tu aprovares, propaga a `main` e pede a reaprovação quando for preciso.
 
 ## 1. Pilha do login real (D4) — o caminho crítico
