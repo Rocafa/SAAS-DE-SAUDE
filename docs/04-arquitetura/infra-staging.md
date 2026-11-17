@@ -283,7 +283,7 @@ A tarefa roda com `NODE_ENV=production`. Antes desta rodada, `api_segredos` só 
 | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET` (base64), `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | segredo | `whatsapp`, **só com `whatsapp_provedor = "cloud_api"`**. Nasce vazio; preencher com `put-secret-value` fora do git (comentário em `api-ambiente.tf`) | ausentes (WhatsApp desligado) | Gerar no painel da Meta, regravar o segredo e forçar o deploy |
 | `NODE_ENV` | ambiente | fixo | `production` | — |
 | `API_PORT` | ambiente | `local.api_porta` | `3333` | — |
-| `NODE_EXTRA_CA_CERTS` | ambiente | fixo (CA do RDS na imagem) | `/app/certs/rds-sa-east-1-bundle.pem` | junto com a CA da AWS |
+| `NODE_EXTRA_CA_CERTS` | ambiente | fixo (CA do RDS na imagem) | `/etc/ssl/certs/rds-sa-east-1-bundle.pem` (o mesmo do Dockerfile) | junto com a CA da AWS |
 | `HTTP_TRUST_PROXY_HOPS` | ambiente | fixo | `1` (ALB). Com `0`, todo cliente seria contado como o IP do ALB no rate limit | — |
 | `IMPORTADOR_HABILITADO` | ambiente | `var.importador_habilitado` | `false` | — |
 | `WHATSAPP_PROVEDOR` | ambiente | `var.whatsapp_provedor` (`desligado` ou `cloud_api`; `falso` é recusado) | `desligado` | — |

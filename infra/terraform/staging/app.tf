@@ -214,7 +214,7 @@ locals {
     { name = "NODE_ENV", value = "production" },
     { name = "API_PORT", value = tostring(local.api_porta) },
     # CA do RDS para sslmode=verify-full; o arquivo precisa estar na imagem (item 1, Dockerfile).
-    { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-sa-east-1-bundle.pem" },
+    { name = "NODE_EXTRA_CA_CERTS", value = "/etc/ssl/certs/rds-sa-east-1-bundle.pem" }, # mesmo caminho do Dockerfile (ressalva 1 do parecer do 3c)
     ],
     # R6: a API sobe HTTPS com certificado autoassinado gerado em memória (contrato com a ENG).
     var.tls_ate_a_tarefa ? [{ name = "API_TLS", value = "autoassinado" }] : [],
@@ -244,7 +244,13 @@ locals {
       REDIS_URL             = { segredo = aws_secretsmanager_secret.app["redis"].arn, campo = "url" }
       PAGINATION_CURSOR_KEY = { segredo = aws_secretsmanager_secret.app["pagination-cursor-key"].arn, campo = "chave" }
       RATE_LIMIT_HASH_KEY   = { segredo = aws_secretsmanager_secret.app["rate-limit-hash-key"].arn, campo = "chave" }
+      # D4 (3c): o provedor real só sobe com estes; AUTH_PROVIDER continua proibido até o parecer final do 3c.
+      DATABASE_AUTH_URL  = { segredo = aws_secretsmanager_secret.app["banco-app-auth"].arn, campo = "url" }
+      BETTER_AUTH_SECRET = { segredo = aws_secretsmanager_secret.app["better-auth-secret"].arn, campo = "chave" }
     },
+    var.better_auth_segredos_versionados ? {
+      BETTER_AUTH_SECRETS = { segredo = one(aws_secretsmanager_secret.better_auth_secrets[*].arn), campo = "segredos" }
+    } : {},
     var.whatsapp_provedor == "cloud_api" ? {
       WHATSAPP_ACCESS_TOKEN         = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "access_token" }
       WHATSAPP_APP_SECRET           = { segredo = one(aws_secretsmanager_secret.whatsapp[*].arn), campo = "app_secret" }

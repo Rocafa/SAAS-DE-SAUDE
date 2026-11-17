@@ -293,7 +293,8 @@ resource "aws_elasticache_replication_group" "this" {
 # gerado e gravado na mesma execução); para o banco, reexecutar o bootstrap em seguida.
 
 ephemeral "random_password" "banco" {
-  for_each = toset(["app_user", "app_migrator"])
+  # app_auth (D4, 0064): papel do schema identidade, só para o Better Auth.
+  for_each = toset(["app_user", "app_migrator", "app_auth"])
   length   = 40
   special  = false # vai dentro de URL; sem especiais não precisa de escape
 }
@@ -302,7 +303,8 @@ ephemeral "random_password" "banco" {
 # nunca a mesma para o rate limit e para o cursor. 64 alfanuméricos aleatórios (~381 bits; o código
 # exige >= 32 bytes UTF-8). Mesmo padrão das senhas: efêmeras, gravadas write-only.
 ephemeral "random_password" "chave_api" {
-  for_each = toset(["pagination-cursor-key", "rate-limit-hash-key"])
+  # better-auth-secret (D4, R2 do desenho): >= 32 bytes, cifra o segredo do TOTP e assina os cookies.
+  for_each = toset(["pagination-cursor-key", "rate-limit-hash-key", "better-auth-secret"])
   length   = 64
   special  = false
 }
@@ -319,6 +321,14 @@ locals {
     "banco-app-migrator" = {
       descricao = "DATABASE_MIGRATOR_URL (papel app_migrator, só na tarefa de migração)"
       versao    = var.banco_senhas_versao
+    }
+    "banco-app-auth" = {
+      descricao = "DATABASE_AUTH_URL da API (papel app_auth: só o schema identidade, D4)"
+      versao    = var.banco_senhas_versao
+    }
+    "better-auth-secret" = {
+      descricao = "BETTER_AUTH_SECRET: cifra o segredo do TOTP e assina os cookies (trocar exige o recadastro do TOTP até os segredos versionados, R9 do #152)"
+      versao    = var.better_auth_secret_versao
     }
     "redis" = {
       descricao = "REDIS_URL com TLS (rediss://) e AUTH"
@@ -346,6 +356,12 @@ locals {
       password = ephemeral.random_password.banco["app_migrator"].result
       url      = "postgres://app_migrator:${ephemeral.random_password.banco["app_migrator"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
     })
+    "banco-app-auth" = jsonencode({
+      username = "app_auth"
+      password = ephemeral.random_password.banco["app_auth"].result
+      url      = "postgres://app_auth:${ephemeral.random_password.banco["app_auth"].result}@${local.host_banco}:5432/${local.banco}?sslmode=verify-full"
+    })
+    "better-auth-secret" = jsonencode({ chave = ephemeral.random_password.chave_api["better-auth-secret"].result })
     "redis" = jsonencode({
       url = "rediss://:${ephemeral.random_password.redis_auth.result}@${aws_elasticache_replication_group.this.primary_endpoint_address}:6379"
     })

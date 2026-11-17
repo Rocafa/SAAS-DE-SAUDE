@@ -57,3 +57,24 @@ Só vai para produção com dado real quando:
 |---|---|---|---|
 | @Rocafa | | | |
 | @Lopesloro | | | |
+
+## Checklist da abertura do login real (D4, 3c; B6 do parecer do 3c parcial)
+
+Cada linha precisa de evidência e do PR. A produção só abre com todas as linhas "antes" fechadas e com o parecer final do Guardião.
+
+| # | Item | Quando | Situação | PR / evidência |
+|---|---|---|---|---|
+| B1 | Segredos versionados, runbook e Terraform | antes | **feito no código**; falta provar no staging | #162 (`segredos.ts`, `segredos.test.ts`, `runbook-rotacao-better-auth.md`) |
+| B2 | Saída para a base de senhas vazadas filtrada por domínio, ou decisão escrita dos sócios | antes | **decisão dos sócios** | — |
+| B3 | `HTTP_TRUST_PROXY_HOPS` provado atrás do ALB real (duas origens contam separado) | antes | depende da AWS | — |
+| B4 | TLS `verify-full` para `app_user` e `app_auth`, e Redis `rediss://` com AUTH | antes | caminho da CA corrigido; falta provar no staging | #162 |
+| B5 | RIPD e contrato: base legal confirmada pelo advogado, cláusula no DPA, §8 assinada pelo encarregado | antes | RIPD e DPA escritos; faltam o advogado e a assinatura | #162 |
+| B6 | Este checklist | antes | em andamento | #162 |
+| B7 | Pilha na `main` (#149 a #161) e #153 | antes | **aguarda a aprovação do @Lopesloro** | — |
+| B8 | Teste de fumaça no staging com contas fictícias (convite, aceite, TOTP, clínica, rota sensível, logout global, bloqueio, recuperação, desligamento) | antes | depende da AWS | — |
+| C1 | CSRF com a sessão real (#132) | antes | coberto pela montagem (403 sem Origin) e pelo `protecaoCsrf`; conferir no B8 | #149 |
+| C2 | Eventos do fator (#123 R5) | antes | feito | #152, #156, #159 |
+| C3 | Auditoria dos ganchos fora de controller (#117 R6) | antes | feito | #149 |
+| D1 | Apagar a credencial de conta inativa em 90 dias | depois, até o primeiro desligamento real | fila | — |
+| D2 | Retenção de `team_invites` (30 dias) | depois, em 30 dias | fila | — |
+| D3 | Verificação de e-mail obrigatória | quando houver provedor de e-mail | fila | — |

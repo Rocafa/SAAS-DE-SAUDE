@@ -26,7 +26,7 @@ import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
 import { chaveDoBloqueio } from './chaves-do-bloqueio';
-import { symmetricDecrypt } from 'better-auth/crypto';
+import { symmetricDecrypt, type SecretConfig } from 'better-auth/crypto';
 import { totpConfere } from './totp';
 import { conferirSenha } from './senha';
 import { CABECALHO_ORIGEM, JANELA_DE_REUSO_MS, TETO_DE_FALHAS, TETO_DE_FALHAS_POR_ORIGEM } from './protecao';
@@ -60,7 +60,7 @@ export interface DependenciasDoProvedor {
   /** Store e segredo dos contadores de bloqueio (para o desbloqueio pelo admin zerar as MESMAS chaves). */
   readonly bloqueio?: { readonly store: RateLimitStore; readonly chaveHmac: Uint8Array };
   /** BETTER_AUTH_SECRET: decifra o segredo do TOTP na recuperação de senha (a pessoa tem o código, não a senha). */
-  readonly segredoDaInstancia?: string;
+  readonly segredoDaInstancia?: string | SecretConfig;
 }
 
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
