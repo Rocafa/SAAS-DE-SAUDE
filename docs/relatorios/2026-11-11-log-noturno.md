@@ -393,3 +393,9 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#191 a #194:** ficaram atrás da `main`. Trouxe a `main` (só o merge), o que derrubou as aprovações, e pedi a reaprovação no #155. Mesclo quando o CI passar e ele reaprovar.
 - **#155** agora aponta para a `main` e espera a aprovação dele.
 - PRs novos do sócio para a `main`: #197 (equipe e trilha de acesso na API real) e #198 (código de demonstração só no modo fake). Vou revisar.
+- **#197 e #198 do sócio: aprovados por nós**, depois de o Guardião aprovar com ressalvas (parecer `revisoes/2026-11-17-codigo-197-198-do-socio.md`). As ressalvas para depois ficaram nos PRs:
+  - #197: a trilha mostra só 12 meses sem avisar quando não trunca;
+  - #198: a exportação em modo http deveria responder 501.
+  
+  Os dois mexem em linhas vizinhas de `configuracoes.tsx`, então o segundo a entrar terá conflito.
+- **#195, A1 a A3 feitos:** chave própria `ativacao-email`, o e-mail conferido ao repetir depois de falha parcial e o `pedido` nos dois eventos. 1166 testes de unidade verdes. Falta a reconferência do Guardião sobre a C1 e o A1 a A3.
