@@ -412,3 +412,6 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#199 aberto (B12, recuperação do fator do admin único)**, empilhado sobre o #195. O código veio do agente de engenharia: migração 0077, tetos com trava, token do suporte de 24 h só para o fator, uso só se a pessoa ainda é admin, comando avulso e runbook. Mandei ao Guardião.
 - **#199: o Guardião aprovou com ressalvas.** Corrigi a C1: `--derrubar-sessoes` passou a ser obrigatório em todo motivo, menos a troca planejada de aparelho, com teste e runbook atualizados. A C2 é esperar o CI. A1 a A5 ficam anotadas (evento na compensação, testes de concorrência). O parecer foi commitado.
 - **#199, A2:** se a compensação não conseguir anular o token do suporte, sai `TRILHA_NAO_GRAVADA` com o motivo novo `recuperacao_nao_anulada`, com alarme imediato, em vez de engolir o erro. O vitest saiu com 0.
+- **#193 MESCLADO na `main`** (modelos v2 de fisio e TO, escalas com faixa e instrumento explícito). O sócio tinha reaprovado.
+- **#191 e #194 atualizados** com a `main` (a aprovação caiu de novo). Pedi para ele aprovar um de cada vez: #194, depois #191.
+- **#199:** o RLS falhou por causa da minha C1. Duas bancadas usavam "perdeu o aparelho" sem derrubar as sessões, o que agora é recusado. Passaram a usar "troca de aparelho". O CI está rodando de novo.
