@@ -586,3 +586,119 @@ describe('T2 do parecer de 17/11: casos de recusa da ativação e resíduo da C1
     expect(ctx?.perfis).toEqual(['recepcao']);
   });
 });
+
+/**
+ * Leva a linha para o passado sem quebrar o CHECK de validade da 0076 (`expira_em` até 72 h depois de `criado_em`):
+ * emitida há `dias + 3` dias, vencida há `dias`; `usado` = usada há `dias` (dentro da validade).
+ */
+async function envelhecer(pedido: string, dias: number, usado = false): Promise<void> {
+  await dbAuth.db
+    .update(ativacaoDoFundador)
+    .set({
+      criadoEm: sql`now() - make_interval(days => ${dias + 3})`,
+      expiraEm: sql`now() - make_interval(days => ${dias})`,
+      ...(usado ? { usadoEm: sql`now() - make_interval(days => ${dias}) - interval '1 hour'` } : {}),
+    })
+    .where(eq(ativacaoDoFundador.id, pedido));
+}
+
+describe('B11 PR 3: expurgo de 30 dias das linhas de ativação (A2 do parecer de 17/11; R6; 0079)', () => {
+  it('A2: conta existente com ativação vencida ou bloqueada há mais de 30 dias: a linha continua e a clínica segue fora da lista e da escolha', async () => {
+    const pessoa = await pessoaComFator();
+    // Vencida sem nenhuma tentativa.
+    const vencida = pedidoFicticio({ email: pessoa.email });
+    const v = await provisionar(vencida);
+    await envelhecer(vencida.pedido, 40);
+    // Bloqueada na 5ª falha (o e-mail errado esgota o contador da linha) e depois vencida.
+    const bloqueada = pedidoFicticio({ email: pessoa.email });
+    const b = await provisionar(bloqueada);
+    const origem = cabecalhos();
+    for (let k = 0; k < TETO_DE_FALHAS_DA_ATIVACAO; k++) {
+      expect(await recusa(ativacao().usar({ token: b.token, email: `outra.${randomUUID().slice(0, 8)}@exemplo.test`, senha: SENHA, cabecalhos: origem }))).toBeInstanceOf(NaoEncontradoError);
+    }
+    await envelhecer(bloqueada.pedido, 40);
+    expect(v.usuarioId).toBe(pessoa.userId);
+    expect(b.usuarioId).toBe(pessoa.userId);
+
+    let r: Awaited<ReturnType<BetterAuthProvider['expurgarComoSistema']>> | undefined;
+    const eventos = await eventosDurante(async () => {
+      r = await provedor.expurgarComoSistema();
+    });
+    expect(r?.ativacoesRetidas).toBeGreaterThanOrEqual(2);
+    // ATIVACAO_VENCIDA só para a que venceu com o HMAC ainda presente; a bloqueada já saiu como ATIVACAO_BLOQUEADA.
+    const vencimentos = eventos.filter((l) => l.includes('"evento":"ATIVACAO_VENCIDA"'));
+    expect(vencimentos.filter((l) => l.includes(`"pedido":"${vencida.pedido}"`) && l.includes(`"tenantId":"${v.clinicaId}"`))).toHaveLength(1);
+    expect(vencimentos.some((l) => l.includes(`"pedido":"${bloqueada.pedido}"`))).toBe(false);
+    expect(vencimentos.some((l) => l.includes('@') || l.includes(pessoa.userId))).toBe(false);
+    for (const [nome, pedido, falhas] of [['vencida', vencida.pedido, 0], ['bloqueada', bloqueada.pedido, TETO_DE_FALHAS_DA_ATIVACAO]] as const) {
+      // A linha fica, pendente, e sem o HMAC do e-mail (R6: zerado no vencimento).
+      expect(await linhaDa(pedido), nome).toMatchObject({ usadoEm: null, falhas, emailHmac: '0'.repeat(32) });
+    }
+    // A pessoa é admin das duas no banco desde o provisionamento, mas nenhuma entra na lista, na escolha automática
+    // nem na escolha explícita.
+    for (const clinicaId of [v.clinicaId, b.clinicaId]) {
+      expect((await provedor.clinicasDaPessoa(pessoa.userId)).map((c) => c.id)).not.toContain(clinicaId);
+      expect(await provedor.clinicasDoUsuario(pessoa.userId)).not.toContain(clinicaId);
+      expect(await provedor.definirClinica(randomUUID(), pessoa.userId, clinicaId)).toBe(false);
+      expect(await ativacoesNaTrilha(clinicaId)).toBe(0);
+    }
+    // A escolha automática continua só com a clínica de antes.
+    expect(await provedor.clinicasDoUsuario(pessoa.userId)).toEqual([pessoa.tenantId]);
+    // Rodar de novo não muda nada.
+    await provedor.expurgarComoSistema();
+    expect(await linhaDa(vencida.pedido)).toMatchObject({ usadoEm: null });
+    expect(await linhaDa(bloqueada.pedido)).toMatchObject({ usadoEm: null });
+  });
+
+  it('linha usada há mais de 30 dias: apagada; a clínica continua do fundador e o pedido repetido segue ja_provisionado (C3)', async () => {
+    const p = pedidoFicticio();
+    const { token, clinicaId, usuarioId } = await provisionar(p);
+    await ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
+    await envelhecer(p.pedido, 31, true);
+    const r = await provedor.expurgarComoSistema();
+    expect(r.ativacoesExpurgadas).toBeGreaterThanOrEqual(1);
+    expect(await linhaDa(p.pedido)).toBeUndefined();
+    expect(await provedor.clinicasDoUsuario(usuarioId)).toEqual([clinicaId]);
+    expect((await provedor.clinicasDaPessoa(usuarioId)).map((c) => c.id)).toEqual([clinicaId]);
+    const tokens: string[] = [];
+    await expect(provisionarClinica(bancos, p, (t) => Promise.resolve(void tokens.push(t)), { chaveDoEmail: CHAVE_DO_EMAIL })).rejects.toMatchObject({ codigo: 'ja_provisionado' });
+    expect(tokens).toEqual([]);
+  });
+
+  it('dentro dos 30 dias nada é apagado: usada há 29 dias e vencida há 29 dias continuam', async () => {
+    const usada = pedidoFicticio();
+    const u = await provisionar(usada);
+    await ativacao().usar({ token: u.token, email: usada.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
+    await envelhecer(usada.pedido, 29, true);
+    const vencida = pedidoFicticio();
+    await provisionar(vencida);
+    await envelhecer(vencida.pedido, 29);
+    await provedor.expurgarComoSistema();
+    expect(await linhaDa(usada.pedido)).toMatchObject({ emailHmac: '0'.repeat(32) });
+    expect((await linhaDa(usada.pedido))?.usadoEm).not.toBeNull();
+    // A vencida perde o HMAC já no vencimento (R6), mas a linha fica.
+    expect(await linhaDa(vencida.pedido)).toMatchObject({ usadoEm: null, emailHmac: '0'.repeat(32) });
+  });
+
+  it('linha pendente de clínica COM founder_activated na trilha (ativação incompleta, A3): apagada depois de 30 dias', async () => {
+    const p = pedidoFicticio();
+    const { token, clinicaId } = await provisionar(p);
+    await ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
+    expect(await ativacoesNaTrilha(clinicaId)).toBe(1);
+    // A trilha diz "ativado", mas o consumo não ficou (COMMIT do app_auth perdido): a linha volta a pendente.
+    await dbAuth.db.update(ativacaoDoFundador).set({ usadoEm: null }).where(eq(ativacaoDoFundador.id, p.pedido));
+    await envelhecer(p.pedido, 40);
+    await provedor.expurgarComoSistema();
+    expect(await linhaDa(p.pedido)).toBeUndefined();
+  });
+
+  it('a pendente recente (ainda válida) não é tocada: HMAC intacto e o token continua servindo', async () => {
+    const p = pedidoFicticio();
+    const { token, clinicaId, usuarioId } = await provisionar(p);
+    const antes = await linhaDa(p.pedido);
+    await provedor.expurgarComoSistema();
+    expect(await linhaDa(p.pedido)).toEqual(antes);
+    await ativacao().usar({ token, email: p.email, nome: 'Fundadora Ficticia', senha: SENHA, cabecalhos: cabecalhos() });
+    expect(await provedor.clinicasDoUsuario(usuarioId)).toEqual([clinicaId]);
+  });
+});

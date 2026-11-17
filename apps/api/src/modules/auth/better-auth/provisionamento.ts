@@ -90,18 +90,27 @@ function ehViolacaoDeUnicidade(err: unknown): boolean {
 }
 
 /**
- * A clínica já teve o fundador ativado? Trilha `founder_activated` (retenção da trilha, bem maior que os 30 dias da
- * linha de ativação) ou conta do fundador nascida da ativação desta clínica. Leitura na sessão de sistema.
+ * Prova durável da ativação: a trilha `founder_activated` da clínica (retenção da trilha, bem maior que os 30 dias da
+ * linha de ativação). Leitura na sessão de sistema. Usada pela C3 (sem reemissão) e pela A2 do parecer de 17/11 (o
+ * expurgo nunca apaga a linha pendente de clínica sem essa prova).
  */
-async function clinicaJaAtivada(bancos: BancosDoProvisionamento, clinicaId: TenantId, fundador: string): Promise<boolean> {
-  const [naTrilha] = await withTenant(bancos.dbClinica, clinicaId, (tx) =>
+export async function fundadorAtivadoNaTrilha(dbClinica: Database, clinicaId: TenantId): Promise<boolean> {
+  const [naTrilha] = await withTenant(dbClinica, clinicaId, (tx) =>
     tx
       .select({ id: auditLog.id })
       .from(auditLog)
       .where(and(eq(auditLog.tenantId, clinicaId), sql`${auditLog.metadata}->>'op' = 'founder_activated'`))
       .limit(1),
   );
-  if (naTrilha) return true;
+  return !!naTrilha;
+}
+
+/**
+ * A clínica já teve o fundador ativado? Trilha `founder_activated` (retenção da trilha, bem maior que os 30 dias da
+ * linha de ativação) ou conta do fundador nascida da ativação desta clínica. Leitura na sessão de sistema.
+ */
+async function clinicaJaAtivada(bancos: BancosDoProvisionamento, clinicaId: TenantId, fundador: string): Promise<boolean> {
+  if (await fundadorAtivadoNaTrilha(bancos.dbClinica, clinicaId)) return true;
   const [conta] = await bancos.dbAuth
     .select({ id: usuario.id })
     .from(usuario)

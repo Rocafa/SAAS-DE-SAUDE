@@ -1,0 +1,11 @@
+-- 0079 — Retenção das linhas de ativação do fundador (B11, PR 3; A2 do parecer do Guardião de 17/11/2026 sobre o #203,
+-- O3 do parecer do #195 e R6 do desenho do provisionamento). Executar com o papel de MIGRAÇÃO (app_migrator).
+--
+-- O job `identidade-expurgo` (papel app_auth) apaga a linha usada há mais de 30 dias e a vencida ou bloqueada há mais de
+-- 30 dias, MAS nunca a linha não usada de clínica sem `founder_activated` na trilha: enquanto a clínica não foi ativada,
+-- a linha pendente é o que a mantém fora da lista e da escolha do fundador (C1 do #195). A regra fica no job porque a
+-- prova (`audit_log`) está sob o RLS da clínica. Uma trava no banco não acrescentaria proteção: o app_auth já tem UPDATE
+-- na tabela e poderia preencher `usado_em` direto.
+--
+-- DELETE só nesta tabela, como a 0070 fez com identidade.recuperacao. O app_user continua sem acesso nenhum.
+GRANT DELETE ON identidade.ativacao_do_fundador TO app_auth;

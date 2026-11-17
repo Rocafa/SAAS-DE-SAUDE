@@ -53,6 +53,7 @@ export const EVENTOS_DE_SEGURANCA = {
   ATIVACAO_EMITIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador emitido pela tarefa de provisionamento (B11; só o hash no banco)' },
   ATIVACAO_FALHOU: { severidade: 'aviso', alarme: 'volume', descricao: 'uso do token de ativação do fundador recusado (B11; o usuário recebe sempre o mesmo 404)' },
   ATIVACAO_BLOQUEADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de ativação do fundador invalidado na 5ª conferência de e-mail errada (B11; volta só por reemissão)' },
+  ATIVACAO_VENCIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador venceu sem uso; o expurgo zerou o HMAC do e-mail (B11, PR 3; a clínica segue fora do alcance do fundador)' },
   FUNDADOR_ATIVADO: { severidade: 'alto', alarme: 'imediato', descricao: 'fundador ativou a clínica provisionada (B11; dispara a confirmação fora de banda antes do importador)' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 

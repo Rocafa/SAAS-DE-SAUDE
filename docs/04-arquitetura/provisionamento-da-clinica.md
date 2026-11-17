@@ -46,8 +46,9 @@
 - **Eventos:** `CLINICA_PROVISIONADA` (com o operador), `ATIVACAO_EMITIDA`, `ATIVACAO_REEMITIDA`, `ATIVACAO_FALHOU`, `ATIVACAO_BLOQUEADA`, `ATIVACAO_VENCIDA` e `FUNDADOR_ATIVADO`.
 - **Trilha da clínica:** `tenant_create` e `member_found` (ator sistema), `factor_enrollment_issued` e `founder_activated`. **Nunca** o id do operador.
 - **Retenção:**
-  - o token (só o hash) fica 30 dias depois de vencer ou ser usado e depois cai no expurgo diário;
-  - o HMAC do e-mail é zerado na ativação ou no vencimento;
+  - o token (só o hash) fica 30 dias depois de vencer ou ser usado e depois cai no expurgo diário (`identidade-expurgo`, 0079);
+  - exceção (A2 do parecer de 17/11): a linha **não usada** de clínica sem `founder_activated` na trilha nunca é apagada. É a pendência que mantém a clínica fora da lista e da escolha do fundador com conta existente; apagá-la daria a clínica a quem nunca ativou;
+  - o HMAC do e-mail é zerado na ativação, no bloqueio ou no vencimento (o expurgo zera e emite `ATIVACAO_VENCIDA`);
   - os parâmetros SSM são de vida curta.
 
 ## Testes

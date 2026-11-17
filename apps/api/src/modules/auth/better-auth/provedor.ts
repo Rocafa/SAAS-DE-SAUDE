@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { TenantId, UserId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
-import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
@@ -30,6 +30,7 @@ import { gerarHashDeSenha } from './senha';
 import type { ConferirSenhaVazada } from './senha-vazada';
 import type { RateLimitStore } from '../../../security/rate-limit-store';
 import { chaveDoBloqueio } from './chaves-do-bloqueio';
+import { fundadorAtivadoNaTrilha } from './provisionamento';
 import { anonimizarContaDoTitular, type PedidoDeAnonimizacao, type ResultadoDaAnonimizacao } from './anonimizacao';
 import { symmetricDecrypt, type SecretConfig } from 'better-auth/crypto';
 import { totpConfere } from './totp';
@@ -310,6 +311,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     expurgosSemTrilha: number;
     contasSemVinculo: number;
     contasReativadas: number;
+    ativacoesExpurgadas: number;
+    ativacoesRetidas: number;
   }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
@@ -427,6 +430,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       }
     }
     if (expurgosSemTrilha > 0) registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'expurgo_de_credencial', contagem: expurgosSemTrilha });
+    const ativacoes = await this.expurgarAtivacoesDoFundador(agora, trintaDias);
     return {
       sessoes: sessoes.length,
       verificacoes: verificacoes.length,
@@ -436,7 +440,52 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       expurgosSemTrilha,
       contasSemVinculo: semVinculo.length,
       contasReativadas: reativadas.length,
+      ...ativacoes,
     };
+  }
+
+  /**
+   * Linhas de ativação do fundador (B11, PR 3; R6 do desenho; A2 do parecer de 17/11 sobre o #203; 0079).
+   *
+   * - Vencida e não usada: o HMAC do e-mail é zerado já no vencimento (R6); o token não serve mais para nada.
+   * - Usada há mais de 30 dias: apagada.
+   * - Não usada, vencida ou bloqueada há mais de 30 dias: apagada SÓ se a clínica tem `founder_activated` na trilha.
+   *   Sem essa prova a linha fica: é a pendência (`usado_em IS NULL`) que mantém a clínica fora da lista e da escolha
+   *   do fundador com conta existente (C1 do #195); apagá-la daria a clínica a quem nunca ativou. A bloqueada não tem
+   *   data própria; vence no máximo 72 h depois de emitida, então `expira_em` serve de marco para as duas.
+   * - Leitura da trilha que falha: a linha fica (falha fechada) e a próxima rodada tenta de novo.
+   */
+  private async expurgarAtivacoesDoFundador(agora: Date, trintaDias: Date): Promise<{ ativacoesExpurgadas: number; ativacoesRetidas: number }> {
+    const vencidas = await this.d.dbAuth
+      .update(ativacaoDoFundador)
+      .set({ emailHmac: EMAIL_DESCARTADO })
+      .where(and(isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, agora), ne(ativacaoDoFundador.emailHmac, EMAIL_DESCARTADO)))
+      .returning({ id: ativacaoDoFundador.id, clinicaId: ativacaoDoFundador.clinicaId });
+    // Uma vez por linha (o filtro do HMAC não repete); a bloqueada já saiu como ATIVACAO_BLOQUEADA com o HMAC zerado.
+    for (const v of vencidas) registrarEventoDeSeguranca('ATIVACAO_VENCIDA', { tenantId: v.clinicaId, pedido: v.id });
+    const usadas = await this.d.dbAuth
+      .delete(ativacaoDoFundador)
+      .where(lt(ativacaoDoFundador.usadoEm, trintaDias))
+      .returning({ id: ativacaoDoFundador.id });
+    const pendentes = await this.d.dbAuth
+      .select({ id: ativacaoDoFundador.id, clinicaId: ativacaoDoFundador.clinicaId })
+      .from(ativacaoDoFundador)
+      .where(and(isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, trintaDias)));
+    let expurgadas = usadas.length;
+    let retidas = 0;
+    for (const { id, clinicaId } of pendentes) {
+      const ativada = await fundadorAtivadoNaTrilha(this.d.dbClinica, clinicaId as TenantId).catch(() => false);
+      if (!ativada) {
+        retidas += 1;
+        continue;
+      }
+      const apagada = await this.d.dbAuth
+        .delete(ativacaoDoFundador)
+        .where(and(eq(ativacaoDoFundador.id, id), isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, trintaDias)))
+        .returning({ id: ativacaoDoFundador.id });
+      expurgadas += apagada.length;
+    }
+    return { ativacoesExpurgadas: expurgadas, ativacoesRetidas: retidas };
   }
 
   async trocarSenhaDaPessoa(e: {
