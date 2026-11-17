@@ -89,8 +89,9 @@ export async function emitirRecuperacaoPeloSuporte(
   if (!UUID.test(clinicaId) || !UUID.test(usuarioId) || !UUID.test(operador) || usuarioId === SYSTEM_ACTOR_ID) throw new RecuperacaoPeloSuporteRecusada('entrada_invalida');
   if (!CHAMADO_SUPORTE.test(chamado)) throw new RecuperacaoPeloSuporteRecusada('chamado_invalido');
   if (!(MOTIVOS_DA_RECUPERACAO_PELO_SUPORTE as readonly string[]).includes(motivo)) throw new RecuperacaoPeloSuporteRecusada('motivo_invalido');
-  // R5: com suspeita de invasão, a sessão aberta pode estar na mão de terceiro.
-  if (motivo === 'suspeita_de_invasao' && !derrubarSessoes) throw new RecuperacaoPeloSuporteRecusada('derrubar_sessoes_obrigatorio');
+  // R5 e C1 do parecer de 17/11: aparelho perdido, conta bloqueada ou suspeita de invasão podem deixar sessão aberta
+  // na mão de terceiro. Só a troca planejada de aparelho dispensa derrubar as sessões.
+  if (motivo !== 'troca_de_aparelho' && !derrubarSessoes) throw new RecuperacaoPeloSuporteRecusada('derrubar_sessoes_obrigatorio');
 
   const tenantId = clinicaId as TenantId;
   const token = randomBytes(32).toString('base64url');

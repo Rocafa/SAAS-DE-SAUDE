@@ -32,7 +32,7 @@ Só ids, datas e nomes de quem executou e entregou. Registra: tipo de documento 
 
 ## Motivo e sessões (R5)
 
-`--motivo` da lista fechada: `perdeu_o_aparelho`, `troca_de_aparelho`, `suspeita_de_invasao` ou `conta_bloqueada`. Com `suspeita_de_invasao` ou **aparelho roubado**, use `--derrubar-sessoes` (o comando recusa `suspeita_de_invasao` sem ele). Nos outros casos, decida com o titular.
+`--motivo` da lista fechada: `perdeu_o_aparelho`, `troca_de_aparelho`, `suspeita_de_invasao` ou `conta_bloqueada`. `--derrubar-sessoes` é **obrigatório** em todo motivo, menos `troca_de_aparelho` (C1 do parecer de 17/11): aparelho perdido, conta bloqueada ou suspeita de invasão podem deixar sessão aberta na mão de terceiro. O comando recusa sem ele.
 
 ## Rodar
 

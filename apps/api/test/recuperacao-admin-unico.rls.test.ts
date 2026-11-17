@@ -49,7 +49,7 @@ async function pessoa(tenantId: TenantId, fator: boolean, ...perfis: ('admin' | 
 
 function pedido(clinicaId: string, usuarioId: string, over: Partial<PedidoDeRecuperacaoPeloSuporte> = {}): PedidoDeRecuperacaoPeloSuporte {
   seq += 1;
-  return { clinicaId, usuarioId, chamado: `SUP-${1000 + seq}`, operador: OPERADOR_FICTICIO, motivo: 'perdeu_o_aparelho', derrubarSessoes: false, ...over };
+  return { clinicaId, usuarioId, chamado: `SUP-${1000 + seq}`, operador: OPERADOR_FICTICIO, motivo: 'troca_de_aparelho', derrubarSessoes: false, ...over };
 }
 
 function guarda(): { tokens: string[]; guardar: (t: string) => Promise<void> } {
@@ -151,9 +151,12 @@ describe('B12: emissão da recuperação do fator pelo suporte', () => {
     await expect(emitirRecuperacaoPeloSuporte(bancos, pedido(tenantId, inativo), g.guardar)).rejects.toMatchObject({ codigo: 'conta_inativa' });
     const admin = await pessoa(tenantId, false, 'admin');
     await expect(emitirRecuperacaoPeloSuporte(bancos, pedido(tenantId, admin, { chamado: 'LGPD-1' }), g.guardar)).rejects.toMatchObject({ codigo: 'chamado_invalido' });
-    await expect(emitirRecuperacaoPeloSuporte(bancos, pedido(tenantId, admin, { motivo: 'suspeita_de_invasao' }), g.guardar)).rejects.toMatchObject({
-      codigo: 'derrubar_sessoes_obrigatorio',
-    });
+    // C1 do parecer de 17/11: só a troca planejada de aparelho dispensa derrubar as sessões.
+    for (const motivo of ['suspeita_de_invasao', 'perdeu_o_aparelho', 'conta_bloqueada'] as const) {
+      await expect(emitirRecuperacaoPeloSuporte(bancos, pedido(tenantId, admin, { motivo }), g.guardar)).rejects.toMatchObject({
+        codigo: 'derrubar_sessoes_obrigatorio',
+      });
+    }
     expect(g.tokens).toEqual([]);
   });
 
