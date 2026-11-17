@@ -158,8 +158,8 @@ export class SlotLimiter {
 export const USUARIO_SISTEMA = '00000000-0000-0000-0000-000000000000';
 
 /**
- * Ids das clínicas pela `app_job_tenants()` (0043): só fora de contexto de clínica e só ids. Consumidores: o agendador
- * de jobs e a anonimização da conta (G3 do #176), que precisa alcançar clínicas onde a pessoa já não tem vínculo.
+ * Ids das clínicas pela `app_job_tenants()` (0043): só fora de contexto de clínica e só ids. Único consumidor: o
+ * agendador de jobs (`ClinicasDoAgendador`). A anonimização usa o espelho estreito `identidade.convite_aceito` (0073).
  */
 export async function listarClinicasDoAgendador(db: Database): Promise<TenantId[]> {
   const linhas = await db.execute<{ t: string }>(sql`select t from app_job_tenants() as t`);
