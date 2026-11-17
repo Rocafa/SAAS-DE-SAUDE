@@ -78,6 +78,11 @@ interface Contexto {
   readonly checker: ts.TypeChecker;
   /** O "nosso código": src/ e os arquivos extras (fixtures do teste). */
   readonly nosso: (n: ts.Node) => boolean;
+  /**
+   * Implementações de um método de INTERFACE (porta): `provider.escolherClinica()` chamado pela interface segue
+   * para o método de mesmo nome em toda classe nossa que declara `implements` dessa interface.
+   */
+  readonly implementacoes: (metodo: ts.Node) => ts.Node[];
 }
 
 function falhar(n: ts.Node, msg: string): never {
@@ -190,6 +195,11 @@ function percorrer(cx: Contexto, inicio: ts.Node, visitar: (n: ts.Node, alvo?: t
         const c = corpoDe(alvo);
         if (c) busca(c);
         if (parou) return;
+        for (const impl of cx.implementacoes(alvo)) {
+          const ci = corpoDe(impl);
+          if (ci) busca(ci);
+          if (parou) return;
+        }
       }
       ts.forEachChild(n, andar);
     };
@@ -235,11 +245,37 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisa
   const [erro] = programa.getSyntacticDiagnostics();
   if (erro) throw new Error(`erro de sintaxe em ${erro.file?.fileName ?? '?'}: ${ts.flattenDiagnosticMessageText(erro.messageText, ' ')}`);
   const doExtra = (f: string) => absolutos.includes(path.resolve(f));
+  const nosso = (n: ts.Node): boolean => {
+    const f = path.resolve(n.getSourceFile().fileName);
+    return f.startsWith(RAIZ_SRC) || doExtra(f);
+  };
+  // Classes nossas por interface implementada (nome da interface → classes).
+  const porInterface = new Map<string, ts.ClassDeclaration[]>();
+  for (const sf of programa.getSourceFiles()) {
+    if (!nosso(sf)) continue;
+    const ver = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n)) {
+        for (const h of n.heritageClauses ?? []) {
+          if (h.token !== ts.SyntaxKind.ImplementsKeyword) continue;
+          for (const t of h.types) {
+            const nome = t.expression.getText(sf);
+            porInterface.set(nome, [...(porInterface.get(nome) ?? []), n]);
+          }
+        }
+      }
+      ts.forEachChild(n, ver);
+    };
+    ver(sf);
+  }
   const cx: Contexto = {
     checker: programa.getTypeChecker(),
-    nosso: (n) => {
-      const f = path.resolve(n.getSourceFile().fileName);
-      return f.startsWith(RAIZ_SRC) || doExtra(f);
+    nosso,
+    implementacoes: (metodo) => {
+      if (!ts.isMethodSignature(metodo) || !ts.isInterfaceDeclaration(metodo.parent) || !ts.isIdentifier(metodo.name)) return [];
+      const nome = metodo.name.text;
+      return (porInterface.get(metodo.parent.name.text) ?? []).flatMap((c) =>
+        c.members.filter((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && ts.isIdentifier(m.name) && m.name.text === nome),
+      );
     },
   };
   const rotas: RotaAnalisada[] = [];

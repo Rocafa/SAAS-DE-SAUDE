@@ -537,6 +537,168 @@ describe('PR 2: TOTP, bloqueio 5/15 e eventos do fator (R5 e R6 do #123)', () =>
   }, 60_000);
 });
 
+describe('PR 3a: sessão da pessoa sem clínica (desenho §14.1; R3 a R6 do parecer do desenho do PR 3)', () => {
+  /** Pessoa com duas clínicas, logada e com TOTP aceito SEM clínica escolhida. */
+  async function pessoaEmDuasClinicas() {
+    const t1 = await api.novaClinica();
+    const t2 = await api.novaClinica();
+    const p = await novaPessoa(t1, ['admin']);
+    await api.membro(t2, { userId: p.userId }, 'admin');
+    const c = cookieDe(await entrar(p.email));
+    return { ...p, t1, t2, c };
+  }
+
+  it('sessão da pessoa: sem clínica ativa o resolver devolve null, mas a sessão de pessoa existe; lista as duas clínicas com o nome', async () => {
+    const { userId, t1, t2, c } = await pessoaEmDuasClinicas();
+    expect(await provedor.resolver({ headers: c })).toBeNull();
+    const pessoa = await provedor.sessaoDePessoa({ headers: c });
+    expect(pessoa?.userId).toBe(userId);
+    const clinicas = await provedor.clinicasDaPessoa(userId);
+    expect(clinicas.map((x) => x.id).sort()).toEqual([t1, t2].sort());
+    expect(clinicas.every((x) => typeof x.nome === 'string' && x.nome.length > 0)).toBe(true);
+    expect(Object.keys(clinicas[0] ?? {}).sort()).toEqual(['id', 'nome']);
+  });
+
+  it('R4: TOTP sem clínica vale para a PRIMEIRA escolha em até 5 min (mfa_em na clínica escolhida e trilha nela), e nunca é lido como mfa_em', async () => {
+    const { userId, t1, c } = await pessoaEmDuasClinicas();
+    const s = await cadastrarFator(c, userId);
+    // Ainda sem clínica: o MFA ficou guardado, não marcado.
+    const id = await sessaoId(s);
+    const [linha] = await dbAuth.db.select({ mfaEm: sessao.mfaEm, semClinica: sessao.mfaSemClinicaEm }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.mfaEm).toBeNull();
+    expect(linha?.semClinica).toBeInstanceOf(Date);
+    const pessoa = await provedor.sessaoDePessoa({ headers: s });
+    expect(await provedor.escolherClinica(pessoa ?? { sessaoId: '', userId: '' }, t1)).toBe(true);
+    expect((await provedor.resolver({ headers: s }))?.mfaEm).toBeInstanceOf(Date);
+    const [depois] = await dbAuth.db.select({ semClinica: sessao.mfaSemClinicaEm }).from(sessao).where(eq(sessao.id, id));
+    expect(depois?.semClinica).toBeNull();
+    expect(await trilhaDoFator(t1, userId)).toContain('login:mfa_verified');
+  });
+
+  it('R4: depois de 5 min, a escolha NÃO aproveita o TOTP; a segunda escolha também não', async () => {
+    const { userId, t1, t2, c } = await pessoaEmDuasClinicas();
+    const s = await cadastrarFator(c, userId);
+    const id = await sessaoId(s);
+    await dbAuth.db.update(sessao).set({ mfaSemClinicaEm: new Date(Date.now() - 6 * 60_000) }).where(eq(sessao.id, id));
+    const pessoa = { sessaoId: id, userId };
+    expect(await provedor.escolherClinica(pessoa, t1)).toBe(true);
+    expect((await provedor.resolver({ headers: s }))?.mfaEm).toBeNull();
+    // Dentro do prazo, mas já houve uma escolha: a segunda não aproveita.
+    await dbAuth.db.update(sessao).set({ mfaSemClinicaEm: new Date() }).where(eq(sessao.id, id));
+    expect(await provedor.escolherClinica(pessoa, t2)).toBe(true);
+    expect((await provedor.resolver({ headers: s }))?.mfaEm).toBeNull();
+  });
+
+  it('R1 do código do 3a: duas escolhas de clínica AO MESMO TEMPO convertem o TOTP sem clínica uma vez só', async () => {
+    const { userId, t1, t2, c } = await pessoaEmDuasClinicas();
+    const s = await cadastrarFator(c, userId);
+    const pessoa = { sessaoId: await sessaoId(s), userId };
+    await Promise.all([provedor.escolherClinica(pessoa, t1), provedor.escolherClinica(pessoa, t2)]);
+    const verificados = [...(await trilhaDoFator(t1, userId)), ...(await trilhaDoFator(t2, userId))].filter((x) => x === 'login:mfa_verified');
+    expect(verificados).toHaveLength(1);
+  });
+
+  it('escolher clínica sem vínculo: false (a rota responde 404)', async () => {
+    const { userId, c } = await pessoaEmDuasClinicas();
+    const outra = await api.novaClinica();
+    expect(await provedor.escolherClinica({ sessaoId: await sessaoId(c), userId }, outra)).toBe(false);
+  });
+
+  it('R20 e R6: a lista mostra só as sessões da pessoa, sem IP nem user-agent; encerrar sessão de OUTRA pessoa não apaga nada', async () => {
+    const a = await pessoaEmDuasClinicas();
+    const b = await pessoaEmDuasClinicas();
+    const segunda = cookieDe(await entrar(a.email));
+    const pa = { sessaoId: await sessaoId(a.c), userId: a.userId };
+    const lista = await provedor.sessoesDaPessoa(pa);
+    expect(lista).toHaveLength(2);
+    expect(lista.filter((x) => x.atual)).toHaveLength(1);
+    expect(JSON.stringify(lista)).not.toMatch(/ip|agente|userAgent|clinica/i);
+    // B tenta encerrar uma sessão de A: nada acontece.
+    const pb = { sessaoId: await sessaoId(b.c), userId: b.userId };
+    expect(await provedor.encerrarSessaoDaPessoa(pb, await sessaoId(segunda))).toBe(false);
+    expect(await provedor.sessoesDaPessoa(pa)).toHaveLength(2);
+    // A encerra a própria segunda sessão.
+    expect(await provedor.encerrarSessaoDaPessoa(pa, await sessaoId(segunda))).toBe(true);
+    expect(await provedor.sessaoDePessoa({ headers: segunda })).toBeNull();
+  });
+
+  it('logout global: encerra todas as sessões da pessoa (inclusive a atual) e grava a trilha nas clínicas do vínculo', async () => {
+    const a = await pessoaEmDuasClinicas();
+    const segunda = cookieDe(await entrar(a.email));
+    expect(await provedor.encerrarTodasDaPessoa({ sessaoId: await sessaoId(a.c), userId: a.userId })).toBe(2);
+    expect(await provedor.sessaoDePessoa({ headers: a.c })).toBeNull();
+    expect(await provedor.sessaoDePessoa({ headers: segunda })).toBeNull();
+    for (const t of [a.t1, a.t2]) {
+      const linhas = await withTenant(api.db.db, t as never, (tx) =>
+        tx.execute<{ op: string }>(sql`select metadata->>'op' as op from audit_log where scope = 'session' and actor_id = ${a.userId}`),
+      );
+      expect(linhas.map((l) => l.op)).toContain('session_logout_global');
+    }
+  });
+
+  it('R3: a sessão de pessoa aplica o prazo absoluto de 12 h (e apaga a sessão)', async () => {
+    const a = await pessoaEmDuasClinicas();
+    const id = await sessaoId(a.c);
+    await dbAuth.db.update(sessao).set({ createdAt: new Date(Date.now() - 13 * 3_600_000) }).where(eq(sessao.id, id));
+    expect(await provedor.sessaoDePessoa({ headers: a.c })).toBeNull();
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, id))).toEqual([]);
+  });
+});
+
+describe('PR 3a: cookie renovado e polling sem renovar (pendência do #149; R19; R5 do desenho do PR 3)', () => {
+  async function sessaoParaRenovar() {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    const id = await sessaoId(c);
+    // 13 min de inatividade restantes: passou do updateAge (60 s), então a próxima leitura estende.
+    const antes = new Date(Date.now() + 13 * 60_000);
+    await dbAuth.db.update(sessao).set({ expiresAt: antes }).where(eq(sessao.id, id));
+    return { c, id, antes };
+  }
+
+  it('rota de polling: 20 leituras não estendem a sessão e nenhum Set-Cookie sai', async () => {
+    const { c, id, antes } = await sessaoParaRenovar();
+    const cookies: string[] = [];
+    for (let i = 0; i < 20; i++) await provedor.resolver({ headers: c, semRenovar: true, aoRenovarCookie: (x) => cookies.push(...x) });
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBe(antes.getTime());
+    expect(cookies).toEqual([]);
+  });
+
+  it('rota comum: a sessão estendida devolve SÓ o Set-Cookie da sessão, com o prazo novo', async () => {
+    const { c, id, antes } = await sessaoParaRenovar();
+    const cookies: string[] = [];
+    expect(await provedor.resolver({ headers: c, aoRenovarCookie: (x) => cookies.push(...x) })).not.toBeNull();
+    const [linha] = await dbAuth.db.select({ expira: sessao.expiresAt }).from(sessao).where(eq(sessao.id, id));
+    expect(linha?.expira.getTime()).toBeGreaterThan(antes.getTime());
+    expect(cookies.length).toBeGreaterThan(0);
+    expect(cookies.every((x) => x.startsWith(`${nomeDoCookie(false)}=`))).toBe(true);
+  });
+});
+
+describe('PR 3a: expurgo diário do schema identidade (R11 do desenho, R7 do desenho do PR 3)', () => {
+  it('apaga sessões vencidas e cadastros de TOTP não concluídos há mais de 24 h; mantém o resto', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const viva = cookieDe(await entrar(p.email));
+    const vencida = cookieDe(await entrar(p.email));
+    const idVencida = await sessaoId(vencida);
+    const idViva = await sessaoId(viva);
+    await dbAuth.db.update(sessao).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(sessao.id, idVencida));
+    // Cadastro iniciado e abandonado há 2 dias.
+    expect((await postar('/two-factor/enable', viva, { password: SENHA })).r.status).toBe(200);
+    await dbAuth.db.update(doisFatores).set({ criadoEm: new Date(Date.now() - 48 * 3_600_000) }).where(eq(doisFatores.userId, p.userId));
+    const r = await provedor.expurgarComoSistema();
+    expect(r.sessoes).toBeGreaterThanOrEqual(1);
+    expect(r.cadastrosNaoConcluidos).toBeGreaterThanOrEqual(1);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idVencida))).toEqual([]);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.id, idViva))).toHaveLength(1);
+    expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
+  });
+});
+
 async function sequencial<T>(tarefas: (() => Promise<T>)[]): Promise<T[]> {
   const saida: T[] = [];
   for (const t of tarefas) saida.push(await t());
