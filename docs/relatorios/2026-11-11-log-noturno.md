@@ -405,3 +405,8 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#155 atualizado com a `main`** (sem aprovação a perder) e a pilha inteira propagada, até o #195, sem conflito.
 - **Erro meu, corrigido em seguida:** o commit das sobras da C1 subiu com 4 testes de unidade quebrados no `provedor.test.ts`. Eu tinha encadeado o commit num `grep` da saída do vitest, e não no código de saída dele. A consulta nova virou um método próprio, com dublê nesses testes; agora o vitest sai com 0 (1166 verdes). **Regra mantida:** o commit depende do `exit` do vitest, nunca de um `grep` da saída.
 - **B12 (recuperação do admin único) passado ao agente de engenharia**, no branch `eng/recuperacao-admin-unico`, sobre o provisionamento, com o escopo fechado pelo parecer: migração 0077, função com teto e ator sistema, ajuste no `usarRecuperacao`, comando avulso, testes e runbook. A recuperação completa (vetada) ficou de fora.
+- **#192 MESCLADO na `main`** (`c3221c6`): o atendimento pelo agendamento, com a `versao`, destrava a fatia S1 do front do sócio.
+  - O #191 e o #193 ficaram atrasados e foram atualizados.
+  - O #194 teve conflito de testes com o #192 (dois `describe` novos no mesmo ponto). Resolvi mantendo os dois; o primeiro resolvedor perdeu o fechamento `});`, que corrigi. O vitest saiu com 0.
+  - Pedi de novo a aprovação do sócio, sugerindo mesclar um por vez (#194, #193, #191), porque cada merge derruba a aprovação dos outros.
+- **#199 aberto (B12, recuperação do fator do admin único)**, empilhado sobre o #195. O código veio do agente de engenharia: migração 0077, tetos com trava, token do suporte de 24 h só para o fator, uso só se a pessoa ainda é admin, comando avulso e runbook. Mandei ao Guardião.
