@@ -473,3 +473,19 @@ Pendente para a próxima sessão:
 - **Segunda causa no autoteste das guardas:** no PG16, o ALTER ROLE do app_provisionamento declarava NOBYPASSRLS, o que só um papel com BYPASSRLS pode fazer (o master do RDS também não poderia). Removido do ALTER; o CREATE já nega o atributo e a guarda confere. **#207 e #208 verdes (16/16).** Esse erro também quebraria o bootstrap no RDS real.
 - **R6 iniciado:** os testes do expurgo das ativações passam a usar o relógio injetado adiantado (linhas recentes), sem corrida com os expurgos de outros arquivos. Depois, cascata #205 → #206 → #207 → #208.
 - **R6 não aplicado, decisão do Maestro.** A engenharia mostrou que adiantar o relógio piora a corrida: o expurgo varre o banco inteiro e apagaria sessões e HMACs vivos de outros arquivos. As alternativas (`fileParallelism: false` na suíte RLS inteira, ou limitar o expurgo a ids em produção) custam mais que o risco, que é só um vermelho falso raro, nunca um verde falso. Fica documentado: se o V1 do #205 falhar no CI, rode de novo o job; se virar frequente, serializar só os 3 arquivos que expurgam.
+
+## Estado ao fim da rodada (17/11)
+- **Pilha de identidade e operação pronta:** #203 (ativação), #204 (Terraform), #205 (expurgo), #206 (cliente SSM), #207 (papel app_provisionamento) e #208 (clínica sem fundador). Todos têm parecer favorável do Guardião e CI verde. Não há pendência de código.
+- **Bloqueado em pessoas:**
+  1. O sócio precisa aprovar o #155 e o #194, a base da pilha.
+  2. Conferir a trava do AUTH_PROVIDER no #174.
+  3. Ajustar o tfvars aos papéis `ops-*-executor`/`-entrega` do #204.
+  4. Votar D13 e D15; decidir sobre o estagiário; separar a parte 2 do #182.
+- **Ordem de deploy do provisionamento:**
+  1. Terraform do #204 com `endpoint_ssm=true`.
+  2. Bootstrap com APP_PROVISIONAMENTO_PASSWORD.
+  3. Migrations até a 0081.
+  4. Imagem nova.
+  5. Uma rodada de cada fluxo em staging com dado fictício.
+  6. Volta ao Guardião.
+- **Backlog:** R6 (decidido acima); Dependabot (#188, #189, #116, #201, #202) depois da pilha.
