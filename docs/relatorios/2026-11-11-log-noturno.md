@@ -420,3 +420,4 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#194 atualizado** de novo com a `main`. É o último da leva e espera a aprovação do sócio.
 - **#155 atualizado com a `main`** (com o #191 a #193) e a pilha inteira propagada, até o #199, sem conflito. Topo: tipos e lint limpos e vitest saindo com 0 (1178 verdes).
 - **RIPD de identidade atualizado no #199** (R10 dos pareceres do B11 e do B12). §3: prazos do token do suporte (13 meses) e da ativação do fundador. §5: procedimentos do fundador (B11), do admin único (B12) e de quem perdeu senha e fator (B13). §8: dois riscos novos para o encarregado assinar.
+- **Provisionamento PR 2** (rota de ativação do fundador, ajuste da 0022 para o ator sistema e a C3) **passado ao agente de engenharia**, no branch `eng/ativacao-do-fundador`, sobre o #199.
