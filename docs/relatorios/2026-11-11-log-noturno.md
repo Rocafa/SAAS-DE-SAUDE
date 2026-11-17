@@ -382,3 +382,7 @@ O limite de 5 h zerou (2% usado; 26% na semana). Continuo sem empilhar código n
 - **#155:** trouxe a main de novo, sem conflito. Tipos, lint e 1138 testes verdes. Push e comentário pedindo nova aprovação. Segue sem aprovação.
 - #153 e #154 sem aprovação (BEHIND). #158, #143 e #157 sem mudança do sócio.
 - #189 aprovado, espera a pilha. #116 segue em conflito (DIRTY).
+
+## Checagem de 16/11 22:14
+
+- Nada mudou desde 20:16: o #155 segue sem aprovação (BLOCKED); avulsos, PRs do sócio e #189/#116 iguais; nenhum merge.
