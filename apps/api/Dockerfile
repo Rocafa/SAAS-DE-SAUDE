@@ -24,7 +24,9 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 WORKDIR /repo
 
 # Só o que define as dependências: muda pouco, então o cache desta camada vale entre builds.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+# .pnpmfile.cjs: tira do better-auth os peers opcionais (next, react, vitest), que levariam ~186 MB de
+# next/vite/vitest/playwright para a imagem. O lockfile guarda o checksum dele; sem o arquivo, o install falha.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .pnpmfile.cjs ./
 COPY patches ./patches
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm fetch --frozen-lockfile
