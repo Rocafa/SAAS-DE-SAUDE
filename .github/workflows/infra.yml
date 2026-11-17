@@ -293,7 +293,8 @@ jobs:
             v=${par%%:*}; s=${par#*:}
             grep -Eq "^\s*$v += \{ segredo = aws_secretsmanager_secret.app\[\"$s\"\].arn," staging/app.tf \
               || { echo "segredo $v fora de api_segredos_origem (ou de outro segredo)"; exit 1; }
-            grep -E '^\s*api_segredos_obrigatorios *=' staging/app.tf | grep -q "\"$v\"" \
+            # A lista pode vir num concat(...) (base fixa na linha seguinte): lê o bloco até o ")".
+            sed -n '/^\s*api_segredos_obrigatorios *=/,/^\s*)/p' staging/app.tf | grep -q "\"$v\"" \
               || { echo "$v fora de api_segredos_obrigatorios"; exit 1; }
             grep -Eq "^\s*\"$s\" = \{" staging/dados.tf || { echo "segredo $s ausente em segredos_app"; exit 1; }
           done
