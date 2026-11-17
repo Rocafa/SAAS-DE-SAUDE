@@ -36,6 +36,7 @@ const SEGREDO = randomBytes(32).toString('base64');
 
 let api: ApiDeTeste;
 let dbAuth: DatabaseHandle;
+let dbProv: DatabaseHandle;
 let auth: Autenticacao;
 let provedor: BetterAuthProvider;
 let bancos: BancosDoProvisionamento;
@@ -57,7 +58,11 @@ beforeAll(async () => {
   const urlAuth = process.env.DATABASE_AUTH_URL;
   if (!urlAuth) throw new Error('DATABASE_AUTH_URL (papel app_auth) é obrigatória neste teste');
   dbAuth = createDatabase(urlAuth, { max: 2 });
-  bancos = { dbAuth: dbAuth.db, dbClinica: api.db.db };
+  const urlProv = process.env.DATABASE_PROVISIONAMENTO_URL;
+  if (!urlProv) throw new Error('DATABASE_PROVISIONAMENTO_URL (papel app_provisionamento) é obrigatória neste teste');
+  // A tarefa de provisionamento usa só o papel dedicado (0080), para a identidade e para a clínica.
+  dbProv = createDatabase(urlProv, { max: 2 });
+  bancos = { dbAuth: dbProv.db, dbClinica: dbProv.db };
   auth = criarAutenticacao({
     db: dbAuth.db,
     segredo: SEGREDO,
@@ -79,6 +84,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  await dbProv?.close();
   await dbAuth?.close();
   await api?.fechar();
 });
@@ -209,10 +215,11 @@ describe('B11 PR 2: trilha do provisionamento com ator sistema (R7; C2 do #195)'
   });
 
   it('0078: a sessão de sistema não funda clínica sem a trilha do provisionamento (sem via, sem contrato ou de outra pessoa)', async () => {
-    const fundar = (meta: Record<string, string>, membroDe?: string) => {
+    // A trilha é forjada à mão pelo papel do provisionamento (0080): só ele funda pela sessão de sistema.
+    const fundar = (meta: Record<string, string>, membroDe?: string, db = dbProv.db) => {
       const id = randomUUID() as TenantId;
       const fundador = randomUUID();
-      return withTenant(api.db.db, id, async (tx) => {
+      return withTenant(db, id, async (tx) => {
         await tx.insert(tenants).values({ id, displayName: 'Clinica Ficticia Forjada', founderUserId: fundador });
         await tx.insert(auditLog).values({ tenantId: id, actorId: SYSTEM_ACTOR_ID, actorKind: 'sistema', action: 'create', scope: 'tenants', metadata: { op: 'tenant_create', ...meta } });
         const [m] = await tx.insert(clinicMembers).values({ tenantId: id, userId: membroDe ?? fundador, role: 'admin', grantedBy: SYSTEM_ACTOR_ID }).returning();
@@ -245,6 +252,11 @@ describe('B11 PR 2: trilha do provisionamento com ator sistema (R7; C2 do #195)'
     expect((await errosPg(fundar({ via: 'provisionamento', contract: 'CTR-1' }, randomUUID()))).some((x) => x.code === '42501')).toBe(true);
     // O caminho completo passa (prova de que as recusas acima são pela trilha, não por outra regra).
     await fundar({ via: 'provisionamento', contract: 'CTR-1' });
+    // A1 do parecer de 17/11 (0080): o mesmo caminho completo, pelo runtime (app_user) ou pela autenticação (app_auth),
+    // é recusado. Comprometer a API não basta para fundar clínica "pelo provisionamento".
+    const peloRuntime = await errosPg(fundar({ via: 'provisionamento', contract: 'CTR-1' }, undefined, api.db.db));
+    expect(peloRuntime.some((x) => x.code === '42501' && /o fundador é quem está na sessão/.test(x.message))).toBe(true);
+    expect((await errosPg(fundar({ via: 'provisionamento', contract: 'CTR-1' }, undefined, dbAuth.db))).some((x) => x.code === '42501')).toBe(true);
     // Fora da fundação, a sessão de sistema continua sem conceder perfil.
     const outra = await api.novaClinica();
     const semFundacao = await errosPg(

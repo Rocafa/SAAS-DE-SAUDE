@@ -1,7 +1,8 @@
 /**
  * Comando operacional do provisionamento da clínica (B11, PR 1). Roda como tarefa avulsa do ECS, com definição e papel
- * de tarefa próprios, só com as credenciais de banco (`app_auth` e `app_user`), a raiz do HMAC por uso e o log de
- * segurança (R8 do parecer de 16/11/2026). Desenho: docs/04-arquitetura/provisionamento-da-clinica.md.
+ * de tarefa próprios, só com a credencial do papel de banco dedicado (`app_provisionamento`, 0080: A1 do parecer de
+ * 17/11/2026 sobre a ativação do fundador), a raiz do HMAC por uso e o log de segurança (R8 do parecer de 16/11/2026).
+ * Desenho: docs/04-arquitetura/provisionamento-da-clinica.md.
  *
  *   node dist/ops/provisionar-clinica.js --pedido <uuid> --contrato CTR-<n>
  *   (com CONFIRMA_PROVISIONAMENTO=<o mesmo uuid do pedido> no ambiente da tarefa)
@@ -155,9 +156,9 @@ function parametrosDoSsm(): ParametrosSeguros | null {
 }
 
 async function principal(): Promise<void> {
-  const authUrl = process.env.DATABASE_AUTH_URL;
-  const clinicaUrl = process.env.DATABASE_URL;
-  if (!authUrl || !clinicaUrl) {
+  // Só o papel dedicado (0080). Nem `app_auth` nem `app_user`: a fundação pela sessão de sistema recusa os dois.
+  const url = process.env.DATABASE_PROVISIONAMENTO_URL;
+  if (!url) {
     saidaDoComando.log('uso_incorreto');
     process.exitCode = 2;
     return;
@@ -168,9 +169,9 @@ async function principal(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const dbAuth = createDatabase(authUrl, { max: 1 });
-  const dbClinica = createDatabase(clinicaUrl, { max: 1 });
-  const bancos: BancosDoProvisionamento = { dbAuth: dbAuth.db, dbClinica: dbClinica.db };
+  // Uma conexão basta: as transações da identidade e da clínica são sequenciais (nenhuma abre outra por dentro).
+  const banco = createDatabase(url, { max: 1 });
+  const bancos: BancosDoProvisionamento = { dbAuth: banco.db, dbClinica: banco.db };
   try {
     const saida = await executarComando(process.argv.slice(2), process.env, {
       parametros,
@@ -179,7 +180,7 @@ async function principal(): Promise<void> {
     saidaDoComando.log(saida.linha);
     process.exitCode = saida.codigo === 'ok' ? 0 : 1;
   } finally {
-    await Promise.allSettled([dbAuth.close(), dbClinica.close()]);
+    await banco.close();
   }
 }
 

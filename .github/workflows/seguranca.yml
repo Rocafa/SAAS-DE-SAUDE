@@ -28,6 +28,7 @@ env:
   DATABASE_MIGRATOR_URL: postgresql://app_migrator:ci-efemero@localhost:5432/plataforma_saude
   DATABASE_URL: postgresql://app_user:ci-efemero@localhost:5432/plataforma_saude
   DATABASE_AUTH_URL: postgresql://app_auth:ci-efemero@localhost:5432/plataforma_saude
+  DATABASE_PROVISIONAMENTO_URL: postgresql://app_provisionamento:ci-efemero@localhost:5432/plataforma_saude
 
 jobs:
   ataques:

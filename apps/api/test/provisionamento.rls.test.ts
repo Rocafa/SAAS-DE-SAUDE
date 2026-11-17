@@ -1,6 +1,7 @@
 /**
  * Provisionamento da clínica e emissão da ativação do fundador (B11, PR 1; R1, R3, R8 e R9 do parecer do Guardião de
- * 16/11/2026), contra o banco: `app_auth` para o schema identidade e `app_user` (RLS) para a clínica. Dados fictícios.
+ * 16/11/2026), contra o banco. A tarefa usa só o papel dedicado `app_provisionamento` (0080; A1 do parecer de 17/11 sobre
+ * a ativação do fundador); as conferências leem com `app_auth` (identidade) e `app_user` (RLS). Dados fictícios.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
@@ -22,6 +23,7 @@ import { subirApi, type ApiDeTeste } from './apoio-api';
 
 let api: ApiDeTeste;
 let dbAuth: DatabaseHandle;
+let dbProv: DatabaseHandle;
 let bancos: BancosDoProvisionamento;
 const CHAVE = randomBytes(32);
 
@@ -30,10 +32,15 @@ beforeAll(async () => {
   const urlAuth = process.env.DATABASE_AUTH_URL;
   if (!urlAuth) throw new Error('DATABASE_AUTH_URL (papel app_auth) é obrigatória neste teste');
   dbAuth = createDatabase(urlAuth, { max: 2 });
-  bancos = { dbAuth: dbAuth.db, dbClinica: api.db.db };
+  const urlProv = process.env.DATABASE_PROVISIONAMENTO_URL;
+  if (!urlProv) throw new Error('DATABASE_PROVISIONAMENTO_URL (papel app_provisionamento) é obrigatória neste teste');
+  // Como a tarefa (provisionar-clinica.ts): uma conexão do papel dedicado para a identidade e para a clínica.
+  dbProv = createDatabase(urlProv, { max: 1 });
+  bancos = { dbAuth: dbProv.db, dbClinica: dbProv.db };
 });
 
 afterAll(async () => {
+  await dbProv?.close();
   await dbAuth?.close();
   await api?.fechar();
 });
@@ -200,6 +207,48 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
     await expect(
       dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: hash(), expiraEm: sql`now() + interval '1 hour'` }),
     ).rejects.toThrow();
+  });
+
+  it('A1/R5: app_provisionamento só insere a ativação; não altera, não apaga e não lê hash, HMAC, conta, sessão ou paciente', async () => {
+    const prov = dbProv.db;
+    const p = pedidoFicticio();
+    const r = await provisionar(p, guarda().guardar);
+    // Só o `id` da ativação é legível (repetição do pedido).
+    expect(await prov.execute(sql`select id from identidade.ativacao_do_fundador where id = ${p.pedido}::uuid`)).toHaveLength(1);
+    const negado = async (q: ReturnType<typeof sql>) => {
+      const e: unknown = await prov.execute(q).then(
+        () => null,
+        (x: unknown) => x,
+      );
+      let codigo: unknown;
+      for (let x: unknown = e; x && !codigo; x = (x as { cause?: unknown }).cause) codigo = (x as { code?: unknown }).code;
+      return codigo;
+    };
+    for (const q of [
+      sql`select token_hash from identidade.ativacao_do_fundador limit 1`,
+      sql`select email_hmac from identidade.ativacao_do_fundador limit 1`,
+      sql`update identidade.ativacao_do_fundador set falhas = 0 where id = ${p.pedido}::uuid`,
+      sql`update identidade.ativacao_do_fundador set usado_em = now() where id = ${p.pedido}::uuid`,
+      sql`delete from identidade.ativacao_do_fundador where id = ${p.pedido}::uuid`,
+      sql`select nome from identidade.usuario limit 1`,
+      // R1 do parecer do #207: a tarefa não lista e-mails; busca só pela chave (identidade.conta_por_email).
+      sql`select email from identidade.usuario limit 1`,
+      sql`select ativo from identidade.usuario limit 1`,
+      sql`update identidade.usuario set ativo = false where id = ${randomUUID()}::uuid`,
+      sql`select 1 from identidade.conta limit 1`,
+      sql`select 1 from identidade.sessao limit 1`,
+      sql`select 1 from identidade.dois_fatores limit 1`,
+      sql`select 1 from identidade.recuperacao limit 1`,
+      sql`select 1 from patients limit 1`,
+      sql`update tenants set display_name = 'x' where id = ${r.clinicaId}::uuid`,
+      sql`select app_set_user(${randomUUID()}::uuid)`,
+    ]) {
+      expect(await negado(q)).toBe('42501');
+    }
+    // A linha continua intacta.
+    expect(await dbAuth.db.select({ usadoEm: ativacaoDoFundador.usadoEm, falhas: ativacaoDoFundador.falhas }).from(ativacaoDoFundador).where(eq(ativacaoDoFundador.id, p.pedido))).toEqual([
+      { usadoEm: null, falhas: 0 },
+    ]);
   });
 
   it('app_user (rotas de negócio) não lê nem escreve a tabela (R1)', async () => {

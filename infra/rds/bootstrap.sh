@@ -5,6 +5,7 @@
 #   export PGHOST=<endpoint do RDS> PGPORT=5432 PGDATABASE=plataforma_saude
 #   export PGUSER=<master>          # senha do master: PGPASSWORD vinda do Secrets Manager
 #   export APP_MIGRATOR_PASSWORD=... APP_USER_PASSWORD=... APP_AUTH_PASSWORD=...   # também do Secrets Manager (banco-app-auth, D4)
+#   export APP_PROVISIONAMENTO_PASSWORD=...   # Secrets Manager (banco-app-provisionamento, 0080)
 #   sh infra/rds/bootstrap.sh
 #
 # TLS: o RDS tem rds.force_ssl=1. Por padrão exige verify-full com o bundle da AWS
@@ -18,6 +19,7 @@ set -eu
 : "${APP_MIGRATOR_PASSWORD:?defina APP_MIGRATOR_PASSWORD}"
 : "${APP_USER_PASSWORD:?defina APP_USER_PASSWORD}"
 : "${APP_AUTH_PASSWORD:?defina APP_AUTH_PASSWORD}"
+: "${APP_PROVISIONAMENTO_PASSWORD:?defina APP_PROVISIONAMENTO_PASSWORD}"
 export PGSSLMODE="${PGSSLMODE:-verify-full}"
 
 exec psql --no-psqlrc -X -q -f "$(dirname "$0")/bootstrap.sql"

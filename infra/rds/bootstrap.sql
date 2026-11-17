@@ -11,11 +11,13 @@
 \getenv app_migrator_password APP_MIGRATOR_PASSWORD
 \getenv app_user_password APP_USER_PASSWORD
 \getenv app_auth_password APP_AUTH_PASSWORD
+\getenv app_provisionamento_password APP_PROVISIONAMENTO_PASSWORD
 \getenv dbname PGDATABASE
 
-SELECT :'app_migrator_password' = '' OR :'app_user_password' = '' OR :'app_auth_password' = '' AS senha_vazia \gset
+SELECT :'app_migrator_password' = '' OR :'app_user_password' = '' OR :'app_auth_password' = ''
+       OR :'app_provisionamento_password' = '' AS senha_vazia \gset
 \if :senha_vazia
-  \echo 'APP_MIGRATOR_PASSWORD, APP_USER_PASSWORD e APP_AUTH_PASSWORD precisam estar definidas'
+  \echo 'APP_MIGRATOR_PASSWORD, APP_USER_PASSWORD, APP_AUTH_PASSWORD e APP_PROVISIONAMENTO_PASSWORD precisam estar definidas'
   \quit 3
 \endif
 
@@ -48,6 +50,16 @@ SELECT format('CREATE ROLE app_auth LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NO
 SELECT format('ALTER ROLE app_auth LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
               :'app_auth_password') \gexec
 
+-- app_provisionamento (0080; A1 do parecer de 17/11/2026 sobre a ativação do fundador): só a tarefa avulsa de
+-- provisionamento da clínica usa. NOINHERIT e membro de nenhum papel; os GRANTs exatos vêm da migração 0080.
+SELECT format('CREATE ROLE app_provisionamento LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L',
+              :'app_provisionamento_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_provisionamento') \gexec
+-- Sem NOBYPASSRLS no ALTER: no PG16 só quem tem BYPASSRLS pode mexer no atributo (o master do RDS não tem). O CREATE
+-- acima já o nega, e a guarda (guarda-papeis.rls.test.ts) confere rolbypassrls = false.
+SELECT format('ALTER ROLE app_provisionamento LOGIN NOINHERIT NOCREATEDB NOCREATEROLE PASSWORD %L',
+              :'app_provisionamento_password') \gexec
+
 SELECT format('ALTER ROLE app_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
               :'app_migrator_password') \gexec
 -- app_user NÃO é dono das tabelas e NÃO tem BYPASSRLS (RLS sempre aplicado).
@@ -58,9 +70,11 @@ SELECT format('ALTER ROLE app_user LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
 SET LOCAL pgaudit.log TO DEFAULT;
 
 -- 2. Acesso ao banco e ao schema (GRANT é idempotente).
-SELECT format('GRANT CONNECT ON DATABASE %I TO app_migrator, app_user, app_auth', :'dbname') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO app_migrator, app_user, app_auth, app_provisionamento', :'dbname') \gexec
 -- USAGE em public para o EXECUTE da função de clínicas do usuário (o GRANT da função vem da migração 0064).
 GRANT USAGE ON SCHEMA public TO app_auth;
+-- app_provisionamento: clínica, vínculo e trilha sob o RLS (0080).
+GRANT USAGE ON SCHEMA public TO app_provisionamento;
 GRANT ALL ON SCHEMA public TO app_migrator;
 GRANT USAGE ON SCHEMA public TO app_user;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
@@ -70,7 +84,7 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 -- O RDS cria o banco com o default do Postgres (TEMPORARY para PUBLIC); por isso o REVOKE é
 -- repetido aqui. Também tira de app_user/app_migrator caso alguém tenha concedido direto.
 SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', :'dbname') \gexec
-SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM app_user, app_migrator, app_auth', :'dbname') \gexec
+SELECT format('REVOKE TEMPORARY ON DATABASE %I FROM app_user, app_migrator, app_auth, app_provisionamento', :'dbname') \gexec
 
 -- 4. Privilégios padrão: tabelas que o app_migrator criar ficam legíveis/graváveis pelo app_user.
 -- ALTER DEFAULT PRIVILEGES FOR ROLE exige ser membro do papel; o master do RDS tem ADMIN OPTION
@@ -84,6 +98,8 @@ SET LOCAL ROLE app_migrator;
 -- Permissões no schema identidade: só o dono (app_migrator) concede.
 REVOKE ALL ON SCHEMA identidade FROM PUBLIC;
 GRANT USAGE ON SCHEMA identidade TO app_auth;
+-- app_provisionamento: só a ativação (INSERT) e quatro colunas da conta (0080).
+GRANT USAGE ON SCHEMA identidade TO app_provisionamento;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
 RESET ROLE;
@@ -96,6 +112,10 @@ SELECT
   has_database_privilege('app_migrator', :'dbname', 'TEMPORARY') AS migrator_temp,
   (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'app_user') AS user_privilegiado,
   (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = 'app_auth') AS auth_privilegiado,
+  (SELECT rolbypassrls OR rolsuper OR rolinherit OR rolcreaterole OR rolcreatedb FROM pg_roles WHERE rolname = 'app_provisionamento')
+    OR EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = 'app_provisionamento')
+    AS provisionamento_privilegiado,
+  has_database_privilege('app_provisionamento', :'dbname', 'TEMPORARY') AS provisionamento_temp,
   has_schema_privilege('app_user', 'identidade', 'USAGE') AS user_na_identidade
 \gset
 \if :user_temp
@@ -112,6 +132,14 @@ SELECT
 \endif
 \if :auth_privilegiado
   \echo 'FALHA: app_auth tem BYPASSRLS ou SUPERUSER'
+  \quit 4
+\endif
+\if :provisionamento_privilegiado
+  \echo 'FALHA: app_provisionamento tem BYPASSRLS, SUPERUSER, INHERIT, CREATEROLE, CREATEDB ou é membro de outro papel'
+  \quit 4
+\endif
+\if :provisionamento_temp
+  \echo 'FALHA: app_provisionamento tem TEMPORARY'
   \quit 4
 \endif
 \if :user_na_identidade

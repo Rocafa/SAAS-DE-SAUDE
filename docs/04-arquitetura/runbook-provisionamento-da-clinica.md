@@ -14,6 +14,7 @@
 - `endpoint_ssm = true` no tfvars do ambiente (#204). Sem o endpoint, a tarefa não alcança o SSM e falha fechado.
 - Listas `principais_ops_provisionamento_executor` e `principais_ops_provisionamento_entrega` preenchidas, **disjuntas** (a precondição do Terraform recusa a mesma pessoa nas duas).
 - A definição da tarefa traz `SSM_KMS_KEY_ID` (chave `ops-provisionamento`) e `AWS_REGION=sa-east-1`. Sem elas a saída é `ssm_nao_configurado`.
+- Banco: papel dedicado `app_provisionamento` (migração 0080; A1 do parecer de 17/11 sobre a ativação do fundador), criado pelo bootstrap (`APP_PROVISIONAMENTO_PASSWORD`, segredo `banco-app-provisionamento`). A tarefa recebe **só** `DATABASE_PROVISIONAMENTO_URL`; sem ela a saída é `uso_incorreto`. Nem `app_auth` nem `app_user` fundam clínica pela sessão de sistema: a 0080 recusa. No RDS 16, o master que cria o papel fica membro dele só com ADMIN OPTION (sem INHERIT e sem SET): a guarda `guarda-papeis` aceita essa linha e nenhuma outra (O2 do parecer do #207). Ordem do deploy: segredo (Terraform), bootstrap com as quatro senhas, 0080, imagem e definição da tarefa juntas.
 
 ## Quem faz (duas pessoas, R3 e C1)
 

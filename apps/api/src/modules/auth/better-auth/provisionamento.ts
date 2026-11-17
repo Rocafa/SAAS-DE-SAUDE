@@ -2,7 +2,7 @@
  * Provisionamento da clínica e emissão da ativação do fundador (B11, PR 1). Desenho v2:
  * docs/04-arquitetura/provisionamento-da-clinica.md; parecer do Guardião de 16/11/2026 (R1 a R10).
  *
- * Recebe só os dois pools de banco (R8): a tarefa que a chama não carrega `BETTER_AUTH_SECRET`; a conta nova nasce na
+ * Recebe só os pools de banco (R8): a tarefa que a chama não carrega `BETTER_AUTH_SECRET`; a conta nova nasce na
  * ativação, pela API (R2, PR 2). Do e-mail do fundador fica só o HMAC (R1); do token, só o SHA-256 (R3). O token volta
  * apenas para quem chamou, pela função `guardarToken`, que roda DENTRO da transação que grava a linha: se guardar
  * falhar, a linha não existe e a repetição emite outro token; se a linha falhar depois, o token guardado não vale nada.
@@ -57,10 +57,16 @@ export interface ResultadoDoProvisionamento {
   readonly contaExistente: boolean;
 }
 
+/**
+ * Na tarefa, os dois apontam para a mesma conexão do papel `app_provisionamento` (0080; A1 do parecer de 17/11 sobre a
+ * ativação do fundador): só SELECT do `id` e INSERT na ativação, SELECT de `id` e `clinica_de_origem` da conta, as
+ * duas funções pela chave do e-mail e SELECT/INSERT em clínica, vínculo e trilha, sob o RLS. A fundação pela sessão de
+ * sistema só passa com esse papel.
+ */
 export interface BancosDoProvisionamento {
-  /** Papel `app_auth` (schema identidade). */
+  /** Schema identidade (na tarefa, `app_provisionamento`). */
   readonly dbAuth: Database;
-  /** Papel `app_user` (RLS por clínica). */
+  /** Clínica, sob o RLS (na tarefa, `app_provisionamento`). */
   readonly dbClinica: Database;
 }
 
@@ -154,11 +160,8 @@ export async function provisionarClinica(
   } else {
     // Conta existente pelo e-mail, como o convite (`idParaContaDoConvite`). Só a conta ATIVA vira fundador com login
     // completo (R2); a inativa (desligada, convite desfeito, expurgada) não é reaproveitada aqui. A anonimizada já não
-    // tem o e-mail.
-    const [conta] = await bancos.dbAuth
-      .select({ id: usuario.id, ativo: usuario.ativo })
-      .from(usuario)
-      .where(sql`lower(${usuario.email}) = ${email}`);
+    // tem o e-mail. Busca só pela chave (0080; R1 do parecer do #207): o papel da tarefa não lê a coluna de e-mail.
+    const [conta] = await bancos.dbAuth.execute<{ id: string; ativo: boolean }>(sql`select id, ativo from identidade.conta_por_email(${email})`);
     if (conta && !conta.ativo) throw new ProvisionamentoRecusado('conta_inativa');
     usuarioId = conta?.id ?? randomUUID();
     // R7 (C2 do #195): ator SISTEMA e metadata fechada `{ op, via: 'provisionamento', contract }`; a 0078 recusa a
@@ -167,11 +170,15 @@ export async function provisionarClinica(
     // O operador não é declarado (R7): a prova é o principal da tarefa no CloudTrail.
     registrarEventoDeSeguranca('CLINICA_PROVISIONADA', { tenantId: clinicaId, userId: usuarioId, contrato, pedido });
   }
-  const [contaDoFundador] = await bancos.dbAuth.select({ id: usuario.id, email: usuario.email }).from(usuario).where(eq(usuario.id, usuarioId));
+  const [contaDoFundador] = await bancos.dbAuth.select({ id: usuario.id }).from(usuario).where(eq(usuario.id, usuarioId));
   const contaExistente = !!contaDoFundador;
   // A2 do parecer do #195: ao repetir depois de falha parcial, o parâmetro foi recriado. Se o fundador já é uma conta,
-  // o e-mail novo tem de ser o dela; senão, o HMAC de outra pessoa ficaria ligado a esta conta.
-  if (existente?.fundador && contaDoFundador && contaDoFundador.email.toLowerCase() !== email) throw new ProvisionamentoRecusado('parametro_invalido');
+  // o e-mail novo tem de ser o dela; senão, o HMAC de outra pessoa ficaria ligado a esta conta. Conferência pela chave
+  // (sim ou não), sem ler o e-mail da conta.
+  if (existente?.fundador && contaDoFundador) {
+    const [confere] = await bancos.dbAuth.execute<{ ok: boolean }>(sql`select identidade.email_da_conta_confere(${usuarioId}::uuid, ${email}) as ok`);
+    if (!confere?.ok) throw new ProvisionamentoRecusado('parametro_invalido');
+  }
 
   // 32 bytes aleatórios; no banco, só o SHA-256 (R3).
   const token = randomBytes(32).toString('base64url');
