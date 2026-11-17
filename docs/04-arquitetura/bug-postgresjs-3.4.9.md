@@ -193,3 +193,51 @@ Falta, para o merge: o script da §3 (6 de 6 rodadas rejeitando) e a data ≥ 12
 gravado` (em `test/resiliencia/transacoes.resiliencia.ts`) reproduz a §3 dentro da aplicação, em 6 tempos de
 ociosidade, e passou no CI com a v4. A condição "script da §3, 6 de 6" passa a ser conferida pelo CI em todo PR.
 **Única condição restante para o merge: a data ≥ 12/11/2026.**
+
+### 8.1 Escolha da versão (17/11/2026)
+
+**Fontes** (consultadas em 17/11/2026): <https://github.com/porsager/postgres/releases> (`gh release view
+v4.1.0|v4.1.1 -R porsager/postgres`) e `npm view postgres time`.
+
+**FATO — versões publicadas e maturidade (regra da §7: ≥ 2 semanas):**
+
+| Versão | Publicada (npm, UTC) | 2 semanas em | Em 17/11/2026 |
+|---|---|---|---|
+| 4.0.0 | 29/10/2026 | 12/11/2026 | cumpre |
+| 4.1.0 | 05/11/2026 | 19/11/2026 | não cumpre |
+| 4.1.1 | 11/11/2026 | 25/11/2026 | não cumpre |
+
+**Decisão: fixar `~4.0.0`** (só patches da 4.0.x). Com `^4.0.0` o `pnpm install` resolvia 4.1.1, que ainda não
+tem a maturidade exigida. Nenhuma correção da 4.1.x atinge um caminho que usamos de forma a mudar a decisão:
+
+| Correção na 4.1.x | Nos afeta na 4.0.0? |
+|---|---|
+| 4.1.0 #1287: statement preparado em cache retém linhas da query (memória cresce) | **Não (FATO):** o Drizzle 0.45 chama `client.unsafe(sql, params, { prepare: false })` em toda query sem `.prepare(nome)`, e não usamos `.prepare()`; as notas dizem que `prepare: false` evita o problema na 4.0.0. As poucas queries cruas (sonda de prontidão) têm texto fixo e resultado mínimo. |
+| 4.1.0 #1283: transação encerrada pelo servidor (`57P01`, `25P03`, `25P04`) rejeitava com `CONNECTION_CLOSED` | **Não (FATO):** `db-errors.ts` trata `CONNECTION_CLOSED`, classe `57` e `25P03` como transitórios; o desfecho (rollback + 503) é o mesmo. |
+| 4.1.0 #1281/#1282: savepoint cuja conexão cai resolvia depois de a transação externa rejeitar | **Não para integridade (ESTIMATIVA):** usamos savepoint (`tx.transaction`) só para decifrar `birth_date` e em `avisos.ts`; a transação externa rejeita e faz rollback, então nada é gravado. |
+| 4.1.1 #1320: statement **não aguardado** no `sql.begin` enviado depois do COMMIT/ROLLBACK rodava fora da transação | **Não (ESTIMATIVA forte):** o lint (`recommendedTypeChecked`, com `no-floating-promises`) barra promessa não aguardada no nosso código e o Drizzle aguarda cada query. Mesmo se escapasse, fora da transação não há o `set_config` do tenant e o RLS nega (falha fechada). |
+| 4.1.0 #1307/#1308/#1309: `PGSSLMODE`, `sslrootcert` na URL, TLS com host IP | **Não (FATO):** a API usa `?sslmode=verify-full` na URL (que tem precedência), host DNS do RDS e CA por `NODE_EXTRA_CA_CERTS`; `PGSSLMODE` só aparece nos scripts `psql` de `infra/rds/`. |
+| 4.1.0: cancelamento sem resposta do servidor esperava para sempre; cancelamento cuja conexão falha (TLS com servidor mudo) virava `unhandledRejection` e derrubava o processo; `query_timeout` novo | **Toca só a sonda de prontidão, sem dano (FATO):** só `readiness-probe.ts` chama `.cancel()`, com `void`, na conexão dedicada dela (`max: 1`), depois de já ter respondido "não pronto". Com o servidor mudo, as sondas seguintes também dão "não pronto" (falha fechada) até o TCP desistir. A rejeição não derruba a API: `graceful-shutdown.ts` registra `unhandledRejection` e segue. As transações não usam `.cancel()`: o prazo vem do `statement_timeout` no startup e do `transactionTimeoutMs` do `SlotLimiter`, como na 3.4.9. O `query_timeout` é melhoria a adotar com a 4.1.x. |
+| 4.1.0 #1279: conexão fechada durante a leitura de tipos ignorava `backoff` | Baixo (ESTIMATIVA): só em queda/failover; o teste de resiliência com queda e volta do banco passa. |
+
+**Próxima versão:** 4.1.x, em PR próprio, **não antes de 19/11/2026 (4.1.0) ou 25/11/2026 (4.1.1)**, trocando
+`~4.0.0` por `~4.1.1` e avaliando `query_timeout`.
+
+**Compatibilidade do Drizzle (FATO, conferida no código instalado):** `drizzle-orm@0.45.4` declara
+`peerDependencies.postgres: ">=3"`; o driver `postgres-js` grava em `client.options.parsers[oid]` e
+`client.options.serializers[oid]`, que na 4.0.0 são um `Proxy` sobre `types.parsers`/`types.serializers` sem
+trap de escrita (a escrita cai no objeto, e `types.parser(oid)` lê de lá primeiro). Os testes de RLS com
+`timestamptz`/`date` em modo string confirmam.
+
+**Merge com a `main` (17/11/2026)** e rodada local contra Postgres 16.13 (cluster efêmero novo, sem dado real),
+com `postgres@4.0.0` resolvido no lockfile, todos com exit 0:
+
+| Verificação | Resultado |
+|---|---|
+| typecheck + lint (api, web, shared) | 10 de 10 tarefas do turbo verdes |
+| unitários | api 1133 (6 pulados), web 412 |
+| RLS completo (`test:rls`) | 35 arquivos, 787 testes |
+| `test:security` | 92 testes (7 pulados: os que exigem Redis, sem Redis local; rodam no CI) |
+| `test:resiliencia` | 3 arquivos, 26 testes, incluindo a §3 automatizada |
+
+**Condição de data: cumprida** (4.0.0 tem 19 dias em 17/11/2026).
