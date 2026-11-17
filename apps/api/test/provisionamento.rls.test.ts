@@ -194,9 +194,11 @@ describe('B11 PR 1: provisionamento da clínica (R1, R3, R8, R9)', () => {
     await expect(
       dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: 'b'.repeat(64), expiraEm: sql`now() + interval '73 hours'` }),
     ).rejects.toThrow();
-    await dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: 'c'.repeat(64), expiraEm: sql`now() + interval '1 hour'` });
+    // Hashes aleatórios: um fixo fica no banco e a 2ª rodada da suíte falharia pelo UNIQUE do token, não pela regra.
+    const hash = () => randomBytes(32).toString('hex');
+    await dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: hash(), expiraEm: sql`now() + interval '1 hour'` });
     await expect(
-      dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: 'd'.repeat(64), expiraEm: sql`now() + interval '1 hour'` }),
+      dbAuth.db.insert(ativacaoDoFundador).values({ ...base, id: randomUUID(), tokenHash: hash(), expiraEm: sql`now() + interval '1 hour'` }),
     ).rejects.toThrow();
   });
 
