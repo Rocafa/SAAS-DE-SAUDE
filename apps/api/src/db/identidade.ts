@@ -18,7 +18,7 @@ export const usuario = identidade.table('usuario', {
   image: text('imagem'),
   ativo: boolean('ativo').notNull().default(true),
   /** 0069 (R1 do código do 3b-3): por que a conta está inativa; só 'sem_vinculo' volta a valer numa concessão. */
-  inativaPor: text('inativa_por', { enum: ['sem_vinculo', 'anonimizada', 'convite_desfeito'] }),
+  inativaPor: text('inativa_por', { enum: ['sem_vinculo', 'anonimizada', 'convite_desfeito', 'expurgada'] }),
   /** 0071: quando ficou inativa (o expurgo apaga a credencial da desligada há mais de 90 dias). */
   inativaDesde: timestamp('inativa_desde', { withTimezone: true }),
   /** Cadastro do TOTP concluído (0065): o login passa a pedir o código. */

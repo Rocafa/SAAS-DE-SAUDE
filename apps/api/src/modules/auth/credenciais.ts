@@ -79,7 +79,11 @@ export class CredenciaisService {
           metadata: { op: 'credential_recovery_issued', user_id: usuarioId, kind: tipo, reason: motivo },
         });
         const r = await recuperacoes.emitirRecuperacao({ userId: usuarioId, tipo, clinicaId: ctx.tenantId, criadoPor: ctx.userId });
-        if (r === 'teto') throw new ConflitoError('teto_diario_de_recuperacoes');
+        if (r === 'teto') {
+          // Ressalva 3 da reconferência do #173: admin batendo no teto é sinal de abuso.
+          registrarEventoDeSeguranca('RECUPERACAO_TETO', { motivo: 'teto_diario', tenantId: ctx.tenantId, userId: ctx.userId });
+          throw new ConflitoError('teto_diario_de_recuperacoes');
+        }
         emitido = r;
         registrarEventoDeSeguranca('RECUPERACAO_EMITIDA', { motivo: 'recuperacao_pelo_admin', tenantId: ctx.tenantId, userId: usuarioId });
       });
@@ -108,6 +112,9 @@ export class CredenciaisService {
     if (r === 'senha_atual_errada' || r === 'bloqueado') throw new ConflitoError('senha_atual_errada', ['senhaAtual']);
     if (r === 'indisponivel') throw new ServiceUnavailableException({ statusCode: 503, message: 'Serviço indisponível' });
     if (r === 'senha_vazada') throw new ConflitoError('senha_vazada', ['senhaNova']);
+    // Ressalva 4: erro que não é de senha (sessão vencida, senha nova recusada pela biblioteca) não gasta tentativa.
+    if (r === 'senha_nova_invalida') throw new ConflitoError('senha_nova_invalida', ['senhaNova']);
+    if (r === 'recusada') throw new ConflitoError('troca_recusada');
     return r;
   }
 

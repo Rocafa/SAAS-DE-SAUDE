@@ -204,3 +204,11 @@ Atende às R16 a R20 do parecer do desenho, às pendências "antes do PR 3" dos 
 - **O TOTP antigo sai quando o token de fator é usado**, e não só quando o novo é confirmado. A biblioteca recusa um segundo cadastro enquanto existe um verificado. Se a pessoa abandonar o cadastro, o admin emite outra recuperação.
 - **Conta existente sem TOTP** não aceita convite (`conta_sem_fator`): o login completo exige o fator. A pessoa passa antes pela recuperação de fator na clínica de origem.
 - **Código TOTP conferido fora do login** (só na recuperação de senha), com o segredo decifrado pela própria biblioteca (`better-auth/crypto`) e os mesmos parâmetros do plugin, pelo bloqueio do fator e pela marca de reuso.
+
+### 14.6 Fila da reconferência do #173 (10/11/2026)
+
+- **Conta expurgada** (migração 0072): o expurgo de 90 dias marca `inativa_por = 'expurgada'`, troca o e-mail pelo marcador `.invalid` e tira o nome. O trigger de espelho recusa a concessão de perfil a essa conta (42501), como já fazia com a anonimizada. A marca dispensa o filtro do expurgo pelo e-mail.
+- **Teto de recuperações atômico**: contagem, invalidação e inserção numa transação do `app_auth`, serializadas por admin com `pg_advisory_xact_lock`. Teto atingido gera `RECUPERACAO_TETO` (alto, alarme imediato).
+- **Troca de senha**: só o código `INVALID_PASSWORD` da biblioteca gasta tentativa do bloqueio. Outro erro devolve a reserva e responde `troca_recusada`.
+- **Invalidação limitada à clínica**: o token novo invalida só os pendentes emitidos pela mesma clínica (risco residual no RIPD §3).
+- **Testes do trigger da 0071**: o desligamento grava `inativa_desde`, um UPDATE sem mudança não zera a contagem e a recontratação limpa a data.

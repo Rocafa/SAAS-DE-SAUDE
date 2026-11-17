@@ -8,7 +8,8 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { conta, doisFatores, recuperacao, sessao, usuario } from '../src/db/identidade';
 import { auditLog } from '../src/db/schema';
 import { createDatabase, withTenant, type DatabaseHandle } from '../src/db/tenant-transaction';
@@ -19,7 +20,8 @@ import { ConvitesService, TETO_DIARIO_DE_CONVITES } from '../src/modules/auth/co
 import { CredenciaisService } from '../src/modules/auth/credenciais';
 import { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 import { codigoErrado, codigoTotp, segredoDoUri } from './apoio-totp';
-import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
+import { BetterAuthProvider, TETO_DIARIO_DE_RECUPERACOES } from '../src/modules/auth/better-auth/provedor';
+import { zerarJanelasDoLog } from '../src/security/log-de-seguranca';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
 import type { Perfil } from '../src/modules/auth/perfis';
 import { executarContrato, type BancadaDoProvedor, type Cabecalhos, type SessaoDaBancada } from './apoio-contrato-provedor';
@@ -1094,6 +1096,11 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     expect((await provedor.expurgarComoSistema()).credenciaisDeInativas).toBeGreaterThanOrEqual(1);
     const [velha] = await dbAuth.db.select({ email: usuario.email, fator: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, p.userId));
     expect(velha).toEqual({ email: `desligada-${p.userId}@desligada.invalid`, fator: false });
+    // Ressalvas 7 e 8 da reconferência: marca 'expurgada', nome fora (art. 16) e nenhuma concessão nova (42501).
+    const [marca] = await dbAuth.db.select({ nome: usuario.name, motivo: usuario.inativaPor, ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(marca).toEqual({ nome: 'Conta desligada', motivo: 'expurgada', ativo: false });
+    await expect(api.membro(tenantId, { userId: p.userId }, 'financeiro')).rejects.toThrow();
+    expect(await provedor.clinicasDoUsuario(p.userId)).toEqual([]);
     expect(await dbAuth.db.select().from(doisFatores).where(eq(doisFatores.userId, p.userId))).toEqual([]);
     // Segunda passada não reprocessa a mesma conta.
     const antes = (await provedor.expurgarComoSistema()).credenciaisDeInativas;
@@ -1124,6 +1131,84 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const primeiro = await credenciais().emitirRecuperacao(ctx, p.userId, 'fator', 'perdeu_o_aparelho');
     await credenciais().emitirRecuperacao(ctx, p.userId, 'fator', 'perdeu_o_aparelho');
     await expect(credenciais().usarRecuperacao({ token: primeiro.token, senhaAtual: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
+  });
+
+  it('ressalva 1 do #173: o desligamento grava inativa_desde, UPDATE sem mudança não zera a contagem e a recontratação limpa', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const desde = async () => (await dbAuth.db.select({ d: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, p.userId)))[0]?.d ?? null;
+    expect(await desde()).toBeNull();
+    await api.http().delete(`/clinica/membros/${p.userId}/recepcao`).set({ Authorization: adm.Authorization }).expect(204);
+    const gravada = await desde();
+    expect(gravada).toBeInstanceOf(Date);
+    // Envelhece a data e grava ativo = false de novo: a contagem continua a mesma.
+    const velha = new Date(Date.now() - 40 * 24 * 3_600_000);
+    await dbAuth.db.update(usuario).set({ inativaDesde: velha }).where(eq(usuario.id, p.userId));
+    await dbAuth.db.update(usuario).set({ ativo: false }).where(eq(usuario.id, p.userId));
+    expect((await desde())?.getTime()).toBe(velha.getTime());
+    // Recontratação antes dos 90 dias: a mesma conta volta a valer e a data some.
+    await api.membro(tenantId, { userId: p.userId }, 'recepcao');
+    const [u] = await dbAuth.db.select({ ativo: usuario.ativo, desde: usuario.inativaDesde }).from(usuario).where(eq(usuario.id, p.userId));
+    expect(u).toEqual({ ativo: true, desde: null });
+  });
+
+  it('ressalvas 2 e 3 do #173: rajada de emissões não passa do teto; a seguinte dá 409, não deixa token e gera RECUPERACAO_TETO', async () => {
+    const tenantId = await api.novaClinica();
+    const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
+    const p = await novaPessoa(tenantId, ['recepcao']);
+    const pedidos = Array.from({ length: TETO_DIARIO_DE_RECUPERACOES + 3 }, () =>
+      provedor.emitirRecuperacao({ userId: p.userId, tipo: 'fator', clinicaId: tenantId, criadoPor: adm.userId }),
+    );
+    const r = await Promise.all(pedidos);
+    expect(r.filter((x) => x !== 'teto')).toHaveLength(TETO_DIARIO_DE_RECUPERACOES);
+    const contar = async () =>
+      (await dbAuth.db.select({ n: sql<number>`count(*)::int` }).from(recuperacao).where(eq(recuperacao.criadoPor, adm.userId)))[0]?.n;
+    expect(await contar()).toBe(TETO_DIARIO_DE_RECUPERACOES);
+    zerarJanelasDoLog();
+    const erro = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const ctx = { tenantId, userId: adm.userId, roles: ['admin'] } as never;
+      await expect(credenciais().emitirRecuperacao(ctx, p.userId, 'fator', 'perdeu_o_aparelho')).rejects.toBeInstanceOf(ConflitoError);
+      const eventos = erro.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"evento":"RECUPERACAO_TETO"'));
+      expect(eventos).toHaveLength(1);
+      expect(eventos[0]).toContain(adm.userId);
+    } finally {
+      erro.mockRestore();
+    }
+    expect(await contar()).toBe(TETO_DIARIO_DE_RECUPERACOES);
+  });
+
+  it('ressalva 4 do #173: erro que não é de senha na troca não gasta tentativa do bloqueio', async () => {
+    const tenantId = await api.novaClinica();
+    const p = await novaPessoa(tenantId, ['admin']);
+    const c = cookieDe(await entrar(p.email));
+    await provedor.resolver({ headers: c });
+    for (let k = 0; k < 6; k++) {
+      expect(await provedor.trocarSenhaDaPessoa({ headers: c, userId: p.userId, atual: SENHA, nova: 'curta' })).toBe('senha_nova_invalida');
+    }
+    const r = await provedor.trocarSenhaDaPessoa({ headers: c, userId: p.userId, atual: SENHA, nova: SENHA_NOVA });
+    expect(Array.isArray(r)).toBe(true);
+  });
+
+  it('ressalva 5 do #173: o token novo de uma clínica não invalida o pendente emitido por outra', async () => {
+    const a = await api.novaClinica();
+    const b = await api.novaClinica();
+    const admA = await api.membro(a, api.sessao(a, 'admin'), 'admin');
+    const admB = await api.membro(b, api.sessao(b, 'admin'), 'admin');
+    const p = await novaPessoa(a, ['recepcao']);
+    await api.membro(b, { userId: p.userId }, 'recepcao');
+    const deA = await credenciais().emitirRecuperacao({ tenantId: a, userId: admA.userId, roles: ['admin'] } as never, p.userId, 'fator', 'perdeu_o_aparelho');
+    await credenciais().emitirRecuperacao({ tenantId: b, userId: admB.userId, roles: ['admin'] } as never, p.userId, 'fator', 'perdeu_o_aparelho');
+    const pendentes = await dbAuth.db
+      .select({ clinica: recuperacao.clinicaId })
+      .from(recuperacao)
+      .where(and(eq(recuperacao.usuarioId, p.userId), sql`${recuperacao.usadoEm} is null`));
+    expect(pendentes.map((x) => x.clinica).sort()).toEqual([a, b].sort());
+    expect(await credenciais().usarRecuperacao({ token: deA.token, senhaAtual: SENHA, cabecalhos: new Headers() })).toBeInstanceOf(Array);
+    // F2 do #175: usado o token de A, o pendente de B também cai.
+    const depois = await dbAuth.db.select({ id: recuperacao.id }).from(recuperacao).where(and(eq(recuperacao.usuarioId, p.userId), sql`${recuperacao.usadoEm} is null`));
+    expect(depois).toEqual([]);
   });
 
   it('R3 do 3b-1: convite encerrado há mais de 30 dias perde o HMAC do e-mail; o pendente fica', async () => {
