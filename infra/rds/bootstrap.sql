@@ -55,7 +55,9 @@ SELECT format('ALTER ROLE app_auth LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
 SELECT format('CREATE ROLE app_provisionamento LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L',
               :'app_provisionamento_password')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_provisionamento') \gexec
-SELECT format('ALTER ROLE app_provisionamento LOGIN NOINHERIT NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L',
+-- Sem NOBYPASSRLS no ALTER: no PG16 só quem tem BYPASSRLS pode mexer no atributo (o master do RDS não tem). O CREATE
+-- acima já o nega, e a guarda (guarda-papeis.rls.test.ts) confere rolbypassrls = false.
+SELECT format('ALTER ROLE app_provisionamento LOGIN NOINHERIT NOCREATEDB NOCREATEROLE PASSWORD %L',
               :'app_provisionamento_password') \gexec
 
 SELECT format('ALTER ROLE app_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD %L',
