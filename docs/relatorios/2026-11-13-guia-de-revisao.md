@@ -14,6 +14,7 @@ exceção que **vence sozinha em 01/12**, porque a CI falha depois dessa data, c
 | 4 | #116 | postgres.js 4.0.0, sai o patch da 3.4.9 | +110 / 8 | — (só dependência) | **reaprovar**: a aprovação caiu com o merge da main |
 | 5 | #155 | Better Auth PR 3a: sessão e escolha de clínica | +1225 / 30 | aprovado | **revisar**: base de toda a pilha abaixo |
 | 6 | #194 | conselho e registro do profissional (COFFITO) | +489 / 17 | aprovado | **reaprovar** |
+| 7 | #201 | next 16.4.3 → 16.4.5 no `apps/web` (Dependabot, GHSA-mfr8-8qww-v76h, média) | 2 arquivos | — (só dependência) | **revisar**: CI verde; mexe no lockfile, então entra depois do #210 e do #116 |
 
 **Pilha nova, empilhada na do login** (cada PR mira a branch do PR de baixo e vira PR para a `main` quando ela entra).
 Todos têm parecer favorável do Guardião e CI verde, e não há pendência de código:

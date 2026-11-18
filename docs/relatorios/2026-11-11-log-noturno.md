@@ -533,3 +533,6 @@ Pendente para a próxima sessão:
   aprovado e espera o #209 (auditoria). Nenhum merge possível sem a revisão do sócio.
 - Sem trabalho de código pendente que não dependa dessas aprovações. Próximo passo: mesclar na ordem do guia
   (`2026-11-13-guia-de-revisao.md`) assim que as aprovações chegarem.
+- Alertas abertos na `main`: GHSA-g3hv-75wg-m249 (minimatch, médio; resolvido pelo #189) e GHSA-mfr8-8qww-v76h
+  (next 16.4.3, médio; o Dependabot abriu o #201, com CI verde). Médios não bloqueiam a auditoria (só alto e
+  crítico). O #201 entrou no guia como item 7, depois do #210 e do #116, por causa do lockfile.
