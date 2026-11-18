@@ -92,6 +92,16 @@ variable "papeis_humanos_extra" {
   }
 }
 
+variable "principais_ops_lgpd" {
+  description = "ARNs (ArnLike) de quem pode assumir o papel ops-lgpd e rodar a anonimização (B10, R-C do #190): usuário IAM nominal (user/<nome>) ou papel do SSO (role/aws-reserved/sso.amazonaws.com/...). Uma pessoa por entrada, sem papel compartilhado; só no tfvars, fora do git. Vazio = o papel não existe."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.principais_ops_lgpd : can(regex("^arn:aws:iam::[0-9]{12}:(user/[A-Za-z0-9+=,.@_-]+|role/aws-reserved/sso\\.amazonaws\\.com/.+)$", a))])
+    error_message = "Cada item deve ser arn:aws:iam::<conta>:user/<nome> (sem curinga) ou um papel do SSO (role/aws-reserved/sso.amazonaws.com/...)."
+  }
+}
+
 variable "backup_mensal_retencao_dias" {
   description = "Prazo de cada ponto de recuperação MENSAL do AWS Backup (R7 do PR #58). G3 promete até 12 meses: prod 365. Staging (dado sintético): 35."
   type        = number

@@ -7,6 +7,7 @@
  * Dados fictícios.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
+import type { TenantId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { Controller, Get, Logger, UseGuards, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -26,6 +27,8 @@ import { CredenciaisService } from '../src/modules/auth/credenciais';
 import { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 import { codigoErrado, codigoTotp, segredoDoUri } from './apoio-totp';
 import { BetterAuthProvider, TETO_DIARIO_DE_RECUPERACOES } from '../src/modules/auth/better-auth/provedor';
+import { AnonimizacaoRecusada, conferirAnonimizacao } from '../src/modules/auth/better-auth/anonimizacao';
+import { SYSTEM_ACTOR_ID } from '../src/modules/audit/audit-log';
 import { zerarJanelasDoLog } from '../src/security/log-de-seguranca';
 import { gerarHashDeSenha } from '../src/modules/auth/better-auth/senha';
 import type { Perfil } from '../src/modules/auth/perfis';
@@ -146,6 +149,9 @@ async function liberarCadastro(c: Cabecalhos): Promise<void> {
 const segredos = new Map<string, { segredo: Buffer; usados: Set<number>; ultimo?: string }>();
 /** Senha atual por pessoa (o gancho trocarSenha muda). */
 const senhas = new Map<string, string>();
+/** B10: pedido de anonimização da bancada (chamado e operador fictícios). */
+const OPERADOR_FICTICIO = '11111111-2222-4333-8444-555555555555';
+const pedidoDe = (usuarioId: string, chamado = 'LGPD-1') => ({ usuarioId, chamado, operador: OPERADOR_FICTICIO });
 const DESLOCAMENTOS = [0, 1, -1] as const;
 /** Margem para não entregar o código do período anterior perto da virada (a biblioteca aceita só -1, 0 e +1). */
 const MARGEM_DA_VIRADA_MS = 3_000;
@@ -1122,7 +1128,7 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     const tenantId = await api.novaClinica();
     const p = await novaPessoa(tenantId, ['recepcao']);
     await cadastrarFator(cookieDe(await entrar(p.email)), p.userId);
-    await provedor.anonimizarConta(p.userId);
+    await provedor.anonimizarConta(pedidoDe(p.userId));
     const [u] = await dbAuth.db.select().from(usuario).where(eq(usuario.id, p.userId));
     expect(u?.email).not.toBe(p.email);
     expect(u?.name).toBe('Conta anonimizada');
@@ -1135,8 +1141,17 @@ describe('PR 3b-3: desligamento, recontratação, anonimização e aviso de fato
     const [depois] = await dbAuth.db.select({ ativo: usuario.ativo, motivo: usuario.inativaPor }).from(usuario).where(eq(usuario.id, p.userId));
     expect(depois).toEqual({ ativo: false, motivo: 'anonimizada' });
     // R3 do código do 3b-3: prova do atendimento na trilha da clínica.
-    const prova = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where actor_id = ${p.userId} and metadata->>'op' = 'account_anonymized'`));
-    expect([...prova][0]?.n).toBe(1);
+    // R1 e R2 do parecer de 12/11: ator SISTEMA, e na metadata só op, a conta, o chamado e a via (nunca o operador).
+    const prova = await withTenant(api.db.db, tenantId, (tx) =>
+      tx.execute<{ ator: string; tipo: string; meta: Record<string, unknown> }>(
+        sql`select actor_id as ator, actor_kind as tipo, metadata as meta from audit_log where metadata->>'op' = 'account_anonymized' and metadata->>'user_id' = ${p.userId}`,
+      ),
+    );
+    expect([...prova]).toHaveLength(1);
+    expect([...prova][0]?.tipo).toBe('sistema');
+    expect([...prova][0]?.ator).not.toBe(p.userId);
+    expect(Object.keys([...prova][0]?.meta ?? {}).sort()).toEqual(['op', 'ticket', 'user_id', 'via']);
+    expect(JSON.stringify([...prova][0]?.meta)).not.toContain(OPERADOR_FICTICIO);
   });
 
   it('R6 do #152: o fator trancado por pessoa identificada vira aviso aos admins da clínica dela (1 por dia)', async () => {
@@ -1333,6 +1348,74 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     expect(c?.senha).not.toBeNull();
   });
 
+  describe('B10: anonimização pelo suporte (R3 e R8 do parecer de 12/11)', () => {
+    /** Linhas do log de segurança emitidas durante `fn` (warn e error), só as do evento pedido. */
+    async function eventosDurante(evento: string, fn: () => Promise<unknown>): Promise<string[]> {
+      zerarJanelasDoLog();
+      const aviso = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const erro = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      try {
+        await fn().catch(() => undefined);
+        return [...aviso.mock.calls, ...erro.mock.calls].map((c) => String(c[0])).filter((l) => l.includes(`"evento":"${evento}"`));
+      } finally {
+        aviso.mockRestore();
+        erro.mockRestore();
+      }
+    }
+    const trilhas = async (tenantId: TenantId, userId: string) =>
+      [...(await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'account_anonymized' and metadata->>'user_id' = ${userId}`)))][0]?.n;
+
+    it('conta inexistente recusa sem evento; a conta de sistema e a entrada fora do formato também recusam', async () => {
+      const inexistente = randomUUID();
+      const eventos = await eventosDurante('CONTA_ANONIMIZADA', async () => {
+        await expect(provedor.anonimizarConta(pedidoDe(inexistente))).rejects.toMatchObject({ codigo: 'nao_encontrada' });
+      });
+      expect(eventos).toEqual([]);
+      await expect(provedor.anonimizarConta(pedidoDe(SYSTEM_ACTOR_ID))).rejects.toMatchObject({ codigo: 'conta_de_sistema' });
+      await expect(provedor.anonimizarConta(pedidoDe(inexistente, 'SUP-1'))).rejects.toBeInstanceOf(AnonimizacaoRecusada);
+      await expect(provedor.anonimizarConta({ usuarioId: inexistente, chamado: 'LGPD-1', operador: 'fulano' })).rejects.toMatchObject({ codigo: 'entrada_invalida' });
+    });
+
+    it('repetir não duplica a trilha nem o CONTA_ANONIMIZADA: a segunda vez é ANONIMIZACAO_REPETIDA; a conferência no banco fecha', async () => {
+      const tenantId = await api.novaClinica();
+      const p = await novaPessoa(tenantId, ['recepcao']);
+      const primeira = await eventosDurante('CONTA_ANONIMIZADA', async () => {
+        expect(await provedor.anonimizarConta(pedidoDe(p.userId, 'LGPD-7'))).toEqual({ repetida: false, clinicas: 1 });
+      });
+      expect(primeira).toHaveLength(1);
+      expect(primeira[0]).toContain('"chamado":"LGPD-7"');
+      expect(primeira[0]).toContain(OPERADOR_FICTICIO);
+      expect(primeira[0]).not.toContain(p.email);
+      const repetidas = await eventosDurante('ANONIMIZACAO_REPETIDA', async () => {
+        expect(await provedor.anonimizarConta(pedidoDe(p.userId, 'LGPD-7'))).toEqual({ repetida: true, clinicas: 1 });
+      });
+      expect(repetidas).toHaveLength(1);
+      expect(await trilhas(tenantId, p.userId)).toBe(1);
+      expect(await conferirAnonimizacao({ dbAuth: dbAuth.db }, p.userId)).toEqual([]);
+    });
+
+    it('falha numa clínica com vínculo não impede as outras; a nova tentativa completa sem duplicar', async () => {
+      const t1 = await api.novaClinica();
+      const t2 = await api.novaClinica();
+      const p = await novaPessoa(t1, ['recepcao']);
+      await api.membro(t2, { userId: p.userId }, 'recepcao');
+      let chamadas = 0;
+      const real = api.db.db;
+      const umaFalha = {
+        transaction: (fn: never) => {
+          chamadas += 1;
+          return chamadas === 1 ? Promise.reject(new Error('banco da clínica fora')) : real.transaction(fn);
+        },
+      };
+      const falho = new BetterAuthProvider({ auth, dbAuth: dbAuth.db, dbClinica: umaFalha as never });
+      await expect(falho.anonimizarConta(pedidoDe(p.userId))).rejects.toMatchObject({ codigo: 'erro_parcial_rodar_de_novo' });
+      // Uma das duas já tem a trilha; a outra ficou para a nova tentativa.
+      expect([await trilhas(t1, p.userId), await trilhas(t2, p.userId)].sort()).toEqual([0, 1]);
+      expect(await provedor.anonimizarConta(pedidoDe(p.userId))).toEqual({ repetida: true, clinicas: 2 });
+      expect([await trilhas(t1, p.userId), await trilhas(t2, p.userId)]).toEqual([1, 1]);
+    });
+  });
+
   it('fila do 3b-3: anonimizar zera na hora o HMAC do e-mail do convite que a conta aceitou', async () => {
     const tenantId = await api.novaClinica();
     const adm = await api.membro(tenantId, api.sessao(tenantId, 'admin'), 'admin');
@@ -1340,7 +1423,7 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const conv = await convites().criar({ tenantId, userId: adm.userId, roles: ['admin'] } as never, email, 'recepcao');
     await convites().aceitar({ token: conv.token, email, nome: 'Pessoa Ficticia', senha: SENHA_NOVA, cabecalhos: new Headers() });
     const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
-    await provedor.anonimizarConta(u?.id ?? '');
+    await provedor.anonimizarConta(pedidoDe(u?.id ?? ''));
     const linhas = await withTenant(api.db.db, tenantId, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${conv.conviteId}`), adm.userId);
     expect([...linhas][0]?.email_hmac).toBe('0'.repeat(32));
   });
@@ -1360,14 +1443,14 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const c2 = await convites().criar({ tenantId: outra, userId: admX.userId, roles: ['admin'] } as never, `outro-${email}`, 'recepcao');
     await withTenant(api.db.db, outra, (tx) => tx.execute(sql`update team_invites set accepted_at = now(), accepted_user_id = ${userId} where id = ${c2.conviteId}`), admX.userId);
     await api.http().delete(`/clinica/membros/${userId}/recepcao`).set({ Authorization: admX.Authorization }).expect(204);
-    await provedor.anonimizarConta(userId);
+    await provedor.anonimizarConta(pedidoDe(userId));
     const hmac = await withTenant(api.db.db, outra, (tx) => tx.execute<{ email_hmac: string }>(sql`select email_hmac from team_invites where id = ${c2.conviteId}`), admX.userId);
     expect([...hmac][0]?.email_hmac).toBe('0'.repeat(32));
     // V2 do #177: a clínica sem vínculo registra o descarte na trilha, com ator sistema (art. 37).
     const prova = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
     expect([...prova][0]?.n).toBe(1);
     // V1 do #177: rodar de novo (com muitas clínicas na base) não lança e não grava trilha repetida.
-    await provedor.anonimizarConta(userId);
+    await provedor.anonimizarConta(pedidoDe(userId));
     const de2 = await withTenant(api.db.db, outra, (tx) => tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where metadata->>'op' = 'invite_pseudonym_dropped' and metadata->>'user_id' = ${userId}`), admX.userId);
     expect([...de2][0]?.n).toBe(1);
     // V2 do #178: a clínica de onde a pessoa saiu passa pelo espelho e ele termina vazio.
@@ -1383,7 +1466,7 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
     const [u] = await dbAuth.db.select({ id: usuario.id }).from(usuario).where(eq(usuario.email, email));
     const userId = u?.id ?? '';
     expect(await dbAuth.db.select({ c: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([{ c: tenantId }]);
-    await provedor.anonimizarConta(userId);
+    await provedor.anonimizarConta(pedidoDe(userId));
     expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
 
@@ -1435,10 +1518,10 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
       bloqueio: { store: STORE_DA_BANCADA, chaveHmac: CHAVE_HMAC_DA_BANCADA },
       segredoDaInstancia: SEGREDO_DA_BANCADA,
     });
-    await expect(falho.anonimizarConta(userId)).rejects.toThrow();
+    await expect(falho.anonimizarConta(pedidoDe(userId))).rejects.toThrow();
     // A clínica que passou perdeu a linha (trigger do HMAC zerado); a que falhou continua.
     expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toHaveLength(1);
-    await provedor.anonimizarConta(userId);
+    await provedor.anonimizarConta(pedidoDe(userId));
     expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
 
@@ -1465,10 +1548,10 @@ describe('Fila do 3b: retenção e tetos (ressalva 4 do 3c; R9 e R10 do 3b-2; R3
       segredoDaInstancia: SEGREDO_DA_BANCADA,
     });
     // A pessoa ainda tem vínculo na origem: a trilha dela falha também, então a anonimização inteira falha.
-    await expect(falho.anonimizarConta(userId)).rejects.toThrow();
+    await expect(falho.anonimizarConta(pedidoDe(userId))).rejects.toThrow();
     expect((await dbAuth.db.select({ c: conviteAceito.clinicaId }).from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).map((x) => x.c)).toContain(outra);
     // Com o banco de volta, a nova tentativa completa.
-    await provedor.anonimizarConta(userId);
+    await provedor.anonimizarConta(pedidoDe(userId));
     expect(await dbAuth.db.select().from(conviteAceito).where(eq(conviteAceito.usuarioId, userId))).toEqual([]);
   });
 
