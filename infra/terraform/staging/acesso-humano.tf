@@ -18,7 +18,24 @@ locals {
       "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:root",
     ],
     var.papeis_humanos_extra,
+    local.papeis_ops_humanos,
   )
+
+  # A5 do parecer de 17/11/2026: os papéis humanos das tarefas avulsas (ARN fixo, existam ou não) são
+  # humanos para os Deny das chaves (HumanoNaoDecifra, HumanoNaoCalculaPseudonimo). Nenhum deles
+  # precisa dessas chaves. Para estender às KEKs das clínicas (montadas pela API), ponha os mesmos
+  # ARNs em papeis_humanos_extra no tfvars (KMS_PAPEIS_HUMANOS_EXTRA, app.tf).
+  papeis_ops_humanos = [
+    "arn:${data.aws_partition.atual.partition}:iam::${local.conta}:role/${local.nome}-ops-lgpd",
+    local.ops_prov_papel_executor_arn,
+    local.ops_prov_papel_entrega_arn,
+    local.ops_rec_papel_executor_arn,
+    local.ops_rec_papel_entrega_arn,
+  ]
+
+  # Quem assume os papéis de exceção (investigacao-seguranca, break-glass): humanos, MAS não a partir
+  # de uma sessão ops-* (encadear papéis daria a um operador de tarefa avulsa o break-glass).
+  humanos_que_assumem_excecao = [for a in local.principais_humanos : a if !contains(local.papeis_ops_humanos, a)]
 }
 
 # Confiança comum aos papéis de exceção: só humano da própria conta, com MFA recente.
@@ -32,7 +49,7 @@ data "aws_iam_policy_document" "confianca_humano_mfa" {
     condition {
       test     = "ArnLike"
       variable = "aws:PrincipalArn"
-      values   = local.principais_humanos
+      values   = local.humanos_que_assumem_excecao
     }
     condition {
       test     = "Bool"
@@ -221,6 +238,15 @@ data "aws_iam_policy_document" "alertas_seguranca" {
         # Execução da anonimização pelo suporte (ops-anonimizacao.tf, R-B do #190).
         aws_cloudwatch_event_rule.ops_anonimizacao_execucao.arn,
         aws_cloudwatch_event_rule.ops_anonimizacao_override_suspeito.arn,
+        # Provisionamento da clínica e recuperação do admin único (ops-provisionamento.tf, B11;
+        # ops-recuperacao.tf, B12).
+        aws_cloudwatch_event_rule.ops_provisionamento_execucao.arn,
+        aws_cloudwatch_event_rule.ops_provisionamento_override_suspeito.arn,
+        aws_cloudwatch_event_rule.ops_recuperacao_execucao.arn,
+        aws_cloudwatch_event_rule.ops_recuperacao_override_suspeito.arn,
+        # Leitura e apagamento da entrega dos tokens (A6 do parecer de 17/11/2026).
+        aws_cloudwatch_event_rule.ops_provisionamento_entrega.arn,
+        aws_cloudwatch_event_rule.ops_recuperacao_entrega.arn,
       ]
     }
   }

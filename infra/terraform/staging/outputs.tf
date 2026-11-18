@@ -87,3 +87,43 @@ output "papel_ops_lgpd" {
   description = "Papel que roda a anonimização (R-C do #190): humano de principais_ops_lgpd, com MFA e --source-identity, sessão de 1 h, todo RunTask gera alerta. null quando a lista está vazia."
   value       = one(aws_iam_role.ops_lgpd[*].arn)
 }
+
+output "ops_provisionamento_task_definition" {
+  description = "Definição de tarefa (com revisão) do provisionamento da clínica (B11). Só o papel ops-provisionamento-executor, com MFA, roda; argumentos por containerOverrides."
+  value       = aws_ecs_task_definition.ops_provisionamento.arn
+}
+
+output "ops_provisionamento_rede" {
+  description = "Cluster, sub-redes e grupo de segurança para o RunTask do provisionamento (awsvpc, sem IP público)."
+  value = {
+    cluster          = aws_ecs_cluster.this.name
+    subnets          = aws_subnet.app[*].id
+    security_group   = aws_security_group.ops_provisionamento.id
+    assign_public_ip = "DISABLED"
+  }
+}
+
+output "papeis_ops_provisionamento" {
+  description = "Papéis humanos do provisionamento (B11, C1): executor (cria o pedido e roda; principais_ops_provisionamento_executor) e entrega (lê e apaga a entrega; principais_ops_provisionamento_entrega). MFA e --source-identity, sessão de 1 h. Vazio quando as listas estão vazias."
+  value       = { for k, r in aws_iam_role.ops_provisionamento : k => r.arn }
+}
+
+output "ops_recuperacao_task_definition" {
+  description = "Definição de tarefa (com revisão) da recuperação do fator do admin único (B12). Só o papel ops-recuperacao-executor, com MFA, roda; argumentos por containerOverrides."
+  value       = aws_ecs_task_definition.ops_recuperacao.arn
+}
+
+output "ops_recuperacao_rede" {
+  description = "Cluster, sub-redes e grupo de segurança para o RunTask da recuperação do admin único (awsvpc, sem IP público)."
+  value = {
+    cluster          = aws_ecs_cluster.this.name
+    subnets          = aws_subnet.app[*].id
+    security_group   = aws_security_group.ops_recuperacao.id
+    assign_public_ip = "DISABLED"
+  }
+}
+
+output "papeis_ops_recuperacao" {
+  description = "Papéis humanos da recuperação do admin único (B12, C1): executor (roda; principais_ops_recuperacao_executor) e entrega (lê e apaga a entrega; principais_ops_recuperacao_entrega). MFA e --source-identity, sessão de 1 h. Vazio quando as listas estão vazias."
+  value       = { for k, r in aws_iam_role.ops_recuperacao : k => r.arn }
+}
