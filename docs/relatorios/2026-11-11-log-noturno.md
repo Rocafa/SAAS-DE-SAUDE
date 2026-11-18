@@ -526,3 +526,10 @@ Pendente para a próxima sessão:
 ## Checagem de 17/11 20:13
 
 - Nada mudou: #155, #194, #209, #210, #116, #153 e #154 seguem BLOCKED sem aprovação; #189 aprovado, esperando a pilha e o #209; #158, #143 e #157 sem commit novo; nenhum merge.
+
+### 18/11 00:19 UTC — conferência
+
+- Sem notificações novas. #209, #210, #116, #155 e #194 seguem esperando a aprovação do @Lopesloro; o #189 está
+  aprovado e espera o #209 (auditoria). Nenhum merge possível sem a revisão do sócio.
+- Sem trabalho de código pendente que não dependa dessas aprovações. Próximo passo: mesclar na ordem do guia
+  (`2026-11-13-guia-de-revisao.md`) assim que as aprovações chegarem.
