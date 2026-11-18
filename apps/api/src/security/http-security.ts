@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadHttpSecurityConfig, type HttpSecurityConfig } from './http-security.config';
 import {
-  loadRateLimitHashKey,
+  chaveDeHmac,
   MemoryRateLimitStore,
   rateLimitKey,
   registerRateLimitStore,
@@ -33,7 +33,7 @@ export function applyHttpSecurity(
   app: INestApplication,
   config: HttpSecurityConfig = loadHttpSecurityConfig(),
   store: RateLimitStore = new MemoryRateLimitStore(),
-  hashKey: Uint8Array = loadRateLimitHashKey(),
+  hashKey: Uint8Array = chaveDeHmac('rate-limit'),
   /** D4: handler do Better Auth, depois das travas da borda e ANTES do parser JSON (a biblioteca lê o corpo cru). */
   montagemDaAutenticacao?: (req: Req, res: ServerResponse, next: Next) => void,
 ): void {
@@ -116,7 +116,7 @@ export function rateLimiter(
   windowMs: number,
   store: RateLimitStore = new MemoryRateLimitStore(),
   exemptPaths: ReadonlySet<string> = RATE_LIMIT_EXEMPT_PATHS,
-  hashKey: Uint8Array = loadRateLimitHashKey(),
+  hashKey: Uint8Array = chaveDeHmac('rate-limit'),
 ) {
   return (req: Req, res: ServerResponse, next: Next): void => {
     const path = (req.url ?? '').split('?')[0] ?? '';
@@ -124,7 +124,8 @@ export function rateLimiter(
       next();
       return;
     }
-    const key = rateLimitKey(req.ip ?? req.socket.remoteAddress ?? 'desconhecido', hashKey);
+    // R6 do parecer do desenho do B9: o IP tem prefixo próprio, como as vigilâncias (`usr`, `portal`).
+    const key = rateLimitKey(`ip\u001f${req.ip ?? req.socket.remoteAddress ?? 'desconhecido'}`, hashKey);
     store.hit(key, windowMs).then(
       ({ count, resetMs }) => {
         const resetSeconds = Math.max(1, Math.ceil(resetMs / 1000));

@@ -82,3 +82,7 @@ Severidade `aviso` sai como `warn`; `alto` e `crítico` saem como `error`. `RATE
 - **`origem` nos eventos do portal** (o do webhook já sai com `origem`) e testes de emissão nos módulos que ainda não têm (webhook, vigilâncias, exportação). O rate limit e o guard já têm teste.
 - **Correlação por requisição:** um id de requisição em todas as linhas (E9 da revisão da equipe).
 - **Front (site e app):** o `no-console` do web e o envio de erros do navegador sem dado pessoal ficam com a frente de front (L6 da triagem de 04/11).
+
+## Chave do pseudônimo de origem (B9, 11/11/2026)
+
+O campo `origem` é um HMAC do IP com a chave do uso `origem`, derivada da `RATE_LIMIT_HASH_KEY` por HKDF. Ele não usa mais a raiz direto. A correlação de origem entre linhas de antes e de depois do deploy do B9, ou de uma rotação do uso `origem`, não é possível. O horário fica no registro de incidentes.
