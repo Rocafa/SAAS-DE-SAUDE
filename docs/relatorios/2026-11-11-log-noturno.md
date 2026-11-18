@@ -536,3 +536,7 @@ Pendente para a próxima sessão:
 - Alertas abertos na `main`: GHSA-g3hv-75wg-m249 (minimatch, médio; resolvido pelo #189) e GHSA-mfr8-8qww-v76h
   (next 16.4.3, médio; o Dependabot abriu o #201, com CI verde). Médios não bloqueiam a auditoria (só alto e
   crítico). O #201 entrou no guia como item 7, depois do #210 e do #116, por causa do lockfile.
+
+## Checagem de 17/11 22:13
+
+- Nada mudou: #155, #194, #209, #210, #116, #153, #154 e #201 seguem BLOCKED sem aprovação; #189 aprovado, esperando a pilha e o #209; #158, #143 e #157 sem commit novo; nenhum merge.
