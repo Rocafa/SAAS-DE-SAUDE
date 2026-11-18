@@ -548,3 +548,7 @@ Pendente para a próxima sessão:
   a regra de listas disjuntas entre executor e entrega e o `endpoint_ssm = true`. Os PRs acima do #204 recebem isso
   quando a pilha for propagada.
 - Vigia em segundo plano: a cada 5 min confere a aprovação e o merge dos PRs abertos; ao mudar algo, eu retomo.
+
+## Checagem de 18/11 08:13
+
+- Nada mudou: #155, #194, #209, #210, #116, #153, #154 e #201 seguem BLOCKED sem aprovação; #189 aprovado, esperando a pilha e o #209; #158, #143 e #157 sem commit novo; nenhum merge.
