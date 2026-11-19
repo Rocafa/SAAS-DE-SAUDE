@@ -199,7 +199,16 @@ function FormularioMarcar() {
           },
         });
       }
-      if (esperaId) await api.removerEspera(esperaId);
+      if (esperaId) {
+        try {
+          await api.removerEspera(esperaId);
+        } catch (err) {
+          avisar({
+            texto: textoDoErro(err, 'Consulta marcada, mas não deu para tirar da lista de espera. Tire pela lista.'),
+            erro: true,
+          });
+        }
+      }
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {

@@ -328,6 +328,8 @@ export function ListaEspera() {
   const [pacienteId, setPacienteId] = useState('');
   const [preferencia, setPreferencia] = useState('');
   const [erro, setErro] = useState('');
+  const [adicionando, setAdicionando] = useState(false);
+  const [tirando, setTirando] = useState<string | null>(null);
   const porId = useMemo(() => indexarPorId(pacientes), [pacientes]);
   const sugestoes = busca.trim() && !pacienteId ? acharPacientes(busca, pacientes.filter((p) => p.ativo)).slice(0, 5) : [];
 
@@ -337,6 +339,7 @@ export function ListaEspera() {
       setErro('Falta o paciente. Digite o nome e escolha na lista.');
       return;
     }
+    setAdicionando(true);
     await acao(async () => {
       const item = await api.adicionarEspera(pacienteId, preferencia);
       setPacienteId('');
@@ -351,10 +354,11 @@ export function ListaEspera() {
           atualizar();
         },
       });
-    });
+    }).finally(() => setAdicionando(false));
   }
 
   async function tirar(id: string) {
+    setTirando(id);
     await acao(async () => {
       const item = await api.removerEspera(id);
       atualizar();
@@ -366,7 +370,7 @@ export function ListaEspera() {
             atualizar();
           },
         });
-    });
+    }).finally(() => setTirando(null));
   }
 
   return (
@@ -385,6 +389,7 @@ export function ListaEspera() {
             <ul className="flex flex-col gap-2">
               {consulta.dados.map((e) => {
                 const p = porId.get(e.pacienteId);
+                const desabilitadoTirar = tirando === e.id;
                 return (
                   <li key={e.id} className="flex flex-col gap-2 rounded-md border-2 border-borda p-3">
                     <p className="text-lg font-bold">{p ? nomeExibido(p) : 'Paciente'}</p>
@@ -397,9 +402,14 @@ export function ListaEspera() {
                           Marcar horário
                         </Link>
                       </Botao>
-                      <Botao variante="suave" tamanho="pequeno" onClick={() => tirar(e.id)}>
+                      <Botao
+                        variante="suave"
+                        tamanho="pequeno"
+                        onClick={() => tirar(e.id)}
+                        disabled={desabilitadoTirar}
+                      >
                         <Trash2 aria-hidden />
-                        Tirar da lista
+                        {desabilitadoTirar ? 'Tirando…' : 'Tirar da lista'}
                       </Botao>
                     </div>
                   </li>
@@ -462,9 +472,13 @@ export function ListaEspera() {
               className="min-h-14 rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg"
             />
           </div>
-          <Botao type="submit" className="self-start">
+          <Botao
+            type="submit"
+            className="self-start"
+            disabled={adicionando}
+          >
             <Hourglass aria-hidden />
-            Colocar na espera
+            {adicionando ? 'Colocando…' : 'Colocar na espera'}
           </Botao>
         </form>
       </section>
