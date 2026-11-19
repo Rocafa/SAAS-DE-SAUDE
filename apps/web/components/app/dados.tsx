@@ -146,12 +146,14 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
   const [estado, setEstado] = useState<EstadoConsulta<T>>({ estado: 'carregando' });
   const pergunta = JSON.stringify(deps);
   const perguntaAnterior = useRef(pergunta);
+  const carregarRef = useRef(carregar);
+  carregarRef.current = carregar;
   useEffect(() => {
     let vivo = true;
     const mesmaPergunta = perguntaAnterior.current === pergunta;
     perguntaAnterior.current = pergunta;
     setEstado((e) => aoRecarregar(e, mesmaPergunta));
-    carregar(api)
+    carregarRef.current(api)
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
         vivo &&
@@ -164,6 +166,7 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
     return () => {
       vivo = false;
     };
+    // `carregar` muda a cada render; recarrega quando os dados mudam ou ao tentar de novo.
   }, [api, versao, tentativa, pergunta]);
   return estado;
 }
