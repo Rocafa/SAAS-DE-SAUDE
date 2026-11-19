@@ -1,6 +1,6 @@
 /**
- * O texto digitado no Ajudante e dado pessoal ("achar Maria Silva"). Ele NAO pode ir para log,
- * analytics, console, armazenamento do navegador nem rede. Este teste varre o codigo do Ajudante.
+ * O texto digitado no Ajudante é dado pessoal ("achar Maria Silva"). Ele NÃO pode ir para log,
+ * analytics, console, armazenamento do navegador nem rede. Este teste varre o código do Ajudante.
  */
 import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -32,11 +32,11 @@ const PROIBIDO_AJUDANTE: [RegExp, string][] = [
   [/XMLHttpRequest|sendBeacon|WebSocket|EventSource/, 'rede'],
   [/localStorage|sessionStorage|indexedDB|document\.cookie/, 'armazenamento do navegador'],
   [/gtag|dataLayer|posthog|analytics|sentry/i, 'analytics'],
-  [/SpeechRecognition|webkitSpeechRecognition|getUserMedia/, 'voz (manda audio para fora)'],
+  [/SpeechRecognition|webkitSpeechRecognition|getUserMedia/, 'voz (manda áudio para fora)'],
 ];
 
-// Remove comentarios de linha (// ...) que comecam no inicio da linha (apos espacos opcionais)
-// e comentarios de bloco (/* ... */). Nao remove // dentro de strings (ex.: https://).
+// Remove comentários de linha (// ...) que começam no início da linha (após espaços opcionais)
+// e comentários de bloco (/* ... */). Não remove // dentro de strings (ex.: https://).
 function semComentarios(codigo: string): string {
   return codigo
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -44,7 +44,7 @@ function semComentarios(codigo: string): string {
 }
 
 describe('privacidade do Ajudante', () => {
-  it.each(ARQUIVOS_AJUDANTE)('%s nao registra, guarda nem envia o texto digitado', (arquivo) => {
+  it.each(ARQUIVOS_AJUDANTE)('%s não registra, guarda nem envia o texto digitado', (arquivo) => {
     const codigo = semComentarios(readFileSync(join(raiz, arquivo), 'utf8'));
     for (const [re, motivo] of PROIBIDO_AJUDANTE) expect(re.test(codigo), `${arquivo}: ${motivo}`).toBe(false);
   });
@@ -56,9 +56,9 @@ describe('privacidade do Ajudante', () => {
 });
 
 /**
- * As telas da clinica mostram prontuario, CPF e nome de paciente. O portal ja tem varredura propria
- * (lib/portal.test.ts); esta e a rede de protecao do lado da equipe, para o primeiro console.log de
- * depuracao numa tela de prontuario nao passar no CI.
+ * As telas da clínica mostram prontuário, CPF e nome de paciente. O portal já tem varredura própria
+ * (lib/portal.test.ts); esta é a rede de proteção do lado da equipe, para o primeiro `console.log` de
+ * depuração numa tela de prontuário não passar no CI.
  * Cobertura: app/(app), app/(acesso), app/(portal), components/app, components/portal, lib/** (exceto .mjs e testes).
  */
 const TELAS_DA_CLINICA = [
@@ -78,20 +78,20 @@ const PROIBIDO_NAS_TELAS: [RegExp, string][] = [
   [/dangerouslySetInnerHTML|\.innerHTML/, 'HTML cru'],
 ];
 
-describe('privacidade das telas da clinica', () => {
+describe('privacidade das telas da clínica', () => {
   it('a varredura cobre as telas e os componentes do app', () => {
     expect(TELAS_DA_CLINICA.length).toBeGreaterThan(30);
   });
 
-  it.each(TELAS_DA_CLINICA)('%s nao registra, guarda nem injeta HTML', (arquivo) => {
+  it.each(TELAS_DA_CLINICA)('%s não registra, guarda nem injeta HTML', (arquivo) => {
     const codigo = semComentarios(readFileSync(join(raiz, arquivo), 'utf8'));
     for (const [re, motivo] of PROIBIDO_NAS_TELAS) expect(re.test(codigo), `${arquivo}: ${motivo}`).toBe(false);
   });
 });
 
 /**
- * Varredura de rede/armazenamento/analytics no lib/ geral (exceto lib/api que e do portal).
- * Inclui sendBeacon, caches.*, window.name que podem vazar dados. public/sw.js e excecao justificada (service worker).
+ * Varredura de rede/armazenamento/analytics no lib/ geral (exceto lib/api que é do portal).
+ * Inclui sendBeacon, caches.*, window.name que podem vazar dados. public/sw.js é exceção justificada (service worker).
  */
 const ARQUIVOS_LIB = [
   ...listarRecursivo('lib').filter((f) => !f.startsWith('lib/api/')),
@@ -107,12 +107,12 @@ const PROIBIDO_LIB: [RegExp, string][] = [
   [/gtag|dataLayer|posthog|analytics|sentry/i, 'analytics'],
 ];
 
-describe('privacidade do lib/ (codigo compartilhado da clinica)', () => {
-  it('ha arquivos para varrer', () => {
+describe('privacidade do lib/ (código compartilhado da clínica)', () => {
+  it('há arquivos para varrer', () => {
     expect(ARQUIVOS_LIB.length).toBeGreaterThan(10);
   });
 
-  it.each(ARQUIVOS_LIB)('%s nao usa APIs perigosas de rede/armazenamento/analytics', (arquivo) => {
+  it.each(ARQUIVOS_LIB)('%s não usa APIs perigosas de rede/armazenamento/analytics', (arquivo) => {
     const codigo = semComentarios(readFileSync(join(raiz, arquivo), 'utf8'));
     for (const [re, motivo] of PROIBIDO_LIB) expect(re.test(codigo), `${arquivo}: ${motivo}`).toBe(false);
   });
