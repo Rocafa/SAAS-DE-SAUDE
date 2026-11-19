@@ -9,18 +9,19 @@ Base: `origin/main` (commit 492835e) + branches locais de refactor
 
 | # | Título | Labels | Status na main | Ação |
 |---|--------|--------|----------------|------|
-| 180 | [front] Evolução na API real: falta rota de leitura por agendamento e a versão no contrato do front | bug, front | **EM ANDAMENTO** — commit 834053e em branch local, não em origin/main | Verificar se merge necessário |
-| 167 | [prontuario] Conteúdo clínico que falta no modelo: COFFITO 414, campos de TO e escalas com faixa | enhancement, front | **PARCIAL (main)** — commits 4b6a0c0, 0543150, cbcb474 mergeados via PR #193 | Manter aberta (escalas pendentes) |
-| 148 | [seguranca] P5: as quatro ressalvas do #103 que precisam fechar antes do primeiro dado real | bug, front, seguranca | **PARCIAL** — PR #193 mergeado; PR #192 status desconhecido | Verificar PR #192 |
-| 146 | [front] P2: tela de demonstração pede senha real com autoComplete=current-password | bug, front | **EM ANDAMENTO (PR #198)** — branch `lopes/front-acesso-sem-codigo-fixo` aberta | Aguardar merge |
-| 145 | [seguranca] P1: código fixo 123456 não depende do modo — e a D4 tem de SUBSTITUIR as telas simuladas | bug, front, seguranca | **EM ANDAMENTO (PR #198)** — mesmo PR que #146 | Aguardar merge |
+| 180 | [front] Evolução na API real: falta rota de leitura por agendamento e a versão no contrato do front | bug, front | **PARCIAL (main)** — item 1 via PR #192 (commit 834053e mergeado em c3221c6); item 2 (versão no contrato) pendente | Verificar item 2 |
+| 167 | [prontuario] Conteúdo clínico que falta no modelo: COFFITO 414, campos de TO e escalas com faixa | enhancement, front | **PARCIAL (main)** — commits 4b6a0c0, 0543150, cbcb474 mergeados via PR #193 (c34c602) | Manter aberta (escalas pendentes) |
+| 148 | [seguranca] P5: as quatro ressalvas do #103 que precisam fechar antes do primeiro dado real | bug, front, seguranca | **Não verificado** — PR #191 (CodeQL), #192 (atendimento/agendamento), #193 (modelos) não cobrem as 4 ressalvas do #103 | Verificar cada ressalva do #103 |
+| 147 | [seguranca] P4/P6: alcance das varreduras (subpasta, portal, lib) e no-console no ESLint | bug, seguranca | **Não verificado** | Verificar alcance CodeQL e regra no-console |
+| 146 | [front] P2: tela de demonstração pede senha real com autoComplete=current-password | bug, front | **EM ANDAMENTO (PR #198 OPEN)** — branch `lopes/front-acesso-sem-codigo-fixo` aberta | Aguardar merge do PR #198 |
+| 145 | [seguranca] P1: código fixo 123456 não depende do modo — e a D4 tem de SUBSTITUIR as telas simuladas | bug, front, seguranca | **EM ANDAMENTO (PR #198 OPEN)** — mesmo PR que #146 | Aguardar merge do PR #198 |
 | 107 | [seguranca] S2: provedor de sessão real (bloqueio técnico nº 1, depende da D4) | enhancement, seguranca | Em andamento — PRs #203-#208 (provisionamento) | Manter aberta |
-| 106 | [seguranca] S3: falta o fator de MFA (TOTP/WebAuthn) — a cobrança de MFA recente já existe | enhancement, seguranca | **EM ANDAMENTO** — commit f245e7b não confirmado em origin/main | Verificar se merge necessário |
+| 106 | [seguranca] S3: falta o fator de MFA (TOTP/WebAuthn) — a cobrança de MFA recente já existe | enhancement, seguranca | **PARCIAL (main)** — commit f245e7b confirmado em origin/main via `merge-base --is-ancestor`; falta implementar TOTP/WebAuthn | Verificar TOTP/WebAuthn |
 | 102 | [seguranca] Exportação total aprovada por quem pediu, e varredura de privacidade sem as telas da clínica | bug, seguranca, revisao-r8 | Parcial — fluxo de aprovação em SecaoPrivacidade | Verificar |
-| 101 | [front] Remarcar perde a escolha, fila de espera sem erro na tela, vínculo do atestado no retrato curto | bug, front, revisao-r8 | **EM ANDAMENTO (PR #197)** — branch `lopes/front-equipe-e-auditoria-api-real` aberta | Verificar fila de espera |
+| 101 | [front] Remarcar perde a escolha, fila de espera sem erro na tela, vínculo do atestado no retrato curto | bug, front, revisao-r8 | **EM ANDAMENTO (PR #197 OPEN)** — branch `lopes/front-equipe-e-auditoria-api-real` aberta | Verificar fila de espera |
 | 100 | [seguranca] next.config não barra NEXT_PUBLIC_API_MODO=http em produção | bug, seguranca, revisao-r8 | Não verificado | Verificar |
-| 99 | [front] Classe de campo repetida em 9 arquivos, indexação por id em 12, e useConsulta duplicado no portal | enhancement, front, revisao-r8 | **EM ANDAMENTO (branch refactor/front-campo)** — commits 1ca724e + ae8a1d5 locais | Preparar PR |
-| 98 | [front] useConsulta mostra o dado antigo quando o filtro muda | bug, front, revisao-r8 | **EM ANDAMENTO (branch refactor/front-useconsulta)** — commit 8dc1854 local | Preparar PR |
+| 99 | [front] Classe de campo repetida em 9 arquivos, indexação por id em 12, e useConsulta duplicado no portal | enhancement, front, revisao-r8 | **EM ANDAMENTO (branch refactor/front-campo)** — commits 1ca724e, ae8a1d5, 06bf777 locais (3 à frente) | Preparar PR |
+| 98 | [front] useConsulta mostra o dado antigo quando o filtro muda | bug, front, revisao-r8 | **EM ANDAMENTO (branch refactor/front-useconsulta)** — commit 8dc1854 local (1 à frente) | Preparar PR |
 | 97 | [front] start_url do manifesto leva o paciente para a área da equipe | bug, front, revisao-r8 | Não verificado | Verificar |
 | 96 | [front] Service worker preso no cache v1: tela offline sem estilo depois de deploys | bug, front, revisao-r8 | Não verificado | Verificar |
 | 95 | [seguranca] Sete rotas do adaptador falso sem trava de papel | bug, seguranca, revisao-r8 | Parcial — SoAdmin em configuracoes.tsx | Verificar rotas |
@@ -74,55 +75,72 @@ Base: `origin/main` (commit 492835e) + branches locais de refactor
 
 **PRs MERGEADOS recentes em origin/main:**
 - #193 — Merge pull request #193 from Rocafa/eng/modelos-por-especialidade (c34c602)
+- #192 — Merge pull request #192 from Rocafa/eng/atendimento-por-agendamento (c3221c6) — resolve #180 item 1
 - #191 — Merge pull request #191 from Rocafa/devops/codeql-agrupado (492835e)
 
 ---
 
 ## Branches de Refatoração Locais (estado real vs origin/main)
 
-| Branch | Descrição | Commits | Atrás/À frente da origin/main | Status real |
-|--------|-----------|---------|-------------------------------|-------------|
-| refactor/front-campo | Extrai componente Campo com 4 variantes, migra 9 arquivos, restaura 31 comentários de regra | 1ca724e, ae8a1d5 | **Não está em origin/main** — branch local apenas | **EM DESVIO** — precisa de PR |
-| refactor/front-useconsulta | Corrige loop do useConsulta: carregar/formatarErro em useRef, efeito depende só de [api, versao, tentativa, pergunta] | 8dc1854 | **Não está em origin/main** — branch local apenas | **EM DESVIO** — precisa de PR |
-| refactor/shared-testes | (não existe — shared não tem testes de paginação) | — | — | — |
-| refactor/shared-tooling | — | — | — | — |
-| refactor/wip-375e750 | — | — | — | — |
+| Branch | Descrição | Commits à frente | Atrás | Status real |
+|--------|-----------|------------------|-------|-------------|
+| refactor/docs | Atualizações de documentação | 1 | 0 | **EM DESVIO** — precisa de PR |
+| refactor/front-campo | Extrai componente Campo com 4 variantes, migra 9 arquivos, restaura comentários de regra | 3 (1ca724e, ae8a1d5, 06bf777) | 0 | **EM DESVIO** — precisa de PR para #99 |
+| refactor/front-useconsulta | Corrige loop do useConsulta: carregar/formatarErro em useRef, efeito depende só de [api, versao, tentativa, pergunta] | 1 (8dc1854) | 0 | **EM DESVIO** — precisa de PR para #98 |
+| refactor/shared-testes | Testes compartilhados (pagination, etc.) | 4 | 15 | **EM DESVIO** — precisa de PR |
+| refactor/shared-tooling | Tooling compartilhado (ESLint, etc.) | 1 | 15 | **EM DESVIO** — precisa de PR |
+| refactor/web-lint-react-hooks | Configuração react-hooks ESLint | 0 | 0 | **EM DESVIO** — sem divergência |
+| refactor/wip-375e750 | Work in progress antigo (R1.1) | 1 | 20 | **EM DESVIO** — precisa de PR ou limpeza |
 
 > **Regra aplicada**: "RESOLVIDO" ou "MERGEADO" só quando o commit está em `origin/main` (prova: `git merge-base --is-ancestor <commit> origin/main` ou merge commit visível no log). Branch local ou PR aberto = "EM ANDAMENTO (branch X / PR #N)".
 
----
-
-## Resumo do que JÁ FOI RESOLVIDO na main (confirmado via merge commits)
-
-✅ **#167 (parcial)** — Modelos por especialidade (fisio, TO, escalas base): commits 4b6a0c0, 0543150, cbcb474 mergeados via PR #193 (c34c602)
-✅ **#148 (parcial)** — CodeQL agrupado: PR #191 mergeado (492835e); PR #193 mergeado (c34c602); PR #192 status a confirmar
-✅ **Deps/Infra** — PR #191 (CodeQL), PR #193 (modelos)
+> **Fonte dos dados acima**: `git for-each-ref --format='%(refname:short) %(ahead-behind:origin/main)' refs/heads/refactor` e `git log origin/main..<branch> --oneline` para cada branch.
 
 ---
 
-## O que o TRIAGEM.md anterior marcava errado como "RESOLVIDO/MERGEADO"
+## Avanços confirmados na origin/main (com commit e PR)
+
+✅ **#180 (item 1)** — Leitura de atendimento por agendamento: commit 834053e mergeado via PR #192 (merge commit c3221c6)
+
+✅ **#167 (parcial)** — Modelos por especialidade (fisio, TO, escalas base): commits 4b6a0c0, 0543150, cbcb474 mergeados via PR #193 (merge commit c34c602)
+
+✅ **#106 (parcial)** — Cobrança de MFA existente: commit f245e7b confirmado em origin/main via `git merge-base --is-ancestor f245e7b origin/main`; falta TOTP/WebAuthn
+
+✅ **Infra/Deps** — CodeQL agrupado: PR #191 mergeado (492835e)
+
+---
+
+## Correções em relação à versão anterior do TRIAGEM.md
+
+A versão anterior deste arquivo foi gerada no branch `orchestrator-saas-claude-triagem` no commit 8871c58 (rodada 1). Esta versão corrige os erros factuais apontados na revisão do Guardião LGPD.
 
 | Item | Antes (incorreto) | Agora (correto) | Evidência |
 |------|-------------------|-----------------|-----------|
-| #180 | RESOLVIDO (commit 834053e) | EM ANDAMENTO — commit não em origin/main | Sem merge commit para 834053e |
-| #145, #146 | RESOLVIDO (PR #198) | EM ANDAMENTO (PR #198 OPEN) | PR #198 está aberto (branch lopes/front-acesso-sem-codigo-fixo) |
-| #106 | RESOLVIDO (commit f245e7b) | EM ANDAMENTO — commit não confirmado em origin/main | Sem merge commit para f245e7b |
-| #99 | MERGEADO (main) | EM ANDAMENTO (branch refactor/front-campo) | Commits 1ca724e, ae8a1d5 só em branch local |
-| #98 | PRONTO | EM ANDAMENTO (branch refactor/front-useconsulta) | Commit 8dc1854 só em branch local |
-| refactor/front-campo | MERGEADO (main) | EM DESVIO — branch local | Não há PR; não está em origin/main |
-| refactor/front-useconsulta | PRONTO | EM DESVIO — branch local | Não há PR; não está em origin/main |
+| #180 | EM ANDAMENTO — commit 834053e não em origin/main | PARCIAL (main) — item 1 via PR #192 (834053e) | `git merge-base --is-ancestor 834053e origin/main` = true; PR #192 MERGED |
+| #106 | EM ANDAMENTO — commit f245e7b não confirmado | PARCIAL (main) — f245e7b confirmado; falta TOTP/WebAuthn | `git merge-base --is-ancestor f245e7b origin/main` = true |
+| #148 | PARCIAL — PR #191, #192, #193 contam como avanço | Não verificado — PRs não cobrem as 4 ressalvas do #103 | Verificado: #191=CodeQL, #192=#180 item 1, #193=#167 |
+| #145, #146 | EM ANDAMENTO (PR #198) — status OK | EM ANDAMENTO (PR #198 OPEN) — aguardando merge | `gh pr view 198` → state=OPEN |
+| #99 | EM ANDAMENTO — commits 1ca724e + ae8a1d5 | EM ANDAMENTO — 3 commits (1ca724e, ae8a1d5, 06bf777) | `git log origin/main..refactor/front-campo --oneline` |
+| #98 | EM ANDAMENTO — commit 8dc1854 | EM ANDAMENTO — commit 8dc1854 (1 à frente) | `git log origin/main..refactor/front-useconsulta --oneline` |
+| refactor/front-campo | 2 commits, não em main | 3 commits à frente, 0 atrás | `git for-each-ref` + `git log` |
+| refactor/front-useconsulta | 1 commit, não em main | 1 commit à frente, 0 atrás | `git for-each-ref` + `git log` |
+| refactor/shared-testes | "não existe" | Existe: 4 à frente, 15 atrás | `git for-each-ref` |
+| refactor/shared-tooling | "não existe" | Existe: 1 à frente, 15 atrás | `git for-each-ref` |
+| refactor/wip-375e750 | "não existe" | Existe: 1 à frente, 20 atrás | `git for-each-ref` |
+| refactor/docs | Ausente da tabela | Existe: 1 à frente, 0 atrás | `git for-each-ref` |
+| refactor/web-lint-react-hooks | Ausente da tabela | Existe: 0 à frente, 0 atrás | `git for-each-ref` |
 
 ---
 
 ## Próximos Passos Sugeridos
 
-1. **Criar PRs para branches de refatoração**: `refactor/front-campo` → PR para #99; `refactor/front-useconsulta` → PR para #98
+1. **Criar PRs para branches de refatoração**: `refactor/front-campo` → PR para #99; `refactor/front-useconsulta` → PR para #98; `refactor/docs`, `refactor/shared-testes`, `refactor/shared-tooling`, `refactor/wip-375e750` → avaliar e abrir PRs ou limpar
 2. **Mergear PR #198** — resolve #145 e #146 (código demo só em modo fake)
-3. **Verificar PR #192** — completa #148 (quatro ressalvas do #103)
-4. **Confirmar commits órfãos em origin/main**: 834053e (#180), f245e7b (#106) — se já mergeados, fechar issues; se não, abrir PRs
-5. **Verificar PRs de provisionamento** (#203-#208) — bloqueiam #107 (S2)
-6. **Completar #167** — escalas com faixa pendentes
-7. **Verificar #147** — alcance varreduras CodeQL e no-console ESLint
+3. **Verificar cada ressalva do #103** para fechar #148 (item de segurança — não pode ser "parcial" sem prova)
+4. **Verificar #147** — alcance varreduras CodeQL (subpasta, portal, lib) e regra no-console ESLint
+5. **Completar #106** — implementar fator TOTP/WebAuthn (cobrança de MFA já existe em main)
+6. **Verificar PRs de provisionamento** (#203-#208) — bloqueiam #107 (S2)
+7. **Completar #167** — escalas com faixa pendentes
 8. **Verificar #101** — fila de espera e vínculo atestado (PR #197 aberto)
 9. **Verificar #100** — next.config barra NEXT_PUBLIC_API_MODO=http em produção
 10. **Verificar #95** — 7 rotas do adaptador falso sem trava de papel
