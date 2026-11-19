@@ -166,6 +166,7 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
     return () => {
       vivo = false;
     };
+    // `carregar` muda a cada render; recarrega quando os dados mudam ou ao tentar de novo.
   }, [api, versao, tentativa, pergunta]);
   return estado;
 }

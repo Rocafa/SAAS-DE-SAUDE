@@ -172,6 +172,7 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
     return () => {
       vivo = false;
     };
+    // `carregar` muda a cada render; recarrega quando os dados mudam ou ao tentar de novo.
   }, [api, versao, tentativa]);
   return estado;
 }
