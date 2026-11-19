@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * PWA: a equipe e o paciente instalam apps diferentes, e o service worker não pode servir arquivo de
  * um build antigo depois de um deploy.
@@ -84,60 +83,91 @@ describe('service worker - código-fonte', () => {
 
 // Testes de lógica do service worker com mocks do Cache API
 describe('service worker - lógica de versão e limpeza (unitário)', () => {
-  /** @type {Map<string, any>} */
-  let cacheStore;
-  /** @type {any} */
-  let cachesMock;
-  /** @type {any} */
-  let fetchMock;
-  /** @type {any} */
-  let originalFetch;
-  /** @type {any} */
-  let originalCaches;
-  /** @type {any} */
-  let selfMock;
+  let cacheStore: Map<string, CacheMock>;
+  let cachesMock: CacheStorageMock;
+  let fetchMock: FetchMock;
+  let originalFetch: typeof global.fetch;
+  let originalCaches: CacheStorage | undefined;
+  let selfMock: ServiceWorkerGlobalScopeMock;
+
+  interface CacheMock {
+    name: string;
+    match: MatchMock;
+    put: ReturnType<typeof vi.fn>;
+    add: AddMock;
+    delete: ReturnType<typeof vi.fn>;
+    keys: KeysMock;
+    store: Map<string, unknown>;
+  }
+
+  interface CacheStorageMock {
+    open: OpenMock;
+    keys: KeysArrayMock;
+    delete: DeleteMock;
+    has: HasMock;
+    match: ReturnType<typeof vi.fn>;
+  }
+
+  interface ServiceWorkerGlobalScopeMock {
+    location: {
+      href: string;
+      origin: string;
+      searchParams: URLSearchParams;
+    };
+    skipWaiting: ReturnType<typeof vi.fn>;
+    clients: { claim: ReturnType<typeof vi.fn> };
+    addEventListener: ReturnType<typeof vi.fn>;
+  }
+
+  type FetchMock = ReturnType<typeof vi.fn> & ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>);
+  type MatchMock = ReturnType<typeof vi.fn> & ((request: RequestInfo) => Promise<Response | undefined>);
+  type AddMock = ReturnType<typeof vi.fn> & ((request: RequestInfo) => Promise<void>);
+  type KeysMock = ReturnType<typeof vi.fn> & (() => Promise<string[]>);
+  type OpenMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<CacheMock>);
+  type KeysArrayMock = ReturnType<typeof vi.fn> & (() => Promise<string[]>);
+  type DeleteMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<boolean>);
+  type HasMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<boolean>);
 
   beforeEach(() => {
     // Mock do Cache store
-    cacheStore = new Map();
+    cacheStore = new Map<string, CacheMock>();
 
     // Mock do Cache
-    const createCache = (/** @type {string} */ name) => ({
+    const createCache = (name: string): CacheMock => ({
       name,
-      match: vi.fn(),
+      match: vi.fn() as MatchMock,
       put: vi.fn(),
-      add: vi.fn().mockResolvedValue(undefined),
+      add: vi.fn().mockResolvedValue(undefined) as AddMock,
       delete: vi.fn(),
-      keys: vi.fn().mockResolvedValue([]),
+      keys: vi.fn().mockResolvedValue([]) as KeysMock,
       store: new Map(),
     });
 
     // Mock do caches
     cachesMock = {
-      open: vi.fn((/** @type {string} */ name) => {
+      open: vi.fn(async (name: string) => {
         if (!cacheStore.has(name)) {
           cacheStore.set(name, createCache(name));
         }
-        return Promise.resolve(cacheStore.get(name));
-      }),
-      keys: vi.fn(() => Promise.resolve(Array.from(cacheStore.keys()))),
-      delete: vi.fn((/** @type {string} */ name) => {
+        return cacheStore.get(name)!;
+      }) as OpenMock,
+      keys: vi.fn(async () => Array.from(cacheStore.keys())) as KeysArrayMock,
+      delete: vi.fn(async (name: string) => {
         cacheStore.delete(name);
-        return Promise.resolve(true);
-      }),
-      has: vi.fn((/** @type {string} */ name) => Promise.resolve(cacheStore.has(name))),
+        return true;
+      }) as DeleteMock,
+      has: vi.fn(async (name: string) => cacheStore.has(name)) as HasMock,
       match: vi.fn(),
     };
 
     // Mock do fetch
-    fetchMock = vi.fn();
+    fetchMock = vi.fn() as FetchMock;
     originalFetch = global.fetch;
-    global.fetch = fetchMock;
+    global.fetch = fetchMock as unknown as typeof global.fetch;
 
     // Mock do caches global
     originalCaches = global.caches;
-    /** @type {any} */
-    (global.caches) = cachesMock;
+    (global.caches as unknown) = cachesMock;
 
     // Mock do self
     selfMock = {
@@ -150,16 +180,13 @@ describe('service worker - lógica de versão e limpeza (unitário)', () => {
       clients: { claim: vi.fn() },
       addEventListener: vi.fn(),
     };
-    /** @type {any} */
-    (global.self) = selfMock;
+    (global.self as unknown) = selfMock;
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
-    /** @type {any} */
-    (global.caches) = originalCaches;
-    /** @type {any} */
-    (global.self) = undefined;
+    (global.caches as unknown) = originalCaches;
+    (global.self as unknown) = undefined;
     vi.clearAllMocks();
   });
 
@@ -204,8 +231,8 @@ describe('service worker - lógica de versão e limpeza (unitário)', () => {
 
     // Simular lógica do activate
     const keys = await cachesMock.keys();
-    const paraApagar = keys.filter((k) => k !== CACHE_ATUAL);
-    await Promise.all(paraApagar.map((k) => cachesMock.delete(k)));
+    const paraApagar = keys.filter((k: string) => k !== CACHE_ATUAL);
+    await Promise.all(paraApagar.map((k: string) => cachesMock.delete(k)));
 
     const keysRestantes = await cachesMock.keys();
     expect(keysRestantes).toEqual(['plataforma-saude-build3']);
