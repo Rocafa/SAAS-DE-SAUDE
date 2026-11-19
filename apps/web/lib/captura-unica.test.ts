@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const PASTA_E2E = fileURLToPath(new URL('../e2e/', import.meta.url));
-const specs = readdirSync(PASTA_E2E).filter((f) => f.endsWith('.ts') && f !== 'captura.ts');
+// Busca recursiva: specs em subpastas não escapam da varredura.
+// readdirSync com recursive: true retorna string[] | Buffer[], mas só usamos strings.
+const specs = readdirSync(PASTA_E2E, { recursive: true })
+  .filter((f): f is string => typeof f === 'string' && f.endsWith('.ts') && f !== 'captura.ts');
 
 describe('capturas de tela só por e2e/captura.ts', () => {
   it('há specs para conferir (sanidade)', () => {
