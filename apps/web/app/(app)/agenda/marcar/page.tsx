@@ -91,12 +91,15 @@ function FormularioMarcar() {
   // segundo plano, e com `[original]` qualquer atualização devolvia os campos ao valor original,
   // jogando fora o que a pessoa acabou de escolher.
   const originalId = original?.id;
+  const pacienteIdOriginal = original?.pacienteId ?? '';
+  const profissionalIdOriginal = original?.profissionalId ?? '';
+  const tipoIdOriginal = original?.tipoId ?? '';
   useEffect(() => {
-    if (!original) return;
-    setPacienteId(original.pacienteId);
-    setProfissionalId(original.profissionalId);
-    setTipoId(original.tipoId);
-  }, [originalId]);
+    if (!originalId) return;
+    setPacienteId(pacienteIdOriginal);
+    setProfissionalId(profissionalIdOriginal);
+    setTipoId(tipoIdOriginal);
+  }, [originalId, pacienteIdOriginal, profissionalIdOriginal, tipoIdOriginal]);
 
   usePreenchimento('marcar-paciente', (v) => {
     setPacienteId(v);

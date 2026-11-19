@@ -10,7 +10,7 @@
  * Na troca de vínculo TODO o estado das telas é descartado (as telas remontam com a chave do vínculo).
  * Nada do portal vai para localStorage, sessionStorage ou cache (G3; §10h).
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ErroPortal, mensagemDoErro, mensagemParaTela, type ClientePortal, type VinculoDaConta } from '@/lib/api/portal';
 import { criarClientePortal, lerConfigPortal, type ModoPortal } from '@/lib/api/portal-selecionar';
 
@@ -155,13 +155,15 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
   const { api, versao } = usePortal();
   const [tentativa, setTentativa] = useState(0);
   const [estado, setEstado] = useState<EstadoPortal<T>>({ estado: 'carregando' });
+  const carregarRef = useRef<(api: ClientePortal) => Promise<T>>(carregar);
+  carregarRef.current = carregar;
   useEffect(() => {
     let vivo = true;
     // Volta a "carregando" ao tentar de novo: sem isto, o "Tentar de novo" depois de um erro deixava
     // a mensagem de erro na tela até a nova resposta chegar, e nada dizia que a tentativa começou.
     // (Cópia proposital da regra do lado da clínica: o portal não importa nada de lá — R-47a.)
     setEstado((e) => (e.estado === 'pronto' ? e : { estado: 'carregando' }));
-    carregar(api)
+    carregarRef.current(api)
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
         vivo &&
@@ -170,7 +172,6 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
     return () => {
       vivo = false;
     };
-    // `carregar` muda a cada render; recarrega quando os dados mudam ou ao tentar de novo.
   }, [api, versao, tentativa]);
   return estado;
 }
