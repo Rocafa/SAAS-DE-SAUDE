@@ -390,13 +390,46 @@ function TrilhaDeAcesso() {
 }
 
 function SecaoPrivacidade() {
-  const { api, usuario, modo } = useDados();
+  const { api, usuario, modo, atualizar } = useDados();
   const [etapa, setEtapa] = useState<'inicio' | 'codigo' | 'pedido'>('inicio');
   const [codigo, setCodigo] = useState('');
   const [ciente, setCiente] = useState(false);
   const [erro, setErro] = useState('');
+  const [erroPedido, setErroPedido] = useState('');
+  const [erroAprovacao, setErroAprovacao] = useState('');
   const [pedido, setPedido] = useState<PedidoExportacao | null>(null);
-  const admin = usuario?.papel === 'admin';
+  const [carregandoPedido, setCarregandoPedido] = useState(true);
+  const [tentativaPedido, setTentativaPedido] = useState(0);
+  const [aprovando, setAprovando] = useState(false);
+  const usuarioId = usuario?.id;
+  const papel = usuario?.papel;
+  const admin = papel === 'admin';
+
+  useEffect(() => {
+    if (!usuarioId || papel !== 'admin') {
+      setCarregandoPedido(false);
+      return;
+    }
+    let vivo = true;
+    setCarregandoPedido(true);
+    setErroPedido('');
+    setErroAprovacao('');
+    api.obterExportacaoPendente()
+      .then((pendente) => {
+        if (!vivo) return;
+        setPedido(pendente);
+        setEtapa(pendente ? 'pedido' : 'inicio');
+        setCarregandoPedido(false);
+      })
+      .catch((err: unknown) => {
+        if (!vivo) return;
+        setErroPedido(err instanceof Error ? err.message : 'Não deu para carregar o pedido.');
+        setCarregandoPedido(false);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [api, usuarioId, papel, tentativaPedido]);
 
   async function pedir(e: FormEvent) {
     e.preventDefault();
@@ -407,6 +440,20 @@ function SecaoPrivacidade() {
       setEtapa('pedido');
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Não deu para pedir.');
+    }
+  }
+
+  async function aprovar() {
+    if (!pedido || aprovando) return;
+    setAprovando(true);
+    setErroAprovacao('');
+    try {
+      setPedido(await api.aprovarExportacao(pedido.id));
+      atualizar();
+    } catch (err) {
+      setErroAprovacao(err instanceof Error ? err.message : 'Não deu para aprovar.');
+    } finally {
+      setAprovando(false);
     }
   }
 
@@ -421,8 +468,14 @@ function SecaoPrivacidade() {
           Grátis e em formato aberto (JSON e planilhas CSV), com tudo da clínica: pacientes, agenda, prontuários e financeiro. Os dados são da
           sua clínica: você pode levar para outro sistema quando quiser.
         </p>
-        {!admin ? (
+        {!usuario ? (
+          <Carregando />
+        ) : !admin ? (
           <p className="font-bold">Só um administrador da clínica pode pedir. Peça ao responsável.</p>
+        ) : carregandoPedido ? (
+          <Carregando texto="Carregando pedido de exportação…" />
+        ) : erroPedido ? (
+          <Erro mensagem={erroPedido} tentarDeNovo={() => setTentativaPedido((t) => t + 1)} />
         ) : etapa === 'inicio' ? (
           <Botao tamanho="grande" onClick={() => setEtapa('codigo')}>
             <Download aria-hidden />
@@ -455,15 +508,13 @@ function SecaoPrivacidade() {
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
             {/*
               Só na demonstração: o dump completo da clínica (pacientes, agenda, prontuários e
-              financeiro) exige duas pessoas, e aqui quem aprovaria é quem pediu, no mesmo navegador.
-              Com a API real, quem aprova é o responsável técnico, conferido no servidor.
+              financeiro) exige duas pessoas. Quem pediu recebe 403; depois da troca de usuário,
+              o pedido pendente é recuperado para outro admin aprovar, sem storage do navegador.
+              Com a API real, as duas identidades são conferidas no servidor.
             */}
+            {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
             {modo === 'fake' && (
-              <Botao
-                variante="contorno"
-                className="self-start"
-                onClick={async () => setPedido(await api.aprovarExportacao(pedido.id))}
-              >
+              <Botao variante="contorno" className="self-start" onClick={aprovar} disabled={aprovando}>
                 <ShieldCheck aria-hidden />
                 Aprovar como responsável técnico (demonstração)
               </Botao>

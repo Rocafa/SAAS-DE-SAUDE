@@ -126,6 +126,15 @@ export interface ApiClinica {
   reativarAssinatura(): Promise<Assinatura>;
   /** Exige o código do autenticador (MFA recente). */
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
+  /**
+   * Pedido pendente mais recente da clínica, para outro responsável retomar após trocar de usuário.
+   * Exige admin e o mesmo isolamento de tenant das demais consultas; `null` quando não há pedido.
+   */
+  obterExportacaoPendente(): Promise<PedidoExportacao | null>;
+  /**
+   * Exige responsável técnico com identidade diferente de quem chamou `pedirExportacao`.
+   * O servidor compara os ids autenticados e recusa autoaprovação com 403 (garantia G2, R6 do Guardião).
+   */
   aprovarExportacao(id: string): Promise<PedidoExportacao>;
 
 

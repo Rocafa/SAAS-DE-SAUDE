@@ -38,7 +38,15 @@ describe('o adaptador falso recusa o que é só do administrador', () => {
     await expect(api.cancelarAssinatura()).rejects.toMatchObject({ status: 403 });
     await expect(api.reativarAssinatura()).rejects.toMatchObject({ status: 403 });
     await expect(api.pedirExportacao('123456')).rejects.toMatchObject({ status: 403 });
+    await expect(api.obterExportacaoPendente()).rejects.toMatchObject({ status: 403 });
     await expect(api.aprovarExportacao('x1')).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('profissional não aprova um pedido de exportação criado pelo administrador', async () => {
+    const api = criarApiFake({ agora });
+    const pedido = await api.pedirExportacao('123456');
+    await api.entrarComo('u2');
+    await expect(api.aprovarExportacao(pedido.id)).rejects.toMatchObject({ status: 403, codigo: 'proibido' });
   });
 
   it('o administrador continua passando', async () => {

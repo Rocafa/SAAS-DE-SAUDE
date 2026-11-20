@@ -285,6 +285,8 @@ export interface Assinatura {
 /** Exportação total (G2): MFA recente, aprovação do responsável técnico, link pessoal de 24 h. */
 export interface PedidoExportacao {
   id: string;
+  /** Identidade de quem pediu; a aprovação exige outro usuário autenticado (R6 do Guardião). */
+  pedidoPor: string;
   status: 'aguardando_rt' | 'pronto';
   pedidoEm: string;
   expiraEm?: string;
