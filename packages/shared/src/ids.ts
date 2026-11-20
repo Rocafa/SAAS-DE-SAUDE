@@ -11,3 +11,8 @@ export type MedicalRecordId = Brand<string, 'MedicalRecordId'>;
 export type RecordEntryId = Brand<string, 'RecordEntryId'>;
 export type PrescriptionId = Brand<string, 'PrescriptionId'>;
 export type ChargeId = Brand<string, 'ChargeId'>;
+
+/** Cria um construtor de ID brandado para o tipo B. */
+export function tipoId<B extends string>(): (s: string) => Brand<string, B> {
+  return (s: string) => s as Brand<string, B>;
+}
