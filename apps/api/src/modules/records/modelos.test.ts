@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
-import { faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloPelaEspecialidade, validarConteudo } from './modelos';
+import { faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloCompativelComEspecialidade, modeloPelaEspecialidade, validarConteudo } from './modelos';
 import { hashDaFinalizacao, podeVerConteudo } from './prontuario-regras';
 
 function campos(fn: () => unknown): string[] {
@@ -86,6 +86,16 @@ describe('modelos de registro por nicho', () => {
     expect(modeloPelaEspecialidade('Terapia Ocupacional')).toBe('to');
     expect(modeloPelaEspecialidade('TO')).toBe('to');
     expect(modeloPelaEspecialidade('Fisioterapia')).toBe('fisio');
+  });
+
+  it('R3: psicologia não sai do compartimento de psicologia; fisio e TO aceitam os modelos entre si', () => {
+    expect(modeloCompativelComEspecialidade('Psicóloga clínica', 'psicologia')).toBe(true);
+    expect(modeloCompativelComEspecialidade('Psicóloga clínica', 'fisio')).toBe(false);
+    expect(modeloCompativelComEspecialidade('Psicóloga clínica', 'to')).toBe(false);
+    expect(modeloCompativelComEspecialidade('Fisioterapia', 'psicologia')).toBe(false);
+    expect(modeloCompativelComEspecialidade('Terapia Ocupacional', 'psicologia')).toBe(false);
+    expect(modeloCompativelComEspecialidade('Fisioterapia', 'to')).toBe(true);
+    expect(modeloCompativelComEspecialidade('Terapia Ocupacional', 'fisio')).toBe(true);
   });
 });
 

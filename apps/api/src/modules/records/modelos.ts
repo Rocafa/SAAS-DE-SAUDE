@@ -155,6 +155,11 @@ export function modeloPelaEspecialidade(especialidade: string): RecordTemplate {
   return 'fisio';
 }
 
+/** R3 do #63: psicologia nunca muda de compartimento; fisio e TO podem usar os modelos entre si. */
+export function modeloCompativelComEspecialidade(especialidade: string, modelo: RecordTemplate): boolean {
+  return (modeloPelaEspecialidade(especialidade) === 'psicologia') === (modelo === 'psicologia');
+}
+
 function ehObjetoSimples(v: unknown): v is Record<string, unknown> {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const proto: unknown = Object.getPrototypeOf(v);

@@ -276,7 +276,7 @@ Nenhuma rota devolve conteúdo clínico: guia e pacote não guardam procedimento
 
 | Método e rota | Quem | Notas |
 |---|---|---|
-| `POST /atendimentos` | profissional DO agendamento, com vínculo | `{agendamentoId, modelo?, consentimentoIa?}`; agendamento em chegou/em atendimento/atendido (senão 409 `agendamento_sem_chegada`); modelo padrão pela especialidade; **idempotente** (200 com o já aberto) |
+| `POST /atendimentos` | profissional DO agendamento, com vínculo | `{agendamentoId, modelo?, consentimentoIa?}`; agendamento em chegou/em atendimento/atendido (senão 409 `agendamento_sem_chegada`); modelo padrão pela especialidade; modelo explícito incompatível = 409 `modelo_incompativel_com_especialidade` (psicologia só usa `psicologia`; fisio/TO aceitam `fisio`/`to`, R3 do #63); **idempotente** (200 com o já aberto) |
 | `GET /atendimentos/:id` | clínico com vínculo | registro atual + adendos; psicologia restrita vem com `conteudoOculto: true, motivoOculto: 'sigilo_psicologia'` |
 | `GET /atendimentos/do-agendamento/:agendamentoId` | clínico com vínculo | `{ atendimento }` com o mesmo corpo do `GET /atendimentos/:id` (inclusive a `versao` para o `versaoBase`), ou `{ atendimento: null }` se o agendamento ainda não tem atendimento. Porteiro antes de dizer se existe; trilha de leitura também sem atendimento (#180) |
 | `PUT /atendimentos/:id/registro` | autor | `{conteudo, versaoBase}`; cada chamada = **versão nova** (serve ao salvamento automático); `versaoBase` diferente da atual: 409 `versao_desatualizada`; finalizado: 409 `registro_finalizado` |
