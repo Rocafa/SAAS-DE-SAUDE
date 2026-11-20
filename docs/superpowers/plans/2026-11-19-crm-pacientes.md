@@ -16,7 +16,7 @@
 - Somente tokens existentes; foco visível, contraste AA, alvo de 48 px e modo escuro preservados.
 - Sem mudança de papéis, visibilidade clínica, busca auditada no servidor ou regras de inativação.
 - TDD: cada comportamento começa com teste vermelho pelo motivo esperado.
-- Sem `any`, `@ts-ignore`, `eslint-disable`, testes pulados ou comentários de regra apagados.
+- Tipagem sempre explícita e estrita, sem suprimir verificações de TypeScript ou ESLint; nenhum teste pulado ou comentário de regra apagado.
 - Conventional Commits em português, sem autoria de ferramenta.
 
 ## Review Focus

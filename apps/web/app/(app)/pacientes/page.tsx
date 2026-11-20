@@ -1,6 +1,6 @@
 'use client';
 
-/** Lista de pacientes: busca, cadastro, situação, ordenação e paginação. Inativos ficam ocultos por padrão. */
+/** Lista de pacientes: busca, cadastro e inativos (escondidos por padrão). */
 import { UserPlus } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';

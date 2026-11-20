@@ -34,7 +34,7 @@ Entregas:
 - Recepção não ganha acesso a prontuário nem a nomes de anexos clínicos.
 - Nenhum dado real, segredo, conteúdo clínico ou termo de busca em logs.
 - Comentários de regra, decisões do Guardião e avisos de retenção são preservados.
-- Sem `any`, `@ts-ignore`, `eslint-disable`, testes pulados ou dependências novas.
+- Tipagem sempre explícita e estrita, sem suprimir verificações de TypeScript ou ESLint; nenhum teste pulado ou dependência nova.
 
 ## Fora do escopo — parte 2
 
