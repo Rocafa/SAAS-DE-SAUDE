@@ -6,7 +6,8 @@
 import { AuditAction, type TenantId, type UserId } from '@plataforma/shared';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import postgres from 'postgres';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { tenants } from '../src/db/schema';
 import { recordAudit } from '../src/modules/audit/audit-log';
 import { createDatabase, withTenant, type DatabaseHandle, type TenantTx } from '../src/db/tenant-transaction';
@@ -20,7 +21,10 @@ import { LocalKeyProvider } from '../src/modules/crypto/local-key-provider';
 import { MemoryDataKeyStore } from '../src/modules/crypto/memory-data-key-store';
 
 const url = process.env.DATABASE_URL;
-if (!url) throw new Error('DATABASE_URL (papel app_user) é obrigatória para o teste de RLS');
+const migratorUrl = process.env.DATABASE_MIGRATOR_URL;
+if (!url || !migratorUrl) {
+  throw new Error('DATABASE_URL (app_user) e DATABASE_MIGRATOR_URL (dono) são obrigatórias para o teste de RLS');
+}
 
 const tenantA = randomUUID() as TenantId;
 const tenantB = randomUUID() as TenantId;
@@ -35,6 +39,7 @@ const ref = (tenantId: TenantId): FieldRef => ({
 });
 
 let h: DatabaseHandle;
+let owner: postgres.Sql;
 const provider = new LocalKeyProvider({ nodeEnv: 'test' });
 const store = new PgDataKeyStore();
 const cipher = new FieldCipher<TenantTx>(provider, store, auditKeyEvents);
@@ -58,6 +63,7 @@ async function novaClinica(tenantId: TenantId): Promise<void> {
 
 beforeAll(async () => {
   h = createDatabase(url, { max: 4 });
+  owner = postgres(migratorUrl, { max: 1, onnotice: () => undefined });
   for (const t of [tenantA, tenantB]) {
     await novaClinica(t);
     await withTenant(h.db, t, (tx) => cipher.provisionTenant(tx, t, ATOR));
@@ -65,7 +71,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await h?.close();
+  try {
+    await h?.close();
+  } finally {
+    await owner?.end({ timeout: 5 });
+  }
 });
 
 describe('chaves por clínica no banco (0004)', () => {
@@ -145,6 +155,48 @@ describe('chaves por clínica no banco (0004)', () => {
   });
 });
 
+describe('trigger do ciclo de vida vale também para o dono das tabelas', () => {
+  it.each(['tenant_data_keys', 'tenant_master_keys'])('dono sem RLS não apaga %s', async (tabela) => {
+    const c = randomUUID() as TenantId;
+    await novaClinica(c);
+    await withTenant(h.db, c, (tx) => cipher.provisionTenant(tx, c, ATOR));
+    const msg = await errorText(
+      owner.begin(async (tx) => {
+        // O erro desfaz inclusive o ALTER: nenhuma conexão fica com o RLS enfraquecido.
+        await tx.unsafe(`alter table ${tabela} no force row level security`);
+        await tx.unsafe(`delete from ${tabela} where tenant_id = '${c}'`);
+      }),
+    );
+    expect(msg).toContain(`${tabela} não permite DELETE`);
+  });
+
+  it('dono sem RLS não reativa DEK aposentada nem muda a identidade da linha', async () => {
+    const c = randomUUID() as TenantId;
+    await novaClinica(c);
+    const antiga = await withTenant(h.db, c, async (tx) => {
+      await cipher.provisionTenant(tx, c, ATOR);
+      const ativa = await store.findActive(tx, c);
+      await cipher.rotateDataKey(tx, c, ATOR);
+      return ativa?.id;
+    });
+    expect(antiga).toBeDefined();
+    const reativar = await errorText(
+      owner.begin(async (tx) => {
+        await tx`alter table tenant_data_keys no force row level security`;
+        await tx`update tenant_data_keys set status = 'active' where id = ${antiga ?? ''}::uuid`;
+      }),
+    );
+    expect(reativar).toMatch(/não volta a ser ativa/);
+    const identidade = await errorText(
+      owner.begin(async (tx) => {
+        await tx`alter table tenant_data_keys no force row level security`;
+        await tx`update tenant_data_keys set tenant_id = ${tenantB} where tenant_id = ${c}`;
+      }),
+    );
+    expect(identidade).toMatch(/identidade da chave de dados é imutável/);
+  });
+});
+
 describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', () => {
   it('depois de destruir, nem o banco nem o backup restaurado abrem os dados de A; B segue normal', async () => {
     const valorA = await withTenant(h.db, tenantA, (tx) => cipher.encrypt(tx, ref(tenantA), TEXTO));
@@ -211,6 +263,85 @@ describe('crypto-shredding com cópia de backup (retencao-e-descarte §4.1)', ()
 });
 
 describe('destruição em duas fases (B1 do revisor N1)', () => {
+  it('provedor falha após a primeira KEK: tudo fica em destroying e a nova chamada conclui', async () => {
+    const c = randomUUID() as TenantId;
+    await novaClinica(c);
+    const valor = await withTenant(h.db, c, async (tx) => {
+      await cipher.provisionTenant(tx, c, ATOR);
+      await cipher.rotateMasterKey(tx, c, ATOR);
+      return cipher.encrypt(tx, ref(c), TEXTO);
+    });
+    const destruir = provider.destroyMasterKey.bind(provider);
+    let falhar = true;
+    const espiado = vi.spyOn(provider, 'destroyMasterKey').mockImplementation(async (id) => {
+      await destruir(id);
+      if (falhar) {
+        falhar = false;
+        throw new KeyUnavailableError();
+      }
+    });
+    try {
+      await expect(cipher.destroyTenantKeys((fn) => withTenant(h.db, c, fn), c, ATOR)).rejects.toBeInstanceOf(
+        KeyUnavailableError,
+      );
+      const intermediarios = await withTenant(h.db, c, (tx) =>
+        tx.execute<{ status: string }>(
+          sql`select status from tenant_data_keys union all select status from tenant_master_keys`,
+        ),
+      );
+      expect(intermediarios).toHaveLength(3);
+      expect(intermediarios.every((e) => e.status === 'destroying')).toBe(true);
+      const semCache = new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { cache: new DataKeyCache() });
+      await expect(withTenant(h.db, c, (tx) => semCache.decrypt(tx, ref(c), valor))).rejects.toBeInstanceOf(
+        KeyUnavailableError,
+      );
+
+      await cipher.destroyTenantKeys((fn) => withTenant(h.db, c, fn), c, ATOR);
+      const finais = await withTenant(h.db, c, (tx) =>
+        tx.execute<{ status: string }>(
+          sql`select status from tenant_data_keys union all select status from tenant_master_keys`,
+        ),
+      );
+      expect(finais).toHaveLength(3);
+      expect(finais.every((e) => e.status === 'destroyed')).toBe(true);
+    } finally {
+      espiado.mockRestore();
+    }
+  });
+
+  it('COMMIT inicial falha: nada chega ao provedor, a auditoria desfaz e os dados seguem legíveis', async () => {
+    const c = randomUUID() as TenantId;
+    await novaClinica(c);
+    const valor = await withTenant(h.db, c, async (tx) => {
+      await cipher.provisionTenant(tx, c, ATOR);
+      return cipher.encrypt(tx, ref(c), TEXTO);
+    });
+    const espiado = vi.spyOn(provider, 'destroyMasterKey');
+    try {
+      const commitFalhaNaPrimeira = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> =>
+        withTenant(h.db, c, async (tx) => {
+          await fn(tx);
+          throw new Error('commit falhou');
+        });
+      await expect(cipher.destroyTenantKeys(commitFalhaNaPrimeira, c, ATOR)).rejects.toThrow('commit falhou');
+      expect(espiado).not.toHaveBeenCalled();
+      const estados = await withTenant(h.db, c, (tx) =>
+        tx.execute<{ status: string }>(
+          sql`select status from tenant_data_keys union all select status from tenant_master_keys`,
+        ),
+      );
+      expect(estados.map((e) => e.status)).toEqual(['active', 'active']);
+      const destruicoes = await withTenant(h.db, c, (tx) =>
+        tx.execute<{ n: number }>(sql`select count(*)::int as n from audit_log where scope = 'crypto.key.destroy'`),
+      );
+      expect(destruicoes[0]?.n).toBe(0);
+      const semCache = new FieldCipher<TenantTx>(provider, store, auditKeyEvents, { cache: new DataKeyCache() });
+      expect(await withTenant(h.db, c, (tx) => semCache.decryptString(tx, ref(c), valor))).toBe(TEXTO);
+    } finally {
+      espiado.mockRestore();
+    }
+  });
+
   it('COMMIT final falha: o banco fica em destroying, nada decifra, e a nova chamada conclui', async () => {
     const c = randomUUID() as TenantId;
     await novaClinica(c);
