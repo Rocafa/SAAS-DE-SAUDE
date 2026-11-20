@@ -6,14 +6,18 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analisarRotasDeEscrita, analisarRotasDeLeitura, handlersForaDeController, type RotaAnalisada } from './analise';
+import { analisarRotasDaApi, analisarRotasDeEscrita, analisarRotasDeLeitura, handlersForaDeController, type RotaAnalisada } from './analise';
 import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE, ROTAS_COM_MFA_RECENTE } from './lista';
 
 let rotas: RotaAnalisada[];
+let leituras: Map<string, RotaAnalisada>;
 const porRota = new Map<string, RotaAnalisada>();
 
 beforeAll(() => {
-  rotas = analisarRotasDeEscrita();
+  // Uma passagem só: repetir o programa TypeScript em cada suíte estourava o hook sob concorrência de CPU.
+  const analisadas = analisarRotasDaApi();
+  rotas = analisadas.escrita;
+  leituras = new Map(analisadas.leitura.map((r) => [r.rota, r]));
   for (const r of rotas) {
     expect(porRota.has(r.rota), `rota duplicada: ${r.rota}`).toBe(false);
     porRota.set(r.rota, r);
@@ -109,12 +113,6 @@ function ehCaminhoClinico(rota: string): boolean {
 }
 
 describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
-  let leituras: Map<string, RotaAnalisada>;
-
-  beforeAll(() => {
-    leituras = new Map(analisarRotasDeLeitura().map((r) => [r.rota, r]));
-  }, 120_000);
-
   it('a análise acha as rotas de leitura (sanidade)', () => {
     expect(leituras.size).toBeGreaterThanOrEqual(55);
     expect(leituras.get('GET /pacientes/:id')?.alcancaTrilha).toBe(true);
@@ -157,7 +155,7 @@ describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
 
 describe('R4 do #123: inventário das rotas com MFA recente', () => {
   it('as rotas com @ExigeMfaRecente são exatamente as de ROTAS_COM_MFA_RECENTE', () => {
-    const marcadas = [...analisarRotasDeEscrita(), ...analisarRotasDeLeitura()]
+    const marcadas = [...rotas, ...leituras.values()]
       .filter((r) => r.marcas.includes('ExigeMfaRecente'))
       .map((r) => r.rota)
       .sort();
