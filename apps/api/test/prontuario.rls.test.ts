@@ -48,6 +48,7 @@ let finA: Sessao;
 let fisioA: Sessao;
 let psiA: Sessao;
 let outroA: Sessao;
+let psicomotricistaA: Sessao;
 let semVinculoA: Sessao;
 let profB: Sessao;
 let pacienteA: string;
@@ -130,6 +131,7 @@ beforeAll(async () => {
   fisioA = api.sessao(clinicaA, 'profissional');
   psiA = api.sessao(clinicaA, 'profissional');
   outroA = api.sessao(clinicaA, 'profissional');
+  psicomotricistaA = api.sessao(clinicaA, 'profissional');
   semVinculoA = api.sessao(clinicaA, 'admin', 'profissional');
   const adminB = api.sessao(clinicaB, 'admin');
   profB = api.sessao(clinicaB, 'profissional');
@@ -137,6 +139,7 @@ beforeAll(async () => {
   const pf = await criarProfissional(adminA, fisioA, 'Fisioterapia');
   const pp = await criarProfissional(adminA, psiA, 'Psicologia');
   const po = await criarProfissional(adminA, outroA, 'Terapia ocupacional');
+  await criarProfissional(adminA, psicomotricistaA, 'Psicomotricidade');
   await criarProfissional(adminA, semVinculoA, 'Fisioterapia');
   const pB = await criarProfissional(adminB, profB, 'Fisioterapia');
   const tipo = await api.http().post('/tipos-atendimento').set(cab(adminA)).send({ nome: 'Sessao', minutos: 50 });
@@ -248,6 +251,44 @@ describe('abertura do atendimento a partir do check-in', () => {
     expect(psi.status).toBe(200);
     expect(psi.body).toMatchObject({ modelo: 'psicologia', restrito: true, consentimentoIa: 'recusou' });
     atPsi = (psi.body as { id: string }).id;
+  });
+
+  it('R3: modelo incompatível com a especialidade é 409 e não abre atendimento; fisio e TO podem trocar entre si', async () => {
+    const paciente = await criarPaciente(adminA);
+    for (const [sessao, modelo] of [
+      [psiA, 'fisio'],
+      [psiA, 'to'],
+      [fisioA, 'psicologia'],
+      [outroA, 'psicologia'],
+      [psicomotricistaA, 'psicologia'],
+    ] as const) {
+      const ag = await agendamento(clinicaA, paciente, profissionalDe.get(sessao.userId) as string, tipoA);
+      const res = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo });
+      expect(res.status, `${modelo} por ${sessao.userId}`).toBe(409);
+      expect(res.body).toMatchObject({ codigo: 'modelo_incompativel_com_especialidade' });
+      const gravados = await withTenant(api.db.db, clinicaA, (tx) => tx.select().from(encounters).where(eq(encounters.appointmentId, ag)));
+      expect(gravados).toEqual([]);
+    }
+
+    for (const [sessao, modelo] of [
+      [fisioA, 'to'],
+      [outroA, 'fisio'],
+      [psicomotricistaA, 'fisio'],
+      [psicomotricistaA, 'to'],
+      [psiA, 'psicologia'],
+    ] as const) {
+      const ag = await agendamento(clinicaA, paciente, profissionalDe.get(sessao.userId) as string, tipoA);
+      const res = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toMatchObject({ modelo, restrito: modelo === 'psicologia' });
+      if (modelo === 'psicologia') {
+        const incompativel = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo: 'fisio' });
+        expect(incompativel.status, JSON.stringify(incompativel.body)).toBe(409);
+        expect(incompativel.body).toMatchObject({ codigo: 'modelo_incompativel_com_especialidade' });
+        const atual = await api.http().get(`/atendimentos/do-agendamento/${ag}`).set(cab(sessao));
+        expect(atual.body).toMatchObject({ atendimento: { id: (res.body as { id: string }).id, modelo: 'psicologia', restrito: true } });
+      }
+    }
   });
 
   it('agendamento sem check-in: 409 agendamento_sem_chegada; agendamento inexistente: 404', async () => {

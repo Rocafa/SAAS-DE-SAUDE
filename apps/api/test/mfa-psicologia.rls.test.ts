@@ -15,8 +15,10 @@ import { cab, subirApi, type ApiDeTeste } from './apoio-api';
 
 let api: ApiDeTeste;
 let clinica: TenantId;
+let admin: { Authorization: string; userId: string };
 let psiUserId: string;
 let pacienteId: string;
+let tipoId: string;
 let atPsi: string;
 let agPsi: string;
 
@@ -26,12 +28,13 @@ const antigo = () => new Date(Date.now() - MFA_RECENTE_MS - 60_000);
 beforeAll(async () => {
   api = await subirApi();
   clinica = await api.novaClinica();
-  const admin = await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin');
+  admin = await api.membro(clinica, api.sessao(clinica, 'admin'), 'admin');
   const psi = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
   psiUserId = psi.userId;
   const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Psi Ficticia MFA', especialidade: 'Psicologia', usuarioId: psiUserId });
   expect(prof.status, JSON.stringify(prof.body)).toBe(201);
   const tipo = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Sessao', minutos: 50 });
+  tipoId = (tipo.body as { id: string }).id;
   const pac = await api.http().post('/pacientes').set(cab(admin)).send({ nome: 'Paciente Ficticia Psi MFA', telefone: '11900000041' });
   pacienteId = (pac.body as { id: string }).id;
   const ag = randomUUID();
@@ -58,7 +61,7 @@ beforeAll(async () => {
   expect(at.status, JSON.stringify(at.body)).toBe(200);
   atPsi = (at.body as { id: string; restrito: boolean }).id;
   expect((at.body as { restrito: boolean }).restrito).toBe(true);
-  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi(new Date()))).send({ versaoBase: 0, conteudo: { tema: 'Tema ficticio psi' } }).expect(200);
+  await api.http().put(`/atendimentos/${atPsi}/registro`).set(cab(sessaoPsi(new Date()))).send({ versaoBase: 0, conteudo: { tema: 'Tema ficticio psi', evolucao: 'Evolucao ficticia psi' } }).expect(200);
 });
 
 afterAll(async () => {
@@ -97,6 +100,53 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
       // A resposta é a mesma com MFA antigo ou recente: o MFA não muda nada para quem não pode ver.
       expect([comVelho.status, (comVelho.body as { codigo?: string }).codigo], url).toEqual([comRecente.status, (comRecente.body as { codigo?: string }).codigo]);
     }
+    for (const [metodo, url, corpo] of [
+      ['put', `/atendimentos/${atPsi}/registro`, { versaoBase: 1, conteudo: { tema: 'Tentativa ficticia' } }],
+      ['post', `/atendimentos/${atPsi}/finalizar`, {}],
+      ['post', `/atendimentos/${atPsi}/adendos`, { texto: 'Tentativa ficticia de adendo' }],
+    ] as const) {
+      const comVelho = await (metodo === 'put' ? api.http().put(url) : api.http().post(url)).set(cab(velho)).send(corpo);
+      const comRecente = await (metodo === 'put' ? api.http().put(url) : api.http().post(url)).set(cab(recente)).send(corpo);
+      expect((comVelho.body as { codigo?: string }).codigo ?? '', url).not.toMatch(/^mfa_/);
+      expect([comVelho.status, (comVelho.body as { codigo?: string }).codigo], url).toEqual([comRecente.status, (comRecente.body as { codigo?: string }).codigo]);
+    }
+  });
+
+  it('B3: com vínculo, mas sem autoria ou sigilo, as escritas também não revelam o compartimento pelo MFA', async () => {
+    const outro = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional');
+    const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'TO Ficticia com vinculo', especialidade: 'Terapia Ocupacional', usuarioId: outro.userId });
+    expect(prof.status, JSON.stringify(prof.body)).toBe(201);
+    const agendamentoId = randomUUID();
+    const recepcao = randomUUID();
+    await withTenant(
+      api.db.db,
+      clinica,
+      (tx) =>
+        tx.insert(appointments).values({
+          createdBy: recepcao,
+          id: agendamentoId,
+          tenantId: clinica,
+          patientId: pacienteId,
+          professionalId: (prof.body as { id: string }).id,
+          appointmentTypeId: tipoId,
+          startsAt: new Date(Date.now() - 10 * 60_000),
+          endsAt: new Date(Date.now() + 40 * 60_000),
+          status: 'checked_in',
+        }),
+      recepcao,
+    );
+    const velho = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: antigo() })}` };
+    const recente = { Authorization: `Bearer ${api.sessoes.criarSessao({ tenantId: clinica, userId: outro.userId, perfis: ['profissional'], mfaEm: new Date() })}` };
+    for (const [metodo, url, corpo, codigo] of [
+      ['put', `/atendimentos/${atPsi}/registro`, { versaoBase: 1, conteudo: { tema: 'Tentativa ficticia' } }, 'somente_o_autor'],
+      ['post', `/atendimentos/${atPsi}/finalizar`, {}, 'somente_o_autor'],
+      ['post', `/atendimentos/${atPsi}/adendos`, { texto: 'Tentativa ficticia de adendo' }, 'sigilo_psicologia'],
+    ] as const) {
+      const comVelho = await (metodo === 'put' ? api.http().put(url) : api.http().post(url)).set(cab(velho)).send(corpo);
+      const comRecente = await (metodo === 'put' ? api.http().put(url) : api.http().post(url)).set(cab(recente)).send(corpo);
+      expect([comVelho.status, comVelho.body], url).toEqual([403, expect.objectContaining({ codigo })]);
+      expect([comVelho.status, (comVelho.body as { codigo?: string }).codigo], url).toEqual([comRecente.status, (comRecente.body as { codigo?: string }).codigo]);
+    }
   });
 
   it('com MFA recente, o autor vê o atendimento de psicologia', async () => {
@@ -116,5 +166,39 @@ describe('R3 do #123: MFA recente só na psicologia', () => {
     expect(item).toMatchObject({ conteudoOculto: true, conteudo: null, motivoOculto: 'mfa_recente_obrigatorio' });
     const novo = await api.http().get(`/pacientes/${pacienteId}/prontuario`).set(cab(sessaoPsi(new Date())));
     expect((novo.body as { itens: { id: string; conteudoOculto: boolean }[] }).itens.find((i) => i.id === atPsi)?.conteudoOculto).toBe(false);
+  });
+
+  it('finalizar e adicionar adendo sem MFA recente: 403 auditado e sem escrita; com MFA recente: permitido', async () => {
+    const velho = sessaoPsi(antigo());
+    const finalizacaoNegada = await api.http().post(`/atendimentos/${atPsi}/finalizar`).set(cab(velho)).send({});
+    expect(finalizacaoNegada.status).toBe(403);
+    expect(finalizacaoNegada.body).toMatchObject({ codigo: 'mfa_recente_obrigatorio' });
+    const aberto = await api.http().get(`/atendimentos/${atPsi}`).set(cab(sessaoPsi(new Date())));
+    expect(aberto.body).toMatchObject({ status: 'aberto', adendos: [] });
+
+    const finalizado = await api.http().post(`/atendimentos/${atPsi}/finalizar`).set(cab(sessaoPsi(new Date()))).send({});
+    expect(finalizado.status, JSON.stringify(finalizado.body)).toBe(200);
+    expect(finalizado.body).toMatchObject({ status: 'finalizado' });
+
+    // O adendo precisa ser negado quando já é uma operação válida: registro finalizado, texto válido e autor com vínculo.
+    const adendoNegado = await api.http().post(`/atendimentos/${atPsi}/adendos`).set(cab(velho)).send({ texto: 'Adendo ficticio negado' });
+    expect(adendoNegado.status).toBe(403);
+    expect(adendoNegado.body).toMatchObject({ codigo: 'mfa_recente_obrigatorio' });
+    const semAdendo = await api.http().get(`/atendimentos/${atPsi}`).set(cab(sessaoPsi(new Date())));
+    expect(semAdendo.body).toMatchObject({ status: 'finalizado', adendos: [] });
+    const negadas = await withTenant(api.db.db, clinica, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.tenantId, clinica), eq(auditLog.actorId, psiUserId), eq(auditLog.scope, SCOPE_ACESSO_NEGADO))),
+    );
+    expect(negadas.map((l) => l.metadata)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ op: 'finalizar', reason: 'mfa_recente_obrigatorio', target_id: atPsi }),
+        expect.objectContaining({ op: 'adendo', reason: 'mfa_recente_obrigatorio', target_id: atPsi }),
+      ]),
+    );
+
+    const adendo = await api.http().post(`/atendimentos/${atPsi}/adendos`).set(cab(sessaoPsi(new Date()))).send({ texto: 'Adendo ficticio permitido' });
+    expect(adendo.status, JSON.stringify(adendo.body)).toBe(201);
+    expect(adendo.body).toMatchObject({ adendos: [{ texto: 'Adendo ficticio permitido', autorId: psiUserId }] });
+    expect((adendo.body as { adendos: unknown[] }).adendos).toHaveLength(1);
   });
 });
