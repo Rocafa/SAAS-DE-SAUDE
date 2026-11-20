@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - TDD: vermelho pelo comportamento errado antes de cada implementação.
-- Sem `any`, `@ts-ignore`, `eslint-disable`, dependências novas ou testes enfraquecidos.
+- Tipagem estrita e lint sem supressões; nenhuma dependência nova ou teste enfraquecido.
 - Erro de autoaprovação: `ErroApi`, status 403, código `autoaprovacao_proibida`.
 - Nenhum dado real, segredo, storage, console ou auditoria removida.
 - A rota HTTP da exportação ainda não existe; não criar backend nesta tarefa.
