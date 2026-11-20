@@ -6,11 +6,14 @@
  */
 import { Archive, CalendarClock, CalendarPlus, FileText, History, Package, Paperclip, Phone, Printer, Receipt, RotateCcw, ShieldAlert, Users, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { useConsulta, useDados } from '@/components/app/dados';
 import { CorrigirDados } from '@/components/app/corrigir-dados';
 import { useAcao, useAviso } from '@/components/app/desfazer';
+import { FichaRegistro } from '@/components/crm/ficha-registro';
+import { LinhaDoTempo } from '@/components/crm/linha-do-tempo';
+import { SeloStatus } from '@/components/crm/selo-status';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { cpfMascarado } from '@/lib/ajudante/busca';
@@ -22,6 +25,9 @@ import { indexarPorId } from '@/lib/indexar';
 
 export default function PaginaFicha() {
   const { id } = useParams<{ id: string }>();
+  const parametros = useSearchParams();
+  const parametroAba = parametros.get('aba');
+  const aba = parametroAba === 'agenda' || parametroAba === 'financeiro' || parametroAba === 'documentos' ? parametroAba : 'visao-geral';
   const { api, atualizar, usuario } = useDados();
   const clinico = ehPerfilClinico(usuario);
   const avisar = useAviso();
@@ -102,23 +108,24 @@ export default function PaginaFicha() {
     });
 
   return (
-    <article className="flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <p className="text-[0.95rem] font-bold uppercase tracking-wide text-texto-suave">Ficha do paciente · fictício</p>
-        <h1 className="text-[2rem] font-bold leading-tight">{nome}</h1>
-        {paciente.nomeSocial && (
-          <p className="text-texto-suave">
-            Nome social. Nome de registro: {paciente.nome} (use só em documentos oficiais).
-          </p>
-        )}
-        {!paciente.ativo && (
-          <p className="flex items-center gap-2 rounded-md border-2 border-dashed border-borda p-2 font-bold">
-            <ShieldAlert aria-hidden className="size-6" />
-            Inativo desde {paciente.inativacao ? formatarDia(paciente.inativacao.data, new Date()) : '—'}
-            {paciente.inativacao ? ` (${paciente.inativacao.motivo})` : ''}. O prontuário continua guardado pelo prazo legal.
-          </p>
-        )}
-        <dl className="mt-2 grid gap-x-8 gap-y-1 sm:grid-cols-2">
+    <FichaRegistro
+      nome={nome}
+      descricao={
+        <>
+          <p className="text-[0.95rem] font-bold uppercase tracking-wide">Ficha do paciente · fictício</p>
+          {paciente.nomeSocial && <p>Nome social. Nome de registro: {paciente.nome} (use só em documentos oficiais).</p>}
+          {!paciente.ativo && (
+            <p className="mt-2 flex items-center gap-2 rounded-md border-2 border-dashed border-borda p-2 font-bold text-texto">
+              <ShieldAlert aria-hidden className="size-6" />
+              Inativo desde {paciente.inativacao ? formatarDia(paciente.inativacao.data, new Date()) : '—'}
+              {paciente.inativacao ? ` (${paciente.inativacao.motivo})` : ''}. O prontuário continua guardado pelo prazo legal.
+            </p>
+          )}
+        </>
+      }
+      status={<SeloStatus texto={paciente.ativo ? 'Ativo' : 'Inativo'} aparencia={paciente.ativo ? 'normal' : 'inativo'} />}
+      metadados={
+        <dl className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
           <div className="flex items-center gap-2">
             <Phone aria-hidden className="size-5" />
             <dt className="sr-only">Telefone</dt>
@@ -129,20 +136,33 @@ export default function PaginaFicha() {
             <dd>{cpfMascarado(paciente.cpf)}</dd>
           </div>
         </dl>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Botao asChild>
-            <Link href={`/agenda/marcar?paciente=${paciente.id}`}>
-              <CalendarPlus aria-hidden />
-              Marcar consulta
-            </Link>
-          </Botao>
-        </div>
-        <div className="mt-2">
+      }
+      acaoPrincipal={
+        <Botao asChild>
+          <Link href={`/agenda/marcar?paciente=${paciente.id}`}>
+            <CalendarPlus aria-hidden />
+            Marcar consulta
+          </Link>
+        </Botao>
+      }
+      voltar={{ href: '/pacientes', rotulo: 'Voltar para Pacientes' }}
+      abas={[
+        { id: 'visao-geral', rotulo: 'Visão geral', href: `/pacientes/${paciente.id}` },
+        { id: 'agenda', rotulo: 'Agenda', href: `/pacientes/${paciente.id}?aba=agenda` },
+        { id: 'financeiro', rotulo: 'Financeiro', href: `/pacientes/${paciente.id}?aba=financeiro` },
+        { id: 'documentos', rotulo: 'Documentos', href: `/pacientes/${paciente.id}?aba=documentos` },
+      ]}
+      abaAtual={aba}
+    >
+      <div className="flex flex-col gap-8">
+      {aba === 'visao-geral' && (
+        <section aria-labelledby="t-dados">
+          <h2 id="t-dados" className="mb-3 text-xl font-bold">Dados cadastrais</h2>
           <CorrigirDados key={`${paciente.id}-${paciente.telefone}-${paciente.nascimento}`} paciente={paciente} />
-        </div>
-      </header>
+        </section>
+      )}
 
-      {paciente.responsaveis.length > 0 && (
+      {aba === 'visao-geral' && paciente.responsaveis.length > 0 && (
         <section aria-labelledby="t-resp">
           <h2 id="t-resp" className="mb-3 flex items-center gap-2 text-xl font-bold">
             <Users aria-hidden className="size-6" />
@@ -158,6 +178,7 @@ export default function PaginaFicha() {
         </section>
       )}
 
+      {(aba === 'visao-geral' || aba === 'agenda') && (
       <section aria-labelledby="t-proximas" data-assist-id="ficha-proximas">
         <h2 id="t-proximas" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <CalendarClock aria-hidden className="size-6" />
@@ -215,8 +236,9 @@ export default function PaginaFicha() {
           </ul>
         )}
       </section>
+      )}
 
-      {pacotes.length > 0 && (
+      {aba === 'visao-geral' && pacotes.length > 0 && (
         <section aria-labelledby="t-pacotes">
           <h2 id="t-pacotes" className="mb-3 flex items-center gap-2 text-xl font-bold">
             <Package aria-hidden className="size-6" />
@@ -245,6 +267,7 @@ export default function PaginaFicha() {
         </section>
       )}
 
+      {aba === 'visao-geral' && (
       <section aria-labelledby="t-pront" data-assist-id="ficha-prontuario">
         <h2 id="t-pront" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <FileText aria-hidden className="size-6" />
@@ -264,7 +287,9 @@ export default function PaginaFicha() {
           <p className="text-texto-suave">O conteúdo clínico é só para os profissionais que atendem este paciente.</p>
         )}
       </section>
+      )}
 
+      {(aba === 'visao-geral' || aba === 'financeiro') && (
       <section aria-labelledby="t-recibos" data-assist-id="ficha-recibos">
         <h2 id="t-recibos" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <Receipt aria-hidden className="size-6" />
@@ -294,6 +319,8 @@ export default function PaginaFicha() {
           </ul>
         )}
       </section>
+      )}
+      {(aba === 'visao-geral' || aba === 'documentos') && (
       <section aria-labelledby="t-anexos">
         <h2 id="t-anexos" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <Paperclip aria-hidden className="size-6" />
@@ -316,30 +343,19 @@ export default function PaginaFicha() {
         )}
         <p className="mt-2 text-texto-suave">Enviar arquivo chega junto com a API real (guardado cifrado, só para a clínica).</p>
       </section>
+      )}
 
+      {aba === 'visao-geral' && (
       <section aria-labelledby="t-linha">
         <h2 id="t-linha" className="mb-3 flex items-center gap-2 text-xl font-bold">
           <History aria-hidden className="size-6" />
           Linha do tempo
         </h2>
-        {linha.length === 0 ? (
-          <Vazio titulo="Ainda sem histórico" oQueFazer="Consultas, faltas, pagamentos e anexos aparecem aqui, do mais novo para o mais antigo." />
-        ) : (
-          <ol className="flex flex-col border-l-[3px] border-borda-forte pl-4">
-            {linha.map((ev, i) => (
-              <li key={`${ev.data}-${i}`} className="relative pb-4">
-                <span aria-hidden className="absolute -left-[1.6rem] top-1.5 size-4 rounded-full border-[3px] border-borda-forte bg-fundo" />
-                <p className="text-[0.95rem] font-bold">
-                  {formatarDia(ev.data, new Date())}
-                  {ev.hora ? ` às ${ev.hora}` : ''}
-                </p>
-                <p className={ev.tipo === 'falta' || ev.tipo === 'cancelamento' ? 'italic' : ''}>{ev.texto}</p>
-              </li>
-            ))}
-          </ol>
-        )}
+        <LinhaDoTempo eventos={linha} />
       </section>
+      )}
 
+      {aba === 'visao-geral' && (
       <section aria-labelledby="t-inativar" className="rounded-md border-2 border-dashed border-borda p-4">
         <h2 id="t-inativar" className="mb-2 flex items-center gap-2 text-xl font-bold">
           <Archive aria-hidden className="size-6" />
@@ -386,6 +402,8 @@ export default function PaginaFicha() {
           </Botao>
         )}
       </section>
-    </article>
+      )}
+      </div>
+    </FichaRegistro>
   );
 }
