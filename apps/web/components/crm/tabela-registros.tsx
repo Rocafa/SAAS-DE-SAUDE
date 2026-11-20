@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { cn } from '@/lib/utils';
@@ -35,6 +35,9 @@ interface TabelaRegistrosProps<T> {
   obterStatus?: (registro: T) => string;
   statusInicial?: string;
   porPagina?: number;
+  rotuloBusca?: string;
+  ajudaBusca?: string;
+  rotuloRegistros?: { singular: string; plural: string };
 }
 
 export function TabelaRegistros<T>({
@@ -53,7 +56,13 @@ export function TabelaRegistros<T>({
   obterStatus = () => 'todos',
   statusInicial = 'todos',
   porPagina = 10,
+  rotuloBusca = 'Procurar registros',
+  ajudaBusca = 'Confira a escrita. Você também pode limpar a busca e os filtros.',
+  rotuloRegistros = { singular: 'registro', plural: 'registros' },
 }: TabelaRegistrosProps<T>) {
+  const id = useId();
+  const buscaId = `${id}-busca`;
+  const statusId = `${id}-status`;
   const [status, setStatus] = useState(statusInicial);
   const [pagina, setPagina] = useState(1);
   const [ordenacao, setOrdenacao] = useState<{ colunaId: string; direcao: DirecaoOrdenacao } | null>(null);
@@ -95,7 +104,7 @@ export function TabelaRegistros<T>({
       <button
         key={coluna.id}
         type="button"
-        aria-label={`Ordenar por ${coluna.titulo}`}
+        aria-label={`Ordenar por ${coluna.titulo}${ativa ? `, ${ordenacao.direcao === 'ascendente' ? 'crescente' : 'decrescente'}` : ''}`}
         aria-pressed={ativa}
         onClick={() => alternarOrdenacao(coluna.id)}
         className={cn('inline-flex min-h-12 items-center gap-2 font-bold', movel && 'rounded-md border-2 border-borda px-3')}
@@ -110,35 +119,36 @@ export function TabelaRegistros<T>({
     );
   }
 
-  const baseTemRegistros = registros.length > 0;
-  const filtroPadraoSemResultado = baseTemRegistros && busca.trim().length === 0 && status === statusInicial && status !== 'todos';
-  const totalRotulo = `${paginado.total} ${paginado.total === 1 ? 'registro' : 'registros'}`;
+  const haBusca = busca.trim().length > 0;
+  const haResultadosOuBusca = registros.length > 0 || haBusca;
+  const filtroPadraoSemResultado = registros.length > 0 && !haBusca && status === statusInicial && status !== 'todos';
+  const totalRotulo = `${paginado.total} ${paginado.total === 1 ? rotuloRegistros.singular : rotuloRegistros.plural}`;
 
   return (
     <section aria-label={titulo}>
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
         <div className="relative w-full max-w-xl">
-          <label htmlFor="busca-pacientes" className="sr-only">
-            Procurar paciente
+          <label htmlFor={buscaId} className="sr-only">
+            {rotuloBusca}
           </label>
           <Search aria-hidden className="pointer-events-none absolute left-4 top-1/2 size-6 -translate-y-1/2" />
           <input
-            id="busca-pacientes"
+            id={buscaId}
             type="search"
             value={busca}
             onChange={(event) => mudarBusca(event.target.value)}
-            placeholder="Procurar paciente"
+            placeholder={rotuloBusca}
             autoComplete="off"
             className="min-h-14 w-full rounded-md border-2 border-borda-forte bg-fundo pl-12 pr-4 text-lg"
           />
         </div>
         {opcoesStatus && (
           <div className="flex flex-col gap-1">
-            <label htmlFor="filtro-status" className="text-[0.95rem] font-bold">
+            <label htmlFor={statusId} className="text-[0.95rem] font-bold">
               Status
             </label>
             <select
-              id="filtro-status"
+              id={statusId}
               aria-label="Filtrar por status"
               value={status}
               onChange={(event) => mudarStatus(event.target.value)}
@@ -158,18 +168,18 @@ export function TabelaRegistros<T>({
       {estado.estado === 'erro' && <Erro mensagem={estado.mensagem} tentarDeNovo={estado.tentarDeNovo} />}
       {estado.estado === 'pronto' && filtrados.length === 0 && (
         <Vazio
-          titulo={baseTemRegistros ? (busca.trim() ? `Ninguém encontrado com “${busca.trim()}”` : 'Nenhum registro neste filtro') : vazio.titulo}
+          titulo={haResultadosOuBusca ? (busca.trim() ? `Ninguém encontrado com “${busca.trim()}”` : 'Nenhum registro neste filtro') : vazio.titulo}
           oQueFazer={
-            baseTemRegistros
+            haResultadosOuBusca
               ? busca.trim()
-                ? 'Confira a escrita ou procure pelo telefone. Você também pode limpar a busca e os filtros.'
+                ? ajudaBusca
                 : filtroPadraoSemResultado
                   ? 'Escolha outro status ou mostre todos os registros.'
                   : 'Escolha outro status ou limpe a busca e os filtros.'
               : vazio.oQueFazer
           }
           acao={
-            baseTemRegistros ? (
+            haResultadosOuBusca ? (
               filtroPadraoSemResultado && opcoesStatus?.some((opcao) => opcao.valor === 'todos') ? (
                 <Botao variante="contorno" onClick={() => mudarStatus('todos')}>
                   Mostrar todos
@@ -251,7 +261,7 @@ export function TabelaRegistros<T>({
               Página anterior
             </Botao>
             <p role="status" className="text-[0.95rem] text-texto-suave">
-              Página {paginado.pagina} de {paginado.totalPaginas} · {paginado.total} {paginado.total === 1 ? 'paciente' : 'pacientes'}
+              Página {paginado.pagina} de {paginado.totalPaginas} · {paginado.total} {paginado.total === 1 ? rotuloRegistros.singular : rotuloRegistros.plural}
             </p>
             <Botao variante="contorno" disabled={paginado.pagina >= paginado.totalPaginas} onClick={() => setPagina(paginado.pagina + 1)}>
               Próxima página

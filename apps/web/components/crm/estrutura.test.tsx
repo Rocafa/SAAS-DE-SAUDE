@@ -19,6 +19,7 @@ describe('TabelaRegistros — HTML estático', () => {
         busca=""
         aoMudarBusca={() => undefined}
         estado={{ estado: 'pronto' }}
+        rotuloBusca="Procurar paciente"
         vazio={{ titulo: 'Nenhum paciente', oQueFazer: 'Cadastre o primeiro.' }}
       />,
     );
@@ -27,7 +28,8 @@ describe('TabelaRegistros — HTML estático', () => {
     expect(html).toContain('scope="col"');
     expect(html).toContain('scope="row"');
     expect(html).toContain('aria-sort="none"');
-    expect(html).toContain('<label for="busca-pacientes"');
+    expect(html).toContain('-busca"');
+    expect(html).toContain('Procurar paciente');
   });
 
   it('reutiliza Carregando, Vazio e Erro em vez de esconder falhas', () => {
@@ -48,6 +50,49 @@ describe('TabelaRegistros — HTML estático', () => {
         <TabelaRegistros {...base} estado={{ estado: 'erro', mensagem: 'Falha de rede.', tentarDeNovo: () => undefined }} />,
       ),
     ).toContain('Tentar de novo');
+  });
+
+  it('informa busca HTTP sem resultado em vez de dizer que a base está vazia', () => {
+    const html = renderToStaticMarkup(
+      <TabelaRegistros
+        titulo="Lista de pacientes"
+        registros={[]}
+        colunas={colunas}
+        obterId={(r) => r.id}
+        textoBusca={(r) => r.nome}
+        busca="Nome inexistente"
+        aoMudarBusca={() => undefined}
+        estado={{ estado: 'pronto' }}
+        buscaNoServidor
+        vazio={{ titulo: 'Nenhum paciente cadastrado ainda', oQueFazer: 'Cadastre o primeiro.' }}
+      />,
+    );
+    expect(html).toContain('Ninguém encontrado com “Nome inexistente”');
+    expect(html).toContain('Limpar busca e filtros');
+    expect(html).not.toContain('Nenhum paciente cadastrado ainda');
+  });
+
+  it('parametriza os textos e gera IDs únicos para duas tabelas reutilizadas', () => {
+    const comum = {
+      titulo: 'Consultas',
+      registros: [{ id: 'a01', nome: 'Consulta da manhã' }],
+      colunas,
+      obterId: (r: { id: string; nome: string }) => r.id,
+      textoBusca: (r: { id: string; nome: string }) => r.nome,
+      busca: '',
+      aoMudarBusca: () => undefined,
+      estado: { estado: 'pronto' } as const,
+      vazio: { titulo: 'Nenhuma consulta', oQueFazer: 'Marque a primeira.' },
+      rotuloBusca: 'Procurar consulta',
+      rotuloRegistros: { singular: 'consulta', plural: 'consultas' },
+    };
+    const html = renderToStaticMarkup(<><TabelaRegistros {...comum} /><TabelaRegistros {...comum} /></>);
+    const ids = html.match(/id="[^"]+-busca"/g) ?? [];
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(html).toContain('Procurar consulta');
+    expect(html).toContain('1 consulta');
+    expect(html).not.toContain('id="busca-pacientes"');
   });
 
   it('distingue base só com inativos de base sem nenhum cadastro', () => {

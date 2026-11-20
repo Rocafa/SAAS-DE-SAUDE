@@ -92,6 +92,9 @@ export default function PaginaPacientes() {
         busca={busca}
         aoMudarBusca={setBusca}
         estado={consulta}
+        rotuloBusca="Procurar paciente"
+        ajudaBusca="Confira a escrita ou procure pelo telefone. Você também pode limpar a busca e os filtros."
+        rotuloRegistros={{ singular: 'paciente', plural: 'pacientes' }}
         filtrar={filtrar}
         buscaNoServidor={noServidor}
         opcoesStatus={OPCOES_STATUS}

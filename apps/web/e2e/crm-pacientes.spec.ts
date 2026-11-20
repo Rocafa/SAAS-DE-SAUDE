@@ -44,6 +44,7 @@ test.describe('CRM — lista de pacientes', () => {
     await expect(page.locator('th[scope="col"]').filter({ hasText: 'Nome' })).toHaveAttribute('aria-sort', 'ascending');
     await ordenar.click();
     await expect(page.locator('th[scope="col"]').filter({ hasText: 'Nome' })).toHaveAttribute('aria-sort', 'descending');
+    await expect(page.getByRole('button', { name: 'Ordenar por Nome, decrescente' })).toBeVisible();
     await expect(nomesVisiveis(page).first()).toHaveText('Thiago Barbosa');
     await expect(nomesVisiveis(page)).toHaveCount(10);
   });
@@ -132,7 +133,7 @@ test.describe('CRM — ficha de paciente', () => {
     let naBusca = false;
     for (let i = 0; i < 25 && !naBusca; i++) {
       await page.keyboard.press('Tab');
-      naBusca = await page.evaluate(() => document.activeElement?.id === 'busca-pacientes');
+      naBusca = await page.evaluate(() => document.activeElement?.id.endsWith('-busca') ?? false);
     }
     expect(naBusca).toBe(true);
     await page.keyboard.type('Maria Silva');
