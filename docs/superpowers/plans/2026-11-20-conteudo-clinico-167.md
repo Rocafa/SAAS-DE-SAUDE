@@ -1,6 +1,6 @@
 # Conteúdo clínico da issue 167 — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Completar, sem inventar conteúdo clínico, os campos textuais e as validações de medidas que a issue 167 e o parecer do Guardião especificam.
 
@@ -37,20 +37,20 @@
 - Consumes: `validarConteudo(modelo, valor)` e `EntradaInvalidaError.campos`.
 - Produces: `InstrumentoConhecido`, catálogo `INSTRUMENTOS` tipado, e restrições declarativas da TO em `MODELOS`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Adicionar casos reais de `validarConteudo` para: psicologia aceitar `instrumentos` como texto e continuar recusando `medidas`; TO aceitar somente `escala` de Barthel/MIF e suas subescalas; TO recusar EVA, força, goniometria, perimetria, Berg, NPRS, escala livre e COPM; fisioterapia manter esses instrumentos permitidos, exceto COPM. Cobrir limites literais: EVA e NPRS 0/10; MRC 0/5; Barthel 0/100; MIF 18/126; MIF motora 13/91; MIF cognitiva 5/35; valores fora de cada faixa e decimais nos instrumentos inteiros.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @plataforma/api exec vitest run src/modules/records/modelos.test.ts`
 Expected: falhas pelos campos ainda desconhecidos e pelas medidas da TO ainda aceitas; nenhuma falha por erro de sintaxe ou fixture.
 
-- [ ] **Step 3: Implement the minimal validation**
+- [x] **Step 3: Implement the minimal validation**
 
 Tipar `INSTRUMENTOS` com `as const`, expor `InstrumentoConhecido = keyof typeof INSTRUMENTOS` e usar esse tipo em `Medida.instrumento`. Em `DefinicaoModelo`, adicionar listas opcionais de tipos de medida e instrumentos. Na TO, permitir somente `escala` e `barthel`, `mif`, `mif_motora`, `mif_cognitiva`. Passar o modelo a `validarMedidas`; resolver primeiro o instrumento explícito ou o rótulo de compatibilidade e aplicar a lista da especialidade. Adicionar `instrumentos` aos textos da psicologia, mantendo `medidas: false`.
 
-- [ ] **Step 4: Run the API checks**
+- [x] **Step 4: Run the API checks**
 
 Run: `pnpm --filter @plataforma/api exec vitest run src/modules/records/modelos.test.ts`
 Expected: todos os testes do arquivo passam.
@@ -58,7 +58,7 @@ Expected: todos os testes do arquivo passam.
 Run: `pnpm --filter @plataforma/api lint && pnpm --filter @plataforma/api typecheck && pnpm --filter @plataforma/api test && pnpm --filter @plataforma/api build`.
 Expected: exit 0 em todos; nenhuma falha omitida.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/modules/records/modelos.ts apps/api/src/modules/records/modelos.test.ts
@@ -76,11 +76,11 @@ git commit -m "fix(prontuario): restringe medidas da TO e referencia instrumento
 - Consumes: as chaves textuais `diagnostico`, `exames`, `nivel_assistencia` e `instrumentos` aceitas pela API.
 - Produces: campos opcionais nos modelos visíveis; obrigatórios atuais permanecem inalterados.
 
-- [ ] **Step 1: Write the failing unit and E2E tests**
+- [x] **Step 1: Write the failing unit and E2E tests**
 
 No Vitest, verificar os campos e a preservação dos obrigatórios por especialidade. No Playwright, preencher, salvar, assinar e reler diagnóstico/exames na fisioterapia; diagnóstico/exames/nível de assistência na TO; referência de instrumento na psicologia. Na TO, tentar assinar sem objetivo/atividades deve mostrar as faltas antes do preenchimento. Conferir o aviso de responsabilidade pela conferência no SATEPSI.
 
-- [ ] **Step 2: Build and run E2E to verify it fails**
+- [x] **Step 2: Build and run E2E to verify it fails**
 
 Run: `pnpm --filter @plataforma/web exec vitest run lib/prontuario.test.ts`
 Expected: falhas porque os campos novos ainda não existem.
@@ -88,11 +88,11 @@ Expected: falhas porque os campos novos ainda não existem.
 Run: `pnpm --filter @plataforma/web build && pnpm --filter ./apps/web test:e2e -- atendimento-documentos.spec.ts`
 Expected: seletores dos campos novos não encontrados; os demais comportamentos continuam íntegros.
 
-- [ ] **Step 3: Implement the specified fields**
+- [x] **Step 3: Implement the specified fields**
 
 Adicionar campos opcionais com os nomes clínicos da issue: diagnóstico e prognóstico fisioterapêuticos; diagnóstico e prognóstico terapêuticos ocupacionais; exames complementares realizados ou solicitados; nível de assistência em texto livre. Em psicologia, adicionar referência textual a instrumentos, sem escore, com ajuda que atribui ao profissional a conferência no SATEPSI. Nenhuma categoria de assistência, instrumento psicológico ou conteúdo de teste será predefinida.
 
-- [ ] **Step 4: Run the web checks**
+- [x] **Step 4: Run the web checks**
 
 Run: `pnpm --filter @plataforma/web exec vitest run lib/prontuario.test.ts`
 Expected: todos os testes do arquivo passam.
@@ -100,7 +100,7 @@ Expected: todos os testes do arquivo passam.
 Run: `pnpm --filter @plataforma/web lint && pnpm --filter @plataforma/web typecheck && pnpm --filter @plataforma/web test && pnpm --filter @plataforma/web build && pnpm --filter ./apps/web test:e2e -- atendimento-documentos.spec.ts`.
 Expected: exit 0 em todos; E2E verde nos projetos celular e computador.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/lib/prontuario.ts apps/web/lib/prontuario.test.ts apps/web/e2e/atendimento-documentos.spec.ts
@@ -109,8 +109,8 @@ git commit -m "feat(web): exibe campos clínicos da COFFITO e referência ao SAT
 
 ### Task 3: Revisão e handoff
 
-- [ ] Reler o diff contra a issue, os 13 itens do pedido e os comentários preservados.
-- [ ] Executar os testes RLS de prontuário se o banco estiver disponível; registrar explicitamente qualquer bloqueio de infraestrutura.
-- [ ] Registrar como `PRECISA DE HUMANO`: licença e faixas da COPM; articulações/movimentos e faixas de referência da goniometria; variante Barthel 0–20; tela e perfil do aviso de propriedade/acesso ao prontuário; decisão sobre estagiários do piloto.
-- [ ] Registrar que o PR #194 já cobre o pré-requisito de registro no conselho e que a cofinalização segue o desenho próprio.
-- [ ] Escrever o handoff com comandos, resultados, riscos e commits; deixar o branch limpo.
+- [x] Reler o diff contra a issue, os 13 itens do pedido e os comentários preservados.
+- [x] Executar os testes RLS de prontuário se o banco estiver disponível; registrar explicitamente qualquer bloqueio de infraestrutura.
+- [x] Registrar como `PRECISA DE HUMANO`: licença e faixas da COPM; articulações/movimentos e faixas de referência da goniometria; variante Barthel 0–20; tela e perfil do aviso de propriedade/acesso ao prontuário; decisão sobre estagiários do piloto.
+- [x] Registrar que o PR #194 já cobre o pré-requisito de registro no conselho e que a cofinalização segue o desenho próprio.
+- [x] Escrever o handoff com comandos, resultados, riscos e commits; deixar o branch limpo.
