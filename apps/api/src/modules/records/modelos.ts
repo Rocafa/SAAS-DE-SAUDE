@@ -11,8 +11,9 @@
  *   conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026): diagnóstico e prognóstico terapêutico
  *   ocupacional (V), exames complementares (IV), objetivos do plano (VI). Desempenho, nível de assistência e as
  *   atividades da sessão são escolha de produto (a tela já pede), não exigência da norma.
- * - Escalas: instrumento conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); os demais, faixa larga.
- * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
+ * - Escalas: instrumento explícito ou conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); a TO só aceita
+ *   Barthel/MIF e subescalas, enquanto a fisio mantém as demais medidas e a escala livre.
+ * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos), referência textual a instrumentos e plano.
  *   As ANOTAÇÕES PRIVADAS do psicólogo não são registro: ficam em `private_notes` (notas-privadas.service.ts).
  */
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -27,7 +28,7 @@ export interface Medida {
   readonly rotulo?: string;
   readonly valor: number;
   /** Instrumento conhecido, explícito (lista fechada `INSTRUMENTOS_CONHECIDOS`); só para `escala`. Sem ele, o rótulo decide. */
-  readonly instrumento?: string;
+  readonly instrumento?: InstrumentoConhecido;
 }
 
 export interface MetaDoPlano {
@@ -58,6 +59,9 @@ interface DefinicaoModelo {
    */
   readonly obrigatoriosAnteriores?: Readonly<Record<number, readonly string[]>>;
   readonly medidas: boolean;
+  /** Ausência = todos os tipos/instrumentos existentes; a TO declara o conjunto próprio (#167). */
+  readonly tiposDeMedida?: readonly TipoDeMedida[];
+  readonly instrumentosPermitidos?: readonly InstrumentoConhecido[];
   readonly plano: boolean;
 }
 
@@ -84,12 +88,17 @@ export const MODELOS: Readonly<Record<RecordTemplate, DefinicaoModelo>> = {
     obrigatoriosParaFinalizar: ['objetivo', 'atividades'],
     obrigatoriosAnteriores: { 1: ['queixa', 'conduta'] },
     medidas: true,
+    // #167 e parecer de 13/11: TO não herda EVA/goniometria/força/perimetria nem o catálogo inteiro da fisio.
+    // COPM continua fora: a licença no Brasil não foi confirmada.
+    tiposDeMedida: ['escala'],
+    instrumentosPermitidos: ['barthel', 'mif', 'mif_motora', 'mif_cognitiva'],
     plano: true,
   },
   psicologia: {
     nome: 'Registro de sessão de psicologia',
     versao: 1,
-    textos: ['tema', 'intervencoes', 'evolucao', 'encaminhamentos'],
+    // #167: só referência textual; nenhum teste, item ou escore é embutido. A conferência no SATEPSI é do profissional.
+    textos: ['tema', 'intervencoes', 'evolucao', 'encaminhamentos', 'instrumentos'],
     obrigatoriosParaFinalizar: ['tema', 'evolucao'],
     medidas: false,
     plano: true,
@@ -113,11 +122,11 @@ const FAIXAS: Readonly<Record<TipoDeMedida, { min: number; max: number; inteiro:
 };
 
 /**
- * Instrumentos conhecidos (pelo rótulo da medida `escala`): faixa e inteiro próprios, para o gráfico não mentir (#167).
+ * Instrumentos conhecidos (explícitos ou pelo rótulo da medida `escala`): faixa e inteiro próprios, para o gráfico não mentir (#167).
  * Só instrumentos de uso livre. A COPM não entra (tem dono; licença no Brasil não confirmada). Psicologia não tem
  * medidas: instrumento psicológico é do SATEPSI e privativo do psicólogo (Res. CFP 31/2022).
  */
-const INSTRUMENTOS: Readonly<Record<string, { min: number; max: number }>> = {
+export const INSTRUMENTOS = {
   barthel: { min: 0, max: 100 },
   mif: { min: 18, max: 126 },
   // C2 do parecer de 13/11: as subescalas da MIF têm faixa própria (13 itens motores e 5 cognitivos, de 1 a 7).
@@ -125,16 +134,22 @@ const INSTRUMENTOS: Readonly<Record<string, { min: number; max: number }>> = {
   mif_cognitiva: { min: 5, max: 35 },
   berg: { min: 0, max: 56 },
   nprs: { min: 0, max: 10 },
-};
+} as const;
+
+export type InstrumentoConhecido = keyof typeof INSTRUMENTOS;
 
 /** Lista fechada aceita no campo `instrumento` da medida (o front oferece estes). */
-export const INSTRUMENTOS_CONHECIDOS: readonly string[] = Object.keys(INSTRUMENTOS);
+export const INSTRUMENTOS_CONHECIDOS: readonly InstrumentoConhecido[] = Object.keys(INSTRUMENTOS) as InstrumentoConhecido[];
+
+function ehInstrumentoConhecido(valor: unknown): valor is InstrumentoConhecido {
+  return typeof valor === 'string' && Object.hasOwn(INSTRUMENTOS, valor);
+}
 
 /**
  * Instrumento pelo rótulo: "Índice de Barthel", "MIF total", "MIF motora", "Escala de Berg" e "NPRS" casam pela palavra.
  * É a reserva para quem não manda o campo `instrumento` explícito, que vence o rótulo quando vem.
  */
-export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS | undefined {
+export function instrumentoDoRotulo(rotulo: string): InstrumentoConhecido | undefined {
   const palavras = rotulo
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -144,7 +159,7 @@ export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS |
     if (palavras.some((p) => p.startsWith('motor'))) return 'mif_motora';
     if (palavras.some((p) => p.startsWith('cognit'))) return 'mif_cognitiva';
   }
-  return Object.keys(INSTRUMENTOS).find((i) => palavras.includes(i));
+  return INSTRUMENTOS_CONHECIDOS.find((i) => palavras.includes(i));
 }
 
 /** Modelo padrão pela especialidade do profissional (o front faz igual). */
@@ -185,12 +200,13 @@ function textoCurto(v: unknown, max: number): string | null {
   return t;
 }
 
-function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
+function validarMedidas(modelo: RecordTemplate, valor: unknown, erros: string[]): Medida[] | undefined {
   if (!Array.isArray(valor) || valor.length > MAX_MEDIDAS) {
     erros.push('conteudo.medidas');
     return undefined;
   }
   const out: Medida[] = [];
+  const def = MODELOS[modelo];
   valor.forEach((m: unknown, i) => {
     const campo = `conteudo.medidas.${i}`;
     if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor', 'instrumento'].includes(k))) {
@@ -199,6 +215,10 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
     }
     const tipo = m.tipo;
     if (typeof tipo !== 'string' || !(TIPOS_DE_MEDIDA as readonly string[]).includes(tipo)) {
+      erros.push(`${campo}.tipo`);
+      return;
+    }
+    if (def.tiposDeMedida && !def.tiposDeMedida.includes(tipo as TipoDeMedida)) {
       erros.push(`${campo}.tipo`);
       return;
     }
@@ -222,9 +242,9 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
       return;
     }
     // Instrumento explícito (parecer de 13/11): da lista fechada e só para `escala`; vence o rótulo.
-    let explicito: string | undefined;
+    let explicito: InstrumentoConhecido | undefined;
     if (m.instrumento !== undefined) {
-      if (tipo !== 'escala' || typeof m.instrumento !== 'string' || !Object.hasOwn(INSTRUMENTOS, m.instrumento)) {
+      if (tipo !== 'escala' || !ehInstrumentoConhecido(m.instrumento)) {
         erros.push(`${campo}.instrumento`);
         return;
       }
@@ -235,6 +255,10 @@ function validarMedidas(valor: unknown, erros: string[]): Medida[] | undefined {
       const propria = instrumento ? INSTRUMENTOS[instrumento] : undefined;
       if (propria && (v < propria.min || v > propria.max || !Number.isInteger(v))) {
         erros.push(`${campo}.valor`);
+        return;
+      }
+      if (def.instrumentosPermitidos && (!instrumento || !def.instrumentosPermitidos.includes(instrumento))) {
+        erros.push(`${campo}.${explicito ? 'instrumento' : 'rotulo'}`);
         return;
       }
     }
@@ -300,7 +324,7 @@ export function validarConteudo(modelo: RecordTemplate, valor: unknown): Conteud
     else if (t !== undefined) out[campo] = t;
   }
   if (def.medidas && valor.medidas !== undefined) {
-    const m = validarMedidas(valor.medidas, erros);
+    const m = validarMedidas(modelo, valor.medidas, erros);
     if (m && m.length > 0) out.medidas = m;
   }
   if (def.plano && valor.planoDeSessoes !== undefined && valor.planoDeSessoes !== null) {

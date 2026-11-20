@@ -47,7 +47,7 @@ describe('modelos de registro por nicho', () => {
     expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'eva', valor: 11 }] }))).toEqual(['conteudo.medidas.0.valor']);
     expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'eva', valor: 2.5 }] }))).toEqual(['conteudo.medidas.0.valor']);
     expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'goniometria', valor: 90 }] }))).toEqual(['conteudo.medidas.0.rotulo']);
-    expect(campos(() => validarConteudo('to', { medidas: [{ tipo: 'forca', valor: 6 }] }))).toEqual(['conteudo.medidas.0.valor']);
+    expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'forca', valor: 6 }] }))).toEqual(['conteudo.medidas.0.valor']);
     expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'peso', valor: 1 }] }))).toEqual(['conteudo.medidas.0.tipo']);
     expect(campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'eva', valor: 1, extra: 1 }] }))).toEqual(['conteudo.medidas.0']);
     expect(campos(() => validarConteudo('fisio', { medidas: Array.from({ length: 51 }, () => ({ tipo: 'eva', valor: 1 })) }))).toEqual([
@@ -134,8 +134,11 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(campos(() => validarConteudo('to', { tema: 'x' }))).toEqual(['campo_desconhecido']);
   });
 
-  it('psicologia não ganha medida nem instrumento (SATEPSI, Res. CFP 31/2022)', () => {
+  it('psicologia referencia instrumento em texto, sem liberar medida ou escore (SATEPSI, Res. CFP 31/2022)', () => {
     expect(MODELOS.psicologia.medidas).toBe(false);
+    expect(validarConteudo('psicologia', { instrumentos: '  Instrumento fictício; conferência pendente  ' })).toEqual({
+      instrumentos: 'Instrumento fictício; conferência pendente',
+    });
     expect(campos(() => validarConteudo('psicologia', { medidas: [{ tipo: 'escala', rotulo: 'Barthel', valor: 50 }] }))).toEqual(['campo_desconhecido']);
   });
 
@@ -145,7 +148,7 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(instrumentoDoRotulo('Escala de Berg')).toBe('berg');
     expect(instrumentoDoRotulo('NPRS')).toBe('nprs');
     expect(instrumentoDoRotulo('Bergamota')).toBeUndefined();
-    const escala = (rotulo: string, valor: number) => campos(() => validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo, valor }] }));
+    const escala = (rotulo: string, valor: number) => campos(() => validarConteudo('fisio', { medidas: [{ tipo: 'escala', rotulo, valor }] }));
     expect(escala('Barthel', 100)).toEqual([]);
     expect(escala('Barthel', 101)).toEqual(['conteudo.medidas.0.valor']);
     expect(escala('MIF', 17)).toEqual(['conteudo.medidas.0.valor']);
@@ -163,7 +166,7 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
   });
 
   it('instrumento explícito: da lista fechada, só em escala, e vence o rótulo', () => {
-    const medir = (m: Record<string, unknown>) => campos(() => validarConteudo('to', { medidas: [m] }));
+    const medir = (m: Record<string, unknown>) => campos(() => validarConteudo('fisio', { medidas: [m] }));
     expect(INSTRUMENTOS_CONHECIDOS).toEqual(expect.arrayContaining(['barthel', 'mif', 'mif_motora', 'mif_cognitiva', 'berg', 'nprs']));
     // Rótulo livre, faixa pelo instrumento.
     expect(medir({ tipo: 'escala', rotulo: 'Avaliação de entrada', instrumento: 'barthel', valor: 100 })).toEqual([]);
@@ -175,8 +178,58 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(medir({ tipo: 'eva', instrumento: 'nprs', valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
     expect(medir({ tipo: 'escala', rotulo: 'x', instrumento: 7, valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
     // Volta normalizado com o instrumento.
-    expect(validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 40 }] })).toEqual({
+    expect(validarConteudo('fisio', { medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 40 }] })).toEqual({
       medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 40 }],
     });
+  });
+
+  it('TO aceita Barthel e MIF pelo instrumento ou pelo rótulo legado, sem escala livre', () => {
+    const medir = (m: Record<string, unknown>) => campos(() => validarConteudo('to', { medidas: [m] }));
+    for (const medida of [
+      { tipo: 'escala', rotulo: 'Índice de Barthel', valor: 0 },
+      { tipo: 'escala', rotulo: 'MIF total', valor: 126 },
+      { tipo: 'escala', rotulo: 'MIF motora', valor: 91 },
+      { tipo: 'escala', rotulo: 'MIF cognitiva', valor: 35 },
+      { tipo: 'escala', rotulo: 'Avaliação de entrada', instrumento: 'barthel', valor: 100 },
+      { tipo: 'escala', rotulo: 'Avaliação de entrada', instrumento: 'mif', valor: 18 },
+    ]) {
+      expect(medir(medida)).toEqual([]);
+    }
+    expect(medir({ tipo: 'escala', rotulo: 'Escala de Berg', valor: 56 })).toEqual(['conteudo.medidas.0.rotulo']);
+    expect(medir({ tipo: 'escala', rotulo: 'NPRS', valor: 10 })).toEqual(['conteudo.medidas.0.rotulo']);
+    expect(medir({ tipo: 'escala', rotulo: 'Escala livre da clínica', valor: 50 })).toEqual(['conteudo.medidas.0.rotulo']);
+    expect(medir({ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 56 })).toEqual(['conteudo.medidas.0.instrumento']);
+    expect(medir({ tipo: 'escala', rotulo: 'Entrada', instrumento: 'nprs', valor: 10 })).toEqual(['conteudo.medidas.0.instrumento']);
+    expect(medir({ tipo: 'escala', rotulo: 'Entrada', instrumento: 'copm', valor: 5 })).toEqual(['conteudo.medidas.0.instrumento']);
+    expect(medir({ tipo: 'escala', rotulo: 'Barthel', valor: 101 })).toEqual(['conteudo.medidas.0.valor']);
+    expect(medir({ tipo: 'escala', rotulo: 'MIF', valor: 17 })).toEqual(['conteudo.medidas.0.valor']);
+  });
+
+  it('TO recusa os tipos de medida da fisioterapia mesmo com valores válidos', () => {
+    for (const medida of [
+      { tipo: 'eva', valor: 5 },
+      { tipo: 'forca', valor: 5 },
+      { tipo: 'goniometria', rotulo: 'Flexão de joelho', valor: 90 },
+      { tipo: 'perimetria', rotulo: 'Braço direito', valor: 30 },
+    ]) {
+      expect(campos(() => validarConteudo('to', { medidas: [medida] }))).toEqual(['conteudo.medidas.0.tipo']);
+    }
+  });
+
+  it.each([
+    { nome: 'EVA', base: { tipo: 'eva' }, min: 0, max: 10 },
+    { nome: 'MRC', base: { tipo: 'forca' }, min: 0, max: 5 },
+    { nome: 'Barthel', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'barthel' }, min: 0, max: 100 },
+    { nome: 'MIF total', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif' }, min: 18, max: 126 },
+    { nome: 'MIF motora', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif_motora' }, min: 13, max: 91 },
+    { nome: 'MIF cognitiva', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif_cognitiva' }, min: 5, max: 35 },
+    { nome: 'NPRS', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'nprs' }, min: 0, max: 10 },
+  ])('$nome: aceita os limites $min e $max; recusa valores fora e decimais', ({ base, min, max }) => {
+    const medir = (valor: number) => campos(() => validarConteudo('fisio', { medidas: [{ ...base, valor }] }));
+    expect(medir(min)).toEqual([]);
+    expect(medir(max)).toEqual([]);
+    expect(medir(min - 1)).toEqual(['conteudo.medidas.0.valor']);
+    expect(medir(max + 1)).toEqual(['conteudo.medidas.0.valor']);
+    expect(medir(min + 0.5)).toEqual(['conteudo.medidas.0.valor']);
   });
 });
