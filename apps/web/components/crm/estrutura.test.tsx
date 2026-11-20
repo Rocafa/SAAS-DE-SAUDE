@@ -49,6 +49,28 @@ describe('TabelaRegistros — HTML estático', () => {
       ),
     ).toContain('Tentar de novo');
   });
+
+  it('distingue base só com inativos de base sem nenhum cadastro', () => {
+    const html = renderToStaticMarkup(
+      <TabelaRegistros
+        titulo="Lista de pacientes"
+        registros={[{ id: 'p27', nome: 'Miguel Freitas', status: 'inativo' }]}
+        colunas={[{ id: 'nome', titulo: 'Nome', celula: (r: { id: string; nome: string; status: string }) => r.nome }]}
+        obterId={(r) => r.id}
+        textoBusca={(r) => r.nome}
+        busca=""
+        aoMudarBusca={() => undefined}
+        estado={{ estado: 'pronto' }}
+        opcoesStatus={[{ valor: 'ativo', rotulo: 'Ativos' }, { valor: 'inativo', rotulo: 'Inativos' }, { valor: 'todos', rotulo: 'Todos' }]}
+        obterStatus={(r) => r.status}
+        statusInicial="ativo"
+        vazio={{ titulo: 'Nenhum paciente cadastrado ainda', oQueFazer: 'Cadastre o primeiro.' }}
+      />,
+    );
+    expect(html).toContain('Nenhum registro neste filtro');
+    expect(html).toContain('Mostrar todos');
+    expect(html).not.toContain('Nenhum paciente cadastrado ainda');
+  });
 });
 
 describe('FichaRegistro — HTML estático', () => {

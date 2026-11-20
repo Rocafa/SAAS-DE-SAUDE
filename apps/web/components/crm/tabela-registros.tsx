@@ -110,7 +110,8 @@ export function TabelaRegistros<T>({
     );
   }
 
-  const semResultadoPorFiltro = busca.trim().length > 0 || status !== statusInicial;
+  const baseTemRegistros = registros.length > 0;
+  const filtroPadraoSemResultado = baseTemRegistros && busca.trim().length === 0 && status === statusInicial && status !== 'todos';
   const totalRotulo = `${paginado.total} ${paginado.total === 1 ? 'registro' : 'registros'}`;
 
   return (
@@ -157,19 +158,27 @@ export function TabelaRegistros<T>({
       {estado.estado === 'erro' && <Erro mensagem={estado.mensagem} tentarDeNovo={estado.tentarDeNovo} />}
       {estado.estado === 'pronto' && filtrados.length === 0 && (
         <Vazio
-          titulo={semResultadoPorFiltro ? (busca.trim() ? `Ninguém encontrado com “${busca.trim()}”` : 'Nenhum registro neste filtro') : vazio.titulo}
+          titulo={baseTemRegistros ? (busca.trim() ? `Ninguém encontrado com “${busca.trim()}”` : 'Nenhum registro neste filtro') : vazio.titulo}
           oQueFazer={
-            semResultadoPorFiltro
+            baseTemRegistros
               ? busca.trim()
                 ? 'Confira a escrita ou procure pelo telefone. Você também pode limpar a busca e os filtros.'
-                : 'Escolha outro status ou limpe a busca e os filtros.'
+                : filtroPadraoSemResultado
+                  ? 'Escolha outro status ou mostre todos os registros.'
+                  : 'Escolha outro status ou limpe a busca e os filtros.'
               : vazio.oQueFazer
           }
           acao={
-            semResultadoPorFiltro ? (
-              <Botao variante="contorno" onClick={limpar}>
-                Limpar busca e filtros
-              </Botao>
+            baseTemRegistros ? (
+              filtroPadraoSemResultado && opcoesStatus?.some((opcao) => opcao.valor === 'todos') ? (
+                <Botao variante="contorno" onClick={() => mudarStatus('todos')}>
+                  Mostrar todos
+                </Botao>
+              ) : (
+                <Botao variante="contorno" onClick={limpar}>
+                  Limpar busca e filtros
+                </Botao>
+              )
             ) : (
               vazio.acao
             )
