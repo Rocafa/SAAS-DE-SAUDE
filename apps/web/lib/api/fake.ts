@@ -556,12 +556,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       const ev: EventoLinhaTempo[] = [];
       for (const a of agendamentos.filter((x) => x.pacienteId === pacienteId && x.data <= hojeIso)) {
         const prof = PROFISSIONAIS.find((p) => p.id === a.profissionalId)?.nome ?? '';
-        if (a.status === 'atendido') ev.push({ data: a.data, hora: a.hora, tipo: 'consulta', texto: `Atendimento com ${prof}` });
-        else if (a.status === 'faltou') ev.push({ data: a.data, hora: a.hora, tipo: 'falta', texto: `Faltou à consulta com ${prof}` });
-        else if (a.status === 'cancelado') ev.push({ data: a.data, hora: a.hora, tipo: 'cancelamento', texto: `Consulta cancelada com ${prof}` });
+        if (a.status === 'atendido') ev.push({ data: a.data, hora: a.hora, tipo: 'consulta', texto: `Atendimento com ${prof}`, autor: 'Histórico da agenda (demonstração)' });
+        else if (a.status === 'faltou') ev.push({ data: a.data, hora: a.hora, tipo: 'falta', texto: `Faltou à consulta com ${prof}`, autor: 'Histórico da agenda (demonstração)' });
+        else if (a.status === 'cancelado') ev.push({ data: a.data, hora: a.hora, tipo: 'cancelamento', texto: `Consulta cancelada com ${prof}`, autor: 'Histórico da agenda (demonstração)' });
       }
-      for (const r of recibos.filter((x) => x.pacienteId === pacienteId)) ev.push({ data: r.data, tipo: 'recibo', texto: `Pagamento recebido: R$ ${r.valor},00` });
-      for (const x of anexos.filter((y) => y.pacienteId === pacienteId)) ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${anexoVisivel(x).nome}` });
+      for (const r of recibos.filter((x) => x.pacienteId === pacienteId))
+        ev.push({ data: r.data, tipo: 'recibo', texto: `Pagamento recebido: R$ ${r.valor},00`, autor: 'Histórico financeiro (demonstração)' });
+      for (const x of anexos.filter((y) => y.pacienteId === pacienteId))
+        ev.push({ data: x.data, tipo: 'anexo', texto: `Anexo: ${anexoVisivel(x).nome}`, autor: 'Histórico de documentos (demonstração)' });
       return resposta(ev.sort((a, b) => (b.data + (b.hora ?? '')).localeCompare(a.data + (a.hora ?? ''))));
     },
 
