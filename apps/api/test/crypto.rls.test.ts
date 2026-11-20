@@ -320,10 +320,14 @@ describe('destruição em duas fases (B1 do revisor N1)', () => {
     try {
       const commitFalhaNaPrimeira = <T>(fn: (tx: TenantTx) => Promise<T>): Promise<T> =>
         withTenant(h.db, c, async (tx) => {
-          await fn(tx);
-          throw new Error('commit falhou');
+          const out = await fn(tx);
+          await tx.execute(sql`insert into receipt_counters (tenant_id, last_number) values (${c}, 1)`);
+          // Runtime não tem TEMPORARY; a trigger diferida da 0021 recusa contador sem recibo no COMMIT real.
+          return out;
         });
-      await expect(cipher.destroyTenantKeys(commitFalhaNaPrimeira, c, ATOR)).rejects.toThrow('commit falhou');
+      expect(await errorText(cipher.destroyTenantKeys(commitFalhaNaPrimeira, c, ATOR))).toContain(
+        'numeração de recibos com buraco (contador 1, recibos 0, maior 0)',
+      );
       expect(espiado).not.toHaveBeenCalled();
       const estados = await withTenant(h.db, c, (tx) =>
         tx.execute<{ status: string }>(
