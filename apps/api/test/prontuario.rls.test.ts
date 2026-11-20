@@ -275,6 +275,13 @@ describe('abertura do atendimento a partir do check-in', () => {
       const res = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo });
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(res.body).toMatchObject({ modelo, restrito: modelo === 'psicologia' });
+      if (modelo === 'psicologia') {
+        const incompativel = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo: 'fisio' });
+        expect(incompativel.status, JSON.stringify(incompativel.body)).toBe(409);
+        expect(incompativel.body).toMatchObject({ codigo: 'modelo_incompativel_com_especialidade' });
+        const atual = await api.http().get(`/atendimentos/do-agendamento/${ag}`).set(cab(sessao));
+        expect(atual.body).toMatchObject({ atendimento: { id: (res.body as { id: string }).id, modelo: 'psicologia', restrito: true } });
+      }
     }
   });
 

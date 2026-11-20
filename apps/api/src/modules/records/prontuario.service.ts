@@ -165,6 +165,10 @@ export class ProntuarioService {
           .where(and(eq(professionals.tenantId, ctx.tenantId), eq(professionals.id, ag.professionalId)));
         // R1: só o profissional DO agendamento registra o atendimento dele.
         if (!prof?.userId || prof.userId !== ctx.userId || !prof.active) throw new ProibidoError('somente_o_autor');
+        const modelo = dados.modelo ?? modeloPelaEspecialidade(prof.specialty);
+        // R3 do #63: sem esta trava, psicologia ia para o compartimento geral (ou outro nicho fingia psicologia).
+        // Vale também na chamada idempotente: um corpo incompatível não pode ser ignorado por já existir atendimento.
+        if (!modeloCompativelComEspecialidade(prof.specialty, modelo)) throw new ConflitoError('modelo_incompativel_com_especialidade');
         const [existente] = await tx
           .select()
           .from(encounters)
@@ -178,9 +182,6 @@ export class ProntuarioService {
           return this.montar(tx, ctx, existente);
         }
         if (!(STATUS_ABRE_ATENDIMENTO as readonly string[]).includes(ag.status)) throw new ConflitoError('agendamento_sem_chegada');
-        const modelo = dados.modelo ?? modeloPelaEspecialidade(prof.specialty);
-        // R3 do #63: sem esta trava, psicologia ia para o compartimento geral (ou outro nicho fingia psicologia).
-        if (!modeloCompativelComEspecialidade(prof.specialty, modelo)) throw new ConflitoError('modelo_incompativel_com_especialidade');
         // B1 do #63: o sigilo vigente AGORA fica gravado no atendimento e vale para sempre para ele.
         const sigilo = await modoPsicologia(tx, ctx.tenantId);
         const [e] = await tx
