@@ -695,15 +695,24 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       exigirAdmin();
       if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
       if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
-      const p: PedidoExportacao = { id: novoId('x'), status: 'aguardando_rt', pedidoEm: hojeIso };
+      const p: PedidoExportacao = { id: novoId('x'), pedidoPor: usuario.id, status: 'aguardando_rt', pedidoEm: hojeIso };
       exportacoes.push(p);
       registrar('Pediu a exportação total dos dados');
+      return resposta(p);
+    },
+    async obterExportacaoPendente() {
+      exigirAdmin();
+      const p = exportacoes.filter((x) => x.status === 'aguardando_rt').pop() ?? null;
       return resposta(p);
     },
     async aprovarExportacao(id) {
       exigirAdmin();
       const p = exportacoes.find((x) => x.id === id);
       if (!p) throw new Error('Pedido não encontrado.');
+      // G2/R6: duas pessoas de verdade; a API real precisa repetir esta comparação no servidor.
+      if (usuario.id === p.pedidoPor) {
+        throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
+      }
       p.status = 'pronto';
       p.expiraEm = paraIsoLocal(somarDias(agora, 1));
       p.downloadsRestantes = 3;

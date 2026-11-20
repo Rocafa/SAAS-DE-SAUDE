@@ -44,15 +44,27 @@ describe('fake: assinatura, exportação e equipe', () => {
     expect(a.proximaCobranca).toBeUndefined();
     expect((await api.reativarAssinatura()).status).toBe('ativa');
   });
-  it('exportação exige código e aprovação do responsável técnico; tudo vai para a auditoria', async () => {
+  it('exportação exige código e aprovação de outra pessoa, com auditoria', async () => {
     const api = criarApiFake({ agora: hoje });
     await expect(api.pedirExportacao('000000')).rejects.toThrow(/não confere/);
     const p = await api.pedirExportacao('123456');
     expect(p.status).toBe('aguardando_rt');
+
+    await expect(api.aprovarExportacao(p.id)).rejects.toMatchObject({ status: 403, codigo: 'autoaprovacao_proibida' });
+    expect(p.pedidoPor).toBe('u1');
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
+    expect((await api.listarAuditoria()).some((e) => e.acao === 'Responsável técnico aprovou a exportação')).toBe(false);
+
+    await api.entrarComo('u5');
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
     const ok = await api.aprovarExportacao(p.id);
-    expect(ok).toMatchObject({ status: 'pronto', downloadsRestantes: 3, expiraEm: '2026-10-13' });
-    const acoes = (await api.listarAuditoria()).map((e) => e.acao);
-    expect(acoes).toEqual(expect.arrayContaining(['Pediu a exportação total dos dados', 'Responsável técnico aprovou a exportação']));
+    expect(ok).toMatchObject({ pedidoPor: 'u1', status: 'pronto', downloadsRestantes: 3, expiraEm: '2026-10-13' });
+    expect(await api.obterExportacaoPendente()).toBeNull();
+    const auditoria = await api.listarAuditoria();
+    expect(auditoria.map((e) => e.acao)).toContain('Pediu a exportação total dos dados');
+    const aprovacoes = auditoria.filter((e) => e.acao === 'Responsável técnico aprovou a exportação');
+    expect(aprovacoes).toHaveLength(1);
+    expect(aprovacoes[0]?.quem).toBe('Dra. Lúcia Prates (administradora e terapeuta ocupacional)');
   });
   it('não deixa a clínica sem administrador; tirar acesso tem desfazer', async () => {
     const api = criarApiFake({ agora: hoje });
