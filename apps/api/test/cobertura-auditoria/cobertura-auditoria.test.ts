@@ -6,8 +6,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { analisarRotasDeEscrita, analisarRotasDeLeitura, handlersForaDeController, type RotaAnalisada } from './analise';
-import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE, ROTAS_COM_MFA_RECENTE } from './lista';
+import { analisarRotasDeEscrita, analisarRotasDeLeitura, analisarHandlersAssincronos, handlersForaDeController, trilhaCentralDosJobsAlcancaInsertAudit, type HandlerAssincronoAnalisado, type RotaAnalisada } from './analise';
+import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_ASSINCRONOS, HANDLERS_FORA_DE_CONTROLLER, LEITURA_SEM_DADO_DE_PACIENTE, ROTAS_COM_MFA_RECENTE } from './lista';
 
 let rotas: RotaAnalisada[];
 const porRota = new Map<string, RotaAnalisada>();
@@ -182,6 +182,61 @@ describe('R6 do #117: handlers HTTP fora de controller só da lista fechada', ()
       'test/cobertura-auditoria/fixtures/handler-fora.ts post("/api/auth/entrar")',
       'test/cobertura-auditoria/fixtures/handler-fora.ts use(loginDeTerceiro)',
     ]);
+  }, 120_000);
+});
+
+describe('R3.3/R6: cobertura de auditoria em filas, jobs e eventos', () => {
+  let handlers: HandlerAssincronoAnalisado[];
+  let porId: Map<string, HandlerAssincronoAnalisado>;
+
+  beforeAll(() => {
+    handlers = analisarHandlersAssincronos();
+    porId = new Map(handlers.map((h) => [h.id, h]));
+    expect(porId.size, 'handler assíncrono duplicado').toBe(handlers.length);
+  }, 120_000);
+
+  it('todo handler está na lista fechada, nenhuma declaração sobra e a auditoria declarada é provada', () => {
+    const declarados = Object.keys(HANDLERS_ASSINCRONOS);
+    expect(handlers.filter((h) => !declarados.includes(h.id)).map((h) => h.id), 'handler novo sem declaração de auditoria').toEqual([]);
+    expect(declarados.filter((id) => !porId.has(id)), 'declaração de handler que não existe mais').toEqual([]);
+
+    for (const [id, declaracao] of Object.entries(HANDLERS_ASSINCRONOS)) {
+      expect(declaracao.motivo.trim().length, `${id}: motivo vazio`).toBeGreaterThan(20);
+      const handler = porId.get(id);
+      if (declaracao.auditoria === 'job') {
+        expect(handler?.tipo, id).toBe('job');
+        expect(handler?.trilha, id).toBe(declaracao.trilha);
+      } else if (declaracao.auditoria === 'executor_central') {
+        expect(handler?.tipo, id).toBe('fila');
+        expect(handler?.despachaAoExecutorCentral, `${id}: worker não é o despachante da fábrica real do agendador`).toBe(true);
+      } else if (declaracao.auditoria === 'propria') {
+        expect(handler?.alcancaTrilha, `${id}: declarado como auditado, mas não alcança insertAudit`).toBe(true);
+      } else {
+        expect(handler?.alcancaTrilha, `${id}: já grava trilha; mude a declaração`).toBe(false);
+      }
+    }
+  });
+
+  it('o executor comum dos jobs e do trabalhador BullMQ chega a insertAudit', () => {
+    expect(trilhaCentralDosJobsAlcancaInsertAudit()).toBe(true);
+  }, 120_000);
+
+  it('sanidade: distingue fila e evento com trilha dos que ficam sem auditoria', () => {
+    const ficticios = analisarHandlersAssincronos([path.join(__dirname, 'fixtures', 'handlers-assincronos.ts')]);
+    const esperado = [
+      ['evento test/cobertura-auditoria/fixtures/handlers-assincronos.ts EventosFicticios.comTrilha', true],
+      ['evento test/cobertura-auditoria/fixtures/handlers-assincronos.ts EventosFicticios.semTrilha', false],
+      ['evento test/cobertura-auditoria/fixtures/handlers-assincronos.ts setInterval(comTrilha)', true],
+      ['evento test/cobertura-auditoria/fixtures/handlers-assincronos.ts setInterval(semTrilha)', false],
+      ['fila test/cobertura-auditoria/fixtures/handlers-assincronos.ts ProcessadorFicticio.process', false],
+      ['fila test/cobertura-auditoria/fixtures/handlers-assincronos.ts Worker(comTrilha)', true],
+      ['fila test/cobertura-auditoria/fixtures/handlers-assincronos.ts Worker(semTrilha)', false],
+      ['job job-ficticio', false],
+      ['job job-metodo-ficticio', false],
+    ];
+    expect(ficticios.map((h) => [h.id, h.alcancaTrilha])).toEqual(esperado);
+    expect(ficticios.every((h) => !h.despachaAoExecutorCentral), 'handler fictício não pode receber o selo do executor central').toBe(true);
+    expect(ficticios.find((h) => h.tipo === 'job')?.trilha).toBe('sempre');
   }, 120_000);
 });
 

@@ -240,6 +240,78 @@ export const HANDLERS_FORA_DE_CONTROLLER: Readonly<Record<string, string>> = {
   'src/security/http-security.ts use(safeErrorHandler)': 'erro sem detalhe interno nem dado na resposta; não toca dado',
 };
 
+// ------------------------------------------------------------------ filas, jobs e eventos (R3.3/R6)
+
+export type DeclaracaoHandlerAssincrono =
+  | { readonly auditoria: 'job'; readonly trilha: 'sempre' | 'com_efeito'; readonly motivo: string }
+  | { readonly auditoria: 'executor_central' | 'propria' | 'sem_dado'; readonly motivo: string };
+
+/**
+ * Lista fechada dos handlers fora de controller que entram por fila, agendamento ou evento. `job` usa a trilha por
+ * clínica do ExecutorDeJobs (inclusive na falha); `executor_central` é o único trabalhador que despacha para ele.
+ * `propria` exige caminho do callback até insertAudit; `sem_dado` exige motivo e não pode alcançar a trilha. Handler
+ * novo, removido ou com política alterada falha o CI. Mudar esta lista exige parecer do Guardião LGPD.
+ */
+export const HANDLERS_ASSINCRONOS: Readonly<Record<string, DeclaracaoHandlerAssincrono>> = {
+  'evento src/modules/jobs/jobs.module.ts setInterval(error)': {
+    auditoria: 'sem_dado',
+    motivo: 'aviso periódico de agendador desligado; repete código e motivo fixos, sem ler dado pessoal',
+  },
+  'evento src/modules/jobs/jobs.module.ts setInterval(verificarAtrasos)': {
+    auditoria: 'sem_dado',
+    motivo: 'sinal de vida lê somente nomes, prazos e datas técnicas dos jobs; não acessa dado pessoal',
+  },
+  'fila src/modules/jobs/agendador-bullmq.ts Worker(processadorSeguro(processar))': {
+    auditoria: 'executor_central',
+    motivo: 'único trabalhador BullMQ; despacha todo job ao ExecutorDeJobs, que registra a trilha por clínica',
+  },
+  'job whatsapp-lembretes': {
+    auditoria: 'job',
+    trilha: 'com_efeito',
+    motivo: 'cada envio já audita a própria ação; o executor registra efeito, retry e falha sem encher a trilha de zeros',
+  },
+  'job whatsapp-retencao': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'retenção de envios e conteúdo pessoal; o serviço e o executor registram a execução diária',
+  },
+  'job portal-representacoes': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'revogação de vínculos e consentimentos; funções do banco e executor registram a execução diária',
+  },
+  'job portal-titular-menor': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'lê nascimento e revoga acesso de titular menor; função do banco e executor registram a execução',
+  },
+  'job importador-expurgo': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'descarte de arquivos pessoais importados e chaves; serviço e executor registram a execução diária',
+  },
+  'job notas-privadas-ciclo': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'custódia e expurgo de notas clínicas privadas; serviço e executor registram a execução diária',
+  },
+  'job retencao-fiscal': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'retém recibos, cobranças e pagadores; serviço e executor registram a execução diária',
+  },
+  'job responsaveis-descarte': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'descarte de cadastro pessoal de responsáveis; serviço e executor registram a execução diária',
+  },
+  'job cpf-indice-reindexacao': {
+    auditoria: 'job',
+    trilha: 'sempre',
+    motivo: 'reindexação de CPF e descarte de chaves; serviço e executor registram a execução diária',
+  },
+};
+
 // ------------------------------------------------------------------ MFA recente (R4 do parecer de 03/11 sobre o #123)
 
 /**
