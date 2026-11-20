@@ -324,3 +324,241 @@ export function handlersForaDeController(extras: readonly string[] = []): string
   }
   return achados.sort();
 }
+
+// ------------------------------------------------------------------ filas, jobs e eventos (R3.3/R6)
+
+export interface HandlerAssincronoAnalisado {
+  /** Identidade estável usada em HANDLERS_ASSINCRONOS. */
+  readonly id: string;
+  readonly tipo: 'job' | 'fila' | 'evento';
+  /** Caminho do próprio callback até insertAudit. Jobs também passam pelo executor central, provado à parte. */
+  readonly alcancaTrilha: boolean;
+  readonly trilha?: 'sempre' | 'com_efeito' | undefined;
+  /** Só o Worker registrado pela fábrica real do AgendadorBullMQ recebe este selo. */
+  readonly despachaAoExecutorCentral: boolean;
+}
+
+const DECORATORS_ASSINCRONOS = new Set(['OnEvent', 'Process', 'Cron', 'Interval', 'Timeout', 'OnQueueEvent', 'OnWorkerEvent']);
+
+function semInvolucros(e: ts.Expression): ts.Expression {
+  let atual = e;
+  while (ts.isParenthesizedExpression(atual) || ts.isAsExpression(atual) || ts.isSatisfiesExpression(atual) || ts.isNonNullExpression(atual)) atual = atual.expression;
+  return atual;
+}
+
+function membroDoObjeto(objeto: ts.ObjectLiteralExpression, nome: string): ts.ObjectLiteralElementLike | undefined {
+  return objeto.properties.find((p) => !ts.isSpreadAssignment(p) && p.name.getText() === nome);
+}
+
+function propriedade(objeto: ts.ObjectLiteralExpression, nome: string): ts.Expression | undefined {
+  const p = membroDoObjeto(objeto, nome);
+  return p && ts.isPropertyAssignment(p) ? p.initializer : undefined;
+}
+
+function objetoRetornado(decl: ts.Node | undefined): ts.ObjectLiteralExpression | undefined {
+  if (!decl) return undefined;
+  const corpo = corpoDe(decl);
+  if (!corpo || !ts.isExpression(corpo)) return undefined;
+  const e = semInvolucros(corpo);
+  return ts.isObjectLiteralExpression(e) ? e : undefined;
+}
+
+/** Lê `trilha` também quando vem do spread `...diario(...)`, sem executar código da aplicação. */
+function trilhaDoObjeto(cx: Contexto, objeto: ts.ObjectLiteralExpression, visitados = new Set<ts.Node>()): 'sempre' | 'com_efeito' | undefined {
+  if (visitados.has(objeto)) return undefined;
+  visitados.add(objeto);
+  const direta = propriedade(objeto, 'trilha');
+  if (direta) {
+    const valor = semInvolucros(direta);
+    if (ts.isStringLiteralLike(valor) && (valor.text === 'sempre' || valor.text === 'com_efeito')) return valor.text;
+    return undefined;
+  }
+  for (const p of objeto.properties) {
+    if (!ts.isSpreadAssignment(p) || !ts.isCallExpression(p.expression)) continue;
+    const interno = objetoRetornado(alvoDaChamada(cx, p.expression));
+    const valor = interno ? trilhaDoObjeto(cx, interno, visitados) : undefined;
+    if (valor) return valor;
+  }
+  return undefined;
+}
+
+function corpoDaFuncaoReferenciada(cx: Contexto, expressao: ts.Expression): ts.Node | undefined {
+  const e = semInvolucros(expressao);
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) return e.body;
+  let simbolo = cx.checker.getSymbolAtLocation(e);
+  if (simbolo && (simbolo.flags & ts.SymbolFlags.Alias) !== 0) simbolo = cx.checker.getAliasedSymbol(simbolo);
+  const decl = simbolo?.declarations?.[0];
+  return decl ? corpoDe(decl) : undefined;
+}
+
+function alcancaTrilhaPeloCallback(cx: Contexto, expressao: ts.Expression): boolean {
+  const corpo = corpoDaFuncaoReferenciada(cx, expressao);
+  return corpo ? percorrer(cx, corpo, (_n, alvo) => alvo !== undefined && ehGravador(alvo)) : false;
+}
+
+function nomeDoProcessador(a: ts.Expression | undefined): string {
+  if (a && ts.isCallExpression(a)) {
+    const argumentos = a.arguments.map((x) => nomeDoArgumento(x)).join(', ');
+    return `${nomeDoArgumento(a.expression)}(${argumentos})`;
+  }
+  return nomeDoArgumento(a);
+}
+
+function nomeDoHandlerAgendado(a: ts.Expression): string {
+  const e = semInvolucros(a);
+  if (!ts.isArrowFunction(e) && !ts.isFunctionExpression(e)) return nomeDoArgumento(a);
+  let corpo: ts.Expression | undefined;
+  if (ts.isBlock(e.body)) {
+    const [unico] = e.body.statements;
+    if (e.body.statements.length === 1 && unico && ts.isExpressionStatement(unico)) corpo = unico.expression;
+  } else {
+    corpo = e.body;
+  }
+  while (corpo && (ts.isVoidExpression(corpo) || ts.isAwaitExpression(corpo))) corpo = corpo.expression;
+  return corpo && ts.isCallExpression(corpo) ? nomeDoArgumento(corpo.expression) : '<função anônima>';
+}
+
+function ehSetIntervalDoNode(cx: Contexto, n: ts.CallExpression): boolean {
+  if (!n.arguments[0]) return false;
+  const decl = cx.checker.getResolvedSignature(n)?.getDeclaration();
+  if (!decl || !ts.isFunctionDeclaration(decl) || decl.name?.text !== 'setInterval') return false;
+  const origem = decl.getSourceFile().fileName.split(path.sep).join('/');
+  return origem.includes('/node_modules/@types/node/');
+}
+
+function ehWorkerDoExecutorCentral(n: ts.NewExpression, sf: ts.SourceFile): boolean {
+  if (relativo(sf) !== 'src/modules/jobs/agendador-bullmq.ts' || nomeDoProcessador(n.arguments?.[1]) !== 'processadorSeguro(processar)') return false;
+  let naFabricaReal = false;
+  let naPropriedadeTrabalhador = false;
+  for (let atual: ts.Node | undefined = n; atual; atual = atual.parent) {
+    if (ts.isPropertyAssignment(atual) && atual.name.getText() === 'trabalhador') naPropriedadeTrabalhador = true;
+    if (ts.isFunctionDeclaration(atual) && atual.name?.text === 'fabricasReais') naFabricaReal = true;
+  }
+  return naFabricaReal && naPropriedadeTrabalhador;
+}
+
+function contextoDoPrograma(programa: ts.Program, extras: readonly string[]): Contexto {
+  const absolutos = extras.map((f) => path.resolve(f));
+  return {
+    checker: programa.getTypeChecker(),
+    nosso: (n) => {
+      const f = path.resolve(n.getSourceFile().fileName);
+      return f.startsWith(RAIZ_SRC) || absolutos.includes(f);
+    },
+  };
+}
+
+/**
+ * Inventário estático dos pontos de entrada que não passam por controller: objetos `DefinicaoDeJob`, trabalhadores
+ * BullMQ e métodos com decorator de fila/evento/agendamento. O teste exige declaração para cada um; declaração sem
+ * trilha só é aceita com o motivo de não tocar dado pessoal. `extras` devolve só os handlers dos fixtures.
+ */
+export function analisarHandlersAssincronos(extras: readonly string[] = []): HandlerAssincronoAnalisado[] {
+  const absolutos = extras.map((f) => path.resolve(f));
+  const programa = criarPrograma(absolutos);
+  const [erro] = programa.getSyntacticDiagnostics();
+  if (erro) throw new Error(`erro de sintaxe em ${erro.file?.fileName ?? '?'}: ${ts.flattenDiagnosticMessageText(erro.messageText, ' ')}`);
+  const cx = contextoDoPrograma(programa, absolutos);
+  const handlers: HandlerAssincronoAnalisado[] = [];
+
+  for (const sf of programa.getSourceFiles()) {
+    const f = path.resolve(sf.fileName);
+    if (absolutos.length > 0 ? !absolutos.includes(f) : !f.startsWith(RAIZ_SRC)) continue;
+    const visitar = (n: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(n)) {
+        const nome = membroDoObjeto(n, 'nome');
+        const porClinica = membroDoObjeto(n, 'porClinica');
+        if (nome && porClinica) {
+          if (!ts.isPropertyAssignment(nome)) falhar(nome, 'job com nome não literal');
+          const nomeNormalizado = semInvolucros(nome.initializer);
+          if (!ts.isStringLiteralLike(nomeNormalizado)) falhar(nome, 'job com nome não literal');
+          const alcancaTrilha = ts.isPropertyAssignment(porClinica)
+            ? alcancaTrilhaPeloCallback(cx, porClinica.initializer)
+            : ts.isMethodDeclaration(porClinica) && porClinica.body
+              ? percorrer(cx, porClinica.body, (_no, alvo) => alvo !== undefined && ehGravador(alvo))
+              : false;
+          handlers.push({
+            id: `job ${nomeNormalizado.text}`,
+            tipo: 'job',
+            alcancaTrilha,
+            trilha: trilhaDoObjeto(cx, n),
+            despachaAoExecutorCentral: false,
+          });
+        }
+      }
+
+      if (ts.isCallExpression(n) && ehSetIntervalDoNode(cx, n)) {
+        const callback = n.arguments[0] as ts.Expression;
+        handlers.push({
+          id: `evento ${relativo(sf)} setInterval(${nomeDoHandlerAgendado(callback)})`,
+          tipo: 'evento',
+          alcancaTrilha: alcancaTrilhaPeloCallback(cx, callback),
+          despachaAoExecutorCentral: false,
+        });
+      }
+
+      if (ts.isNewExpression(n) && n.arguments?.[1]) {
+        let simbolo = cx.checker.getSymbolAtLocation(n.expression);
+        if (simbolo && (simbolo.flags & ts.SymbolFlags.Alias) !== 0) simbolo = cx.checker.getAliasedSymbol(simbolo);
+        const decl = simbolo?.declarations?.[0];
+        const origem = decl?.getSourceFile().fileName.split(path.sep).join('/') ?? '';
+        if (simbolo?.getName() === 'Worker' && origem.includes('/node_modules/bullmq/')) {
+          handlers.push({
+            id: `fila ${relativo(sf)} Worker(${nomeDoProcessador(n.arguments[1])})`,
+            tipo: 'fila',
+            alcancaTrilha: alcancaTrilhaPeloCallback(cx, n.arguments[1]),
+            despachaAoExecutorCentral: ehWorkerDoExecutorCentral(n, sf),
+          });
+        }
+      }
+
+      if (ts.isClassDeclaration(n) && n.name) {
+        const processadorNest = (ts.getDecorators(n) ?? []).some((d) => identidadeDoDecorator(cx, d)?.nome === 'Processor');
+        for (const membro of n.members) {
+          if (!ts.isMethodDeclaration(membro) || !membro.body) continue;
+          const assincrono = (ts.getDecorators(membro) ?? []).some((d) => {
+            const id = identidadeDoDecorator(cx, d);
+            return id !== undefined && DECORATORS_ASSINCRONOS.has(id.nome);
+          });
+          const workerHost = processadorNest && membro.name.getText() === 'process';
+          if (assincrono || workerHost) {
+            const tipo = workerHost ? 'fila' : 'evento';
+            handlers.push({
+              id: `${tipo} ${relativo(sf)} ${n.name.text}.${membro.name.getText()}`,
+              tipo,
+              alcancaTrilha: percorrer(cx, membro.body, (_no, alvo) => alvo !== undefined && ehGravador(alvo)),
+              despachaAoExecutorCentral: false,
+            });
+          }
+        }
+      }
+      ts.forEachChild(n, visitar);
+    };
+    visitar(sf);
+  }
+  return handlers.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Prova o caminho comum: bootstrap cria o executor, que recebe `registrarTrilha` de JobsService; essa função chama
+ * recordAudit e, por fim, insertAudit. O comportamento por clínica e os caminhos de erro têm testes unitários e RLS.
+ */
+export function trilhaCentralDosJobsAlcancaInsertAudit(): boolean {
+  const programa = criarPrograma([]);
+  const cx = contextoDoPrograma(programa, []);
+  for (const sf of programa.getSourceFiles()) {
+    if (!sf.fileName.endsWith('/src/modules/jobs/jobs.module.ts')) continue;
+    let encontrado = false;
+    const visitar = (n: ts.Node): void => {
+      if (encontrado) return;
+      if (ts.isMethodDeclaration(n) && n.name.getText() === 'onApplicationBootstrap' && n.body) {
+        encontrado = percorrer(cx, n.body, (_no, alvo) => alvo !== undefined && ehGravador(alvo));
+        if (encontrado) return;
+      }
+      ts.forEachChild(n, visitar);
+    };
+    visitar(sf);
+    return encontrado;
+  }
+  return false;
+}
