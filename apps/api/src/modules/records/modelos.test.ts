@@ -96,6 +96,9 @@ describe('modelos de registro por nicho', () => {
     expect(modeloCompativelComEspecialidade('Terapia Ocupacional', 'psicologia')).toBe(false);
     expect(modeloCompativelComEspecialidade('Fisioterapia', 'to')).toBe(true);
     expect(modeloCompativelComEspecialidade('Terapia Ocupacional', 'fisio')).toBe(true);
+    expect(modeloCompativelComEspecialidade('Psicomotricidade', 'fisio')).toBe(true);
+    expect(modeloCompativelComEspecialidade('Psicomotricidade', 'to')).toBe(true);
+    expect(modeloCompativelComEspecialidade('Psicomotricidade', 'psicologia')).toBe(false);
   });
 });
 

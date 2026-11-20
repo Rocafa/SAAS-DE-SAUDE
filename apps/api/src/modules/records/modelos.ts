@@ -157,7 +157,10 @@ export function modeloPelaEspecialidade(especialidade: string): RecordTemplate {
 
 /** R3 do #63: psicologia nunca muda de compartimento; fisio e TO podem usar os modelos entre si. */
 export function modeloCompativelComEspecialidade(especialidade: string, modelo: RecordTemplate): boolean {
-  return (modeloPelaEspecialidade(especialidade) === 'psicologia') === (modelo === 'psicologia');
+  const e = especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  // A autorização não pode repetir o "psico" amplo do padrão: psicomotricidade e psicopedagogia não são psicologia.
+  const psicologia = e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
+  return psicologia === (modelo === 'psicologia');
 }
 
 function ehObjetoSimples(v: unknown): v is Record<string, unknown> {

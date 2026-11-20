@@ -48,6 +48,7 @@ let finA: Sessao;
 let fisioA: Sessao;
 let psiA: Sessao;
 let outroA: Sessao;
+let psicomotricistaA: Sessao;
 let semVinculoA: Sessao;
 let profB: Sessao;
 let pacienteA: string;
@@ -130,6 +131,7 @@ beforeAll(async () => {
   fisioA = api.sessao(clinicaA, 'profissional');
   psiA = api.sessao(clinicaA, 'profissional');
   outroA = api.sessao(clinicaA, 'profissional');
+  psicomotricistaA = api.sessao(clinicaA, 'profissional');
   semVinculoA = api.sessao(clinicaA, 'admin', 'profissional');
   const adminB = api.sessao(clinicaB, 'admin');
   profB = api.sessao(clinicaB, 'profissional');
@@ -137,6 +139,7 @@ beforeAll(async () => {
   const pf = await criarProfissional(adminA, fisioA, 'Fisioterapia');
   const pp = await criarProfissional(adminA, psiA, 'Psicologia');
   const po = await criarProfissional(adminA, outroA, 'Terapia ocupacional');
+  await criarProfissional(adminA, psicomotricistaA, 'Psicomotricidade');
   await criarProfissional(adminA, semVinculoA, 'Fisioterapia');
   const pB = await criarProfissional(adminB, profB, 'Fisioterapia');
   const tipo = await api.http().post('/tipos-atendimento').set(cab(adminA)).send({ nome: 'Sessao', minutos: 50 });
@@ -257,6 +260,7 @@ describe('abertura do atendimento a partir do check-in', () => {
       [psiA, 'to'],
       [fisioA, 'psicologia'],
       [outroA, 'psicologia'],
+      [psicomotricistaA, 'psicologia'],
     ] as const) {
       const ag = await agendamento(clinicaA, paciente, profissionalDe.get(sessao.userId) as string, tipoA);
       const res = await api.http().post('/atendimentos').set(cab(sessao)).send({ agendamentoId: ag, modelo });
@@ -269,6 +273,8 @@ describe('abertura do atendimento a partir do check-in', () => {
     for (const [sessao, modelo] of [
       [fisioA, 'to'],
       [outroA, 'fisio'],
+      [psicomotricistaA, 'fisio'],
+      [psicomotricistaA, 'to'],
       [psiA, 'psicologia'],
     ] as const) {
       const ag = await agendamento(clinicaA, paciente, profissionalDe.get(sessao.userId) as string, tipoA);
