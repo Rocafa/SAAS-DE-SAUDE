@@ -64,6 +64,7 @@ test.describe('Atendimento e prontuário', () => {
 
     await entrarComo(page, /Dr\. Henrique/);
     await irPeloMenu(page, 'Pacientes');
+    await page.getByLabel('Procurar paciente').fill('Pedro Santos');
     await page.getByRole('link', { name: /Pedro Santos/ }).click();
     await page.getByRole('link', { name: 'Abrir prontuário' }).click();
     await expect(page.getByText(/Conteúdo fictício de demonstração/).first()).toBeVisible();
@@ -90,6 +91,7 @@ test.describe('B1: conteúdo clínico só para quem cuida do paciente', () => {
   test('recepção: ficha sem "Abrir prontuário" e anexo clínico sem nome; prontuário fechado', async ({ page }) => {
     await entrarComo(page, /Recepcionista/);
     await irPeloMenu(page, 'Pacientes');
+    await page.getByLabel('Procurar paciente').fill('Maria Silva');
     await page.getByRole('link', { name: /^Maria Silva\b/ }).click();
     await expect(page.getByText('O conteúdo clínico é só para os profissionais que atendem este paciente.')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Abrir prontuário' })).toHaveCount(0);
@@ -100,6 +102,7 @@ test.describe('B1: conteúdo clínico só para quem cuida do paciente', () => {
   test('fisioterapeuta com vínculo lê a evolução', async ({ page }) => {
     await entrarComo(page, /Dra\. Beatriz/);
     await irPeloMenu(page, 'Pacientes');
+    await page.getByLabel('Procurar paciente').fill('Maria Silva');
     await page.getByRole('link', { name: /^Maria Silva\b/ }).click();
     await page.getByRole('link', { name: 'Abrir prontuário' }).click();
     await expect(page.getByText(TEXTO_CLINICO).first()).toBeVisible();
