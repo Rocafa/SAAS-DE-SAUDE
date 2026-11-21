@@ -67,13 +67,16 @@ export function TabelaRegistros<T>({
   const [pagina, setPagina] = useState(1);
   const [ordenacao, setOrdenacao] = useState<{ colunaId: string; direcao: DirecaoOrdenacao } | null>(null);
 
+  const correspondencias = useMemo(
+    () => (buscaNoServidor ? [...registros] : filtrar ? filtrar([...registros], busca) : filtrarPorTexto(registros, busca, textoBusca)),
+    [registros, buscaNoServidor, filtrar, busca, textoBusca],
+  );
   const filtrados = useMemo(() => {
-    const porStatus = filtrarPorStatus(registros, status, obterStatus);
-    const porTexto = buscaNoServidor ? porStatus : filtrar ? filtrar(porStatus, busca) : filtrarPorTexto(porStatus, busca, textoBusca);
-    if (!ordenacao) return porTexto;
+    const porStatus = filtrarPorStatus(correspondencias, status, obterStatus);
+    if (!ordenacao) return porStatus;
     const coluna = colunas.find((c) => c.id === ordenacao.colunaId);
-    return coluna?.valorOrdenacao ? ordenarRegistros(porTexto, coluna.valorOrdenacao, ordenacao.direcao) : porTexto;
-  }, [registros, status, obterStatus, buscaNoServidor, filtrar, busca, textoBusca, ordenacao, colunas]);
+    return coluna?.valorOrdenacao ? ordenarRegistros(porStatus, coluna.valorOrdenacao, ordenacao.direcao) : porStatus;
+  }, [correspondencias, status, obterStatus, ordenacao, colunas]);
   const paginado = paginarRegistros(filtrados, pagina, porPagina);
 
   function mudarBusca(valor: string) {
@@ -121,6 +124,7 @@ export function TabelaRegistros<T>({
 
   const haBusca = busca.trim().length > 0;
   const haResultadosOuBusca = registros.length > 0 || haBusca;
+  const buscaForaDoFiltro = haBusca && status !== 'todos' && filtrados.length === 0 && correspondencias.length > 0;
   const filtroPadraoSemResultado = registros.length > 0 && !haBusca && status === statusInicial && status !== 'todos';
   const totalRotulo = `${paginado.total} ${paginado.total === 1 ? rotuloRegistros.singular : rotuloRegistros.plural}`;
 
@@ -168,19 +172,29 @@ export function TabelaRegistros<T>({
       {estado.estado === 'erro' && <Erro mensagem={estado.mensagem} tentarDeNovo={estado.tentarDeNovo} />}
       {estado.estado === 'pronto' && filtrados.length === 0 && (
         <Vazio
-          titulo={haResultadosOuBusca ? (busca.trim() ? `Ninguém encontrado com “${busca.trim()}”` : 'Nenhum registro neste filtro') : vazio.titulo}
+          titulo={
+            haResultadosOuBusca
+              ? buscaForaDoFiltro
+                ? 'Nenhum registro neste filtro'
+                : haBusca
+                  ? `Ninguém encontrado com “${busca.trim()}”`
+                  : 'Nenhum registro neste filtro'
+              : vazio.titulo
+          }
           oQueFazer={
             haResultadosOuBusca
-              ? busca.trim()
-                ? ajudaBusca
-                : filtroPadraoSemResultado
-                  ? 'Escolha outro status ou mostre todos os registros.'
-                  : 'Escolha outro status ou limpe a busca e os filtros.'
+              ? buscaForaDoFiltro
+                ? 'A busca encontrou registros em outro status. Mostre todos sem apagar a busca.'
+                : haBusca
+                  ? ajudaBusca
+                  : filtroPadraoSemResultado
+                    ? 'Escolha outro status ou mostre todos os registros.'
+                    : 'Escolha outro status ou limpe a busca e os filtros.'
               : vazio.oQueFazer
           }
           acao={
             haResultadosOuBusca ? (
-              filtroPadraoSemResultado && opcoesStatus?.some((opcao) => opcao.valor === 'todos') ? (
+              (filtroPadraoSemResultado || buscaForaDoFiltro) && opcoesStatus?.some((opcao) => opcao.valor === 'todos') ? (
                 <Botao variante="contorno" onClick={() => mudarStatus('todos')}>
                   Mostrar todos
                 </Botao>
@@ -198,7 +212,7 @@ export function TabelaRegistros<T>({
 
       {estado.estado === 'pronto' && filtrados.length > 0 && (
         <>
-          <div aria-label="Ordenar registros" className="mb-4 flex flex-wrap items-center gap-2 md:hidden">
+          <div role="group" aria-label="Ordenar registros" className="mb-4 flex flex-wrap items-center gap-2 md:hidden">
             <span className="text-[0.95rem] font-bold">Ordenar:</span>
             {colunas.filter((coluna) => coluna.valorOrdenacao).map((coluna) => botaoOrdenacao(coluna, true))}
           </div>

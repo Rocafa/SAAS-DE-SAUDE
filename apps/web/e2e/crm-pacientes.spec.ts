@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 function nomesVisiveis(page: Page) {
@@ -25,6 +26,17 @@ test.describe('CRM — lista de pacientes', () => {
     await page.getByRole('button', { name: 'Limpar busca e filtros' }).click();
     await expect(page.getByLabel('Procurar paciente')).toHaveValue('');
     await expect(registrosVisiveis(page)).toHaveCount(10);
+  });
+
+  test('busca válida fora do status ativo oferece mostrar todos sem apagar o termo', async ({ page }) => {
+    await page.goto('/pacientes');
+    await page.getByLabel('Procurar paciente').fill('Miguel Freitas');
+    await expect(page.getByText('Nenhum registro neste filtro')).toBeVisible();
+    await expect(page.getByText('A busca encontrou registros em outro status. Mostre todos sem apagar a busca.')).toBeVisible();
+    await page.getByRole('button', { name: 'Mostrar todos' }).click();
+    await expect(page.getByLabel('Procurar paciente')).toHaveValue('Miguel Freitas');
+    await expect(page.getByLabel('Filtrar por status')).toHaveValue('todos');
+    await expect(nomesVisiveis(page)).toHaveText(['Miguel Freitas']);
   });
 
   test('filtro de status mostra inativos sem mudar a regra de acesso', async ({ page }) => {
@@ -86,6 +98,9 @@ test.describe('CRM — lista de pacientes', () => {
     await expect(page.getByTestId('cartoes-registros')).toBeVisible();
     await expect(page.getByRole('table', { name: 'Lista de pacientes' })).toBeHidden();
     await expect(registrosVisiveis(page)).toHaveCount(10);
+    await expect(page.getByRole('group', { name: 'Ordenar registros' })).toBeVisible();
+    const acessibilidade = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+    expect(acessibilidade.violations.map((violacao) => `${violacao.id} (${violacao.impact ?? 'sem impacto'})`)).toEqual([]);
     await page.getByLabel('Procurar paciente').fill('Maria Silva');
     await expect(page.getByRole('link', { name: 'Maria Silva', exact: true })).toBeVisible();
   });
