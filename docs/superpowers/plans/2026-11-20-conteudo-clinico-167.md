@@ -17,7 +17,7 @@
 - Preservar compatibilidade do rótulo como reserva ao instrumento explícito e todos os comentários de regra.
 - Não alterar migrações, RLS, autenticação, auditoria ou retenção; não tocar o adaptador HTTP do PR #158 nem o cadastro do PR #194. Preservar a regra de compatibilidade por especialidade do PR #219, sem incorporar o trabalho dele.
 - TDD: cada mudança de produção começa por teste vermelho executado contra o código real.
-- Sem `any`, `@ts-ignore`, `eslint-disable`, dependências novas ou atribuição adicional nos commits.
+- Não usar escapes de tipagem nem suprimir TypeScript/ESLint; nenhuma dependência nova ou atribuição adicional nos commits.
 
 ## Review Focus
 

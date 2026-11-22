@@ -11,9 +11,11 @@
  *   conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026): diagnóstico e prognóstico terapêutico
  *   ocupacional (V), exames complementares (IV), objetivos do plano (VI). Desempenho, nível de assistência e as
  *   atividades da sessão são escolha de produto (a tela já pede), não exigência da norma.
- * - Escalas: instrumento explícito ou conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); a TO só aceita
- *   Barthel/MIF e subescalas, enquanto a fisio mantém as demais medidas e a escala livre.
- * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos), referência textual a instrumentos e plano.
+ * - Escalas: instrumento conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); os demais, faixa larga.
+ *   #167: instrumento explícito também tem faixa própria; a TO só aceita Barthel/MIF e subescalas, enquanto a fisio mantém
+ *   as demais medidas e a escala livre.
+ * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
+ *   #167: referência textual a instrumentos, sem embutir teste, item ou escore.
  *   As ANOTAÇÕES PRIVADAS do psicólogo não são registro: ficam em `private_notes` (notas-privadas.service.ts).
  */
 import { EntradaInvalidaError } from '../../common/validacao';
@@ -122,7 +124,8 @@ const FAIXAS: Readonly<Record<TipoDeMedida, { min: number; max: number; inteiro:
 };
 
 /**
- * Instrumentos conhecidos (explícitos ou pelo rótulo da medida `escala`): faixa e inteiro próprios, para o gráfico não mentir (#167).
+ * Instrumentos conhecidos (pelo rótulo da medida `escala`): faixa e inteiro próprios, para o gráfico não mentir (#167).
+ * O campo `instrumento` explícito tem a mesma regra e prevalece sobre o rótulo.
  * Só instrumentos de uso livre. A COPM não entra (tem dono; licença no Brasil não confirmada). Psicologia não tem
  * medidas: instrumento psicológico é do SATEPSI e privativo do psicólogo (Res. CFP 31/2022).
  */
