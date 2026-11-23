@@ -6,7 +6,7 @@
  */
 import { CalendarCheck, ChevronDown, Search, UserRound, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useId, useMemo, useState, type FormEvent } from 'react';
+import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
 import { textoDoErro, useAviso } from '@/components/app/desfazer';
@@ -91,11 +91,18 @@ function FormularioMarcar() {
   // segundo plano, e com `[original]` qualquer atualização devolvia os campos ao valor original,
   // jogando fora o que a pessoa acabou de escolher.
   const originalId = original?.id;
+  // Os campos vêm de um ref (atualizado após o render): o efeito dispara só quando o id muda, mas lê
+  // sempre o agendamento mais recente, sem precisar de `original` nas deps.
+  const originalRef = useRef(original);
+  useLayoutEffect(() => {
+    originalRef.current = original;
+  });
   useEffect(() => {
-    if (!original) return;
-    setPacienteId(original.pacienteId);
-    setProfissionalId(original.profissionalId);
-    setTipoId(original.tipoId);
+    const atual = originalRef.current;
+    if (!atual) return;
+    setPacienteId(atual.pacienteId);
+    setProfissionalId(atual.profissionalId);
+    setTipoId(atual.tipoId);
   }, [originalId]);
 
   usePreenchimento('marcar-paciente', (v) => {
