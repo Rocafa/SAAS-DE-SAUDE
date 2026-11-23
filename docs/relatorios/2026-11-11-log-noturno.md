@@ -727,3 +727,12 @@ destravando a auditoria de todos.
   os PRs dele (#213, #216, #219, #220, #222, #227); conferir aprovação do #209 e seguir a ordem do guia; #213 ainda
   tem o bloco unitário que testa os próprios mocks; CloudTrail do `GenerateMac` no staging (ressalva b do #227).
   A tarefa `pilha-login-merges-2h` segue mesclando o que for aprovado.
+
+## Checagem de 23/11 (agendada, noite)
+
+- A main andou: o sócio mesclou #223, #224, #215, #214 e #221. Por isso #153, #154, #155, #189 e #194 ficaram BEHIND.
+- Pilha do login: o #155 (mais baixo, base main) segue sem aprovação; nada da pilha entra.
+- #153 e #154 sem aprovação; não trouxe a main para não gastar CI à toa (a auditoria ainda depende do #209).
+- #189 aprovado, mas só entra depois da pilha inteira. #116 DIRTY e sem aprovação. #209 ainda sem aprovação.
+- #158, #143 e #157 sem commit novo desde 11/11; nenhuma aprovação dada.
+- Nenhum merge. Próximo passo continua sendo a aprovação do #209 e do #155.
