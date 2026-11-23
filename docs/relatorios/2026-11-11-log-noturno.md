@@ -647,3 +647,6 @@ Pendente para a próxima sessão:
   #227 (injeção do `AuditoriaIaService`, teste que compila o módulo), #219 (predicado único de psicologia) e #216
   (caminhos com `/` no Windows, no-console só em `scripts/**`). Três agentes de engenharia, cada um em worktree própria.
 - Depois, se fizer sentido: o seletor do Playwright no #222 e a lista do cache no e2e do #213.
+- **#228** aberto para a branch do #216: caminhos com `/` (no Windows o teste foi de exit 1 para exit 0; lint e os 461
+  testes do web com exit 0), no-console só em `scripts/**/*.mjs`. Comentei no #216 apontando o #228.
+- Disparado: correção do e2e do #222 (seletor `Status`) e do #213 (manifest no cache), em PRs próprios.
