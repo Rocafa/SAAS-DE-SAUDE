@@ -581,3 +581,12 @@ Pendente para a próxima sessão:
 - O @Lopesloro abriu 16 PRs novos (#211 a #227), todos sem revisão. Começo a revisão deles, em lotes de até 3
   revisores, pelos menores e verdes: (A) #221, #223, #219; (B) #214, #216, #217, #218; (C) #215, #220, #224, #225.
   Depois: #211, #213, #222, #226, #227 (maiores ou com CI vermelho).
+
+### 23/11 — revisão do lote A (PRs do sócio)
+
+- **#219** (prontuário): pedi mudança. `modeloPelaEspecialidade` ainda usa `includes('psico')`, mas a checagem nova
+  exclui psicomotricidade; quem é de Psicomotricidade e abre o atendimento sem `modelo` leva 409. Conferido no código
+  (`modelos.ts:153` contra `:162`). Sugeri critério único e teste do caso.
+- **#223** (crypto): aprovado com sugestões (rollback garantido nos blocos sem FORCE RLS; acoplamento à trigger da 0021).
+- **#221** (financeiro): aprovado com sugestões (`toBe` no lugar de `includes`; commit de cache redundante com o #223).
+  Ordem sugerida: #223, depois #221.
