@@ -9,12 +9,14 @@ import { describe, expect, it } from 'vitest';
 
 const raiz = fileURLToPath(new URL('..', import.meta.url));
 
+// Caminhos relativos sempre com "/" (no Windows, join geraria "\" e quebraria os filtros por prefixo).
+// join(raiz, dir) fica só para ler o disco.
 function listarRecursivo(dir: string): string[] {
   const entradas = readdirSync(join(raiz, dir), { withFileTypes: true });
   return entradas.flatMap((e) => {
-    if (e.isDirectory()) return listarRecursivo(join(dir, e.name));
+    if (e.isDirectory()) return listarRecursivo(`${dir}/${e.name}`);
     if (!/\.tsx?$/.test(e.name) || /\.test\.tsx?$/.test(e.name) || e.name.endsWith('.mjs')) return [];
-    return [join(dir, e.name)];
+    return [`${dir}/${e.name}`];
   });
 }
 
@@ -91,7 +93,7 @@ describe('privacidade das telas da clínica', () => {
 
 /**
  * Varredura de rede/armazenamento/analytics no lib/ geral (exceto lib/api que é do portal).
- * Inclui sendBeacon, caches.*, window.name que podem vazar dados. public/sw.js é exceção justificada (service worker).
+ * Inclui sendBeacon, caches.*, window.name que podem vazar dados.
  */
 const ARQUIVOS_LIB = [
   ...listarRecursivo('lib').filter((f) => !f.startsWith('lib/api/')),
@@ -101,7 +103,7 @@ const PROIBIDO_LIB: [RegExp, string][] = [
   [/\bconsole\./, 'console'],
   [/\bfetch\s*\(/, 'fetch (rede)'],
   [/XMLHttpRequest|sendBeacon|WebSocket|EventSource/, 'rede (sendBeacon/EventSource/WebSocket)'],
-  [/caches\./, 'Cache API (exceto public/sw.js)'],
+  [/caches\./, 'Cache API'],
   [/window\.name/, 'window.name (pode vazar cross-origin)'],
   [/localStorage|sessionStorage|indexedDB|document\.cookie/, 'armazenamento do navegador'],
   [/gtag|dataLayer|posthog|analytics|sentry/i, 'analytics'],
