@@ -44,27 +44,61 @@ describe('fake: assinatura, exportação e equipe', () => {
     expect(a.proximaCobranca).toBeUndefined();
     expect((await api.reativarAssinatura()).status).toBe('ativa');
   });
-  it('exportação exige código e aprovação de outra pessoa, com auditoria', async () => {
+  it('exportação: admin não-RT que pediu não aprova; o RT aprova com o próprio MFA, com auditoria', async () => {
     const api = criarApiFake({ agora: hoje });
     await expect(api.pedirExportacao('000000')).rejects.toThrow(/não confere/);
     const p = await api.pedirExportacao('123456');
     expect(p.status).toBe('aguardando_rt');
 
-    await expect(api.aprovarExportacao(p.id)).rejects.toMatchObject({ status: 403, codigo: 'autoaprovacao_proibida' });
+    // u1 é admin, pediu e não é o RT: recusa, mesmo com o código certo.
+    await expect(api.aprovarExportacao(p.id, '123456')).rejects.toMatchObject({ status: 403, codigo: 'proibido' });
     expect(p.pedidoPor).toBe('u1');
     expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
-    expect((await api.listarAuditoria()).some((e) => e.acao === 'Responsável técnico aprovou a exportação')).toBe(false);
+    expect((await api.listarAuditoria()).some((e) => /aprovou a/.test(e.acao))).toBe(false);
 
     await api.entrarComo('u5');
+    expect((await api.usuarioAtual()).responsavelTecnico).toBe(true);
     expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
-    const ok = await api.aprovarExportacao(p.id);
-    expect(ok).toMatchObject({ pedidoPor: 'u1', status: 'pronto', downloadsRestantes: 3, expiraEm: '2026-10-13' });
+    // O RT precisa do próprio MFA: sem código válido não aprova.
+    await expect(api.aprovarExportacao(p.id, '')).rejects.toThrow(/6 números/);
+    await expect(api.aprovarExportacao(p.id, '000000')).rejects.toThrow(/não confere/);
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, status: 'aguardando_rt' });
+    const ok = await api.aprovarExportacao(p.id, '123456');
+    expect(ok).toMatchObject({ pedidoPor: 'u1', aprovadoPor: 'u5', autoaprovacao: false, status: 'pronto', downloadsRestantes: 3, expiraEm: '2026-10-13' });
     expect(await api.obterExportacaoPendente()).toBeNull();
     const auditoria = await api.listarAuditoria();
     expect(auditoria.map((e) => e.acao)).toContain('Pediu a exportação total dos dados');
     const aprovacoes = auditoria.filter((e) => e.acao === 'Responsável técnico aprovou a exportação');
     expect(aprovacoes).toHaveLength(1);
     expect(aprovacoes[0]?.quem).toBe('Dra. Lúcia Prates (administradora e terapeuta ocupacional)');
+    expect(auditoria.some((e) => /autoaprovação/.test(e.acao))).toBe(false);
+  });
+  it('exportação: o admin que é o próprio RT (autônomo) aprova o próprio pedido, registrado como autoaprovação', async () => {
+    const api = criarApiFake({ agora: hoje });
+    await api.entrarComo('u5');
+    const p = await api.pedirExportacao('123456');
+    expect(p.pedidoPor).toBe('u5');
+    await expect(api.aprovarExportacao(p.id, '000000')).rejects.toThrow(/não confere/);
+    const ok = await api.aprovarExportacao(p.id, '123456');
+    expect(ok).toMatchObject({ pedidoPor: 'u5', aprovadoPor: 'u5', autoaprovacao: true, status: 'pronto', downloadsRestantes: 3 });
+    const auto = (await api.listarAuditoria()).filter((e) => /autoaprovação/.test(e.acao));
+    expect(auto).toHaveLength(1);
+    expect(auto[0]).toMatchObject({
+      quem: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)',
+      acao: 'Responsável técnico aprovou a própria exportação (autoaprovação: quem pediu é o RT)',
+    });
+  });
+  it('exportação: outro admin que não é o RT também não aprova; o RT que não é admin aprova', async () => {
+    // RT é a Dra. Beatriz (profissional, não admin). u1 pede; u5 é admin, não pediu e não é o RT.
+    const api = criarApiFake({ agora: hoje, responsavelTecnicoId: 'u2' });
+    const p = await api.pedirExportacao('123456');
+    await api.entrarComo('u5');
+    expect((await api.usuarioAtual()).responsavelTecnico).toBe(false);
+    await expect(api.aprovarExportacao(p.id, '123456')).rejects.toMatchObject({ status: 403, codigo: 'proibido' });
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, status: 'aguardando_rt' });
+    await api.entrarComo('u2');
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, status: 'aguardando_rt' });
+    expect(await api.aprovarExportacao(p.id, '123456')).toMatchObject({ aprovadoPor: 'u2', autoaprovacao: false, status: 'pronto' });
   });
   it('não deixa a clínica sem administrador; tirar acesso tem desfazer', async () => {
     const api = criarApiFake({ agora: hoje });

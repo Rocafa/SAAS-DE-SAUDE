@@ -6,7 +6,7 @@ import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
-import { ehAdmin } from './papeis';
+import { ehAdmin, ehResponsavelTecnico } from './papeis';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
 import { fimDaJanela } from '../conta';
 import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
@@ -167,6 +167,11 @@ export interface OpcoesFake {
   simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
   /** Papel de quem ENTRA na demonstração (padrão: admin). `entrarComo` troca depois. */
   papel?: Papel;
+  /**
+   * Quem é o responsável técnico (padrão: `u5`, a Dra. Lúcia, admin e profissional). Os testes trocam
+   * para modelar o RT que não é admin. Na API real, o vínculo de RT vem do cadastro da clínica.
+   */
+  responsavelTecnicoId?: string;
 }
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
@@ -211,13 +216,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'e2', pacienteId: 'p20', preferencia: 'Terça ou quinta depois das 17h', criadoEm: paraIsoLocal(somarDias(agora, -1)) },
       ];
   const pacotes: Pacote[] = vazio ? [] : [{ id: 'k1', pacienteId: 'p01', nome: 'Pacote de 10 sessões de fisioterapia', total: 10, usadas: 3 }];
-  const USUARIOS: Usuario[] = [
+  // R9: a aprovação da exportação total é do usuário RT; o fake marca um único RT por clínica.
+  const USUARIOS: Usuario[] = ([
     { id: 'u1', nome: 'Administradora (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
     { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
     { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
     { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
     { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
-  ];
+  ] satisfies Usuario[]).map((u) => ({ ...u, responsavelTecnico: u.id === (opcoes.responsavelTecnicoId ?? 'u5') }));
   // `papel` é só o ESTADO INICIAL: escolhe quem entra na demonstração, e `entrarComo` sobrepõe depois.
   // Tem de ser um usuário da lista, não a administradora com o papel trocado: o perfil clínico é
   // decidido pelo `profissionalId` (`ehPerfilClinico`), e um "profissional" sem vínculo não existe —
@@ -318,6 +324,12 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
    */
   function exigirAdmin(): void {
     if (!ehAdmin(usuario.papel)) throw new ErroApi(MENSAGENS.proibido, 403, 'proibido');
+  }
+
+  /** MFA recente de quem está na sessão (pedido e aprovação da exportação total, G2). */
+  function conferirMfa(codigo: string): void {
+    if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
+    if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
   }
 
   async function resposta<T>(valor: T): Promise<T> {
@@ -693,30 +705,38 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async pedirExportacao(codigo) {
       exigirAdmin();
-      if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
-      if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
+      conferirMfa(codigo);
       const p: PedidoExportacao = { id: novoId('x'), pedidoPor: usuario.id, status: 'aguardando_rt', pedidoEm: hojeIso };
       exportacoes.push(p);
       registrar('Pediu a exportação total dos dados');
       return resposta(p);
     },
     async obterExportacaoPendente() {
-      exigirAdmin();
+      if (!ehResponsavelTecnico(usuario)) exigirAdmin();
       const p = exportacoes.filter((x) => x.status === 'aguardando_rt').pop() ?? null;
       return resposta(p);
     },
-    async aprovarExportacao(id) {
-      exigirAdmin();
+    async aprovarExportacao(id, codigo) {
+      // G2/R9: a aprovação é ato DO USUÁRIO RT, com MFA próprio. Ser admin não basta; ser outra pessoa
+      // também não. A API real repete as duas conferências no servidor, com a identidade da sessão.
+      if (!ehResponsavelTecnico(usuario)) {
+        throw new ErroApi('Só o responsável técnico da clínica aprova a exportação.', 403, 'proibido');
+      }
       const p = exportacoes.find((x) => x.id === id);
       if (!p) throw new Error('Pedido não encontrado.');
-      // G2/R6: duas pessoas de verdade; a API real precisa repetir esta comparação no servidor.
-      if (usuario.id === p.pedidoPor) {
-        throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
-      }
+      conferirMfa(codigo);
+      // Quem pediu só chega aqui sendo o próprio RT (autônomo): permitido e registrado explicitamente.
+      const autoaprovacao = usuario.id === p.pedidoPor;
       p.status = 'pronto';
+      p.aprovadoPor = usuario.id;
+      p.autoaprovacao = autoaprovacao;
       p.expiraEm = paraIsoLocal(somarDias(agora, 1));
       p.downloadsRestantes = 3;
-      registrar('Responsável técnico aprovou a exportação');
+      registrar(
+        autoaprovacao
+          ? 'Responsável técnico aprovou a própria exportação (autoaprovação: quem pediu é o RT)'
+          : 'Responsável técnico aprovou a exportação',
+      );
       return resposta(p);
     },
 

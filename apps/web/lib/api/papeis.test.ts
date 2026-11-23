@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { criarApiFake } from './fake';
-import { ehAdmin } from './papeis';
+import { ehAdmin, ehResponsavelTecnico } from './papeis';
 
 const agora = new Date('2026-10-12T10:00:00');
 
@@ -14,6 +14,16 @@ describe('ehAdmin', () => {
     expect(ehAdmin('admin')).toBe(true);
     expect(ehAdmin('profissional')).toBe(false);
     expect(ehAdmin('recepcao')).toBe(false);
+  });
+});
+
+describe('ehResponsavelTecnico', () => {
+  it('só quem tem o vínculo de RT; ser admin não basta', async () => {
+    expect(ehResponsavelTecnico({ responsavelTecnico: true })).toBe(true);
+    expect(ehResponsavelTecnico({})).toBe(false);
+    expect(ehResponsavelTecnico(null)).toBe(false);
+    const rts = (await criarApiFake({ agora }).usuariosDemo()).filter(ehResponsavelTecnico).map((u) => u.id);
+    expect(rts).toEqual(['u5']);
   });
 });
 
@@ -39,14 +49,14 @@ describe('o adaptador falso recusa o que é só do administrador', () => {
     await expect(api.reativarAssinatura()).rejects.toMatchObject({ status: 403 });
     await expect(api.pedirExportacao('123456')).rejects.toMatchObject({ status: 403 });
     await expect(api.obterExportacaoPendente()).rejects.toMatchObject({ status: 403 });
-    await expect(api.aprovarExportacao('x1')).rejects.toMatchObject({ status: 403 });
+    await expect(api.aprovarExportacao('x1', '123456')).rejects.toMatchObject({ status: 403 });
   });
 
   it('profissional não aprova um pedido de exportação criado pelo administrador', async () => {
     const api = criarApiFake({ agora });
     const pedido = await api.pedirExportacao('123456');
     await api.entrarComo('u2');
-    await expect(api.aprovarExportacao(pedido.id)).rejects.toMatchObject({ status: 403, codigo: 'proibido' });
+    await expect(api.aprovarExportacao(pedido.id, '123456')).rejects.toMatchObject({ status: 403, codigo: 'proibido' });
   });
 
   it('o administrador continua passando', async () => {

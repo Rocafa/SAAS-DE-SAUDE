@@ -17,7 +17,7 @@ test.describe('Garantias na tela', () => {
     await expect(page.getByText(/Próxima cobrança/)).toBeVisible();
   });
 
-  test('G2: quem pediu não aprova; outro admin retoma o pedido e conclui', async ({ page }) => {
+  test('G2: quem pediu não vê o botão de aprovar; o RT entra, usa o próprio código e conclui', async ({ page }) => {
     await page.goto('/configuracoes/privacidade');
     await page.getByRole('button', { name: 'Baixar todos os dados da clínica' }).click();
     await page.getByLabel(/Código do aplicativo autenticador/).fill('000000');
@@ -29,26 +29,48 @@ test.describe('Garantias na tela', () => {
     await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
     await page.getByRole('button', { name: 'Confirmar pedido' }).click();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
-    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'Quem pediu a exportação não pode aprovar.' })).toContainText(
-      'Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.',
-    );
-    await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toHaveCount(0);
+    // R9: a administradora que pediu não é o RT, então a tela não oferece o botão.
+    await expect(page.getByRole('button', { name: /Aprovar como responsável técnico/ })).toHaveCount(0);
+    await expect(page.getByText(/Só o responsável técnico aprova/)).toBeVisible();
 
     await page.getByRole('link', { name: 'Mais', exact: true }).click();
-    const outroAdmin = page.getByRole('button', { name: /Dra\. Lúcia Prates \(administradora/ });
-    await outroAdmin.click();
-    await expect(outroAdmin).toHaveAttribute('aria-pressed', 'true');
+    const rt = page.getByRole('button', { name: /Dra\. Lúcia Prates \(administradora/ });
+    await rt.click();
+    await expect(rt).toHaveAttribute('aria-pressed', 'true');
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
+    await expect(page.getByText(/registrada como autoaprovação/)).toHaveCount(0);
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('000000');
     await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Código não confere' })).toBeVisible();
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
+    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
+    await expect(page.getByText(/O link foi para o e-mail de quem pediu/)).toBeVisible();
     await expect(page.getByText(/pode ser baixado 3 vezes/)).toBeVisible();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toHaveCount(0);
     const aprovacoes = page.getByRole('region', { name: 'Registro de acessos' }).getByRole('row').filter({ hasText: 'Responsável técnico aprovou a exportação' });
     await expect(aprovacoes).toHaveCount(1);
     await expect(aprovacoes.first()).toContainText('Dra. Lúcia Prates');
+  });
+
+  test('G2: o admin que é o próprio RT (autônomo) aprova o próprio pedido, registrado como autoaprovação', async ({ page }) => {
+    await page.goto('/mais');
+    const rt = page.getByRole('button', { name: /Dra\. Lúcia Prates \(administradora/ });
+    await rt.click();
+    await expect(rt).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
+    await page.getByRole('button', { name: 'Baixar todos os dados da clínica' }).click();
+    await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
+    await page.getByLabel(/Estou ciente/).check();
+    await page.getByRole('button', { name: 'Confirmar pedido' }).click();
+    await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
+    await expect(page.getByText(/registrada como autoaprovação/)).toBeVisible();
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
+    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
+    await expect(page.getByText(/O link foi para o seu e-mail/)).toBeVisible();
+    const auto = page.getByRole('region', { name: 'Registro de acessos' }).getByRole('row').filter({ hasText: 'autoaprovação' });
+    await expect(auto).toHaveCount(1);
+    await expect(auto.first()).toContainText('Dra. Lúcia Prates');
   });
 
   test('auditoria mostra quem acessou o quê e filtra por pessoa', async ({ page }) => {

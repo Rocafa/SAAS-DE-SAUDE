@@ -8,3 +8,11 @@ import type { Papel } from './tipos';
 export function ehAdmin(papel: Papel): boolean {
   return papel === 'admin';
 }
+
+/**
+ * Responsável técnico (RT) da clínica: quem aprova a exportação total (G2, R9 da revisão de 12/10).
+ * É um atributo da pessoa, não um papel de acesso: o RT pode ser admin (o autônomo) ou só profissional.
+ */
+export function ehResponsavelTecnico(usuario: { responsavelTecnico?: boolean } | null | undefined): boolean {
+  return usuario?.responsavelTecnico === true;
+}

@@ -14,6 +14,8 @@ export interface Usuario {
   clinicaId?: string;
   /** Quando o usuário é um profissional de saúde. */
   profissionalId?: string;
+  /** Responsável técnico da clínica: aprova a exportação total (G2) com o próprio MFA. */
+  responsavelTecnico?: boolean;
 }
 
 export interface Adendo {
@@ -285,8 +287,12 @@ export interface Assinatura {
 /** Exportação total (G2): MFA recente, aprovação do responsável técnico, link pessoal de 24 h. */
 export interface PedidoExportacao {
   id: string;
-  /** Identidade de quem pediu; a aprovação exige outro usuário autenticado (R6 do Guardião). */
+  /** Identidade de quem pediu; só o RT aprova, e quem pediu só aprova se for o próprio RT (R9). */
   pedidoPor: string;
+  /** Identidade do RT que aprovou, autenticado e com MFA próprio. */
+  aprovadoPor?: string;
+  /** `true` quando quem pediu é o próprio RT (autônomo): permitido e registrado na auditoria. */
+  autoaprovacao?: boolean;
   status: 'aguardando_rt' | 'pronto';
   pedidoEm: string;
   expiraEm?: string;
