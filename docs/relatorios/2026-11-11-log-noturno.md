@@ -679,3 +679,6 @@ Pendente para a próxima sessão:
 - **Guardião no #229: aprovado com ressalvas**, condicionado ao verde do RLS na CI (rodando). Ressalvas sendo
   resolvidas no próprio PR: teste do autor desligado só com o perfil `psicologo`; comentário de `custodia.ts`
   corrigido (nota lacrada de não psicólogo não tem custódia e é eliminada ao fim do lacre).
+- #229, 53b598b: ressalvas resolvidas (o ciclo confere se o autor já teve o perfil `psicologo`, mesmo revogado; o
+  banco não apaga `clinic_members`). Mudança nova: em `designar`, só o perfil no banco decide a custódia (saiu a
+  checagem de especialidade do autor). Como amplia acesso a nota privada, voltou ao Guardião.
