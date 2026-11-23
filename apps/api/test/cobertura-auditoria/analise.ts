@@ -24,7 +24,6 @@ export const METODOS_DE_ESCRITA = ['Post', 'Patch', 'Put', 'Delete', 'All'] as c
 export const METODOS_DE_LEITURA = ['Get'] as const;
 /** Qualquer outro decorator de rota do Nest: a análise falha com o nome, até alguém decidir como tratá-lo. */
 const METODOS_NAO_TRATADOS = ['Options', 'Head', 'Search', 'RequestMapping', 'applyDecorators'] as const;
-const METODOS_TRATADOS: readonly string[] = [...METODOS_DE_ESCRITA, ...METODOS_DE_LEITURA];
 
 /** A função que grava a linha da trilha. Alcançá-la a partir do handler conta como auditado. */
 export const GRAVADOR_DA_TRILHA = { nome: 'insertAudit', arquivo: 'src/modules/audit/audit-log.ts' } as const;
@@ -109,13 +108,11 @@ function identidadeDoDecorator(cx: Contexto, dec: ts.Decorator): { nome: string;
 const RE_ROTA_COMPOSTA = /\bapplyDecorators\b|\bRequestMapping\b|\b(Get|Post|Put|Patch|Delete|All|Options|Head|Search)\s*\(/;
 
 /** Decorator de método de controller: o verbo HTTP do tipo pedido, `null` (não é rota desse tipo) ou falha alto. */
-function verboDaRota(cx: Contexto, dec: ts.Decorator, tipo: TipoDeVarredura): string | null {
+function verboDaRota(cx: Contexto, dec: ts.Decorator, tipo: TipoDeRota): string | null {
   const id = identidadeDoDecorator(cx, dec);
   if (!id) return null;
   if (id.doNest) {
-    let metodos: readonly string[] = METODOS_DE_ESCRITA;
-    if (tipo === 'leitura') metodos = METODOS_DE_LEITURA;
-    if (tipo === 'todas') metodos = METODOS_TRATADOS;
+    const metodos: readonly string[] = tipo === 'escrita' ? METODOS_DE_ESCRITA : METODOS_DE_LEITURA;
     if (metodos.includes(id.nome)) return id.nome;
     if ((METODOS_NAO_TRATADOS as readonly string[]).includes(id.nome)) return falhar(dec, `decorator de rota não tratado pela análise de auditoria: @${id.nome}`);
     return null;
@@ -216,7 +213,6 @@ function sqlAlcancado(cx: Contexto, inicio: ts.Node): string[] {
 }
 
 export type TipoDeRota = 'escrita' | 'leitura';
-type TipoDeVarredura = TipoDeRota | 'todas';
 
 /** Rotas de escrita (`POST/PATCH/PUT/DELETE/ALL`), com a análise de alcance. */
 export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaAnalisada[] {
@@ -228,20 +224,11 @@ export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaAnal
   return analisarRotas('leitura', extras);
 }
 
-/** Escrita e leitura da API real numa única criação do programa TypeScript e varredura dos controllers. */
-export function analisarRotasDaApi(): { escrita: RotaAnalisada[]; leitura: RotaAnalisada[] } {
-  const rotas = analisarRotas('todas', []);
-  return {
-    escrita: rotas.filter((r) => !r.rota.startsWith('GET ')),
-    leitura: rotas.filter((r) => r.rota.startsWith('GET ')),
-  };
-}
-
 /**
  * Rotas da API do tipo pedido (ordenadas pela rota), com a análise de alcance. `extras`: arquivos fora de `src/`
  * tratados como nosso código e cujas rotas são as ÚNICAS devolvidas (fixtures de sanidade do teste).
  */
-function analisarRotas(tipo: TipoDeVarredura, extras: readonly string[]): RotaAnalisada[] {
+function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisada[] {
   const absolutos = extras.map((f) => path.resolve(f));
   const programa = criarPrograma(absolutos);
   // Código com erro de sintaxe daria análise parcial (e falso "não audita"): melhor falhar com o motivo.
