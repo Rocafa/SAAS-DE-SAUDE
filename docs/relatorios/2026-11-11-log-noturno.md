@@ -697,3 +697,7 @@ Pendente para a próxima sessão:
 - #229: CI toda verde, inclusive Playwright. Pronto para o sócio mesclar na branch do #219.
 - Disparada a correção do #220 (R9 de 12/10: aprovação pelo RT com MFA, autoaprovação registrada do autônomo, sem
   botão para quem pediu; sai o plano em `docs/superpowers/`), em PR para a branch do sócio.
+- **Guardião retira o veto do #227 com o #233**: aprovado com ressalvas, condicionado à CI. Ressalvas: (a) trava que
+  impede subir com provedor de IA real enquanto a chamada estiver na transação; (b) conferir no CloudTrail do
+  staging que o `GenerateMac` não registra `Message`; (c) retenção dos eventos de IA e V2 do RIPD do escriba. (a) e
+  (c) pedidos ao agente no #233; (b) fica para o staging. Postado no #227.
