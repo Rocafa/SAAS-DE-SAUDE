@@ -266,6 +266,17 @@ describe('guarda de schema: RLS e policies', () => {
     });
   }
 
+  it('nenhuma tabela de public fica sem RLS habilitado e FORÇADO', () => {
+    const semRls = tabelas.filter((t) => !t.rls || !t.force).map((t) => t.tabela);
+    expect(semRls, 'toda tabela, inclusive interna, precisa de RLS FORCE; aplica-se também ao dono').toEqual([]);
+  });
+
+  it('nenhuma tabela de public fica sem policy', () => {
+    const comPolicy = new Set(policies.map((p) => p.tabela));
+    const semPolicy = tabelas.map((t) => t.tabela).filter((tabela) => !comPolicy.has(tabela));
+    expect(semPolicy, 'tabela sem nenhuma policy: negar por privilégio não substitui RLS com policy explícita').toEqual([]);
+  });
+
   it('tabela interna não dá nenhum privilégio ao papel de runtime', async () => {
     for (const tabela of Object.keys(TABELAS_INTERNAS)) {
       expect(await privilegiosDoRuntime(tabela), `${tabela}: ${TABELAS_INTERNAS[tabela]}`).toEqual([]);
