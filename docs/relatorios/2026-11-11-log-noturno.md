@@ -694,3 +694,6 @@ Pendente para a próxima sessão:
   `hash_key_id`; revisão que herda os campos da geração, 403 a quem não é o responsável, 409 na duplicada, 404 igual
   para inexistente e outra clínica. Vitest (1169), build e boot ok; o RLS novo só na CI. Enviado ao Guardião para
   reconferir o veto, com a pergunta sobre o SHA-256 que vai ao KMS.
+- #229: CI toda verde, inclusive Playwright. Pronto para o sócio mesclar na branch do #219.
+- Disparada a correção do #220 (R9 de 12/10: aprovação pelo RT com MFA, autoaprovação registrada do autônomo, sem
+  botão para quem pediu; sai o plano em `docs/superpowers/`), em PR para a branch do sócio.
