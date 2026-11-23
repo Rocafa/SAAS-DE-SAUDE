@@ -719,3 +719,11 @@ Pendente para a próxima sessão:
 com o Guardião: #228 (#216), #229 (#219), #231 (#222), #232 (#213), #233 (#227, inclui o #230) e #234 (#220). Falta
 dele: mesclá-los e as decisões de produto do #226 (dividir; prazo no plano de incidentes). Nossos: #209 continua
 destravando a auditoria de todos.
+
+### 23/11 — limite de uso atingido
+
+- Tudo commitado e enviado; nenhum agente rodando. Guia de revisão atualizado com a tabela dos PRs de correção.
+- **Ao retomar:** conferir se o sócio mesclou #228, #229, #231, #232, #233 e #234 nas branches dele e revisar de novo
+  os PRs dele (#213, #216, #219, #220, #222, #227); conferir aprovação do #209 e seguir a ordem do guia; #213 ainda
+  tem o bloco unitário que testa os próprios mocks; CloudTrail do `GenerateMac` no staging (ressalva b do #227).
+  A tarefa `pilha-login-merges-2h` segue mesclando o que for aprovado.
