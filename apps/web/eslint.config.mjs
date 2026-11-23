@@ -18,10 +18,10 @@ export default tseslint.config(
     // SW usa caches.* e pode usar sendBeacon/window.name; console continua proibido (não há uso).
   },
   {
-    files: ['scripts/**/*.mjs', 'lib/**/*.mjs'],
+    files: ['scripts/**/*.mjs'],
     rules: { 'no-console': 'off' },
     languageOptions: { globals: { console: 'readonly', process: 'readonly', URL: 'readonly' } },
-    // Scripts de build e arquivos .mjs em lib/ usam console propositalmente (checar-cinza: erro/sucesso;
-    // gerar-icones: confirmação de geração). Exceção justificada: registro de erro de propósito.
+    // Scripts de build usam console propositalmente (checar-cinza: erro/sucesso;
+    // gerar-icones: confirmação de geração). Exceção justificada: saída de terminal de propósito.
   },
 );
