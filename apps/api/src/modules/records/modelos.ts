@@ -7,14 +7,16 @@
  * - fisio (v2, #167): queixa, avaliação, diagnóstico e prognóstico fisioterapêuticos (Res. COFFITO 414/2012, art. 1º
  *   §1º V), exames complementares realizados ou solicitados (inciso IV), conduta, resposta, orientações, próximos passos,
  *   medidas/escalas e plano de sessões com metas (HU-PRO-021/022).
- * - TO (v2, #167): modelo próprio, não mais os textos da fisioterapia. Pela Res. COFFITO 415/2012 (art. 1º §1º,
+ * - TO (v3, #167): modelo próprio, não mais os textos da fisioterapia. Pela Res. COFFITO 415/2012 (art. 1º §1º,
  *   conferida em https://www.coffito.gov.br/nsite/?p=3178 em 13/11/2026): diagnóstico e prognóstico terapêutico
  *   ocupacional (V), exames complementares (IV), objetivos do plano (VI). Desempenho, nível de assistência e as
  *   atividades da sessão são escolha de produto (a tela já pede), não exigência da norma.
+ *   A v3 passou a recusar as medidas da fisioterapia (`medidasRestritasDesde`); rascunho gravado na v2 segue a regra
+ *   da v2 (aceita essas medidas), pois mudar o modelo não reinterpreta registro antigo.
  * - Escalas: instrumento conhecido pelo rótulo tem faixa própria (Barthel, MIF, Berg, NPRS); os demais, faixa larga.
  *   #167: instrumento explícito também tem faixa própria; a TO só aceita Barthel/MIF e subescalas, enquanto a fisio mantém
  *   as demais medidas e a escala livre.
- * - psicologia: registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
+ * - psicologia (v2, #167): registro de sessão (tema, intervenções, evolução, encaminhamentos) e plano de sessões.
  *   #167: referência textual a instrumentos, sem embutir teste, item ou escore.
  *   As ANOTAÇÕES PRIVADAS do psicólogo não são registro: ficam em `private_notes` (notas-privadas.service.ts).
  */
@@ -64,6 +66,11 @@ interface DefinicaoModelo {
   /** Ausência = todos os tipos/instrumentos existentes; a TO declara o conjunto próprio (#167). */
   readonly tiposDeMedida?: readonly TipoDeMedida[];
   readonly instrumentosPermitidos?: readonly InstrumentoConhecido[];
+  /**
+   * Versão a partir da qual `tiposDeMedida` e `instrumentosPermitidos` valem. Registro de versão anterior é validado
+   * sem essas restrições (PRO-01.4: mudar o modelo não reinterpreta registro antigo). Ausente = valem sempre.
+   */
+  readonly medidasRestritasDesde?: number;
   readonly plano: boolean;
 }
 
@@ -83,7 +90,7 @@ export const MODELOS: Readonly<Record<RecordTemplate, DefinicaoModelo>> = {
   },
   to: {
     nome: 'Evolução de terapia ocupacional',
-    versao: 2,
+    versao: 3,
     // #167: COFFITO 415/2012 art. 1º §1º IV e V (exames; diagnóstico e prognóstico) e VI (objetivos), mais o que a tela
     // já pede (atividades, desempenho, nível de assistência, próximos passos). Os textos da v1 continuam aceitos.
     textos: [...TEXTOS_REABILITACAO, 'diagnostico', 'exames', 'objetivo', 'atividades', 'desempenho', 'nivel_assistencia', 'plano'],
@@ -94,14 +101,16 @@ export const MODELOS: Readonly<Record<RecordTemplate, DefinicaoModelo>> = {
     // COPM continua fora: a licença no Brasil não foi confirmada.
     tiposDeMedida: ['escala'],
     instrumentosPermitidos: ['barthel', 'mif', 'mif_motora', 'mif_cognitiva'],
+    medidasRestritasDesde: 3,
     plano: true,
   },
   psicologia: {
     nome: 'Registro de sessão de psicologia',
-    versao: 1,
+    versao: 2,
     // #167: só referência textual; nenhum teste, item ou escore é embutido. A conferência no SATEPSI é do profissional.
     textos: ['tema', 'intervencoes', 'evolucao', 'encaminhamentos', 'instrumentos'],
     obrigatoriosParaFinalizar: ['tema', 'evolucao'],
+    obrigatoriosAnteriores: { 1: ['tema', 'evolucao'] },
     medidas: false,
     plano: true,
   },
@@ -129,7 +138,7 @@ const FAIXAS: Readonly<Record<TipoDeMedida, { min: number; max: number; inteiro:
  * Só instrumentos de uso livre. A COPM não entra (tem dono; licença no Brasil não confirmada). Psicologia não tem
  * medidas: instrumento psicológico é do SATEPSI e privativo do psicólogo (Res. CFP 31/2022).
  */
-export const INSTRUMENTOS = {
+const INSTRUMENTOS = {
   barthel: { min: 0, max: 100 },
   mif: { min: 18, max: 126 },
   // C2 do parecer de 13/11: as subescalas da MIF têm faixa própria (13 itens motores e 5 cognitivos, de 1 a 7).
@@ -203,13 +212,16 @@ function textoCurto(v: unknown, max: number): string | null {
   return t;
 }
 
-function validarMedidas(modelo: RecordTemplate, valor: unknown, erros: string[]): Medida[] | undefined {
+function validarMedidas(modelo: RecordTemplate, valor: unknown, erros: string[], versaoModelo: number): Medida[] | undefined {
   if (!Array.isArray(valor) || valor.length > MAX_MEDIDAS) {
     erros.push('conteudo.medidas');
     return undefined;
   }
   const out: Medida[] = [];
   const def = MODELOS[modelo];
+  const restringe = def.medidasRestritasDesde === undefined || versaoModelo >= def.medidasRestritasDesde;
+  const tiposPermitidos = restringe ? def.tiposDeMedida : undefined;
+  const instrumentosPermitidos = restringe ? def.instrumentosPermitidos : undefined;
   valor.forEach((m: unknown, i) => {
     const campo = `conteudo.medidas.${i}`;
     if (!ehObjetoSimples(m) || Object.keys(m).some((k) => !['tipo', 'rotulo', 'valor', 'instrumento'].includes(k))) {
@@ -221,7 +233,7 @@ function validarMedidas(modelo: RecordTemplate, valor: unknown, erros: string[])
       erros.push(`${campo}.tipo`);
       return;
     }
-    if (def.tiposDeMedida && !def.tiposDeMedida.includes(tipo as TipoDeMedida)) {
+    if (tiposPermitidos && !tiposPermitidos.includes(tipo as TipoDeMedida)) {
       erros.push(`${campo}.tipo`);
       return;
     }
@@ -255,13 +267,14 @@ function validarMedidas(modelo: RecordTemplate, valor: unknown, erros: string[])
     }
     if (tipo === 'escala') {
       const instrumento = explicito ?? (rotulo ? instrumentoDoRotulo(rotulo) : undefined);
+      // Instrumento não permitido vem ANTES da faixa: o erro aponta o instrumento, não um valor que nem seria lido.
+      if (instrumentosPermitidos && (!instrumento || !instrumentosPermitidos.includes(instrumento))) {
+        erros.push(`${campo}.${explicito ? 'instrumento' : 'rotulo'}`);
+        return;
+      }
       const propria = instrumento ? INSTRUMENTOS[instrumento] : undefined;
       if (propria && (v < propria.min || v > propria.max || !Number.isInteger(v))) {
         erros.push(`${campo}.valor`);
-        return;
-      }
-      if (def.instrumentosPermitidos && (!instrumento || !def.instrumentosPermitidos.includes(instrumento))) {
-        erros.push(`${campo}.${explicito ? 'instrumento' : 'rotulo'}`);
         return;
       }
     }
@@ -311,9 +324,10 @@ function validarPlano(valor: unknown, erros: string[]): PlanoDeSessoes | undefin
 
 /**
  * Valida e normaliza o conteúdo de um registro no modelo dado. Rascunho pode estar incompleto (a
- * completude é cobrada na finalização, `faltasParaFinalizar`).
+ * completude é cobrada na finalização, `faltasParaFinalizar`). `versaoModelo` é a do registro: rascunho aberto numa
+ * versão anterior é validado pela regra dela (PRO-01.4); ausente = versão atual.
  */
-export function validarConteudo(modelo: RecordTemplate, valor: unknown): ConteudoRegistro {
+export function validarConteudo(modelo: RecordTemplate, valor: unknown, versaoModelo?: number): ConteudoRegistro {
   const def = MODELOS[modelo];
   if (!ehObjetoSimples(valor)) throw new EntradaInvalidaError(['conteudo']);
   const permitidas = [...def.textos, ...(def.medidas ? ['medidas'] : []), ...(def.plano ? ['planoDeSessoes'] : [])];
@@ -327,7 +341,7 @@ export function validarConteudo(modelo: RecordTemplate, valor: unknown): Conteud
     else if (t !== undefined) out[campo] = t;
   }
   if (def.medidas && valor.medidas !== undefined) {
-    const m = validarMedidas(modelo, valor.medidas, erros);
+    const m = validarMedidas(modelo, valor.medidas, erros, versaoModelo ?? def.versao);
     if (m && m.length > 0) out.medidas = m;
   }
   if (def.plano && valor.planoDeSessoes !== undefined && valor.planoDeSessoes !== null) {

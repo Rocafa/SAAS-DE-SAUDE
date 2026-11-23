@@ -125,8 +125,8 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     expect(campos(() => validarConteudo('fisio', { objetivo: 'x' }))).toEqual(['campo_desconhecido']);
   });
 
-  it('TO v2 tem os campos que a tela pede (objetivo, atividades, desempenho, plano) e nível de assistência', () => {
-    expect(MODELOS.to.versao).toBe(2);
+  it('TO (v2 em diante) tem os campos que a tela pede (objetivo, atividades, desempenho, plano) e nível de assistência', () => {
+    expect(MODELOS.to.versao).toBe(3);
     const c = { objetivo: 'a', atividades: 'b', desempenho: 'c', nivel_assistencia: 'd', plano: 'e', queixa: 'f' };
     expect(validarConteudo('to', c)).toEqual(c);
     // COFFITO 415/2012 art. 1º §1º IV e V: a TO também registra exames e diagnóstico/prognóstico.
@@ -216,6 +216,26 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     }
   });
 
+  it('TO v2 já gravada com medida da fisioterapia segue válida pela regra da v2; a v3 recusa (PRO-01.4)', () => {
+    expect(MODELOS.to.versao).toBe(3);
+    const eva = { medidas: [{ tipo: 'eva', valor: 5 }] };
+    expect(campos(() => validarConteudo('to', eva, 2))).toEqual([]);
+    expect(campos(() => validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo: 'Escala de Berg', valor: 40 }] }, 2))).toEqual([]);
+    expect(campos(() => validarConteudo('to', eva, 3))).toEqual(['conteudo.medidas.0.tipo']);
+    expect(campos(() => validarConteudo('to', eva))).toEqual(['conteudo.medidas.0.tipo']);
+    expect(faltasParaFinalizar('to', {}, 2)).toEqual(['objetivo', 'atividades']);
+  });
+
+  it('psicologia v2 mantém os obrigatórios da v1 para registro antigo', () => {
+    expect(MODELOS.psicologia.versao).toBe(2);
+    expect(faltasParaFinalizar('psicologia', {}, 1)).toEqual(['tema', 'evolucao']);
+  });
+
+  it('instrumento não permitido na TO é recusado antes da faixa: Berg 57 erra o instrumento, não o valor', () => {
+    expect(campos(() => validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo: 'Escala de Berg', valor: 57 }] }))).toEqual(['conteudo.medidas.0.rotulo']);
+    expect(campos(() => validarConteudo('to', { medidas: [{ tipo: 'escala', rotulo: 'Entrada', instrumento: 'berg', valor: 57 }] }))).toEqual(['conteudo.medidas.0.instrumento']);
+  });
+
   it.each([
     { nome: 'EVA', base: { tipo: 'eva' }, min: 0, max: 10 },
     { nome: 'MRC', base: { tipo: 'forca' }, min: 0, max: 5 },
@@ -223,6 +243,7 @@ describe('modelos por especialidade (#167; COFFITO 414 e 415/2012)', () => {
     { nome: 'MIF total', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif' }, min: 18, max: 126 },
     { nome: 'MIF motora', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif_motora' }, min: 13, max: 91 },
     { nome: 'MIF cognitiva', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'mif_cognitiva' }, min: 5, max: 35 },
+    { nome: 'Berg', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'berg' }, min: 0, max: 56 },
     { nome: 'NPRS', base: { tipo: 'escala', rotulo: 'Avaliação fictícia', instrumento: 'nprs' }, min: 0, max: 10 },
   ])('$nome: aceita os limites $min e $max; recusa valores fora e decimais', ({ base, min, max }) => {
     const medir = (valor: number) => campos(() => validarConteudo('fisio', { medidas: [{ ...base, valor }] }));
