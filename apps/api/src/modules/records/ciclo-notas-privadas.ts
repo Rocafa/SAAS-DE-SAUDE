@@ -106,6 +106,9 @@ export async function aplicarPrazosDeCustodia(
       estado: privateNotes.custodyState,
       exportar: privateNotes.exportConsent,
       // Subconsultas (não join): autor com dois cadastros de profissional não duplica a nota no laço.
+      // `perfilPsicologo` é o HISTÓRICO (mesma regra de `tevePerfilNoBanco`): SEM filtro de `revoked_at`. O desligamento
+      // revoga o perfil (marca `revoked_at`), não apaga: DELETE/TRUNCATE em clinic_members são negados ao app_user e
+      // barrados pelo trigger `clinic_members_guard` (0020/0022). Assim o sinal sobrevive ao desligamento.
       especialidades: sql<string[] | null>`(select array_agg(${professionals.specialty}) from ${professionals} where ${professionals.tenantId} = ${privateNotes.tenantId} and ${professionals.userId} = ${privateNotes.authorUserId})`,
       areaSensivel: sql<boolean>`exists(select 1 from ${professionals} where ${professionals.tenantId} = ${privateNotes.tenantId} and ${professionals.userId} = ${privateNotes.authorUserId} and ${professionals.sensitiveArea})`,
       perfilPsicologo: sql<boolean>`exists(select 1 from ${clinicMembers} where ${clinicMembers.tenantId} = ${privateNotes.tenantId} and ${clinicMembers.userId} = ${privateNotes.authorUserId} and ${clinicMembers.role} = 'psicologo')`,

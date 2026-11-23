@@ -24,6 +24,12 @@ describe('ciclo das notas privadas: lacrar na dúvida (deveLacrar)', () => {
     expect(deveLacrar({ especialidades: null, areaSensivel: false, perfilPsicologo: true })).toBe(true);
   });
 
+  it('autor desligado, especialidade sem "psico", sem área sensível, só o perfil psicologo (já revogado): lacra', () => {
+    // perfilPsicologo vem do histórico de clinic_members (revogado conta); o RLS do ciclo prova a consulta.
+    expect(deveLacrar({ especialidades: ['Terapia integrativa'], areaSensivel: false, perfilPsicologo: true })).toBe(true);
+    expect(deveLacrar({ especialidades: ['Terapia integrativa'], areaSensivel: false, perfilPsicologo: false })).toBe(false);
+  });
+
   it('autor com dois cadastros: basta um ser área psi', () => {
     expect(deveLacrar(semSinalDoBanco(['Fisioterapia', 'Psicol.']))).toBe(true);
   });

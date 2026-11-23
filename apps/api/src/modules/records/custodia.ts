@@ -25,7 +25,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { exigirPerfilNoBanco, temPerfilNoBanco, tevePerfilNoBanco } from '../auth/membros';
-import { modeloPelaEspecialidade, podeSerAreaPsi } from './modelos';
+import { modeloPelaEspecialidade } from './modelos';
 import { descartarComLapide } from './notas-privadas.service';
 import { CAMPO_NOTA, decifrarCampoClinico } from './record-fields';
 import { exigirSemRetencao } from './retencao-legal';
@@ -64,9 +64,12 @@ export class CustodiaService {
       const autor = await this.profissional(tx, ctx, autorProfissionalId);
       const subst = await this.profissional(tx, ctx, substitutoProfissionalId);
       if (!autor.userId || !subst.userId) throw new ConflitoError('profissional_sem_usuario');
-      // Autor: regra AMPLA, a mesma que lacrou as notas (deveLacrar no ciclo); se fosse a estreita, nota lacrada de
-      // psicomotricista ficaria sem custódia possível e seria eliminada no fim do lacre. O perfil no banco segue exigido.
-      if (!podeSerAreaPsi(autor.specialty)) throw new ConflitoError('autor_nao_psicologo');
+      // Autor: quem decide é o PERFIL no banco (R13, `tevePerfilNoBanco(autor, 'psicologo')` abaixo), não a especialidade.
+      // Consequência assumida: nota lacrada de autor que nunca teve o perfil psicologo (psicomotricista, psicopedagogo,
+      // lacrada só pela regra ampla ou por área sensível) NÃO consegue custódia e é eliminada ao fim dos 90 dias de lacre.
+      // O lacre só adia a eliminação na dúvida; quem lê a nota é sempre psicólogo (substituto, abaixo). Sem checagem
+      // pela especialidade do autor: autor com o perfil e especialidade sem "psico" (também lacrado pelo perfil no
+      // ciclo, deveLacrar) consegue custódia.
       // Substituto: regra ESTREITA (quem lê nota lacrada é psicólogo de fato; psicopedagogo não), mais o perfil no banco.
       if (modeloPelaEspecialidade(subst.specialty) !== 'psicologia' || !subst.active) throw new ConflitoError('substituto_nao_psicologo_ativo');
       // Duas pessoas: quem designa não é o substituto; o substituto não é o autor (CHECK no banco também).

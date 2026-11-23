@@ -8,7 +8,7 @@ import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, privateNotes, professionals } from '../src/db/schema';
+import { appointments, auditLog, clinicMembers, privateNotes, professionals } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -265,6 +265,19 @@ describe('D2: profissional que sai da clínica', () => {
       notas.push(await novaNota(a.s, p));
       await api.http().post(`/prontuario/profissionais/${a.id}/desligamento`).set(cab(admin)).send({}).expect(200);
     }
+    // Ressalva do Guardião: só o perfil psicologo no banco (especialidade sem "psico", sem área sensível), revogado no
+    // desligamento. A revogação marca revoked_at (não apaga), e o ciclo lê o histórico: a nota é lacrada.
+    const soPerfil = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'psicologo');
+    const soPerfilId = await profissional(soPerfil, 'Terapia integrativa');
+    await agendaDeHoje(p, soPerfilId);
+    notas.push(await novaNota(soPerfil, p));
+    await api.http().post(`/prontuario/profissionais/${soPerfilId}/desligamento`).set(cab(admin)).send({}).expect(200);
+    await api.http().delete(`/clinica/membros/${soPerfil.userId}/psicologo`).set(cab(admin)).expect(204);
+    const [revogado] = await withTenant(api.db.db, clinica, (tx) =>
+      tx.select({ revokedAt: clinicMembers.revokedAt }).from(clinicMembers).where(and(eq(clinicMembers.userId, soPerfil.userId), eq(clinicMembers.role, 'psicologo'))),
+    );
+    expect(revogado?.revokedAt).not.toBeNull();
+
     await ciclo.executarCicloDasNotas(ctxAdmin(), new Date(Date.now() + 31 * DIA));
     for (const id of notas) {
       const n = await linha(id);
