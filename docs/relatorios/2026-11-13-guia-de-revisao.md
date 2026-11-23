@@ -1,6 +1,16 @@
 # Guia de revisão para o @Lopesloro — 13/11/2026
 
-## Atualização de 17/11/2026, comece por aqui
+## Atualização de 23/11/2026
+
+- **O #209 continua sendo o único que destrava a auditoria.** O picomatch segue sem correção (4.0.7 é a última no
+  npm), então o #210 (já aprovado, obrigado) e todos os PRs nossos falham só nesse job até o #209 entrar.
+- **Revisei os teus 16 PRs novos (#211 a #227).** Aprovados: #211, #214, #215, #217, #218, #221, #223, #224, #225.
+  Com mudança pedida, cada uma explicada no PR: #213 e #222 (o Playwright vermelho vem do próprio PR), #216 (filtro
+  quebra no Windows), #219 (Psicomotricidade sem `modelo` leva 409), #220 (contradiz o R9 de 12/10), #226 (migração 0066
+  conflita com a pilha do Better Auth; dividir) e #227 (a API compilada não sobe).
+- #214 e #217 mexem nos mesmos tsconfigs: quem entrar por último atualiza a branch. Sugiro o #223 antes do #221.
+
+## Atualização de 17/11/2026
 
 **Urgente: o #209 destrava a CI de todos os PRs.** Desde 17/11 às 15:56 UTC, o alerta GHSA-fc5q-39xc-vjpf (picomatch,
 alta, ainda **sem versão corrigida**) faz o job "Auditoria de dependências" falhar em qualquer PR. O #209 adiciona uma
