@@ -705,3 +705,6 @@ Pendente para a próxima sessão:
   autoaprovação do RT registrada na auditoria e no pedido, tela sem botão para quem pediu; sai o plano de
   `docs/superpowers`. Vitest (416), lint, typecheck e e2e `configuracoes-acesso` (26) com exit 0. Decisão sensível:
   o agente permite a autoaprovação do RT mesmo com outros admins; mandei ao Guardião antes de recomendar.
+- #233 (fc1f9e3, 93a092a): trava de boot com `AI_PROVIDER` real enquanto a chamada estiver na transação, e retenção
+  dos eventos de IA e V2 "Parcial" no RIPD do escriba. CI toda verde. Avisado no #227 que está pronto; falta só o
+  CloudTrail no staging.
