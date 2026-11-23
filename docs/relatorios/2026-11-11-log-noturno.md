@@ -658,3 +658,8 @@ Pendente para a próxima sessão:
   psicomotricista e psicopedagogo passariam de lacradas a eliminadas. Pedido ao agente: ampliar `ehPsicologia`,
   lacrar na dúvida no ciclo, testes do ciclo e corpo do PR descrevendo as mudanças em `custodia.ts` e no ciclo.
   O #229 não deve ser mesclado antes da reconferência do Guardião.
+- **#230** aberto para a branch do #227: `@Optional() @Inject(token)` no relógio do `AuditoriaIaService` e teste que
+  compila o módulo (falha no código antigo). Typecheck, vitest (1156) e build com exit 0; a API compilada sobe. A
+  chamada ao modelo ficou na transação (a checagem de assinatura roda antes; tirar muda o desenho). Pedi parecer do
+  Guardião sobre o conjunto #227 + #230 (inclui o `prompt_hash` sem salt).
+- Rede: um `gh pr comment` falhou por conexão; refeito em seguida.
