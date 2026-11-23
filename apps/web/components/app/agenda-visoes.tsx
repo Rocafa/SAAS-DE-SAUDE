@@ -6,7 +6,7 @@
  */
 import { CalendarClock, CalendarPlus, DoorOpen, Hourglass, Play, Trash2, UserX, Users, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, useState, type DragEvent, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Status, Vazio } from '@/components/ui/estados';
 import { conflito, diasDaSemana, porHorario, simultaneos } from '@/lib/agenda';
@@ -328,8 +328,42 @@ export function ListaEspera() {
   const [pacienteId, setPacienteId] = useState('');
   const [preferencia, setPreferencia] = useState('');
   const [erro, setErro] = useState('');
+  const [adicionando, setAdicionando] = useState(false);
+  // Ids com remoção em andamento. Um id só não serve: com duas remoções ao mesmo tempo, a que
+  // terminava primeiro reabilitava o botão da outra. O Set em estado é sempre substituído por uma
+  // cópia; a ref é a trava síncrona (o "Tentar de novo" chama `tirar` de uma closure antiga).
+  const [tirando, setTirando] = useState<ReadonlySet<string>>(new Set());
+  const pendentes = useRef(new Set<string>());
+  const adicionandoAgora = useRef(false);
   const porId = useMemo(() => indexarPorId(pacientes), [pacientes]);
   const sugestoes = busca.trim() && !pacienteId ? acharPacientes(busca, pacientes.filter((p) => p.ativo)).slice(0, 5) : [];
+
+  async function colocar(paciente: string, horario: string) {
+    if (adicionandoAgora.current) return;
+    adicionandoAgora.current = true;
+    setAdicionando(true);
+    await acao(
+      async () => {
+        const item = await api.adicionarEspera(paciente, horario);
+        setPacienteId('');
+        setBusca('');
+        setPreferencia('');
+        setErro('');
+        atualizar();
+        avisar({
+          texto: 'Colocado na lista de espera.',
+          desfazer: async () => {
+            await api.removerEspera(item.id);
+            atualizar();
+          },
+        });
+      },
+      { tentarDeNovo: () => colocar(paciente, horario) },
+    ).finally(() => {
+      adicionandoAgora.current = false;
+      setAdicionando(false);
+    });
+  }
 
   async function adicionar(e: FormEvent) {
     e.preventDefault();
@@ -337,35 +371,30 @@ export function ListaEspera() {
       setErro('Falta o paciente. Digite o nome e escolha na lista.');
       return;
     }
-    await acao(async () => {
-      const item = await api.adicionarEspera(pacienteId, preferencia);
-      setPacienteId('');
-      setBusca('');
-      setPreferencia('');
-      setErro('');
-      atualizar();
-      avisar({
-        texto: 'Colocado na lista de espera.',
-        desfazer: async () => {
-          await api.removerEspera(item.id);
-          atualizar();
-        },
-      });
-    });
+    await colocar(pacienteId, preferencia);
   }
 
   async function tirar(id: string) {
-    await acao(async () => {
-      const item = await api.removerEspera(id);
-      atualizar();
-      if (item)
-        avisar({
-          texto: 'Tirado da lista de espera.',
-          desfazer: async () => {
-            await api.devolverEspera(item);
-            atualizar();
-          },
-        });
+    if (pendentes.current.has(id)) return;
+    pendentes.current.add(id);
+    setTirando(new Set(pendentes.current));
+    await acao(
+      async () => {
+        const item = await api.removerEspera(id);
+        atualizar();
+        if (item)
+          avisar({
+            texto: 'Tirado da lista de espera.',
+            desfazer: async () => {
+              await api.devolverEspera(item);
+              atualizar();
+            },
+          });
+      },
+      { tentarDeNovo: () => tirar(id) },
+    ).finally(() => {
+      pendentes.current.delete(id);
+      setTirando(new Set(pendentes.current));
     });
   }
 
@@ -385,6 +414,7 @@ export function ListaEspera() {
             <ul className="flex flex-col gap-2">
               {consulta.dados.map((e) => {
                 const p = porId.get(e.pacienteId);
+                const desabilitadoTirar = tirando.has(e.id);
                 return (
                   <li key={e.id} className="flex flex-col gap-2 rounded-md border-2 border-borda p-3">
                     <p className="text-lg font-bold">{p ? nomeExibido(p) : 'Paciente'}</p>
@@ -397,9 +427,14 @@ export function ListaEspera() {
                           Marcar horário
                         </Link>
                       </Botao>
-                      <Botao variante="suave" tamanho="pequeno" onClick={() => tirar(e.id)}>
+                      <Botao
+                        variante="suave"
+                        tamanho="pequeno"
+                        onClick={() => tirar(e.id)}
+                        disabled={desabilitadoTirar}
+                      >
                         <Trash2 aria-hidden />
-                        Tirar da lista
+                        {desabilitadoTirar ? 'Tirando…' : 'Tirar da lista'}
                       </Botao>
                     </div>
                   </li>
@@ -462,9 +497,13 @@ export function ListaEspera() {
               className="min-h-14 rounded-md border-2 border-borda-forte bg-fundo px-4 text-lg"
             />
           </div>
-          <Botao type="submit" className="self-start">
+          <Botao
+            type="submit"
+            className="self-start"
+            disabled={adicionando}
+          >
             <Hourglass aria-hidden />
-            Colocar na espera
+            {adicionando ? 'Colocando…' : 'Colocar na espera'}
           </Botao>
         </form>
       </section>
