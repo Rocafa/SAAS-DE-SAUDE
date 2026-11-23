@@ -590,3 +590,11 @@ Pendente para a próxima sessão:
 - **#223** (crypto): aprovado com sugestões (rollback garantido nos blocos sem FORCE RLS; acoplamento à trigger da 0021).
 - **#221** (financeiro): aprovado com sugestões (`toBe` no lugar de `includes`; commit de cache redundante com o #223).
   Ordem sugerida: #223, depois #221.
+
+### 23/11 — revisão do lote B
+
+- **#216** (no-console e varreduras de privacidade): pedi mudança. `join` gera barra invertida no Windows e o filtro
+  `startsWith('lib/api/')` deixa de excluir `lib/api` (conferido no código do PR); mais exceção ampla do no-console.
+- **#214** (testes do shared), **#217** (extensões `.ts` para o Turbopack), **#218** (auditoria de filas e jobs):
+  aprovados com sugestões. #214 e #217 mexem nos mesmos tsconfigs: quem entrar por último atualiza a branch. No #217,
+  pedi para confirmar o `next dev` localmente (a CI não cobre).
