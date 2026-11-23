@@ -28,6 +28,8 @@ export const MODELOS: Record<Modelo, { nome: string; campos: CampoModelo[] }> = 
     campos: [
       { id: 'queixa', rotulo: 'Como o paciente chegou hoje', ajuda: 'O que ele contou: dor, melhora, dificuldade.', tipo: 'texto', obrigatorio: true },
       { id: 'dor', rotulo: 'Dor hoje (0 a 10)', ajuda: '0 é sem dor; 10 é a pior dor que ele já sentiu.', tipo: 'escala', obrigatorio: false },
+      { id: 'diagnostico', rotulo: 'Diagnóstico e prognóstico fisioterapêuticos', ajuda: 'COFFITO 414/2012, art. 1º §1º V: registre o diagnóstico e o prognóstico fisioterapêuticos.', tipo: 'texto', obrigatorio: false },
+      { id: 'exames', rotulo: 'Exames complementares realizados ou solicitados', ajuda: 'COFFITO 414/2012, art. 1º §1º IV: exames realizados ou solicitados.', tipo: 'texto', obrigatorio: false },
       { id: 'conduta', rotulo: 'O que foi feito na sessão', ajuda: 'Exercícios, técnicas, aparelhos, tempo.', tipo: 'texto', obrigatorio: true },
       { id: 'resposta', rotulo: 'Como o paciente respondeu', ajuda: 'Tolerou bem? Sentiu algo?', tipo: 'texto', obrigatorio: false },
       { id: 'plano', rotulo: 'Próximos passos', ajuda: 'O que fazer na próxima sessão e orientações para casa.', tipo: 'texto', obrigatorio: false },
@@ -39,6 +41,9 @@ export const MODELOS: Record<Modelo, { nome: string; campos: CampoModelo[] }> = 
       { id: 'objetivo', rotulo: 'Objetivo da sessão', ajuda: 'O que se queria trabalhar hoje.', tipo: 'texto', obrigatorio: true },
       { id: 'atividades', rotulo: 'Atividades feitas', ajuda: 'Atividades e adaptações usadas.', tipo: 'texto', obrigatorio: true },
       { id: 'desempenho', rotulo: 'Desempenho do paciente', ajuda: 'Independência, ajuda necessária, comportamento.', tipo: 'texto', obrigatorio: false },
+      { id: 'nivel_assistencia', rotulo: 'Nível de assistência', ajuda: 'Registre a assistência necessária na atividade, em texto livre.', tipo: 'texto', obrigatorio: false },
+      { id: 'diagnostico', rotulo: 'Diagnóstico e prognóstico terapêutico ocupacional', ajuda: 'COFFITO 415/2012, art. 1º §1º V: registre o diagnóstico e o prognóstico terapêutico ocupacional.', tipo: 'texto', obrigatorio: false },
+      { id: 'exames', rotulo: 'Exames complementares realizados ou solicitados', ajuda: 'COFFITO 415/2012, art. 1º §1º IV: exames realizados ou solicitados.', tipo: 'texto', obrigatorio: false },
       { id: 'plano', rotulo: 'Próximos passos', ajuda: 'O que fazer na próxima sessão e orientações à família.', tipo: 'texto', obrigatorio: false },
     ],
   },
@@ -48,6 +53,7 @@ export const MODELOS: Record<Modelo, { nome: string; campos: CampoModelo[] }> = 
       { id: 'tema', rotulo: 'Tema principal da sessão', ajuda: 'Escreva só o necessário (Res. CFP 01/2009).', tipo: 'texto', obrigatorio: true },
       { id: 'intervencoes', rotulo: 'Intervenções', ajuda: 'Técnicas e encaminhamentos da sessão.', tipo: 'texto', obrigatorio: false },
       { id: 'evolucao', rotulo: 'Evolução', ajuda: 'Como o processo está andando.', tipo: 'texto', obrigatorio: true },
+      { id: 'instrumentos', rotulo: 'Instrumentos ou testes utilizados', ajuda: 'Só referencie o instrumento em texto. A conferência no SATEPSI é responsabilidade do profissional; uso privativo do psicólogo (Res. CFP 31/2022; Lei 4.119/1962, art. 13).', tipo: 'texto', obrigatorio: false },
     ],
   },
 };
