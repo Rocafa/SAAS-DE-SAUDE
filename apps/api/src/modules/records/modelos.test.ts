@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
-import { faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloCompativelComEspecialidade, modeloPelaEspecialidade, validarConteudo } from './modelos';
+import type { RecordTemplate } from '../../db/schema';
+import { ehPsicologia, faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloCompativelComEspecialidade, modeloPelaEspecialidade, validarConteudo } from './modelos';
 import { hashDaFinalizacao, podeVerConteudo } from './prontuario-regras';
 
 function campos(fn: () => unknown): string[] {
@@ -86,6 +87,27 @@ describe('modelos de registro por nicho', () => {
     expect(modeloPelaEspecialidade('Terapia Ocupacional')).toBe('to');
     expect(modeloPelaEspecialidade('TO')).toBe('to');
     expect(modeloPelaEspecialidade('Fisioterapia')).toBe('fisio');
+  });
+
+  it('padrão e autorização usam o mesmo predicado: psicomotricidade e psicopedagogia não são psicologia', () => {
+    const casos: ReadonlyArray<[string, RecordTemplate]> = [
+      ['Psicomotricidade', 'fisio'],
+      ['Psicopedagogia', 'fisio'],
+      ['Psicologia clínica', 'psicologia'],
+      ['Psicoterapeuta', 'psicologia'],
+      ['Psicóloga clínica', 'psicologia'],
+      ['Terapia Ocupacional', 'to'],
+      ['Fisioterapia', 'fisio'],
+    ];
+    for (const [especialidade, esperado] of casos) {
+      const padrao = modeloPelaEspecialidade(especialidade);
+      expect(padrao, especialidade).toBe(esperado);
+      // Sem `modelo` no pedido, o padrão tem de passar na autorização (senão 409 modelo_incompativel_com_especialidade).
+      expect(modeloCompativelComEspecialidade(especialidade, padrao), especialidade).toBe(true);
+    }
+    expect(ehPsicologia('psicomotricidade')).toBe(false);
+    expect(ehPsicologia('psicopedagogia')).toBe(false);
+    expect(ehPsicologia('psico')).toBe(true);
   });
 
   it('R3: psicologia não sai do compartimento de psicologia; fisio e TO aceitam os modelos entre si', () => {

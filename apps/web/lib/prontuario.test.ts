@@ -8,6 +8,14 @@ describe('modelos por nicho', () => {
     expect(modeloDoProfissional({ especialidade: 'Terapia ocupacional' })).toBe('to');
     expect(modeloDoProfissional({ especialidade: 'Psicologia' })).toBe('psicologia');
   });
+  it('mesma regra da API: psicomotricidade e psicopedagogia não são psicologia', () => {
+    expect(modeloDoProfissional({ especialidade: 'Psicologia clínica' })).toBe('psicologia');
+    expect(modeloDoProfissional({ especialidade: 'Psicoterapeuta' })).toBe('psicologia');
+    expect(modeloDoProfissional({ especialidade: 'Psicóloga' })).toBe('psicologia');
+    expect(modeloDoProfissional({ especialidade: 'Psicomotricidade' })).toBe('fisio');
+    expect(modeloDoProfissional({ especialidade: 'Psicopedagogia' })).toBe('fisio');
+    expect(modeloDoProfissional({ especialidade: 'TO' })).toBe('to');
+  });
   it('só psicologia é compartimento sigiloso', () => {
     expect(ehRestrito('psicologia')).toBe(true);
     expect(ehRestrito('fisio')).toBe(false);

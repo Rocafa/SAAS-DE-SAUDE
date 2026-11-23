@@ -52,10 +52,18 @@ export const MODELOS: Record<Modelo, { nome: string; campos: CampoModelo[] }> = 
   },
 };
 
+/**
+ * Mesma regra da API (`ehPsicologia` em apps/api/src/modules/records/modelos.ts): psicomotricidade e psicopedagogia
+ * NÃO são psicologia. Se o front divergir, sugere um modelo que a API recusa (409 modelo_incompativel_com_especialidade).
+ */
+export function ehPsicologia(e: string): boolean {
+  return e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
+}
+
 export function modeloDoProfissional(p: Pick<Profissional, 'especialidade'> | undefined): Modelo {
-  const e = (p?.especialidade ?? '').toLowerCase();
-  if (e.includes('psico')) return 'psicologia';
-  if (e.includes('ocupacional')) return 'to';
+  const e = (p?.especialidade ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  if (ehPsicologia(e)) return 'psicologia';
+  if (e.includes('ocupacional') || /\bto\b/.test(e)) return 'to';
   return 'fisio';
 }
 

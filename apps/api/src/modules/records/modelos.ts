@@ -147,20 +147,30 @@ export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS |
   return Object.keys(INSTRUMENTOS).find((i) => palavras.includes(i));
 }
 
+function normalizarEspecialidade(especialidade: string): string {
+  return especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/**
+ * Especialidade (já normalizada) é psicologia? Predicado ÚNICO do padrão e da autorização: se divergirem, o padrão
+ * escolhe um modelo que a autorização recusa (409). Psicomotricidade e psicopedagogia NÃO são psicologia.
+ * O front (apps/web/lib/prontuario.ts) repete esta regra.
+ */
+export function ehPsicologia(e: string): boolean {
+  return e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
+}
+
 /** Modelo padrão pela especialidade do profissional (o front faz igual). */
 export function modeloPelaEspecialidade(especialidade: string): RecordTemplate {
-  const e = especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  if (e.includes('psico')) return 'psicologia';
+  const e = normalizarEspecialidade(especialidade);
+  if (ehPsicologia(e)) return 'psicologia';
   if (e.includes('ocupacional') || /\bto\b/.test(e)) return 'to';
   return 'fisio';
 }
 
 /** R3 do #63: psicologia nunca muda de compartimento; fisio e TO podem usar os modelos entre si. */
 export function modeloCompativelComEspecialidade(especialidade: string, modelo: RecordTemplate): boolean {
-  const e = especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  // A autorização não pode repetir o "psico" amplo do padrão: psicomotricidade e psicopedagogia não são psicologia.
-  const psicologia = e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
-  return psicologia === (modelo === 'psicologia');
+  return ehPsicologia(normalizarEspecialidade(especialidade)) === (modelo === 'psicologia');
 }
 
 function ehObjetoSimples(v: unknown): v is Record<string, unknown> {
