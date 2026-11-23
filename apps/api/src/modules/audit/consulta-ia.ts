@@ -24,6 +24,7 @@ const COLUNAS_CSV = [
   'revisadoEm',
   'revisorId',
   'saidaFinalHash',
+  'chaveHash',
   'id',
   'usoId',
 ] as const;
@@ -58,6 +59,11 @@ export interface LinhaAuditoriaIaDto {
   readonly revisadoEm: string | null;
   readonly revisorId: string | null;
   readonly saidaFinalHash: string | null;
+  /**
+   * `hash_key_id` da linha: os três hashes são HMAC-SHA256 da clínica (veto do Guardião no #227),
+   * só conferíveis por quem tem a chave; sem ela não servem para dicionário nem ligam clínicas.
+   */
+  readonly chaveHash: string | null;
 }
 
 /** Query fechada: somente datas, UUID, finalidade conhecida e paginação; nenhum texto livre na URL. */
@@ -113,6 +119,7 @@ export function paraCsvAuditoriaIa(linhas: readonly LinhaAuditoriaIaDto[]): stri
       l.revisadoEm,
       l.revisorId,
       l.saidaFinalHash,
+      l.chaveHash,
       l.id,
       l.usoId,
     ]),

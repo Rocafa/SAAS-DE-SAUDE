@@ -53,12 +53,15 @@ describe('CSV da auditoria de IA', () => {
       revisadoEm: '2026-11-23T12:01:00.000Z',
       revisorId: ID2,
       saidaFinalHash: 'c'.repeat(64),
+      chaveHash: 'local-v1',
     };
     const csv = paraCsvAuditoriaIa([item]);
     expect(csv.startsWith('﻿"em","finalidade","usuarioId","pacienteId"')).toBe(true);
     expect(csv).toContain('"\'=modelo-ficticio"');
     expect(csv).toContain('"editada"');
     expect(csv).toContain(`"${'c'.repeat(64)}"`);
+    expect(csv).toContain('"saidaFinalHash","chaveHash","id"');
+    expect(csv).toContain('"local-v1"');
     expect(csv).not.toContain('Paciente Ficticio');
     expect(csv).not.toContain('000.000.000-00');
     expect(csv).not.toContain('transcrição');

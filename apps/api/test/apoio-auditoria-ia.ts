@@ -1,6 +1,7 @@
 import type { RequestContext, TenantId } from '@plataforma/shared';
 import { auditLog, type AuditMetadata } from '../src/db/schema';
 import type { TenantTx } from '../src/db/tenant-transaction';
+import { LocalPseudonymSigner, type PseudonymSigner } from '../src/modules/audit/ator-suporte';
 import { AuditoriaIaService } from '../src/modules/audit/registro-ia';
 import type { TenantDatabase } from '../src/modules/tenancy/tenancy.module';
 
@@ -13,7 +14,18 @@ export interface LinhaAuditoriaCapturada {
   readonly metadata: AuditMetadata;
 }
 
-/** Banco de unidade: mantém reais a política de assinatura, o serviço e o insertAudit; só substitui o I/O. */
+/** Segredo fixo e fictício dos testes de unidade (32 bytes): os HMACs esperados ficam estáveis. */
+export const SEGREDO_DE_TESTE_DO_MAC = Buffer.alloc(32, 7);
+
+export function signerDeTeste(): PseudonymSigner {
+  return new LocalPseudonymSigner(SEGREDO_DE_TESTE_DO_MAC, 'test');
+}
+
+/**
+ * Banco de unidade: mantém reais a política de assinatura, o serviço, o signer local e o insertAudit;
+ * só substitui o I/O. A leitura da trilha devolve TODAS as linhas, de todas as clínicas, como se o
+ * filtro do banco falhasse: assim o teste prova também a conferência em memória do serviço.
+ */
 export function criarAuditoriaFalsa(
   ctx: RequestContext,
   opcoes: {
@@ -21,24 +33,30 @@ export function criarAuditoriaFalsa(
     monotonico?: () => number;
     falharInsert?: boolean;
     falharCommit?: boolean;
+    signer?: PseudonymSigner;
+    linhasIniciais?: readonly LinhaAuditoriaCapturada[];
   } = {},
 ) {
-  const linhas: LinhaAuditoriaCapturada[] = [];
+  const linhas: LinhaAuditoriaCapturada[] = [...(opcoes.linhasIniciais ?? [])];
+  const travas: string[] = [];
+  const tenant = {
+    id: ctx.tenantId,
+    displayName: 'Clínica fictícia de teste',
+    subscriptionStatus: 'active',
+    cancelledAt: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  };
   const tx = {
+    execute() {
+      travas.push('advisory');
+      return Promise.resolve([]);
+    },
     select() {
       return {
-        from() {
+        from(table: unknown) {
           return {
             where() {
-              return Promise.resolve([
-                {
-                  id: ctx.tenantId,
-                  displayName: 'Clínica fictícia de teste',
-                  subscriptionStatus: 'active',
-                  cancelledAt: null,
-                  createdAt: new Date('2026-01-01T00:00:00.000Z'),
-                },
-              ]);
+              return Promise.resolve(table === auditLog ? linhas.map((l) => ({ ...l })) : [tenant]);
             },
           };
         },
@@ -57,7 +75,7 @@ export function criarAuditoriaFalsa(
   } as unknown as TenantTx;
   const db = {
     async run<T>(tenantId: TenantId, operacao: (tx: TenantTx) => Promise<T>, userId?: string): Promise<T> {
-      if (tenantId !== ctx.tenantId || userId !== ctx.userId) throw new Error('contexto trocado no teste');
+      if (tenantId !== ctx.tenantId || !userId) throw new Error('contexto trocado no teste');
       const resultado = await operacao(tx);
       if (opcoes.falharCommit) throw new Error('falha de commit de teste');
       return resultado;
@@ -65,6 +83,7 @@ export function criarAuditoriaFalsa(
   } as unknown as TenantDatabase;
   return {
     linhas,
-    auditoria: new AuditoriaIaService(db, opcoes.agora, opcoes.monotonico),
+    travas,
+    auditoria: new AuditoriaIaService(db, opcoes.signer ?? signerDeTeste(), opcoes.agora, opcoes.monotonico),
   };
 }
