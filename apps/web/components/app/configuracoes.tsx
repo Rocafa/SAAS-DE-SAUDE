@@ -401,11 +401,16 @@ function SecaoPrivacidade() {
   const [carregandoPedido, setCarregandoPedido] = useState(true);
   const [tentativaPedido, setTentativaPedido] = useState(0);
   const [aprovando, setAprovando] = useState(false);
+  const [codigoAprovacao, setCodigoAprovacao] = useState('');
   const usuarioId = usuario?.id;
   const papel = usuario?.papel;
   const admin = papel === 'admin';
+  const responsavelTecnico = usuario?.responsavelTecnico === true;
+  const aprovacaoAutonoma = responsavelTecnico && pedido?.pedidoPor === usuarioId;
 
   useEffect(() => {
+    // MFA pertence a quem está na sessão agora: nunca carregar o código ao trocar de usuário.
+    setCodigoAprovacao('');
     if (!usuarioId || papel !== 'admin') {
       setCarregandoPedido(false);
       return;
@@ -443,12 +448,14 @@ function SecaoPrivacidade() {
     }
   }
 
-  async function aprovar() {
+  async function aprovar(e: FormEvent) {
+    e.preventDefault();
     if (!pedido || aprovando) return;
     setAprovando(true);
     setErroAprovacao('');
     try {
-      setPedido(await api.aprovarExportacao(pedido.id));
+      setPedido(await api.aprovarExportacao(pedido.id, codigoAprovacao));
+      setCodigoAprovacao('');
       atualizar();
     } catch (err) {
       setErroAprovacao(err instanceof Error ? err.message : 'Não deu para aprovar.');
@@ -507,17 +514,34 @@ function SecaoPrivacidade() {
             <p className="font-bold">Pedido feito. Falta a aprovação do responsável técnico da clínica.</p>
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
             {/*
-              Só na demonstração: o dump completo da clínica (pacientes, agenda, prontuários e
-              financeiro) exige duas pessoas. Quem pediu recebe 403; depois da troca de usuário,
-              o pedido pendente é recuperado para outro admin aprovar, sem storage do navegador.
-              Com a API real, as duas identidades são conferidas no servidor.
+              G2/R6: com RT diferente, o dump completo exige duas pessoas. Quem pediu sem papel de
+              RT não vê ação nem depende do 403. R9: se o admin também é o RT autônomo, pode aprovar
+              o próprio pedido, com MFA próprio e exceção explícita na auditoria. O pedido pendente
+              é recuperado sem storage; a API real confere papel, identidade e MFA no servidor.
             */}
+            {!responsavelTecnico && <p>Somente o responsável técnico pode aprovar, com um novo código MFA.</p>}
+            {responsavelTecnico && aprovacaoAutonoma && (
+              <p>Você também é o responsável técnico; esta aprovação autônoma ficará registrada com seu usuário e este MFA.</p>
+            )}
             {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
-            {modo === 'fake' && (
-              <Botao variante="contorno" className="self-start" onClick={aprovar} disabled={aprovando}>
-                <ShieldCheck aria-hidden />
-                Aprovar como responsável técnico (demonstração)
-              </Botao>
+            {modo === 'fake' && responsavelTecnico && (
+              <form onSubmit={aprovar} noValidate className="flex max-w-xl flex-col gap-3">
+                <Campo id="x-cod-aprovacao" rotulo="Código do responsável técnico (6 números)">
+                  <input
+                    id="x-cod-aprovacao"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={codigoAprovacao}
+                    onChange={(e) => setCodigoAprovacao(e.target.value)}
+                    className={CAMPO}
+                  />
+                </Campo>
+                <p className="text-texto-suave">Na demonstração, use 123456.</p>
+                <Botao type="submit" variante="contorno" className="self-start" disabled={aprovando}>
+                  <ShieldCheck aria-hidden />
+                  Aprovar como responsável técnico (demonstração)
+                </Botao>
+              </form>
             )}
           </div>
         ) : (

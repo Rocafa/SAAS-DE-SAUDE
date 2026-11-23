@@ -216,7 +216,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
     { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
     { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
-    { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
+    {
+      id: 'u5',
+      nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)',
+      papel: 'admin',
+      clinica: 'Clínica Demonstração',
+      profissionalId: 'pr3',
+      responsavelTecnico: true,
+    },
   ];
   // `papel` é só o ESTADO INICIAL: escolhe quem entra na demonstração, e `entrarComo` sobrepõe depois.
   // Tem de ser um usuário da lista, não a administradora com o papel trocado: o perfil clínico é
@@ -318,6 +325,11 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
    */
   function exigirAdmin(): void {
     if (!ehAdmin(usuario.papel)) throw new ErroApi(MENSAGENS.proibido, 403, 'proibido');
+  }
+
+  function exigirMfa(codigo: string): void {
+    if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
+    if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
   }
 
   async function resposta<T>(valor: T): Promise<T> {
@@ -693,8 +705,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async pedirExportacao(codigo) {
       exigirAdmin();
-      if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
-      if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
+      exigirMfa(codigo);
       const p: PedidoExportacao = { id: novoId('x'), pedidoPor: usuario.id, status: 'aguardando_rt', pedidoEm: hojeIso };
       exportacoes.push(p);
       registrar('Pediu a exportação total dos dados');
@@ -705,18 +716,25 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
       const p = exportacoes.filter((x) => x.status === 'aguardando_rt').pop() ?? null;
       return resposta(p);
     },
-    async aprovarExportacao(id) {
+    async aprovarExportacao(id, codigo) {
       exigirAdmin();
       const p = exportacoes.find((x) => x.id === id);
       if (!p) throw new Error('Pedido não encontrado.');
-      // G2/R6: duas pessoas de verdade; a API real precisa repetir esta comparação no servidor.
-      if (usuario.id === p.pedidoPor) {
+      // G2/R6/R9: a API real repete papel, identidade e MFA no servidor. Admin sozinho não basta:
+      // só o RT aprova; autoaprovação só vale quando esse admin também é o RT autônomo.
+      if (usuario.id === p.pedidoPor && !usuario.responsavelTecnico) {
         throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
       }
+      if (!usuario.responsavelTecnico) {
+        throw new ErroApi('Somente o responsável técnico pode aprovar a exportação.', 403, 'responsavel_tecnico_obrigatorio');
+      }
+      exigirMfa(codigo);
+      p.aprovadoPor = usuario.id;
+      p.aprovacaoAutonoma = usuario.id === p.pedidoPor;
       p.status = 'pronto';
       p.expiraEm = paraIsoLocal(somarDias(agora, 1));
       p.downloadsRestantes = 3;
-      registrar('Responsável técnico aprovou a exportação');
+      registrar(p.aprovacaoAutonoma ? 'Responsável técnico autônomo aprovou a própria exportação' : 'Responsável técnico aprovou a exportação');
       return resposta(p);
     },
 

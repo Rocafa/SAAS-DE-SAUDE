@@ -44,25 +44,59 @@ describe('fake: assinatura, exportação e equipe', () => {
     expect(a.proximaCobranca).toBeUndefined();
     expect((await api.reativarAssinatura()).status).toBe('ativa');
   });
-  it('exportação exige código e aprovação de outra pessoa, com auditoria', async () => {
+  it('RT diferente aprova somente com o próprio MFA e deixa auditoria', async () => {
     const api = criarApiFake({ agora: hoje });
     await expect(api.pedirExportacao('000000')).rejects.toThrow(/não confere/);
     const p = await api.pedirExportacao('123456');
     expect(p.status).toBe('aguardando_rt');
 
-    await expect(api.aprovarExportacao(p.id)).rejects.toMatchObject({ status: 403, codigo: 'autoaprovacao_proibida' });
+    await expect(api.aprovarExportacao(p.id, '123456')).rejects.toMatchObject({ status: 403, codigo: 'autoaprovacao_proibida' });
     expect(p.pedidoPor).toBe('u1');
     expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
     expect((await api.listarAuditoria()).some((e) => e.acao === 'Responsável técnico aprovou a exportação')).toBe(false);
 
     await api.entrarComo('u5');
+    await expect(api.aprovarExportacao(p.id, '000000')).rejects.toThrow(/Código não confere/);
     expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, pedidoPor: 'u1', status: 'aguardando_rt' });
-    const ok = await api.aprovarExportacao(p.id);
-    expect(ok).toMatchObject({ pedidoPor: 'u1', status: 'pronto', downloadsRestantes: 3, expiraEm: '2026-10-13' });
+    expect((await api.listarAuditoria()).some((e) => e.acao === 'Responsável técnico aprovou a exportação')).toBe(false);
+
+    const ok = await api.aprovarExportacao(p.id, '123456');
+    expect(ok).toMatchObject({
+      pedidoPor: 'u1',
+      aprovadoPor: 'u5',
+      aprovacaoAutonoma: false,
+      status: 'pronto',
+      downloadsRestantes: 3,
+      expiraEm: '2026-10-13',
+    });
     expect(await api.obterExportacaoPendente()).toBeNull();
     const auditoria = await api.listarAuditoria();
     expect(auditoria.map((e) => e.acao)).toContain('Pediu a exportação total dos dados');
     const aprovacoes = auditoria.filter((e) => e.acao === 'Responsável técnico aprovou a exportação');
+    expect(aprovacoes).toHaveLength(1);
+    expect(aprovacoes[0]?.quem).toBe('Dra. Lúcia Prates (administradora e terapeuta ocupacional)');
+  });
+
+  it('administrador sem papel de RT não aprova pedido de outra pessoa', async () => {
+    const api = criarApiFake({ agora: hoje });
+    await api.entrarComo('u5');
+    const p = await api.pedirExportacao('123456');
+    await api.entrarComo('u1');
+
+    await expect(api.aprovarExportacao(p.id, '123456')).rejects.toMatchObject({ status: 403, codigo: 'responsavel_tecnico_obrigatorio' });
+    expect(await api.obterExportacaoPendente()).toMatchObject({ id: p.id, status: 'aguardando_rt' });
+    expect((await api.listarAuditoria()).some((e) => e.acao.includes('aprovou'))).toBe(false);
+  });
+
+  it('admin que também é RT autônomo aprova o próprio pedido com MFA e registro explícito', async () => {
+    const api = criarApiFake({ agora: hoje });
+    await api.entrarComo('u5');
+    const p = await api.pedirExportacao('123456');
+
+    await expect(api.aprovarExportacao(p.id, '000000')).rejects.toThrow(/Código não confere/);
+    const ok = await api.aprovarExportacao(p.id, '123456');
+    expect(ok).toMatchObject({ pedidoPor: 'u5', aprovadoPor: 'u5', aprovacaoAutonoma: true, status: 'pronto' });
+    const aprovacoes = (await api.listarAuditoria()).filter((e) => e.acao === 'Responsável técnico autônomo aprovou a própria exportação');
     expect(aprovacoes).toHaveLength(1);
     expect(aprovacoes[0]?.quem).toBe('Dra. Lúcia Prates (administradora e terapeuta ocupacional)');
   });
