@@ -663,3 +663,8 @@ Pendente para a próxima sessão:
   chamada ao modelo ficou na transação (a checagem de assinatura roda antes; tirar muda o desenho). Pedi parecer do
   Guardião sobre o conjunto #227 + #230 (inclui o `prompt_hash` sem salt).
 - Rede: um `gh pr comment` falhou por conexão; refeito em seguida.
+- **Veto do Guardião no #227** (o #230 está ok). Bloqueantes: hashes da trilha de IA em SHA-256 sem chave (confirmação
+  por dicionário de saídas curtas numa trilha de 20 anos; trocar por HMAC com chave da clínica) e revisão forjável
+  (`registrarRevisao` aceita `useId`, paciente e profissional da entrada). Antes de provedor real: tentativa e
+  resultado em dois eventos. Postado no #227, oferecendo fazer 1 e 2 num PR para a branch dele; mexe no desenho do
+  sócio, então espero o OK dele.
