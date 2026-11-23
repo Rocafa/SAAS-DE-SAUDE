@@ -690,3 +690,7 @@ Pendente para a próxima sessão:
 - #229, 6faf2a9: o 403 era do preparo do teste (o autor só com `psicologo` perdia o `profissional` na sessão); agora
   recebe os dois perfis, como no `auditoria-leitura.rls.test.ts`. **RLS verde** e os demais checks verdes (Playwright
   rodando). Condição do Guardião cumprida; avisei no #219 que o #229 está pronto para o sócio mesclar.
+- **#233** aberto para a branch do #227 (inclui o #230): HMAC por clínica e por uso nos hashes da trilha de IA, com
+  `hash_key_id`; revisão que herda os campos da geração, 403 a quem não é o responsável, 409 na duplicada, 404 igual
+  para inexistente e outra clínica. Vitest (1169), build e boot ok; o RLS novo só na CI. Enviado ao Guardião para
+  reconferir o veto, com a pergunta sobre o SHA-256 que vai ao KMS.
