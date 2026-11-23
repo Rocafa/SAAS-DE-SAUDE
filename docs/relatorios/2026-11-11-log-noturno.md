@@ -650,3 +650,6 @@ Pendente para a próxima sessão:
 - **#228** aberto para a branch do #216: caminhos com `/` (no Windows o teste foi de exit 1 para exit 0; lint e os 461
   testes do web com exit 0), no-console só em `scripts/**/*.mjs`. Comentei no #216 apontando o #228.
 - Disparado: correção do e2e do #222 (seletor `Status`) e do #213 (manifest no cache), em PRs próprios.
+- **#229** aberto para a branch do #219: `ehPsicologia` único na API e no web; Psicomotricidade e Psicopedagogia vão
+  para fisio por padrão. Typecheck e vitest com exit 0 (API: 1135 testes). Efeito colateral: o aviso de sigilo de
+  psicologia deixa de ir a psicomotricistas. Pedi parecer ao Guardião antes de recomendar o merge.
