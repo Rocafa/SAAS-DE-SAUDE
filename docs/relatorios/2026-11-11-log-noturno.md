@@ -598,3 +598,13 @@ Pendente para a próxima sessão:
 - **#214** (testes do shared), **#217** (extensões `.ts` para o Turbopack), **#218** (auditoria de filas e jobs):
   aprovados com sugestões. #214 e #217 mexem nos mesmos tsconfigs: quem entrar por último atualiza a branch. No #217,
   pedi para confirmar o `next dev` localmente (a CI não cobre).
+
+### 23/11 — revisão do lote C
+
+- **#220** (exportação em duas pessoas): pedi mudança. Contradiz o R9 de 12/10 (conferido): autônomo admin-RT precisa
+  poder aprovar com registro; a aprovação é do RT com MFA; a tela não oferece o botão a quem pediu.
+- **#215** (react-hooks), **#225** (proposta de plano terapêutico): aprovados.
+- **#224** (TO v3 e psicologia v2): aprovado com pontos: congelar o rascunho na versão de criação muda o item 1 do
+  parecer de 13/11 (pedi registro e teste RLS); fonte da Res. CFP 31/2022 e da Lei 4.119/1962.
+- Os quatro vêm de branches `orchestrator-saas-claude-*`, fora do padrão `<frente>/<microparte>`; anotado, sem bloquear.
+- Em andamento: revisores dos #211, #213, #222 e dos #226, #227.
