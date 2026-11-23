@@ -687,3 +687,6 @@ Pendente para a próxima sessão:
 - CI do #229 (53b598b): lint e testes verdes; o RLS falhou só no caso novo do ciclo (403 no preparo em vez de 201;
   790 de 791 passaram). Devolvido ao agente para corrigir, rodando o RLS num Postgres local se houver Docker. A
   aprovação do Guardião segue condicionada a esse verde.
+- #229, 6faf2a9: o 403 era do preparo do teste (o autor só com `psicologo` perdia o `profissional` na sessão); agora
+  recebe os dois perfis, como no `auditoria-leitura.rls.test.ts`. **RLS verde** e os demais checks verdes (Playwright
+  rodando). Condição do Guardião cumprida; avisei no #219 que o #229 está pronto para o sócio mesclar.
