@@ -8,11 +8,20 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    rules: {
+      'no-console': 'error',
+    },
+  },
+  {
     files: ['public/sw.js'],
     languageOptions: { globals: { self: 'readonly', caches: 'readonly', fetch: 'readonly', URL: 'readonly' } },
+    // SW usa caches.* e pode usar sendBeacon/window.name; console continua proibido (não há uso).
   },
   {
     files: ['scripts/**/*.mjs', 'lib/**/*.mjs'],
+    rules: { 'no-console': 'off' },
     languageOptions: { globals: { console: 'readonly', process: 'readonly', URL: 'readonly' } },
+    // Scripts de build e arquivos .mjs em lib/ usam console propositalmente (checar-cinza: erro/sucesso;
+    // gerar-icones: confirmação de geração). Exceção justificada: registro de erro de propósito.
   },
 );
