@@ -708,3 +708,6 @@ Pendente para a próxima sessão:
 - #233 (fc1f9e3, 93a092a): trava de boot com `AI_PROVIDER` real enquanto a chamada estiver na transação, e retenção
   dos eventos de IA e V2 "Parcial" no RIPD do escriba. CI toda verde. Avisado no #227 que está pronto; falta só o
   CloudTrail no staging.
+- **Guardião no #234: aprovado com ressalvas.** A autoaprovação do RT só vale sem outro admin ativo (havendo, um admin
+  confirma com o próprio MFA) e exige a janela de segurança do R10; `aprovarExportacao` recusa com 409 o pedido fora de
+  `aguardando_rt` (hoje reaprovar um pronto renova downloads e prazo). Postado no PR; correção pedida ao agente.
