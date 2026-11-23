@@ -564,3 +564,11 @@ Pendente para a próxima sessão:
 ## Checagem de 18/11 14:13
 
 - Nada mudou: #155, #194, #209, #210, #116, #153, #154 e #201 seguem BLOCKED sem aprovação; #189 aprovado, esperando a pilha e o #209; #158, #143 e #157 sem commit novo; nenhum merge.
+
+## Checagem de 23/11 (agendada)
+
+- Mudou só uma coisa: o @Lopesloro aprovou o #210 em 19/11. Ele segue BLOCKED pela "Auditoria de dependências", que só passa depois do #209.
+- Pilha do login: o #155 (mais baixo, base main) segue sem aprovação; nada da pilha pode entrar.
+- #153, #154, #116, #201, #194 e #209 seguem BLOCKED sem aprovação; #189 aprovado, mas também barrado pela auditoria.
+- #158, #143 e #157 sem commit novo desde 12/11; nenhuma aprovação dada.
+- Nenhum merge nesta checagem. Próximo passo continua sendo a aprovação do #209 e do #155.
