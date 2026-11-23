@@ -682,3 +682,5 @@ Pendente para a próxima sessão:
 - #229, 53b598b: ressalvas resolvidas (o ciclo confere se o autor já teve o perfil `psicologo`, mesmo revogado; o
   banco não apaga `clinic_members`). Mudança nova: em `designar`, só o perfil no banco decide a custódia (saiu a
   checagem de especialidade do autor). Como amplia acesso a nota privada, voltou ao Guardião.
+- **Guardião aprova o #229** (53b598b), condicionado ao verde do RLS e de "Lint, typecheck e testes". A custódia só
+  pelo perfil `psicologo` foi aceita (o leitor segue sendo psicólogo ativo; mesmo critério do lacre). Postado no PR.
