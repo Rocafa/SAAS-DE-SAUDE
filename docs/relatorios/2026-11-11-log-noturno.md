@@ -653,3 +653,8 @@ Pendente para a próxima sessão:
 - **#229** aberto para a branch do #219: `ehPsicologia` único na API e no web; Psicomotricidade e Psicopedagogia vão
   para fisio por padrão. Typecheck e vitest com exit 0 (API: 1135 testes). Efeito colateral: o aviso de sigilo de
   psicologia deixa de ir a psicomotricistas. Pedi parecer ao Guardião antes de recomendar o merge.
+- **Veto do Guardião no #229.** A regra estreita também decide, no ciclo das notas privadas
+  (`ciclo-notas-privadas.ts:123`), entre lacrar e eliminar sem volta: "Psicol.", "Psicooncologia", "Psicodrama",
+  psicomotricista e psicopedagogo passariam de lacradas a eliminadas. Pedido ao agente: ampliar `ehPsicologia`,
+  lacrar na dúvida no ciclo, testes do ciclo e corpo do PR descrevendo as mudanças em `custodia.ts` e no ciclo.
+  O #229 não deve ser mesclado antes da reconferência do Guardião.
