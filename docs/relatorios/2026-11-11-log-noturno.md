@@ -668,3 +668,6 @@ Pendente para a próxima sessão:
   (`registrarRevisao` aceita `useId`, paciente e profissional da entrada). Antes de provedor real: tentativa e
   resultado em dois eventos. Postado no #227, oferecendo fazer 1 e 2 num PR para a branch dele; mexe no desenho do
   sócio, então espero o OK dele.
+- Com o OK do @Rocafa, disparei a correção dos dois bloqueantes do #227 (HMAC com chave da clínica pela porta do
+  `PSEUDONYM_SIGNER`; revisão que herda os campos da geração, só do responsável e sem duplicar), num PR para a branch
+  do sócio que inclui o #230. O item 3 (dois eventos) fica como TODO.
