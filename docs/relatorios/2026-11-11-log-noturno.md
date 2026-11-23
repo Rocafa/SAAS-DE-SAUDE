@@ -711,3 +711,11 @@ Pendente para a próxima sessão:
 - **Guardião no #234: aprovado com ressalvas.** A autoaprovação do RT só vale sem outro admin ativo (havendo, um admin
   confirma com o próprio MFA) e exige a janela de segurança do R10; `aprovarExportacao` recusa com 409 o pedido fora de
   `aguardando_rt` (hoje reaprovar um pronto renova downloads e prazo). Postado no PR; correção pedida ao agente.
+- #234 (bf87ba4): ressalvas do Guardião resolvidas (autoaprovação só do RT autônomo, com janela de 24 h; com outro
+  admin ativo, ele confirma com MFA; 409 em pedido pronto ou cancelado). Vitest (421) e e2e (26) com exit 0, CI
+  verde. Avisado no #220 que o #234 está pronto.
+
+**Balanço de 23/11.** PRs de correção para as branches do sócio, todos com CI verde e, quando tocam dado pessoal,
+com o Guardião: #228 (#216), #229 (#219), #231 (#222), #232 (#213), #233 (#227, inclui o #230) e #234 (#220). Falta
+dele: mesclá-los e as decisões de produto do #226 (dividir; prazo no plano de incidentes). Nossos: #209 continua
+destravando a auditoria de todos.
