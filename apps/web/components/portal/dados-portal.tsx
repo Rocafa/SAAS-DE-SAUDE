@@ -10,7 +10,7 @@
  * Na troca de vínculo TODO o estado das telas é descartado (as telas remontam com a chave do vínculo).
  * Nada do portal vai para localStorage, sessionStorage ou cache (G3; §10h).
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ErroPortal, mensagemDoErro, mensagemParaTela, type ClientePortal, type VinculoDaConta } from '@/lib/api/portal';
 import { criarClientePortal, lerConfigPortal, type ModoPortal } from '@/lib/api/portal-selecionar';
 
@@ -156,7 +156,11 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
   const [tentativa, setTentativa] = useState(0);
   const [estado, setEstado] = useState<EstadoPortal<T>>({ estado: 'carregando' });
   const carregarRef = useRef<(api: ClientePortal) => Promise<T>>(carregar);
-  carregarRef.current = carregar;
+  // Atualiza o ref DEPOIS do render (escrever em ref durante o render é impuro e quebra em render
+  // concorrente). Sem deps: roda a cada commit, antes do efeito abaixo, que lê sempre o `carregar` mais novo.
+  useLayoutEffect(() => {
+    carregarRef.current = carregar;
+  });
   useEffect(() => {
     let vivo = true;
     // Volta a "carregando" ao tentar de novo: sem isto, o "Tentar de novo" depois de um erro deixava
@@ -172,7 +176,8 @@ export function useConsultaPortal<T>(carregar: (api: ClientePortal) => Promise<T
     return () => {
       vivo = false;
     };
-    // `carregar` muda a cada render; recarrega quando os dados mudam ou ao tentar de novo.
+    // `carregar` vem do ref e muda a cada render, por isso fica fora das deps: recarrega quando os dados
+    // mudam ou ao tentar de novo.
   }, [api, versao, tentativa]);
   return estado;
 }
