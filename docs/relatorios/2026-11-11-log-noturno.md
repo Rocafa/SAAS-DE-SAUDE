@@ -736,3 +736,7 @@ destravando a auditoria de todos.
 - #189 aprovado, mas só entra depois da pilha inteira. #116 DIRTY e sem aprovação. #209 ainda sem aprovação.
 - #158, #143 e #157 sem commit novo desde 11/11; nenhuma aprovação dada.
 - Nenhum merge. Próximo passo continua sendo a aprovação do #209 e do #155.
+
+## Checagem de 23/11 20:13
+
+- Nada mudou desde a última checagem: #155 segue sem aprovação, main parada em e545878, nenhum merge.
