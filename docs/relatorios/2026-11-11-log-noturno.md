@@ -617,3 +617,15 @@ Pendente para a próxima sessão:
 - **#226** (chore de prontidão para produção): pedi para dividir. A migração 0066 conflita com a
   `0066_sessao_mfa_sem_clinica.sql` da pilha do Better Auth (conferido); a mudança no plano de incidentes muda o prazo
   imposto à clínica e precisa de decisão dos sócios e do Guardião; o Next duplica o #201.
+
+### 23/11 — revisão do #211, #213 e #222 (fim dos 16 PRs do sócio)
+
+- **#211** (fila de espera com carregamento e erro): aprovado com dois ajustes de follow-up.
+- **#213** (service worker): pedi mudança. O Playwright vermelho vem do PR (o e2e não espera o manifest no cache) e o
+  bloco unitário testa os próprios mocks, não o `sw.js`.
+- **#222** (CRM em Pacientes): pedi mudança. O relatório do agente diz "BLOQUEADO" com correções fora de commit; o
+  Playwright falha por `getByLabel('Status')` ambíguo; o `autor` da linha do tempo só existe no fake.
+
+**Resumo dos 16:** aprovados 9 (#211, #214, #215, #217, #218, #221, #223, #224, #225); mudança pedida 7 (#213, #216,
+#219, #220, #222, #226, #227). Os pedidos de mudança foram conferidos no código antes de postar (#219, #216, #220,
+#226) ou vêm de log de CI do próprio PR (#213, #222, #227).
