@@ -676,3 +676,6 @@ Pendente para a próxima sessão:
 - **#229 corrigido após o veto** (5593519): `ehPsicologia` ampliada; no ciclo, `deveLacrar` lacra na dúvida (perfil
   `psicologo`, `sensitive_area` ou "psico" amplo) e nunca usa a regra estreita; `custodia.ts` com autor pela regra
   ampla. Vitest da API (1157) e do web (413) com exit 0; o caso RLS novo só roda na CI. Devolvido ao Guardião.
+- **Guardião no #229: aprovado com ressalvas**, condicionado ao verde do RLS na CI (rodando). Ressalvas sendo
+  resolvidas no próprio PR: teste do autor desligado só com o perfil `psicologo`; comentário de `custodia.ts`
+  corrigido (nota lacrada de não psicólogo não tem custódia e é eliminada ao fim do lacre).
