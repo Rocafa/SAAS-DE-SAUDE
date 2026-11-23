@@ -71,6 +71,30 @@ function modeloParaTrilha(model: ModelRef): string {
 export const RELOGIO_IA = Symbol('RELOGIO_IA');
 export const RELOGIO_MONOTONICO_IA = Symbol('RELOGIO_MONOTONICO_IA');
 
+/**
+ * Verdadeiro enquanto `chamar` envia ao modelo dentro da transação da trilha (item 3 do veto do
+ * Guardião no #227). Só vira `false` no PR que separar os eventos "tentativa" e "resultado".
+ */
+export const CHAMADA_IA_DENTRO_DA_TRANSACAO = true;
+
+/**
+ * TRAVA de boot: com a chamada dentro da transação, provedor real não pode ser ligado. Uma falha do
+ * KMS no MAC da saída, depois do envio, deixaria texto enviado sem linha na trilha (e a conexão fica
+ * presa durante a chamada). `AI_PROVIDER` ausente ou `fake` passa; qualquer outro valor derruba o boot.
+ */
+export function assertTravaDaChamadaIa(
+  env: NodeJS.ProcessEnv = process.env,
+  dentroDaTransacao: boolean = CHAMADA_IA_DENTRO_DA_TRANSACAO,
+): void {
+  const id = env.AI_PROVIDER?.trim();
+  if (dentroDaTransacao && id && id !== 'fake') {
+    throw new Error(
+      `AI_PROVIDER="${id}" bloqueado: a chamada ao modelo ainda roda dentro da transação da trilha de IA ` +
+        '(item 3 do veto do Guardião no #227). Separe os eventos tentativa/resultado antes de ligar provedor real.',
+    );
+  }
+}
+
 const agoraPadrao = (): Date => new Date();
 const monotonicoPadrao = (): number => performance.now();
 
@@ -113,9 +137,11 @@ export class AuditoriaIaService {
     dados: DadosChamadaIa,
     executar: () => Promise<LlmResponse>,
   ): Promise<ResultadoChamadaIa> {
-    // TODO(veto do Guardião no #227, item 3): antes de ligar provedor real, separar em dois eventos
-    // append-only, "tentativa" (gravada, com assertCanWrite, ANTES do envio) e "resultado" em outra
-    // transação, para nada sair ao provedor sem linha gravada e não prender a conexão por até 30 s.
+    // Item 3 do veto do Guardião no #227: a chamada ao modelo ainda roda DENTRO desta transação.
+    // Por isso a TRAVA `assertTravaDaChamadaIa` impede a API de subir com provedor real. Com o desenho
+    // atual, uma falha do KMS no MAC da saída (abaixo), DEPOIS do envio, aborta a transação: o texto
+    // já saiu para o provedor e nenhuma linha fica gravada. Para tirar a trava, separar "tentativa"
+    // (gravada, com assertCanWrite, ANTES do envio) e "resultado" em outra transação.
     // MAC do prompt antes do provedor: se a chave falhar, nada é enviado.
     const promptMac = await this.mac(ctx, 'ia_prompt', `${dados.system}\0${dados.input}`);
     const inicio = this.monotonico();

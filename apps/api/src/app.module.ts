@@ -3,6 +3,7 @@ import type { AppConfig } from './config';
 import { HealthModule } from './health/health.module';
 import { LifecycleModule } from './lifecycle/lifecycle.module';
 import { createPseudonymSigner, type PseudonymSigner } from './modules/audit/ator-suporte';
+import { assertTravaDaChamadaIa } from './modules/audit/registro-ia';
 import { AuditModule } from './modules/audit/audit.module';
 import type { AuthProvider } from './modules/auth/auth-context';
 import { createAuthProvider } from './modules/auth/auth-provider.factory';
@@ -71,6 +72,8 @@ export class AppModule {
    * SUPPORT_PSEUDONYM_KMS_KEY_ID) ou sem os segredos obrigatórios. Tabela em api-dominio.md §0.
    */
   static forRoot(config: AppConfig, adapters: AppAdapters = {}): DynamicModule {
+    // Trava do item 3 do veto do Guardião no #227: sem provedor de IA real enquanto a chamada roda na transação.
+    assertTravaDaChamadaIa(process.env);
     const kmsDeps = adapters.kms ? { kms: adapters.kms } : {};
     const authProvider = adapters.authProvider ?? createAuthProvider(process.env);
     const keyProvider = adapters.keyProvider ?? createKeyProvider(process.env, kmsDeps);

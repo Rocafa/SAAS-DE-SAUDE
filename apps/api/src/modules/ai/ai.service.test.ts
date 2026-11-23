@@ -1,7 +1,8 @@
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
 import { criarAuditoriaFalsa } from '../../../test/apoio-auditoria-ia';
-import { AI_PROVIDER_IDS, createProviders, parseAiProvider } from './ai.module';
+import { assertTravaDaChamadaIa, CHAMADA_IA_DENTRO_DA_TRANSACAO } from '../audit/registro-ia';
+import { AI_PROVIDER_IDS, AiModule, createProviders, parseAiProvider } from './ai.module';
 import { AiDeniedError, AiService, AiUnavailableError, promptHash, type AiGenerateInput } from './ai.service';
 import type { LlmProvider } from './llm-provider';
 import { FakeLlmProvider } from './providers/fake-llm.provider';
@@ -117,5 +118,34 @@ describe('configuração do provedor (AI_PROVIDER)', () => {
 
   it.each(AI_PROVIDER_IDS.filter((id) => id !== 'fake'))('%s ainda não existe: aguarda a D3', (id) => {
     expect(() => createProviders(id)).toThrow(/aguarda a D3/);
+  });
+});
+
+describe('trava: provedor real enquanto a chamada roda na transação (item 3 do veto do #227)', () => {
+  it('a trava está ligada no código atual', () => {
+    expect(CHAMADA_IA_DENTRO_DA_TRANSACAO).toBe(true);
+  });
+
+  it.each(AI_PROVIDER_IDS.filter((id) => id !== 'fake'))('AI_PROVIDER=%s: erro de boot', (id) => {
+    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: id })).toThrow(/dentro da transação da trilha de IA/);
+    expect(() => AiModule.forRoot()).not.toThrow(); // process.env do teste não tem AI_PROVIDER real
+  });
+
+  it('fake ou ausente: sobe; com os eventos separados, a trava deixa passar', () => {
+    expect(() => assertTravaDaChamadaIa({})).not.toThrow();
+    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: 'fake' })).not.toThrow();
+    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: 'maritaca' }, false)).not.toThrow();
+  });
+
+  it('AiModule: provedor injetado que não é o fake derruba o boot; o fake monta', () => {
+    const real: LlmProvider = {
+      id: 'real-de-teste',
+      residency: 'BR',
+      model: { provider: 'real', name: 'modelo-de-teste', version: '1' },
+      tasks: ['escriba'],
+      generate: () => Promise.reject(new Error('não deve ser chamado')),
+    };
+    expect(() => AiModule.forRoot({ providers: [real] })).toThrow(/provedor de IA real bloqueado/);
+    expect(() => AiModule.forRoot({ providers: [new FakeLlmProvider()] })).not.toThrow();
   });
 });
