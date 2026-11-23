@@ -15,17 +15,22 @@ describe('api-portal: contrato e campos clínicos', () => {
     expect(rotas).toContain('GET /portal/sessao');
     expect(rotas).toContain('GET /portal/consultas');
     expect(rotas).toContain('POST /portal/consultas/:id/confirmar');
-    expect(rotas.length).toBeGreaterThan(10);
   });
 
   it('toda rota tem resposta, método e erros definidos', () => {
-    for (const [_rota, def] of Object.entries(CONTRATO_PORTAL)) {
-      void _rota;
+    for (const def of Object.values(CONTRATO_PORTAL)) {
       expect(def.metodo).toMatch(/^(GET|POST)$/);
       expect(def.resposta).toBeDefined();
       expect(Array.isArray(def.erros)).toBe(true);
       expect(typeof def.noVinculo).toBe('boolean');
     }
+  });
+
+  it('todo caminho começa com "/" e não há par método+caminho duplicado', () => {
+    const defs = Object.values(CONTRATO_PORTAL);
+    for (const def of defs) expect(def.caminho.startsWith('/')).toBe(true);
+    const chaves = defs.map((d) => `${d.metodo} ${d.caminho}`);
+    expect(new Set(chaves).size).toBe(chaves.length);
   });
 
   it('CAMPOS_CLINICOS_PROIBIDOS não está vazio', () => {

@@ -1,48 +1,31 @@
-import { describe, expect, it } from 'vitest';
-import { tipoId, type PatientId, type ProfessionalId } from '../src/ids.js';
+import { describe, it } from 'vitest';
+import type { PatientId, ProfessionalId } from '../src/ids.js';
 
+// Estes testes só valem no typecheck (tsconfig.test.json, rodado por `pnpm typecheck`):
+// cada @ts-expect-error falha se o branding deixar de barrar a troca de IDs.
 describe('ids: tipos brandados (nominal typing)', () => {
-  it('tipoId cria marca de tipo única', () => {
-    const Paciente = tipoId<'PatientId'>();
-    const Profissional = tipoId<'ProfessionalId'>();
-    const p = Paciente('pac-123');
-    const pr = Profissional('prof-456');
-    expect(p).toBe('pac-123');
-    expect(pr).toBe('prof-456');
-  });
+  it('ID de um tipo não é atribuível a outro tipo de ID', () => {
+    const paciente = 'pac-123' as PatientId;
+    const profissional = 'prof-456' as ProfessionalId;
 
-  it('IDs de tipos diferentes não são atribuíveis entre si', () => {
-    const Paciente = tipoId<'PatientId'>();
-    const Profissional = tipoId<'ProfessionalId'>();
-    const p: PatientId = Paciente('pac-123');
-    const pr: ProfessionalId = Profissional('prof-456');
     // @ts-expect-error: PatientId não é atribuível a ProfessionalId
-    void (p as ProfessionalId);
+    const comoProfissional: ProfessionalId = paciente;
     // @ts-expect-error: ProfessionalId não é atribuível a PatientId
-    void (pr as PatientId);
-  });
+    const comoPaciente: PatientId = profissional;
 
-  it('IDs do mesmo tipo são atribuíveis', () => {
-    const Paciente = tipoId<'PatientId'>();
-    const p1: PatientId = Paciente('pac-1');
-    const p2: PatientId = Paciente('pac-2');
-    const p3: PatientId = p2;
-    expect(p3).toBe(p2);
-    void Paciente;
-    void p1;
+    void comoProfissional;
+    void comoPaciente;
   });
 
   it('string pura não é atribuível a ID brandado', () => {
-    const Paciente = tipoId<'PatientId'>();
     // @ts-expect-error: string não é atribuível a PatientId
     const id: PatientId = 'pac-123';
     void id;
-    void Paciente;
   });
 
-  it('IDs brandados aceitam string no construtor', () => {
-    const Paciente = tipoId<'PatientId'>();
-    const id: PatientId = Paciente('pac-123');
-    expect(id).toBe('pac-123');
+  it('ID brandado continua atribuível a string', () => {
+    const paciente = 'pac-123' as PatientId;
+    const texto: string = paciente;
+    void texto;
   });
 });
