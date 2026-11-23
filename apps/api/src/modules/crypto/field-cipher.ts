@@ -148,6 +148,7 @@ export class FieldCipher<Tx> {
 
   /** Recifra com a DEK ativa (job em segundo plano após rotação). Não muda o valor em claro. */
   async reencrypt(tx: Tx, ref: FieldRef, value: string): Promise<string> {
+    assertFieldRef(ref);
     if (!(await this.isStale(tx, ref.tenantId, value))) return value;
     const plaintext = await this.decrypt(tx, ref, value);
     try {
