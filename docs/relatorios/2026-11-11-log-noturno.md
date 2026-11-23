@@ -640,3 +640,10 @@ Pendente para a próxima sessão:
 - Nada mais destravável hoje sem o sócio. A tarefa agendada `pilha-login-merges-2h` (próxima às 17:12 UTC) mescla o
   que for aprovado e registra aqui. Próximas datas: postgres.js 4.1.x depois de 25/11; revisão da exceção do
   picomatch até 01/12.
+
+### 23/11 — PRs de correção para os PRs do sócio
+
+- Para não depender só dele, abro PRs de correção **mirando as branches dele** (sem push nelas; ele mescla):
+  #227 (injeção do `AuditoriaIaService`, teste que compila o módulo), #219 (predicado único de psicologia) e #216
+  (caminhos com `/` no Windows, no-console só em `scripts/**`). Três agentes de engenharia, cada um em worktree própria.
+- Depois, se fizer sentido: o seletor do Playwright no #222 e a lista do cache no e2e do #213.
