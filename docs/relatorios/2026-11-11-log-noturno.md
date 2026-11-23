@@ -629,3 +629,14 @@ Pendente para a próxima sessão:
 **Resumo dos 16:** aprovados 9 (#211, #214, #215, #217, #218, #221, #223, #224, #225); mudança pedida 7 (#213, #216,
 #219, #220, #222, #226, #227). Os pedidos de mudança foram conferidos no código antes de postar (#219, #216, #220,
 #226) ou vêm de log de CI do próprio PR (#213, #222, #227).
+
+### 23/11 — conferência depois das revisões
+
+- Proteção da `main`: 1 aprovação de dono do código (CODEOWNERS: os dois sócios). Nos PRs do Dependabot a minha
+  aprovação basta, mas eles mexem no lockfile e, atualizados, caem na auditoria do picomatch; seguem para depois do
+  #209 e da pilha, como combinado.
+- #158, #143, #157 e #182 (do sócio): sem commit novo desde a minha última revisão. #197 e #198 estão aprovados por
+  mim e atrás da `main`: o merge é do sócio (quem abriu mescla).
+- Nada mais destravável hoje sem o sócio. A tarefa agendada `pilha-login-merges-2h` (próxima às 17:12 UTC) mescla o
+  que for aprovado e registra aqui. Próximas datas: postgres.js 4.1.x depois de 25/11; revisão da exceção do
+  picomatch até 01/12.
