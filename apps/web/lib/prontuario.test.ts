@@ -15,6 +15,9 @@ describe('modelos por nicho', () => {
     expect(modeloDoProfissional({ especialidade: 'Psicomotricidade' })).toBe('fisio');
     expect(modeloDoProfissional({ especialidade: 'Psicopedagogia' })).toBe('fisio');
     expect(modeloDoProfissional({ especialidade: 'TO' })).toBe('to');
+    for (const e of ['Psicol.', 'Psicól. clínica', 'Psicooncologia', 'Psicodrama', 'Psicodramatista', 'Psicanalista']) {
+      expect(modeloDoProfissional({ especialidade: e }), e).toBe('psicologia');
+    }
   });
   it('só psicologia é compartimento sigiloso', () => {
     expect(ehRestrito('psicologia')).toBe(true);

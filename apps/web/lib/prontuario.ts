@@ -57,7 +57,16 @@ export const MODELOS: Record<Modelo, { nome: string; campos: CampoModelo[] }> = 
  * NÃO são psicologia. Se o front divergir, sugere um modelo que a API recusa (409 modelo_incompativel_com_especialidade).
  */
 export function ehPsicologia(e: string): boolean {
-  return e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
+  return (
+    e.includes('psicolog') ||
+    /\bpsicol/.test(e) ||
+    e.includes('psicoterap') ||
+    e.includes('psicooncolog') ||
+    e.includes('psico-oncolog') ||
+    e.includes('psicodram') ||
+    e.includes('psicanal') ||
+    /\bpsico\b/.test(e)
+  );
 }
 
 export function modeloDoProfissional(p: Pick<Profissional, 'especialidade'> | undefined): Modelo {

@@ -249,4 +249,28 @@ describe('D2: profissional que sai da clínica', () => {
       eliminadas: 0,
     });
   });
+
+  it('parecer do Guardião no #229: na dúvida lacra; psicomotricista e "Psicol." não são eliminados por engano', async () => {
+    const autores = await Promise.all(
+      ['Psicomotricidade', 'Psicol.', 'Psicopedagogia'].map(async (especialidade) => {
+        const s = api.sessao(clinica, 'profissional');
+        const id = await profissional(s, especialidade);
+        return { s, id };
+      }),
+    );
+    const p = await paciente();
+    const notas: string[] = [];
+    for (const a of autores) {
+      await agendaDeHoje(p, a.id);
+      notas.push(await novaNota(a.s, p));
+      await api.http().post(`/prontuario/profissionais/${a.id}/desligamento`).set(cab(admin)).send({}).expect(200);
+    }
+    await ciclo.executarCicloDasNotas(ctxAdmin(), new Date(Date.now() + 31 * DIA));
+    for (const id of notas) {
+      const n = await linha(id);
+      expect(n?.custodyState).toBe('lacrada');
+      expect(n?.discardedAt).toBeNull();
+      expect(await texto(id, n!.contentEnc)).toBe(TEXTO);
+    }
+  });
 });

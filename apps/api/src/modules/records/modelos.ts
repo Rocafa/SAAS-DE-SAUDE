@@ -147,17 +147,37 @@ export function instrumentoDoRotulo(rotulo: string): keyof typeof INSTRUMENTOS |
   return Object.keys(INSTRUMENTOS).find((i) => palavras.includes(i));
 }
 
-function normalizarEspecialidade(especialidade: string): string {
+export function normalizarEspecialidade(especialidade: string): string {
   return especialidade.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
 /**
  * Especialidade (já normalizada) é psicologia? Predicado ÚNICO do padrão e da autorização: se divergirem, o padrão
- * escolhe um modelo que a autorização recusa (409). Psicomotricidade e psicopedagogia NÃO são psicologia.
- * O front (apps/web/lib/prontuario.ts) repete esta regra.
+ * escolhe um modelo que a autorização recusa (409). Reconhece abreviações ("Psicol.", "Psicól. clínica") e as
+ * especialidades/abordagens do psicólogo (psicoterapia, psico-oncologia, psicodrama, psicanálise, neuropsicologia).
+ * Psicomotricidade e psicopedagogia NÃO são psicologia. O front (apps/web/lib/prontuario.ts) repete esta regra.
+ * Decisão destrutiva (eliminar nota privada) NÃO usa este predicado: ver `podeSerAreaPsi`.
  */
 export function ehPsicologia(e: string): boolean {
-  return e.includes('psicolog') || e.includes('psicoterap') || /\bpsico\b/.test(e);
+  return (
+    e.includes('psicolog') ||
+    /\bpsicol/.test(e) ||
+    e.includes('psicoterap') ||
+    e.includes('psicooncolog') ||
+    e.includes('psico-oncolog') ||
+    e.includes('psicodram') ||
+    e.includes('psicanal') ||
+    /\bpsico\b/.test(e)
+  );
+}
+
+/**
+ * Regra AMPLA ("psico" em qualquer lugar), só para decisões em que errar é irreversível (lacrar × eliminar nota
+ * privada): na dúvida, lacra. Psicomotricidade e psicopedagogia caem aqui de propósito. Não usar para autorizar.
+ */
+export function podeSerAreaPsi(especialidade: string): boolean {
+  const e = normalizarEspecialidade(especialidade);
+  return ehPsicologia(e) || e.includes('psico');
 }
 
 /** Modelo padrão pela especialidade do profissional (o front faz igual). */

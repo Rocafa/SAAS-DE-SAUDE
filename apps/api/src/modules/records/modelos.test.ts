@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
 import type { RecordTemplate } from '../../db/schema';
-import { ehPsicologia, faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloCompativelComEspecialidade, modeloPelaEspecialidade, validarConteudo } from './modelos';
+import { ehPsicologia, normalizarEspecialidade, podeSerAreaPsi, faltasParaFinalizar, instrumentoDoRotulo, INSTRUMENTOS_CONHECIDOS, MAX_TEXTO_CLINICO, MODELOS, modeloCompativelComEspecialidade, modeloPelaEspecialidade, validarConteudo } from './modelos';
 import { hashDaFinalizacao, podeVerConteudo } from './prontuario-regras';
 
 function campos(fn: () => unknown): string[] {
@@ -108,6 +108,26 @@ describe('modelos de registro por nicho', () => {
     expect(ehPsicologia('psicomotricidade')).toBe(false);
     expect(ehPsicologia('psicopedagogia')).toBe(false);
     expect(ehPsicologia('psico')).toBe(true);
+  });
+
+  it.each(['Psicol.', 'Psicól. clínica', 'Psicooncologia', 'Psico-oncologia', 'Psicodrama', 'Psicodramatista', 'Psicanálise', 'Psicanalista', 'Neuropsicologia', 'Psicoterapeuta'])(
+    'parecer do Guardião no #229: "%s" é psicologia (padrão psicologia, nunca fisio fora do sigilo)',
+    (especialidade) => {
+      expect(ehPsicologia(normalizarEspecialidade(especialidade))).toBe(true);
+      expect(modeloPelaEspecialidade(especialidade)).toBe('psicologia');
+      // prontuario.service.ts: padrão + trava R3. Psicólogo não pode abrir atendimento em fisio/TO (fora do sigilo).
+      expect(modeloCompativelComEspecialidade(especialidade, 'psicologia')).toBe(true);
+      expect(modeloCompativelComEspecialidade(especialidade, 'fisio')).toBe(false);
+      expect(modeloCompativelComEspecialidade(especialidade, 'to')).toBe(false);
+      expect(podeSerAreaPsi(especialidade)).toBe(true);
+    },
+  );
+
+  it('regra ampla (só para lacrar na dúvida) inclui psicomotricidade e psicopedagogia; fisio e TO não', () => {
+    expect(podeSerAreaPsi('Psicomotricidade')).toBe(true);
+    expect(podeSerAreaPsi('Psicopedagogia')).toBe(true);
+    expect(podeSerAreaPsi('Fisioterapia')).toBe(false);
+    expect(podeSerAreaPsi('Terapia Ocupacional')).toBe(false);
   });
 
   it('R3: psicologia não sai do compartimento de psicologia; fisio e TO aceitam os modelos entre si', () => {

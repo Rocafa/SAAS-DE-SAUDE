@@ -25,7 +25,7 @@ import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { exigirPerfilNoBanco, temPerfilNoBanco, tevePerfilNoBanco } from '../auth/membros';
-import { modeloPelaEspecialidade } from './modelos';
+import { modeloPelaEspecialidade, podeSerAreaPsi } from './modelos';
 import { descartarComLapide } from './notas-privadas.service';
 import { CAMPO_NOTA, decifrarCampoClinico } from './record-fields';
 import { exigirSemRetencao } from './retencao-legal';
@@ -64,7 +64,10 @@ export class CustodiaService {
       const autor = await this.profissional(tx, ctx, autorProfissionalId);
       const subst = await this.profissional(tx, ctx, substitutoProfissionalId);
       if (!autor.userId || !subst.userId) throw new ConflitoError('profissional_sem_usuario');
-      if (modeloPelaEspecialidade(autor.specialty) !== 'psicologia') throw new ConflitoError('autor_nao_psicologo');
+      // Autor: regra AMPLA, a mesma que lacrou as notas (deveLacrar no ciclo); se fosse a estreita, nota lacrada de
+      // psicomotricista ficaria sem custódia possível e seria eliminada no fim do lacre. O perfil no banco segue exigido.
+      if (!podeSerAreaPsi(autor.specialty)) throw new ConflitoError('autor_nao_psicologo');
+      // Substituto: regra ESTREITA (quem lê nota lacrada é psicólogo de fato; psicopedagogo não), mais o perfil no banco.
       if (modeloPelaEspecialidade(subst.specialty) !== 'psicologia' || !subst.active) throw new ConflitoError('substituto_nao_psicologo_ativo');
       // Duas pessoas: quem designa não é o substituto; o substituto não é o autor (CHECK no banco também).
       if (subst.userId === ctx.userId) throw new ConflitoError('mesma_pessoa');
