@@ -572,3 +572,12 @@ Pendente para a próxima sessão:
 - #153, #154, #116, #201, #194 e #209 seguem BLOCKED sem aprovação; #189 aprovado, mas também barrado pela auditoria.
 - #158, #143 e #157 sem commit novo desde 12/11; nenhuma aprovação dada.
 - Nenhum merge nesta checagem. Próximo passo continua sendo a aprovação do #209 e do #155.
+
+### 23/11 15:20 UTC — retomada
+
+- A vigia de 18/11 morreu com a sessão (o processo em segundo plano não sobrevive ao fechamento). Entre 18 e 23/11:
+  o #210 foi aprovado; #209, #116, #155, #194 continuam sem aprovação. O picomatch segue sem correção (4.0.7 é a
+  última no npm), então a auditoria falha em todo PR nosso até o #209 entrar (o #210 e o #204 só falham nela).
+- O @Lopesloro abriu 16 PRs novos (#211 a #227), todos sem revisão. Começo a revisão deles, em lotes de até 3
+  revisores, pelos menores e verdes: (A) #221, #223, #219; (B) #214, #216, #217, #218; (C) #215, #220, #224, #225.
+  Depois: #211, #213, #222, #226, #227 (maiores ou com CI vermelho).
