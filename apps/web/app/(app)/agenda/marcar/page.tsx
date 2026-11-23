@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useId, useMemo, useState, type FormEvent } from 'react';
 import { AvisoTruncado } from '@/components/app/aviso-truncado';
 import { useConsulta, useDados } from '@/components/app/dados';
-import { textoDoErro, useAviso } from '@/components/app/desfazer';
+import { avisoDeEsperaNaoRemovida, textoDoErro, useAviso } from '@/components/app/desfazer';
 import { Titulo } from '@/components/app/estrutura';
 import { usePreenchimento } from '@/components/app/executor';
 import { useAtrasado } from '@/components/app/use-atrasado';
@@ -168,47 +168,49 @@ function FormularioMarcar() {
     try {
       const nome = escolhido ? nomeExibido(escolhido) : 'Paciente';
       const quando = `${formatarDia(dia, new Date())} às ${hora}`;
+      // O aviso de sucesso só sai depois de tirar da espera: se tirar falhar, vira UM aviso só (ver
+      // `avisoDeEsperaNaoRemovida`), senão o de erro apagaria o "Desfazer" da consulta.
+      let aviso: { texto: string; desfazer: () => Promise<void> };
       if (remarcarId) {
         const anterior = await api.remarcarAgendamento(remarcarId, dia, hora);
-        avisar({
+        aviso = {
           texto: `Consulta de ${nome} remarcada para ${quando}.`,
           desfazer: async () => {
             await api.remarcarAgendamento(remarcarId, anterior.data, anterior.hora);
             atualizar();
           },
-        });
+        };
       } else if (repetir !== 'nao') {
         const serie = await api.criarSerie(
           { pacienteId, data: dia, hora, profissionalId, tipoId },
           { intervaloDias: repetir === '7' ? 7 : 14, vezes: Number(vezes), pacote },
         );
-        avisar({
+        aviso = {
           texto: `${serie.length} sessões marcadas para ${nome}, começando ${quando}.`,
           desfazer: async () => {
             await api.removerSerie(serie[0]!.serieId!);
             atualizar();
           },
-        });
+        };
       } else {
         const novo = await api.criarAgendamento({ pacienteId, data: dia, hora, profissionalId, tipoId, encaixe });
-        avisar({
+        aviso = {
           texto: `Consulta marcada: ${nome}, ${quando}.`,
           desfazer: async () => {
             await api.removerAgendamento(novo.id);
             atualizar();
           },
-        });
+        };
       }
+      let esperaFalhou: { erro: unknown } | null = null;
       if (esperaId) {
         try {
           await api.removerEspera(esperaId);
         } catch (err) {
-          avisar({
-            texto: textoDoErro(err, 'Consulta marcada, mas não deu para tirar da lista de espera. Tire pela lista.'),
-            erro: true,
-          });
+          esperaFalhou = { erro: err };
         }
       }
+      avisar(esperaFalhou ? avisoDeEsperaNaoRemovida(aviso, esperaFalhou.erro) : aviso);
       atualizar();
       router.push(`/agenda?dia=${dia}`);
     } catch (err) {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { textoDoErro } from './desfazer';
+import { describe, expect, it, vi } from 'vitest';
+import { avisoDeEsperaNaoRemovida, textoDoErro } from './desfazer';
 import { ErroApi } from '@/lib/api/http';
 
 describe('textoDoErro (formatador de erro para a tela)', () => {
@@ -52,5 +52,20 @@ describe('textoDoErro (formatador de erro para a tela)', () => {
   it('ErroApi com status 500 mostra a mensagem do erro', () => {
     const erro = new ErroApi('Erro interno do servidor.', 500);
     expect(textoDoErro(erro)).toBe('Erro interno do servidor.');
+  });
+});
+
+describe('avisoDeEsperaNaoRemovida (consulta marcada, mas a espera não saiu)', () => {
+  it('é UM aviso só: junta o texto com o motivo e mantém o Desfazer da consulta', async () => {
+    const desfazer = vi.fn();
+    const aviso = avisoDeEsperaNaoRemovida({ texto: 'Consulta marcada: Ana, hoje às 14:00.', desfazer }, new ErroApi('Sessão expirada. Entre de novo.', 401));
+    expect(aviso.texto).toBe('Consulta marcada, mas não deu para tirar da lista de espera. Sessão expirada. Entre de novo.');
+    expect(aviso.erro).toBe(true);
+    expect(aviso.desfazer).toBe(desfazer);
+  });
+
+  it('com erro que não é ErroApi usa a mensagem genérica de textoDoErro', () => {
+    const aviso = avisoDeEsperaNaoRemovida({ texto: 'x' }, new TypeError('Failed to fetch'));
+    expect(aviso.texto).toBe('Consulta marcada, mas não deu para tirar da lista de espera. Não deu certo. Tente de novo.');
   });
 });

@@ -4,7 +4,7 @@
  * Aviso no rodapé com "Desfazer" para toda ação reversível. Fica 10 segundos na tela
  * (tempo de leitura para quem não tem pressa com tecnologia) e não some com o mouse em cima.
  */
-import { Check, TriangleAlert, Undo2, X } from 'lucide-react';
+import { Check, RotateCw, TriangleAlert, Undo2, X } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Botao } from '@/components/ui/botao';
 import { ErroApi } from '@/lib/api/http';
@@ -15,6 +15,8 @@ interface Aviso {
   desfazer?: () => void | Promise<void>;
   /** Aviso de erro: ícone de alerta e `role="alert"`. */
   erro?: boolean;
+  /** Aviso de erro com a mesma operação disponível para repetir ("Tentar de novo"). */
+  tentarDeNovo?: () => void | Promise<void>;
 }
 
 const Ctx = createContext<(a: Omit<Aviso, 'id'>) => void>(() => undefined);
@@ -32,17 +34,30 @@ export function textoDoErro(e: unknown, generica = 'Não deu certo. Tente de nov
 }
 
 /**
+ * A consulta foi marcada, mas tirar o paciente da lista de espera falhou. Vira UM aviso só: o texto
+ * de sucesso é substituído pelo motivo, mas o "Desfazer" da consulta continua valendo. Dois avisos em
+ * sequência fariam o de erro apagar o de sucesso e sumir com o botão Desfazer.
+ */
+export function avisoDeEsperaNaoRemovida(aviso: Pick<Aviso, 'desfazer'> & { texto: string }, err: unknown): Omit<Aviso, 'id'> {
+  return {
+    texto: 'Consulta marcada, mas não deu para tirar da lista de espera. ' + textoDoErro(err),
+    erro: true,
+    ...(aviso.desfazer ? { desfazer: aviso.desfazer } : {}),
+  };
+}
+
+/**
  * Roda uma ação da tela (mudar status, cancelar, remarcar…) e, se a API recusar, mostra a mensagem
  * no aviso em vez de falhar calada (ex.: 409 `fora_do_horario`, 403 de perfil).
  */
 export function useAcao() {
   const avisar = useAviso();
   return useCallback(
-    async (acao: () => Promise<void>) => {
+    async (acao: () => Promise<void>, opcoes: { tentarDeNovo?: () => void | Promise<void> } = {}) => {
       try {
         await acao();
       } catch (e) {
-        avisar({ texto: textoDoErro(e), erro: true });
+        avisar({ texto: textoDoErro(e), erro: true, ...(opcoes.tentarDeNovo ? { tentarDeNovo: opcoes.tentarDeNovo } : {}) });
       }
     },
     [avisar],
@@ -94,6 +109,20 @@ export function AvisosProvider({ children }: { children: ReactNode }) {
               >
                 <Undo2 aria-hidden />
                 Desfazer
+              </Botao>
+            )}
+            {aviso.tentarDeNovo && (
+              <Botao
+                variante="contorno"
+                tamanho="pequeno"
+                onClick={() => {
+                  const repetir = aviso.tentarDeNovo!;
+                  setAviso(null);
+                  void repetir();
+                }}
+              >
+                <RotateCw aria-hidden />
+                Tentar de novo
               </Botao>
             )}
             <Botao variante="suave" tamanho="pequeno" onClick={() => setAviso(null)}>
