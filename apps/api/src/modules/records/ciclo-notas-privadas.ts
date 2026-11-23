@@ -8,7 +8,7 @@
  * - D2: profissional que sai → as notas vivas dele ficam `aguardando_decisao` por 30 dias (o admin vê
  *   SÓ a contagem; o autor decide nota a nota: incorporar por adendo, marcar para exportar ou
  *   descartar). Sem decisão no prazo: marcada para exportar → `guarda_clinica` (acompanha o prontuário,
- *   ilegível no aplicativo, só no G2); psicologia → `lacrada` por 90 dias para o psicólogo substituto
+ *   ilegível no aplicativo, só no G2); psicologia (na dúvida, `deveLacrar`: regra ampla ou sinal do banco) → `lacrada` por 90 dias para o psicólogo substituto
  *   (custódia, R2 do #63, antes do piloto com psicologia); demais (fisio/TO) → eliminação (lápide e
  *   expurgo da D1). Lacrada sem decisão da custódia em 90 dias → eliminação.
  *
@@ -23,13 +23,13 @@ import { AuditAction, type RequestContext, type TenantId } from '@plataforma/sha
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica } from '../../common/transacao-clinica';
-import { patients, privateNotes, professionals } from '../../db/schema';
+import { clinicMembers, patients, privateNotes, professionals } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../audit/audit-log';
 import { FIELD_CIPHER } from '../crypto/crypto.module';
 import type { FieldCipher } from '../crypto/field-cipher';
 import { TenantDatabase } from '../tenancy/tenancy.module';
-import { modeloPelaEspecialidade } from './modelos';
+import { podeSerAreaPsi } from './modelos';
 import { descartarComLapide } from './notas-privadas.service';
 
 const SCOPE_NOTAS = 'private_notes';
@@ -76,6 +76,23 @@ export async function iniciarDesligamentoDoAutor(
   return { notas: linhas.length, prazo: prazo.toISOString() };
 }
 
+/** Sinais do autor de uma nota privada vencida (banco + especialidade). */
+export interface SinaisDoAutor {
+  readonly especialidades: readonly string[] | null;
+  readonly areaSensivel: boolean;
+  readonly perfilPsicologo: boolean;
+}
+
+/**
+ * Lacrar × eliminar (irreversível): NA DÚVIDA, LACRA. Lacra se QUALQUER sinal indicar área psi: perfil `psicologo` no
+ * banco (clinic_members), área sensível marcada pela clínica (professionals.sensitive_area) ou a regra AMPLA da
+ * especialidade (`podeSerAreaPsi`, que inclui psicomotricidade e psicopedagogia). Nunca usa a regra estreita do
+ * modelo padrão (`ehPsicologia`): errar ali elimina a nota sem volta. Nota lacrada à toa só espera a custódia (90 dias).
+ */
+export function deveLacrar(s: SinaisDoAutor): boolean {
+  return s.perfilPsicologo || s.areaSensivel || (s.especialidades ?? []).some((e) => podeSerAreaPsi(e));
+}
+
 /** D2: aplica os prazos vencidos. A especialidade do AUTOR (profissional da clínica) decide psicologia. */
 export async function aplicarPrazosDeCustodia(
   cipher: FieldCipher<TenantTx>,
@@ -88,15 +105,17 @@ export async function aplicarPrazosDeCustodia(
       id: privateNotes.id,
       estado: privateNotes.custodyState,
       exportar: privateNotes.exportConsent,
-      especialidade: professionals.specialty,
+      // Subconsultas (não join): autor com dois cadastros de profissional não duplica a nota no laço.
+      // `perfilPsicologo` é o HISTÓRICO (mesma regra de `tevePerfilNoBanco`): SEM filtro de `revoked_at`. O desligamento
+      // revoga o perfil (marca `revoked_at`), não apaga: DELETE/TRUNCATE em clinic_members são negados ao app_user e
+      // barrados pelo trigger `clinic_members_guard` (0020/0022). Assim o sinal sobrevive ao desligamento.
+      especialidades: sql<string[] | null>`(select array_agg(${professionals.specialty}) from ${professionals} where ${professionals.tenantId} = ${privateNotes.tenantId} and ${professionals.userId} = ${privateNotes.authorUserId})`,
+      areaSensivel: sql<boolean>`exists(select 1 from ${professionals} where ${professionals.tenantId} = ${privateNotes.tenantId} and ${professionals.userId} = ${privateNotes.authorUserId} and ${professionals.sensitiveArea})`,
+      perfilPsicologo: sql<boolean>`exists(select 1 from ${clinicMembers} where ${clinicMembers.tenantId} = ${privateNotes.tenantId} and ${clinicMembers.userId} = ${privateNotes.authorUserId} and ${clinicMembers.role} = 'psicologo')`,
       retida: sql<number>`(${patients.legalHoldSince} IS NOT NULL)::int`,
     })
     .from(privateNotes)
     .innerJoin(patients, and(eq(patients.tenantId, privateNotes.tenantId), eq(patients.id, privateNotes.patientId)))
-    .leftJoin(
-      professionals,
-      and(eq(professionals.tenantId, privateNotes.tenantId), eq(professionals.userId, privateNotes.authorUserId)),
-    )
     .where(
       and(
         eq(privateNotes.tenantId, ctx.tenantId),
@@ -120,7 +139,7 @@ export async function aplicarPrazosDeCustodia(
     if (n.estado === 'aguardando_decisao' && n.exportar) {
       await tx.update(privateNotes).set({ custodyState: 'guarda_clinica', custodyDeadline: null, updatedAt: agora }).where(onde);
       guardaClinica++;
-    } else if (n.estado === 'aguardando_decisao' && modeloPelaEspecialidade(n.especialidade ?? '') === 'psicologia') {
+    } else if (n.estado === 'aguardando_decisao' && deveLacrar(n)) {
       // Código de Ética do Psicólogo, art. 15: lacrar para o psicólogo substituto.
       await tx
         .update(privateNotes)

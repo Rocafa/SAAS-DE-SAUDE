@@ -64,7 +64,13 @@ export class CustodiaService {
       const autor = await this.profissional(tx, ctx, autorProfissionalId);
       const subst = await this.profissional(tx, ctx, substitutoProfissionalId);
       if (!autor.userId || !subst.userId) throw new ConflitoError('profissional_sem_usuario');
-      if (modeloPelaEspecialidade(autor.specialty) !== 'psicologia') throw new ConflitoError('autor_nao_psicologo');
+      // Autor: quem decide é o PERFIL no banco (R13, `tevePerfilNoBanco(autor, 'psicologo')` abaixo), não a especialidade.
+      // Consequência assumida: nota lacrada de autor que nunca teve o perfil psicologo (psicomotricista, psicopedagogo,
+      // lacrada só pela regra ampla ou por área sensível) NÃO consegue custódia e é eliminada ao fim dos 90 dias de lacre.
+      // O lacre só adia a eliminação na dúvida; quem lê a nota é sempre psicólogo (substituto, abaixo). Sem checagem
+      // pela especialidade do autor: autor com o perfil e especialidade sem "psico" (também lacrado pelo perfil no
+      // ciclo, deveLacrar) consegue custódia.
+      // Substituto: regra ESTREITA (quem lê nota lacrada é psicólogo de fato; psicopedagogo não), mais o perfil no banco.
       if (modeloPelaEspecialidade(subst.specialty) !== 'psicologia' || !subst.active) throw new ConflitoError('substituto_nao_psicologo_ativo');
       // Duas pessoas: quem designa não é o substituto; o substituto não é o autor (CHECK no banco também).
       if (subst.userId === ctx.userId) throw new ConflitoError('mesma_pessoa');

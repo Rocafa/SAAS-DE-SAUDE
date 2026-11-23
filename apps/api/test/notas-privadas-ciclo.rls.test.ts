@@ -8,7 +8,7 @@ import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { appointments, auditLog, privateNotes, professionals } from '../src/db/schema';
+import { appointments, auditLog, clinicMembers, privateNotes, professionals } from '../src/db/schema';
 import { withTenant, type TenantTx } from '../src/db/tenant-transaction';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -248,5 +248,44 @@ describe('D2: profissional que sai da clínica', () => {
       lacradas: 0,
       eliminadas: 0,
     });
+  });
+
+  it('parecer do Guardião no #229: na dúvida lacra; psicomotricista e "Psicol." não são eliminados por engano', async () => {
+    const autores = await Promise.all(
+      ['Psicomotricidade', 'Psicol.', 'Psicopedagogia'].map(async (especialidade) => {
+        const s = api.sessao(clinica, 'profissional');
+        const id = await profissional(s, especialidade);
+        return { s, id };
+      }),
+    );
+    const p = await paciente();
+    const notas: string[] = [];
+    for (const a of autores) {
+      await agendaDeHoje(p, a.id);
+      notas.push(await novaNota(a.s, p));
+      await api.http().post(`/prontuario/profissionais/${a.id}/desligamento`).set(cab(admin)).send({}).expect(200);
+    }
+    // Ressalva do Guardião: só o perfil psicologo no banco (especialidade sem "psico", sem área sensível), revogado no
+    // desligamento. A revogação marca revoked_at (não apaga), e o ciclo lê o histórico: a nota é lacrada.
+    // 'profissional' também no banco: com qualquer linha em clinic_members, só valem os perfis de sessão ativos lá
+    // (perfisVigentes, R1 do #130); sem ele a sessão perde 'profissional' e a criação da nota é 403.
+    const soPerfil = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
+    const soPerfilId = await profissional(soPerfil, 'Terapia integrativa');
+    await agendaDeHoje(p, soPerfilId);
+    notas.push(await novaNota(soPerfil, p));
+    await api.http().post(`/prontuario/profissionais/${soPerfilId}/desligamento`).set(cab(admin)).send({}).expect(200);
+    await api.http().delete(`/clinica/membros/${soPerfil.userId}/psicologo`).set(cab(admin)).expect(204);
+    const [revogado] = await withTenant(api.db.db, clinica, (tx) =>
+      tx.select({ revokedAt: clinicMembers.revokedAt }).from(clinicMembers).where(and(eq(clinicMembers.userId, soPerfil.userId), eq(clinicMembers.role, 'psicologo'))),
+    );
+    expect(revogado?.revokedAt).not.toBeNull();
+
+    await ciclo.executarCicloDasNotas(ctxAdmin(), new Date(Date.now() + 31 * DIA));
+    for (const id of notas) {
+      const n = await linha(id);
+      expect(n?.custodyState).toBe('lacrada');
+      expect(n?.discardedAt).toBeNull();
+      expect(await texto(id, n!.contentEnc)).toBe(TEXTO);
+    }
   });
 });
