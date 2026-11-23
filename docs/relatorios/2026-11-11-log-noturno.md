@@ -684,3 +684,6 @@ Pendente para a próxima sessão:
   checagem de especialidade do autor). Como amplia acesso a nota privada, voltou ao Guardião.
 - **Guardião aprova o #229** (53b598b), condicionado ao verde do RLS e de "Lint, typecheck e testes". A custódia só
   pelo perfil `psicologo` foi aceita (o leitor segue sendo psicólogo ativo; mesmo critério do lacre). Postado no PR.
+- CI do #229 (53b598b): lint e testes verdes; o RLS falhou só no caso novo do ciclo (403 no preparo em vez de 201;
+  790 de 791 passaram). Devolvido ao agente para corrigir, rodando o RLS num Postgres local se houver Docker. A
+  aprovação do Guardião segue condicionada a esse verde.
