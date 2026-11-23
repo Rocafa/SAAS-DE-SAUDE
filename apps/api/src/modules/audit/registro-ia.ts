@@ -1,5 +1,5 @@
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { escreverNaClinica } from '../../common/transacao-clinica';
 import { ProibidoError, RegraNaoAtendidaError } from '../../common/erros-dominio';
@@ -56,13 +56,30 @@ function modeloParaTrilha(model: ModelRef): string {
   return `${model.provider}/${model.name}`;
 }
 
+/**
+ * Tokens opcionais dos relógios: em produção nenhum provider os registra e valem os defaults;
+ * testes podem instanciar a classe direto ou registrar `{ provide: RELOGIO_IA, useValue }`.
+ * Sem token, o Nest tentaria resolver o tipo `Function` do parâmetro e o boot falharia.
+ */
+export const RELOGIO_IA = Symbol('RELOGIO_IA');
+export const RELOGIO_MONOTONICO_IA = Symbol('RELOGIO_MONOTONICO_IA');
+
+const agoraPadrao = (): Date => new Date();
+const monotonicoPadrao = (): number => performance.now();
+
 @Injectable()
 export class AuditoriaIaService {
+  private readonly clock: () => Date;
+  private readonly monotonico: () => number;
+
   constructor(
     @Inject(TenantDatabase) private readonly db: TenantDatabase,
-    private readonly clock: () => Date = () => new Date(),
-    private readonly monotonico: () => number = () => performance.now(),
-  ) {}
+    @Optional() @Inject(RELOGIO_IA) clock?: () => Date,
+    @Optional() @Inject(RELOGIO_MONOTONICO_IA) monotonico?: () => number,
+  ) {
+    this.clock = clock ?? agoraPadrao;
+    this.monotonico = monotonico ?? monotonicoPadrao;
+  }
 
   /**
    * Uma tentativa de provedor e sua linha de trilha vivem na MESMA transação. Erro do provedor é
