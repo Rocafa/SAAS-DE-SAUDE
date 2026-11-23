@@ -11,6 +11,13 @@ import { AUDITADAS, AUDITADAS_LEITURA, EXCECOES, HANDLERS_FORA_DE_CONTROLLER, LE
 
 let rotas: RotaAnalisada[];
 const porRota = new Map<string, RotaAnalisada>();
+let leiturasDaApi: RotaAnalisada[] | undefined;
+
+/** Reutiliza o programa TypeScript entre as suítes, sem quebrar a execução de um teste isolado por filtro. */
+function obterRotasDeLeitura(): RotaAnalisada[] {
+  leiturasDaApi ??= analisarRotasDeLeitura();
+  return leiturasDaApi;
+}
 
 beforeAll(() => {
   rotas = analisarRotasDeEscrita();
@@ -112,7 +119,7 @@ describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
   let leituras: Map<string, RotaAnalisada>;
 
   beforeAll(() => {
-    leituras = new Map(analisarRotasDeLeitura().map((r) => [r.rota, r]));
+    leituras = new Map(obterRotasDeLeitura().map((r) => [r.rota, r]));
   }, 120_000);
 
   it('a análise acha as rotas de leitura (sanidade)', () => {
@@ -157,7 +164,7 @@ describe('R5: cobertura de auditoria das rotas de leitura (GET)', () => {
 
 describe('R4 do #123: inventário das rotas com MFA recente', () => {
   it('as rotas com @ExigeMfaRecente são exatamente as de ROTAS_COM_MFA_RECENTE', () => {
-    const marcadas = [...analisarRotasDeEscrita(), ...analisarRotasDeLeitura()]
+    const marcadas = [...rotas, ...obterRotasDeLeitura()]
       .filter((r) => r.marcas.includes('ExigeMfaRecente'))
       .map((r) => r.rota)
       .sort();
