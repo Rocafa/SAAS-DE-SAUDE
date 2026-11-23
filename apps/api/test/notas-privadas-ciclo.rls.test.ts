@@ -267,7 +267,9 @@ describe('D2: profissional que sai da clínica', () => {
     }
     // Ressalva do Guardião: só o perfil psicologo no banco (especialidade sem "psico", sem área sensível), revogado no
     // desligamento. A revogação marca revoked_at (não apaga), e o ciclo lê o histórico: a nota é lacrada.
-    const soPerfil = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'psicologo');
+    // 'profissional' também no banco: com qualquer linha em clinic_members, só valem os perfis de sessão ativos lá
+    // (perfisVigentes, R1 do #130); sem ele a sessão perde 'profissional' e a criação da nota é 403.
+    const soPerfil = await api.membro(clinica, api.sessao(clinica, 'profissional'), 'profissional', 'psicologo');
     const soPerfilId = await profissional(soPerfil, 'Terapia integrativa');
     await agendaDeHoje(p, soPerfilId);
     notas.push(await novaNota(soPerfil, p));
