@@ -89,7 +89,8 @@ Riscos técnicos específicos do treino: **memorização** e extração de dados
 
 - Prompts e respostas com dados clínicos são **C4** (mesmo nível do prontuário).
 - Armazenamento: banco/bucket cifrado com DEK do tenant; **retenção ≤ 30 dias** para o que não for incorporado ao prontuário (o que for incorporado segue a regra do prontuário).
-- Trilha de auditoria (sempre, retida como auditoria): usuário, tenant, paciente (ID), funcionalidade, modelo/versão, hash do prompt/resposta, tokens, latência, se foi aceito/editado/descartado. **Sem o texto.**
+- Trilha de auditoria (sempre, retida como auditoria): usuário, tenant, paciente (ID), funcionalidade, modelo/versão, hash do prompt/resposta, tokens, latência, se foi aceito/editado/descartado. **Sem o texto.** Os hashes são HMAC-SHA256 com a chave da clínica, gravados com o id da chave (`hash_key_id`), não SHA-256 puro (PR #233).
+- **Retenção dos eventos de IA** (`ai_generation`, `ai_review` e `ai_refusal`, decisão registrada no #227 + #233): os eventos seguem o prazo do prontuário a que se referem até a decisão da **D7** ([matriz-retencao.md](matriz-retencao.md)). **Nenhum descarte acontece antes da D7.** A trilha é append-only e encadeada por hash, então não há rotina de expurgo. Se a D7 fixar outro prazo, o expurgo entra em migração própria, revisada pelo Guardião.
 - **Proibido** enviar prompts/respostas para APM, Sentry, ferramentas de observabilidade de LLM de terceiros ou planilhas. Observabilidade de LLM só self-hosted ou com dados redigidos.
 - Acesso de engenheiros ao conteúdo: break-glass apenas, com chamado.
 
