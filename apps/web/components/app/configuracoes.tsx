@@ -12,8 +12,8 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import type { DadosClinica, Papel, PedidoExportacao } from '@/lib/api/tipos';
-import { JANELA_SAIDA_DIAS, avisoDeSaida, validarEmail } from '@/lib/conta';
-import { ehResponsavelTecnico } from '@/lib/api/papeis';
+import { JANELA_SAIDA_DIAS, JANELA_SEGURANCA_EXPORTACAO_HORAS, avisoDeSaida, validarEmail } from '@/lib/conta';
+import { ehResponsavelTecnico, podeAprovarExportacao } from '@/lib/api/papeis';
 import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
@@ -513,19 +513,28 @@ function SecaoPrivacidade() {
           </form>
         ) : pedido?.status === 'aguardando_rt' ? (
           <div className="flex flex-col gap-3" role="status">
-            <p className="font-bold">Pedido feito. Falta a aprovação do responsável técnico da clínica.</p>
+            <p className="font-bold">
+              {pedido.confirmacao === 'admin'
+                ? 'Pedido feito pelo responsável técnico. Falta a confirmação de outro administrador da clínica.'
+                : pedido.confirmacao === 'autoaprovacao'
+                  ? 'Pedido feito. Falta a aprovação do responsável técnico (você, que é o único administrador ativo).'
+                  : 'Pedido feito. Falta a aprovação do responsável técnico da clínica.'}
+            </p>
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
             {/*
-              G2/R9: o dump completo da clínica (pacientes, agenda, prontuários e financeiro) é
-              aprovado pelo usuário RT, com o código do próprio autenticador. Quem não é RT (inclusive
-              quem pediu, quando o RT é outra pessoa) não vê o botão; o adaptador recusa com 403 de
-              qualquer forma. Quando quem pediu é o próprio RT (autônomo), a autoaprovação é
-              permitida e fica registrada na auditoria. Com a API real, o servidor confere tudo.
+              G2/R9 + Guardião (PR 234): o dump completo da clínica (pacientes, agenda, prontuários e
+              financeiro) precisa de duas pessoas, cada uma com o próprio MFA: pedido de admin → o RT
+              aprova (sigilo); pedido do RT com outro admin ativo → outro admin confirma (desvio). Só o
+              autônomo (RT sem outro admin ativo) se autoaprova, com janela de segurança (R10) e registro.
+              Quem não pode aprovar não vê o botão; o adaptador recusa com 403 de qualquer forma.
             */}
-            {modo === 'fake' && rt ? (
+            {modo === 'fake' && podeAprovarExportacao(usuario, pedido) ? (
               <form onSubmit={aprovar} noValidate className="flex max-w-xl flex-col gap-3">
-                {pedido.pedidoPor === usuario.id && (
-                  <p>Você é o responsável técnico: a aprovação do seu próprio pedido fica registrada como autoaprovação.</p>
+                {pedido.confirmacao === 'autoaprovacao' && (
+                  <p>
+                    Você é o responsável técnico: a aprovação do seu próprio pedido fica registrada como autoaprovação, e o link só é liberado{' '}
+                    {JANELA_SEGURANCA_EXPORTACAO_HORAS} horas depois (janela de segurança).
+                  </p>
                 )}
                 <Campo id="x-cod-rt" rotulo="Seu código do aplicativo autenticador (6 números)">
                   <input id="x-cod-rt" inputMode="numeric" autoComplete="one-time-code" value={codigoRt} onChange={(e) => setCodigoRt(e.target.value)} className={CAMPO} />
@@ -533,13 +542,19 @@ function SecaoPrivacidade() {
                 {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
                 <Botao type="submit" variante="contorno" className="self-start" disabled={aprovando}>
                   <ShieldCheck aria-hidden />
-                  Aprovar como responsável técnico (demonstração)
+                  {pedido.confirmacao === 'admin' ? 'Confirmar como administrador (demonstração)' : 'Aprovar como responsável técnico (demonstração)'}
                 </Botao>
               </form>
             ) : (
-              <p className="text-texto-suave">Só o responsável técnico aprova, entrando com o próprio usuário e o código do autenticador dele.</p>
+              <p className="text-texto-suave">
+                {pedido.confirmacao === 'admin'
+                  ? 'Só outro administrador confirma, entrando com o próprio usuário e o código do autenticador dele.'
+                  : 'Só o responsável técnico aprova, entrando com o próprio usuário e o código do autenticador dele.'}
+              </p>
             )}
           </div>
+        ) : pedido?.status === 'cancelado' ? (
+          <p role="status" className="font-bold">Pedido cancelado. Nada foi enviado.</p>
         ) : (
           <p role="status" className="flex items-start gap-2 font-bold">
             <CheckCircle2 aria-hidden className="mt-0.5 size-6 shrink-0" />
@@ -548,6 +563,7 @@ function SecaoPrivacidade() {
               : 'Pronto. O link foi para o seu e-mail: vale até '}
             {pedido?.expiraEm ? formatarDia(pedido.expiraEm, new Date()) : 'amanhã'}, só para
             {pedido && pedido.pedidoPor !== usuario.id ? ' essa pessoa' : ' você'}, e pode ser baixado {pedido?.downloadsRestantes} vezes. O arquivo vai cifrado.
+            {pedido?.liberadoEm && ` Janela de segurança: o link só é liberado em ${formatarDia(pedido.liberadoEm.slice(0, 10), new Date())} às ${pedido.liberadoEm.slice(11)}.`}
           </p>
         )}
         <p className="mt-3 text-texto-suave">Fluxo de demonstração: a exportação de verdade entra com o login (D4) e a API de exportação.</p>

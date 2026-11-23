@@ -1,4 +1,4 @@
-import type { Papel } from './tipos';
+import type { Papel, PedidoExportacao, Usuario } from './tipos';
 
 /**
  * Quem pode o que, do lado do cliente. Mesma ideia de `podeConferirDocumento`: o predicado vive aqui,
@@ -15,4 +15,18 @@ export function ehAdmin(papel: Papel): boolean {
  */
 export function ehResponsavelTecnico(usuario: { responsavelTecnico?: boolean } | null | undefined): boolean {
   return usuario?.responsavelTecnico === true;
+}
+
+/**
+ * A tela mostra o botão de aprovar a exportação a esta pessoa? Espelha o contrato de `aprovarExportacao`
+ * (o servidor decide de novo): `rt` → o RT; `admin` → outro admin, nunca quem pediu; `autoaprovacao` → o RT que pediu.
+ */
+export function podeAprovarExportacao(
+  usuario: Pick<Usuario, 'id' | 'papel' | 'responsavelTecnico'> | null | undefined,
+  pedido: Pick<PedidoExportacao, 'pedidoPor' | 'confirmacao' | 'status'> | null | undefined,
+): boolean {
+  if (!usuario || pedido?.status !== 'aguardando_rt') return false;
+  if (pedido.confirmacao === 'rt') return ehResponsavelTecnico(usuario);
+  if (pedido.confirmacao === 'admin') return ehAdmin(usuario.papel) && usuario.id !== pedido.pedidoPor;
+  return ehResponsavelTecnico(usuario) && usuario.id === pedido.pedidoPor;
 }

@@ -287,13 +287,23 @@ export interface Assinatura {
 /** Exportação total (G2): MFA recente, aprovação do responsável técnico, link pessoal de 24 h. */
 export interface PedidoExportacao {
   id: string;
-  /** Identidade de quem pediu; só o RT aprova, e quem pediu só aprova se for o próprio RT (R9). */
+  /** Identidade de quem pediu (R9). */
   pedidoPor: string;
-  /** Identidade do RT que aprovou, autenticado e com MFA próprio. */
+  /**
+   * Quem confirma, decidido no pedido (R9 + parecer do Guardião no PR 234):
+   * - `rt`: pediu um admin que não é o RT; o RT aprova com o próprio MFA (cobre o sigilo);
+   * - `admin`: pediu o RT e a clínica tem outro admin ativo; um desses admins confirma com o MFA dele (cobre desvio);
+   * - `autoaprovacao`: pediu o RT de clínica sem outro admin ativo (autônomo); ele mesmo aprova, com janela de segurança.
+   */
+  confirmacao: 'rt' | 'admin' | 'autoaprovacao';
+  /** Identidade de quem aprovou, autenticado e com MFA próprio. */
   aprovadoPor?: string;
-  /** `true` quando quem pediu é o próprio RT (autônomo): permitido e registrado na auditoria. */
+  /** `true` quando o RT autônomo aprovou o próprio pedido: registrado na auditoria. */
   autoaprovacao?: boolean;
-  status: 'aguardando_rt' | 'pronto';
+  /** Janela de segurança (R10), obrigatória na autoaprovação: o link só é liberado a partir daqui ("AAAA-MM-DD HH:MM"). */
+  liberadoEm?: string;
+  /** `aguardando_rt` = aguardando a confirmação prevista em `confirmacao`; `cancelado` = "Não fui eu". */
+  status: 'aguardando_rt' | 'pronto' | 'cancelado';
   pedidoEm: string;
   expiraEm?: string;
   downloadsRestantes?: number;
