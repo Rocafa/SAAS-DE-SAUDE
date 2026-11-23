@@ -671,3 +671,5 @@ Pendente para a próxima sessão:
 - Com o OK do @Rocafa, disparei a correção dos dois bloqueantes do #227 (HMAC com chave da clínica pela porta do
   `PSEUDONYM_SIGNER`; revisão que herda os campos da geração, só do responsável e sem duplicar), num PR para a branch
   do sócio que inclui o #230. O item 3 (dois eventos) fica como TODO.
+- **#231** para a branch do #222 (seletor `combobox` exato; 28 e2e passaram localmente) e **#232** para a branch do
+  #213 (manifest permitido no cache; 24 passaram). Comentado nos dois PRs do sócio.
