@@ -14,7 +14,7 @@
 
 - Nenhum prompt, saída, nome, CPF ou conteúdo clínico em claro na trilha, CSV, tela ou testes.
 - Paciente aparece somente por UUID; usuário e tenant vêm do `RequestContext`, nunca do navegador.
-- Toda chamada sem gravação falha; nenhum `catch` vazio, `any`, `@ts-ignore` ou `eslint-disable`.
+- Toda chamada sem gravação falha; são proibidos tratamento de erro vazio, tipagem sem segurança e supressões de TypeScript ou ESLint.
 - Não editar migrações existentes, não criar perfil de DPO nem política de retenção sem decisão humana.
 - Commits Conventional Commits em português, sem atribuição a IA.
 
