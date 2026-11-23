@@ -8,10 +8,13 @@
  * - a proveniência (rota, modelo@versão, prompt@hash) vai para o documento final;
  * - a recusa do paciente bloqueia a chamada (routing-policy.ts).
  * Nenhum log deste serviço contém texto clínico: só ids, códigos e contagens.
+ * Toda tentativa e recusa passa por AuditoriaIaService: se a trilha falhar, não há rascunho
+ * nem fallback que esconda a ausência do registro.
  */
 import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import type { TenantId } from '@plataforma/shared';
+import type { RequestContext } from '@plataforma/shared';
+import { AuditoriaIaService, FalhaAuditoriaIaError } from '../audit/registro-ia';
 import type {
   AiNiche,
   AiTask,
@@ -28,12 +31,16 @@ import { routeRequest, type RoutingDenialReason } from './routing-policy';
 export const DEFAULT_AI_TIMEOUT_MS = 30_000;
 
 export interface AiGenerateInput {
-  readonly tenantId: TenantId;
+  readonly ctx: RequestContext;
   readonly task: AiTask;
   readonly niche: AiNiche;
   readonly sensitivity: DataSensitivity;
   readonly tenantPolicy: TenantAiPolicy;
   readonly patientConsent?: PatientAiConsent;
+  /** UUID do paciente, nunca nome/CPF; ausente só em tarefa sem paciente. */
+  readonly patientId?: string;
+  /** UUID do profissional, quando a chamada é de um profissional. */
+  readonly professionalId?: string;
   readonly system: string;
   readonly input: string;
   readonly jsonSchema?: Readonly<Record<string, unknown>>;
@@ -55,6 +62,8 @@ export interface AiDraft {
   readonly json?: unknown;
   readonly usage: LlmUsage;
   readonly provenance: AiProvenance;
+  /** UUID da linha de geração; liga a revisão humana append-only a esta chamada. */
+  readonly auditId: string;
   /** Sempre true: IA sugere, o profissional decide e assina. */
   readonly requiresHumanReview: true;
 }
@@ -83,15 +92,23 @@ export class AiService {
 
   constructor(
     private readonly providers: readonly LlmProvider[],
-    private readonly clock: () => Date = () => new Date(),
+    private readonly auditoria: AuditoriaIaService,
   ) {}
 
   async generate(input: AiGenerateInput): Promise<AiDraft> {
     const decision = routeRequest(input, this.providers);
-    if (!decision.allowed) throw new AiDeniedError(decision.reason);
+    if (!decision.allowed) {
+      await this.auditoria.registrarRecusa(input.ctx, {
+        task: input.task,
+        reason: decision.reason,
+        ...(input.patientId ? { patientId: input.patientId } : {}),
+        ...(input.professionalId ? { professionalId: input.professionalId } : {}),
+      });
+      throw new AiDeniedError(decision.reason);
+    }
 
     const request: LlmRequest = {
-      tenantId: input.tenantId,
+      tenantId: input.ctx.tenantId,
       task: input.task,
       niche: input.niche,
       sensitivity: input.sensitivity,
@@ -108,7 +125,19 @@ export class AiService {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), request.timeoutMs);
       try {
-        const res = await provider.generate(request, controller.signal);
+        const resultado = await this.auditoria.chamar(
+          input.ctx,
+          {
+            task: input.task,
+            ...(input.patientId ? { patientId: input.patientId } : {}),
+            ...(input.professionalId ? { professionalId: input.professionalId } : {}),
+            system: input.system,
+            input: input.input,
+            model: provider.model,
+          },
+          () => provider.generate(request, controller.signal),
+        );
+        const res = resultado.response;
         if (res.finishReason === 'error' || res.finishReason === 'content_filter') {
           this.logger.warn(`rota ${provider.id} terminou com ${res.finishReason}; tentando a próxima`);
           continue;
@@ -121,11 +150,13 @@ export class AiService {
             providerId: provider.id,
             model: res.model,
             promptHash: promptHash(request.system),
-            generatedAt: this.clock().toISOString(),
+            generatedAt: resultado.generatedAt,
           },
+          auditId: resultado.auditId,
           requiresHumanReview: true,
         };
       } catch (err) {
+        if (err instanceof FalhaAuditoriaIaError) throw err;
         const name = err instanceof Error ? err.name : 'Error';
         this.logger.warn(`rota ${provider.id} falhou (${name}); tentando a próxima`);
       } finally {

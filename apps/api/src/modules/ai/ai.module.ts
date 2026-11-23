@@ -1,6 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { AiService } from './ai.service';
 import type { LlmProvider } from './llm-provider';
+import { AuditoriaIaService } from '../audit/registro-ia';
 import { FakeLlmProvider } from './providers/fake-llm.provider';
 
 /**
@@ -43,7 +44,7 @@ export class AiModule {
     const providers = options.providers ?? createProviders(parseAiProvider());
     return {
       module: AiModule,
-      providers: [{ provide: AiService, useFactory: () => new AiService(providers) }],
+      providers: [{ provide: AiService, useFactory: (auditoria: AuditoriaIaService) => new AiService(providers, auditoria), inject: [AuditoriaIaService] }],
       exports: [AiService],
     };
   }
