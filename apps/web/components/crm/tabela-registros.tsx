@@ -153,7 +153,6 @@ export function TabelaRegistros<T>({
             </label>
             <select
               id={statusId}
-              aria-label="Filtrar por status"
               value={status}
               onChange={(event) => mudarStatus(event.target.value)}
               className="min-h-14 rounded-md border-2 border-borda-forte bg-fundo px-4"
@@ -177,7 +176,7 @@ export function TabelaRegistros<T>({
               ? buscaForaDoFiltro
                 ? 'Nenhum registro neste filtro'
                 : haBusca
-                  ? `Ninguém encontrado com “${busca.trim()}”`
+                  ? 'Ninguém encontrado com essa busca.'
                   : 'Nenhum registro neste filtro'
               : vazio.titulo
           }

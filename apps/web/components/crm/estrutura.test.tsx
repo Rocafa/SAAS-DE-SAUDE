@@ -67,7 +67,7 @@ describe('TabelaRegistros — HTML estático', () => {
         vazio={{ titulo: 'Nenhum paciente cadastrado ainda', oQueFazer: 'Cadastre o primeiro.' }}
       />,
     );
-    expect(html).toContain('Ninguém encontrado com “Nome inexistente”');
+    expect(html).toContain('Ninguém encontrado com essa busca.');
     expect(html).toContain('Limpar busca e filtros');
     expect(html).not.toContain('Nenhum paciente cadastrado ainda');
   });
