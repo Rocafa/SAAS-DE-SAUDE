@@ -35,16 +35,16 @@ test.describe('CRM — lista de pacientes', () => {
     await expect(page.getByText('A busca encontrou registros em outro status. Mostre todos sem apagar a busca.')).toBeVisible();
     await page.getByRole('button', { name: 'Mostrar todos' }).click();
     await expect(page.getByLabel('Procurar paciente')).toHaveValue('Miguel Freitas');
-    await expect(page.getByLabel('Status')).toHaveValue('todos');
+    await expect(page.getByRole('combobox', { name: 'Status', exact: true })).toHaveValue('todos');
     await expect(nomesVisiveis(page)).toHaveText(['Miguel Freitas']);
   });
 
   test('filtro de status mostra inativos sem mudar a regra de acesso', async ({ page }) => {
     await page.goto('/pacientes');
-    await page.getByLabel('Status').selectOption('inativo');
+    await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('inativo');
     await expect(nomesVisiveis(page)).toHaveText(['Miguel Freitas']);
     await expect(page.getByText('Inativo', { exact: true }).filter({ visible: true })).toBeVisible();
-    await page.getByLabel('Status').selectOption('todos');
+    await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('todos');
     await expect(page.getByRole('status').filter({ hasText: /Página 1 de 3/ })).toContainText('30 pacientes');
   });
 
