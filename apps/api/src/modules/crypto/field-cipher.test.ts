@@ -186,6 +186,13 @@ describe('rotação sem downtime', () => {
     ).toEqual(['active', 'retired']);
   });
 
+  it('recifrar valida a referência mesmo quando a cifra já usa a DEK ativa', async () => {
+    const valor = await cipher.encrypt(null, ref(tenantA), TEXTO);
+    await expect(cipher.reencrypt(null, ref(tenantA, { table: 'X; drop' }), valor)).rejects.toBeInstanceOf(
+      InvalidFieldRefError,
+    );
+  });
+
   it('girar a chave mestra re-cifra as DEKs sem tocar nos dados', async () => {
     const antes = await cipher.encrypt(null, ref(tenantA), TEXTO);
     const velha = store.masterKeys.find((m) => m.tenantId === tenantA)?.id;
