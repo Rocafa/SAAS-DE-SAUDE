@@ -22,6 +22,8 @@
 
 **Na prática, para nós:** quase todo incidente com prontuário envolve dado sensível e sob sigilo profissional, então deve ser tratado como **comunicável por padrão**. A decisão de não comunicar precisa de justificativa escrita no registro. ⚖️
 
+**Meta operacional:** a controladora deve protocolar a comunicação à ANPD e aos titulares em até **2 dias úteis** da ciência. O limite legal continua sendo **3 dias úteis** (Res. 15/2024, art. 6º); o dia de margem serve para contingência, não para adiar o registro da ciência nem o aviso às clínicas.
+
 ## 2. Papéis
 
 | Papel | Quem | Faz |
@@ -43,12 +45,13 @@ T0+4h   contenção inicial (revogar credenciais, isolar, bloquear rota)
 D0   CIÊNCIA de que o incidente afetou dados pessoais  ◄── começa o prazo legal
 D0+24h  aviso a cada clínica afetada (DPA cl. 7.1) + minuta da comunicação para a ANPD e para os titulares
 D0+24h…  atualização a cada 24 h às clínicas
-até D+3 dias úteis  clínica comunica à ANPD e aos titulares (nós apoiamos com minuta, lista e ferramenta)
+até D+2 dias úteis  META INTERNA: clínica comunica à ANPD e aos titulares (nós apoiamos com minuta, lista e ferramenta)
+até D+3 dias úteis  limite legal da Res. 15/2024; a margem não é nova meta
 até D+3 + 20 dias úteis  comunicação complementar
 até D+10 dias úteis  post-mortem sem culpados
 ```
 
-Exemplo de contagem (ESTIMATIVA, sem feriados): ciência numa sexta-feira às 16 h → 1º dia útil = segunda, 2º = terça, 3º = quarta. **A clínica protocola até quarta.** Por isso o aviso às clínicas em 24 h é inegociável.
+Exemplo de contagem (ESTIMATIVA, sem feriados): ciência numa sexta-feira às 16 h → 1º dia útil = segunda, 2º = terça, 3º = quarta. **A meta interna é protocolar até terça; o limite legal é quarta.** Por isso o aviso às clínicas em 24 h é inegociável.
 
 ## 4. Severidade (PROPOSTA)
 
@@ -89,7 +92,7 @@ Vazamento entre clínicas · credencial de profissional comprometida · ransomwa
 > - **Dados possivelmente afetados:** [categorias, ex.: nome e telefone; evolução clínica]. **Quantidade estimada:** [n] pacientes; [há / não há] menores.
 > - **Proteções existentes:** [ex.: dados cifrados; a chave não foi exposta].
 > - **O que já fizemos:** [medidas].
-> - **Prazo legal de vocês:** como controladora, a clínica tem **3 dias úteis** a partir de hoje para comunicar à ANPD e aos titulares, se o incidente for relevante (Res. CD/ANPD 15/2024). Anexamos minutas prontas e podemos enviar a comunicação aos pacientes pelo sistema, se vocês aprovarem.
+> - **Prazo de vocês:** como controladora, a clínica deve seguir a meta interna de comunicar à ANPD e aos titulares em até **2 dias úteis** da ciência, sem ultrapassar o limite legal de **3 dias úteis**, se o incidente for relevante (Res. CD/ANPD 15/2024). Anexamos minutas prontas e podemos enviar a comunicação aos pacientes pelo sistema, se vocês aprovarem.
 > - **Próxima atualização:** até [data/hora] (no máximo 24 h).
 >
 > Contato do nosso encarregado: [nome, e-mail, telefone].
