@@ -701,3 +701,7 @@ Pendente para a próxima sessão:
   impede subir com provedor de IA real enquanto a chamada estiver na transação; (b) conferir no CloudTrail do
   staging que o `GenerateMac` não registra `Message`; (c) retenção dos eventos de IA e V2 do RIPD do escriba. (a) e
   (c) pedidos ao agente no #233; (b) fica para o staging. Postado no #227.
+- **#234** aberto para a branch do #220: RT por clínica no fake, aprovação só do RT com código do autenticador,
+  autoaprovação do RT registrada na auditoria e no pedido, tela sem botão para quem pediu; sai o plano de
+  `docs/superpowers`. Vitest (416), lint, typecheck e e2e `configuracoes-acesso` (26) com exit 0. Decisão sensível:
+  o agente permite a autoaprovação do RT mesmo com outros admins; mandei ao Guardião antes de recomendar.
