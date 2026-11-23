@@ -673,3 +673,6 @@ Pendente para a próxima sessão:
   do sócio que inclui o #230. O item 3 (dois eventos) fica como TODO.
 - **#231** para a branch do #222 (seletor `combobox` exato; 28 e2e passaram localmente) e **#232** para a branch do
   #213 (manifest permitido no cache; 24 passaram). Comentado nos dois PRs do sócio.
+- **#229 corrigido após o veto** (5593519): `ehPsicologia` ampliada; no ciclo, `deveLacrar` lacra na dúvida (perfil
+  `psicologo`, `sensitive_area` ou "psico" amplo) e nunca usa a regra estreita; `custodia.ts` com autor pela regra
+  ampla. Vitest da API (1157) e do web (413) com exit 0; o caso RLS novo só roda na CI. Devolvido ao Guardião.
