@@ -608,3 +608,12 @@ Pendente para a próxima sessão:
   parecer de 13/11 (pedi registro e teste RLS); fonte da Res. CFP 31/2022 e da Lei 4.119/1962.
 - Os quatro vêm de branches `orchestrator-saas-claude-*`, fora do padrão `<frente>/<microparte>`; anotado, sem bloquear.
 - Em andamento: revisores dos #211, #213, #222 e dos #226, #227.
+
+### 23/11 — revisão do #226 e do #227
+
+- **#227** (trilha da consulta de IA): pedi mudança. Os vermelhos da fumaça e do k6 vêm do PR: o Nest não injeta
+  `clock`/`monotonico` no `AuditoriaIaService` e a API compilada não sobe. Também: chamada ao modelo dentro da
+  transação e `registrarRevisao` sem validar o `useId`. O `prompt_hash` sem salt fica para o Guardião.
+- **#226** (chore de prontidão para produção): pedi para dividir. A migração 0066 conflita com a
+  `0066_sessao_mfa_sem_clinica.sql` da pilha do Better Auth (conferido); a mudança no plano de incidentes muda o prazo
+  imposto à clínica e precisa de decisão dos sócios e do Guardião; o Next duplica o #201.
