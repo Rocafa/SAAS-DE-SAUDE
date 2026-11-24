@@ -21,7 +21,7 @@
  * - todo acesso de suporte leva o número do chamado (`ticket`) e o motivo (`reason`) no metadata,
  *   sem nome. O CHECK da 0008 recusa linha de suporte sem eles.
  */
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { createAwsKmsCliente, loadKmsConfig, regiaoDoArnKms } from '../crypto/kms-client';
@@ -74,10 +74,56 @@ export function supportActorPseudonym(key: Uint8Array, tenantId: TenantId, atend
   return macParaUuid(createHmac('sha256', key).update(mensagemDoPseudonimo(tenantId, atendenteId)).digest());
 }
 
-/** Porta: quem calcula o pseudônimo do atendente. */
+/**
+ * Usos do MAC de conteúdo (veto do Guardião no #227): cada uso tem domínio próprio, então o mesmo
+ * texto em usos diferentes dá MACs diferentes. Novo uso = novo item aqui, nunca reaproveitar.
+ */
+export const USOS_DO_MAC = ['ia_prompt', 'ia_saida', 'ia_saida_final'] as const;
+export type UsoDoMac = (typeof USOS_DO_MAC)[number];
+
+/** MAC de conteúdo: hex de 64 caracteres + id da chave que o calculou (vai para a linha da trilha). */
+export interface MacDeConteudo {
+  readonly mac: string;
+  /** `local-v1` (development/test) ou o UUID da chave HMAC no KMS (rotação = chave nova = id novo). */
+  readonly chave: string;
+}
+
+/** Versão do formato da mensagem assinada; mudar o formato exige versão nova (e chave id novo no local). */
+const VERSAO_DO_MAC = 'v1';
+export const CHAVE_LOCAL_DO_MAC = `local-${VERSAO_DO_MAC}`;
+
+/**
+ * Mensagem do MAC de conteúdo: domínio (uso + versão) 0x1f clínica 0x1f SHA-256 do conteúdo. O
+ * pré-hash mantém a mensagem curta (limite de 4096 bytes do GenerateMac) e o texto clínico nunca vai
+ * ao KMS; sem a chave, o SHA-256 interno não serve para dicionário porque só o MAC é gravado. A
+ * clínica na mensagem faz o mesmo conteúdo dar MACs diferentes em clínicas diferentes.
+ */
+export function mensagemDoMac(tenantId: TenantId, uso: UsoDoMac, conteudo: string): Buffer {
+  if (!(USOS_DO_MAC as readonly string[]).includes(uso)) throw new PseudonimoIndisponivelError();
+  const digest = createHash('sha256').update(conteudo, 'utf8').digest();
+  return Buffer.concat([Buffer.from(`plataforma-saude:mac:${uso}:${VERSAO_DO_MAC}\u001f${tenantId}\u001f`, 'utf8'), digest]);
+}
+
+/** Subchave local por clínica e por uso (HKDF-SHA256): vazar o MAC de um uso não ajuda em outro. */
+function subchaveLocal(key: Uint8Array, tenantId: TenantId, uso: UsoDoMac): Buffer {
+  return Buffer.from(hkdfSync('sha256', key, Buffer.from(tenantId, 'utf8'), `plataforma-saude:mac:${uso}:${VERSAO_DO_MAC}`, 32));
+}
+
+const UUID_DA_CHAVE_RE = /:key\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** UUID da chave a partir do ARN que o KMS devolve (o ARN inteiro tem conta e passa do limite da trilha). */
+export function idDaChaveKms(arnOuId: string | undefined): string {
+  const m = arnOuId ? UUID_DA_CHAVE_RE.exec(arnOuId) : null;
+  if (!m?.[1]) throw new PseudonimoIndisponivelError();
+  return m[1].toLowerCase();
+}
+
+/** Porta: quem calcula o pseudônimo do atendente e o MAC de conteúdo por clínica. */
 export interface PseudonymSigner {
   readonly tipo: 'local' | 'kms';
   pseudonimo(tenantId: TenantId, atendenteId: string): Promise<string>;
+  /** HMAC-SHA256 com a chave do operador, separado por clínica e por uso. Nunca devolve o conteúdo. */
+  macDeConteudo(tenantId: TenantId, uso: UsoDoMac, conteudo: string): Promise<MacDeConteudo>;
 }
 
 export const PSEUDONYM_SIGNER = Symbol('PSEUDONYM_SIGNER');
@@ -102,6 +148,16 @@ export class LocalPseudonymSigner implements PseudonymSigner {
       return Promise.resolve(supportActorPseudonym(this.key, tenantId, atendenteId));
     } catch (e) {
       return Promise.reject(e instanceof Error ? e : new PseudonimoIndisponivelError());
+    }
+  }
+
+  macDeConteudo(tenantId: TenantId, uso: UsoDoMac, conteudo: string): Promise<MacDeConteudo> {
+    try {
+      const mensagem = mensagemDoMac(tenantId, uso, conteudo);
+      const mac = createHmac('sha256', subchaveLocal(this.key, tenantId, uso)).update(mensagem).digest('hex');
+      return Promise.resolve({ mac, chave: CHAVE_LOCAL_DO_MAC });
+    } catch {
+      return Promise.reject(new PseudonimoIndisponivelError());
     }
   }
 }
@@ -142,6 +198,14 @@ export class KmsPseudonymSigner implements PseudonymSigner {
     const out = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message, MacAlgorithm: 'HMAC_SHA_256' }));
     if (!out.Mac) throw new PseudonimoIndisponivelError();
     return macParaUuid(out.Mac);
+  }
+
+  /** Mesma chave HMAC do pseudônimo, com domínio próprio por uso; o id gravado é o UUID da chave no ARN da resposta. */
+  async macDeConteudo(tenantId: TenantId, uso: UsoDoMac, conteudo: string): Promise<MacDeConteudo> {
+    const Message = mensagemDoMac(tenantId, uso, conteudo);
+    const out = await guard(() => this.kms.generateMac({ KeyId: this.keyId, Message, MacAlgorithm: 'HMAC_SHA_256' }));
+    if (!out.Mac || out.Mac.length !== 32) throw new PseudonimoIndisponivelError();
+    return { mac: Buffer.from(out.Mac).toString('hex'), chave: idDaChaveKms(out.KeyId ?? this.keyId) };
   }
 
   /**

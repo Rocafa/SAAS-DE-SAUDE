@@ -14,6 +14,7 @@
 import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { RequestContext } from '@plataforma/shared';
+import { ProibidoError } from '../../common/erros-dominio';
 import { AuditoriaIaService, FalhaAuditoriaIaError } from '../audit/registro-ia';
 import type {
   AiNiche,
@@ -156,7 +157,8 @@ export class AiService {
           requiresHumanReview: true,
         };
       } catch (err) {
-        if (err instanceof FalhaAuditoriaIaError) throw err;
+        // Trilha indisponível ou escrita bloqueada pela assinatura não são "rota fora": não tenta outra.
+        if (err instanceof FalhaAuditoriaIaError || err instanceof ProibidoError) throw err;
         const name = err instanceof Error ? err.name : 'Error';
         this.logger.warn(`rota ${provider.id} falhou (${name}); tentando a próxima`);
       } finally {

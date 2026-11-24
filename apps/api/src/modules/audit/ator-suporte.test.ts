@@ -1,10 +1,13 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { TenantTx } from '../../db/tenant-transaction';
 import {
   AcessoDeSuporteInvalidoError,
+  CHAVE_LOCAL_DO_MAC,
   createPseudonymSigner,
+  idDaChaveKms,
+  mensagemDoMac,
   KmsPseudonymSigner,
   LocalPseudonymSigner,
   PseudonimoIndisponivelError,
@@ -161,5 +164,45 @@ describe('PseudonymSigner (N1: segredo fora do processo da API)', () => {
     const s = createPseudonymSigner({ NODE_ENV: 'development', SUPPORT_PSEUDONYM_KEY: valor.toString('base64') });
     expect(await s.pseudonimo(T1, 'atendente-01')).toBe(supportActorPseudonym(valor, T1, 'atendente-01'));
     expect(() => createPseudonymSigner({ NODE_ENV: 'test', SUPPORT_PSEUDONYM_KEY: randomBytes(16).toString('base64') })).toThrow(/32 bytes/);
+  });
+});
+
+describe('MAC de conteúdo da trilha de IA (veto do Guardião no #227, bloqueante 1)', () => {
+  const ARN = 'arn:aws:kms:sa-east-1:000000000000:key/00000000-0000-4000-8000-0000000000aa';
+
+  it('local: HMAC por clínica e por uso, nunca o SHA-256 puro, com id de chave local-v1', async () => {
+    const s = new LocalPseudonymSigner(randomBytes(32), 'test');
+    const a = await s.macDeConteudo(T1, 'ia_saida', 'CID F32.1');
+    expect(a.mac).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.chave).toBe(CHAVE_LOCAL_DO_MAC);
+    expect(a.mac).not.toBe(createHash('sha256').update('CID F32.1', 'utf8').digest('hex'));
+    expect((await s.macDeConteudo(T1, 'ia_saida', 'CID F32.1')).mac).toBe(a.mac);
+    expect((await s.macDeConteudo(T2, 'ia_saida', 'CID F32.1')).mac).not.toBe(a.mac);
+    expect((await s.macDeConteudo(T1, 'ia_prompt', 'CID F32.1')).mac).not.toBe(a.mac);
+    // Outra chave (outro operador ou rotação) dá outro MAC: sem a chave, não há dicionário.
+    expect((await new LocalPseudonymSigner(randomBytes(32), 'test').macDeConteudo(T1, 'ia_saida', 'CID F32.1')).mac).not.toBe(a.mac);
+  });
+
+  it('KMS: o texto nunca vai ao KMS (só o pré-hash com domínio) e o id gravado é o UUID da chave', async () => {
+    const chave = randomBytes(32);
+    const mensagens: Buffer[] = [];
+    const kms: KmsMacApi = {
+      generateMac: (input) => {
+        mensagens.push(Buffer.from(input.Message));
+        return kmsFalso(chave, { keyIdResposta: ARN }).generateMac(input);
+      },
+    };
+    const s = new KmsPseudonymSigner(kms, 'alias/pseudonimo');
+    const r = await s.macDeConteudo(T1, 'ia_saida_final', 'Paciente Ficticio, texto final');
+    expect(r.chave).toBe('00000000-0000-4000-8000-0000000000aa');
+    expect(r.mac).toBe(createHmac('sha256', chave).update(mensagemDoMac(T1, 'ia_saida_final', 'Paciente Ficticio, texto final')).digest('hex'));
+    expect(Buffer.concat(mensagens).toString('utf8')).not.toContain('Paciente Ficticio');
+    expect(idDaChaveKms(ARN)).toBe('00000000-0000-4000-8000-0000000000aa');
+  });
+
+  it('KMS: falha, MAC vazio ou resposta sem ARN de chave saem como PseudonimoIndisponivelError', async () => {
+    await expect(new KmsPseudonymSigner(kmsFalso(randomBytes(32), { falhar: true }), ARN).macDeConteudo(T1, 'ia_saida', 'x')).rejects.toBeInstanceOf(PseudonimoIndisponivelError);
+    await expect(new KmsPseudonymSigner(kmsFalso(randomBytes(32), { macVazio: true }), ARN).macDeConteudo(T1, 'ia_saida', 'x')).rejects.toBeInstanceOf(PseudonimoIndisponivelError);
+    await expect(new KmsPseudonymSigner(kmsFalso(randomBytes(32)), 'alias/sem-arn').macDeConteudo(T1, 'ia_saida', 'x')).rejects.toBeInstanceOf(PseudonimoIndisponivelError);
   });
 });
