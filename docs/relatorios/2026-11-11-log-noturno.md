@@ -871,3 +871,6 @@ destravando a auditoria de todos.
   caminhos SSM `/troca-admin/*` com vencimento e sem sobrescrita, entrega lida só pelo entregador, KMS do provisionamento
   reaproveitado, alertas e endpoint SSM cobrindo a troca. Job de infra verde na CI; sem terraform local. Runbook vai
   conflitar com o do #239 (fica a seção 11 do #240). Enviado ao Guardião.
+- **Guardião no #240: aprovado com ressalvas.** KMS reaproveitado aceito. R1: entryPoint por igualdade exata por família
+  (senão uma roda o programa da outra sem alerta). R2: documentar que o IAM não limita o prazo do vencimento. CI do #240
+  toda verde. Correções pedidas ao agente.
