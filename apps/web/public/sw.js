@@ -52,8 +52,9 @@ function extrairRecursosOffline(html) {
  */
 async function precarregarRecursosOffline(cache) {
   try {
-    const resp = await fetch(OFFLINE, { credentials: 'same-origin' });
-    if (!resp.ok) return;
+    // Lê o HTML do cache (o `cache.add` acabou de guardar): evita buscar /offline duas vezes na rede.
+    const resp = await cache.match(OFFLINE);
+    if (!resp) return;
     const html = await resp.text();
     const recursos = extrairRecursosOffline(html);
     await Promise.all(

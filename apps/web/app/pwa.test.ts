@@ -4,7 +4,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import vm from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
 import manifestDaEquipe from './manifest';
 import { GET as manifestoDoPortal } from './portal.webmanifest/route';
 
@@ -74,252 +75,217 @@ describe('service worker - código-fonte', () => {
     expect(sw).toMatch(/stylesheet\|preload/);
     expect(sw).toMatch(/script\s+src=/);
   });
-
-  it('não cacheia respostas de erro (404, 500)', () => {
-    expect(sw).toMatch(/if \(res\.ok\)/);
-    expect(sw).toMatch(/404 e erro não entram no cache/);
-  });
 });
 
-// Testes de lógica do service worker com mocks do Cache API
-describe('service worker - lógica de versão e limpeza (unitário)', () => {
-  let cacheStore: Map<string, CacheMock>;
-  let cachesMock: CacheStorageMock;
-  let fetchMock: FetchMock;
-  let originalFetch: typeof global.fetch;
-  let originalCaches: CacheStorage | undefined;
-  let selfMock: ServiceWorkerGlobalScopeMock;
+/*
+ * Comportamento real: carrega o `public/sw.js` num contexto isolado (`vm`), com um `self` falso que
+ * guarda os `addEventListener`, um Cache Storage em memória e uma rede falsa. Os eventos install,
+ * activate e fetch são disparados como o navegador faria e o teste confere o que ficou no cache e o
+ * que foi respondido. Só dados fictícios.
+ */
+const ORIGEM = 'https://clinica-ficticia.test';
+const PERMITIDOS_NO_CACHE = [/^\/offline$/, /^\/_next\/static\//, /^\/icones\//, /^\/manifest\.webmanifest$/];
 
-  interface CacheMock {
-    name: string;
-    match: MatchMock;
-    put: ReturnType<typeof vi.fn>;
-    add: AddMock;
-    delete: ReturnType<typeof vi.fn>;
-    keys: KeysMock;
-    store: Map<string, unknown>;
+const HTML_OFFLINE = `<!doctype html><html><head>
+  <link rel="stylesheet" href="/_next/static/css/app.css">
+  <link rel="preload" href="/_next/static/media/fonte.woff2" as="font">
+  <script src="/_next/static/chunks/app.js"></script>
+  <link rel="icon" href="/icones/icone-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <script src="https://cdn.terceiro.test/rastreador.js"></script>
+  <link rel="stylesheet" href="/api/pacientes/estilo.css">
+</head><body>Sem conexão</body></html>`;
+
+type Rota = (url: string) => Response | Promise<Response>;
+type Ouvinte = (evento: unknown) => void;
+interface Pedido { url: string; method: string; mode: string }
+
+class CacheFalso {
+  readonly itens = new Map<string, Response>();
+  constructor(private readonly rede: (entrada: string | Pedido) => Promise<Response>) {}
+  private chave(entrada: string | Pedido) {
+    return new URL(typeof entrada === 'string' ? entrada : entrada.url, ORIGEM).href;
   }
-
-  interface CacheStorageMock {
-    open: OpenMock;
-    keys: KeysArrayMock;
-    delete: DeleteMock;
-    has: HasMock;
-    match: ReturnType<typeof vi.fn>;
+  async add(entrada: string | Pedido) {
+    const res = await this.rede(entrada);
+    if (!res.ok) throw new TypeError(`add falhou: ${res.status}`);
+    this.itens.set(this.chave(entrada), res);
   }
-
-  interface ServiceWorkerGlobalScopeMock {
-    location: {
-      href: string;
-      origin: string;
-      searchParams: URLSearchParams;
-    };
-    skipWaiting: ReturnType<typeof vi.fn>;
-    clients: { claim: ReturnType<typeof vi.fn> };
-    addEventListener: ReturnType<typeof vi.fn>;
+  async put(entrada: string | Pedido, res: Response) {
+    this.itens.set(this.chave(entrada), res);
   }
+  async match(entrada: string | Pedido) {
+    return this.itens.get(this.chave(entrada))?.clone();
+  }
+}
 
-  type FetchMock = ReturnType<typeof vi.fn> & ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>);
-  type MatchMock = ReturnType<typeof vi.fn> & ((request: RequestInfo) => Promise<Response | undefined>);
-  type AddMock = ReturnType<typeof vi.fn> & ((request: RequestInfo) => Promise<void>);
-  type KeysMock = ReturnType<typeof vi.fn> & (() => Promise<string[]>);
-  type OpenMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<CacheMock>);
-  type KeysArrayMock = ReturnType<typeof vi.fn> & (() => Promise<string[]>);
-  type DeleteMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<boolean>);
-  type HasMock = ReturnType<typeof vi.fn> & ((name: string) => Promise<boolean>);
+function carregarSw(opcoes: { versao?: string; rotas?: Record<string, Rota>; cachesExistentes?: string[] } = {}) {
+  const rotas: Record<string, Rota> = {
+    '/offline': () => new Response(HTML_OFFLINE, { status: 200 }),
+    ...opcoes.rotas,
+  };
+  const rede = vi.fn(async (entrada: string | Pedido) => {
+    const url = new URL(typeof entrada === 'string' ? entrada : entrada.url, ORIGEM);
+    const rota = rotas[url.origin === ORIGEM ? url.pathname : url.href];
+    return rota ? rota(url.href) : new Response('recurso fictício', { status: 200 });
+  });
+  const armazenamento = new Map<string, CacheFalso>();
+  for (const nome of opcoes.cachesExistentes ?? []) armazenamento.set(nome, new CacheFalso(rede));
+  const caches = {
+    open: vi.fn(async (nome: string) => {
+      if (!armazenamento.has(nome)) armazenamento.set(nome, new CacheFalso(rede));
+      return armazenamento.get(nome)!;
+    }),
+    keys: vi.fn(async () => [...armazenamento.keys()]),
+    delete: vi.fn(async (nome: string) => armazenamento.delete(nome)),
+    match: vi.fn(async (entrada: string | Pedido) => {
+      for (const cache of armazenamento.values()) {
+        const achado = await cache.match(entrada);
+        if (achado) return achado;
+      }
+      return undefined;
+    }),
+  };
+  const ouvintes: Record<string, Ouvinte> = {};
+  const self = {
+    location: new URL(`${ORIGEM}/sw.js${opcoes.versao ? `?v=${opcoes.versao}` : ''}`),
+    addEventListener: (tipo: string, fn: Ouvinte) => { ouvintes[tipo] = fn; },
+    skipWaiting: vi.fn(),
+    clients: { claim: vi.fn() },
+  };
+  vm.runInNewContext(sw, { self, caches, fetch: rede, URL, Response }, { filename: 'sw.js' });
 
-  beforeEach(() => {
-    // Mock do Cache store
-    cacheStore = new Map<string, CacheMock>();
+  async function ciclo(tipo: 'install' | 'activate') {
+    const pendentes: Promise<unknown>[] = [];
+    ouvintes[tipo]!({ waitUntil: (p: Promise<unknown>) => pendentes.push(p) });
+    await Promise.all(pendentes);
+  }
+  async function buscar(caminho: string, init: { method?: string; mode?: string } = {}) {
+    let resposta: Promise<Response> | undefined;
+    const request: Pedido = { url: new URL(caminho, ORIGEM).href, method: init.method ?? 'GET', mode: init.mode ?? 'cors' };
+    ouvintes.fetch!({ request, respondWith: (p: Promise<Response>) => { resposta = p; } });
+    const res = resposta ? await resposta : undefined;
+    await new Promise((r) => setTimeout(r, 0)); // deixa o `caches.open(...).then(put)` do sw terminar
+    return res;
+  }
+  const conteudo = (nome: string) => [...(armazenamento.get(nome)?.itens.keys() ?? [])].map((u) => new URL(u).pathname);
+  const tudoNoCache = () => [...armazenamento.values()].flatMap((c) => [...c.itens.keys()]);
+  const urlsBuscadas = () => rede.mock.calls.map(([e]) => new URL(typeof e === 'string' ? e : e.url, ORIGEM).href);
+  return { self, caches, rede, ciclo, buscar, conteudo, tudoNoCache, urlsBuscadas, nomes: () => [...armazenamento.keys()] };
+}
 
-    // Mock do Cache
-    const createCache = (name: string): CacheMock => ({
-      name,
-      match: vi.fn() as MatchMock,
-      put: vi.fn(),
-      add: vi.fn().mockResolvedValue(undefined) as AddMock,
-      delete: vi.fn(),
-      keys: vi.fn().mockResolvedValue([]) as KeysMock,
-      store: new Map(),
-    });
+describe('service worker - comportamento (sw.js carregado de verdade)', () => {
+  it('install pré-carrega /offline e só os estáticos da nossa origem citados nela', async () => {
+    const sw = carregarSw({ versao: 'build123' });
+    await sw.ciclo('install');
 
-    // Mock do caches
-    cachesMock = {
-      open: vi.fn(async (name: string) => {
-        if (!cacheStore.has(name)) {
-          cacheStore.set(name, createCache(name));
-        }
-        return cacheStore.get(name)!;
-      }) as OpenMock,
-      keys: vi.fn(async () => Array.from(cacheStore.keys())) as KeysArrayMock,
-      delete: vi.fn(async (name: string) => {
-        cacheStore.delete(name);
-        return true;
-      }) as DeleteMock,
-      has: vi.fn(async (name: string) => cacheStore.has(name)) as HasMock,
-      match: vi.fn(),
-    };
+    expect(sw.nomes()).toEqual(['plataforma-saude-build123']);
+    expect(sw.conteudo('plataforma-saude-build123').sort()).toEqual([
+      '/_next/static/chunks/app.js',
+      '/_next/static/css/app.css',
+      '/_next/static/media/fonte.woff2',
+      '/icones/icone-192.png',
+      '/manifest.webmanifest',
+      '/offline',
+    ]);
+    // Terceiro e caminho fora da lista permitida nem são buscados.
+    expect(sw.urlsBuscadas()).not.toContain('https://cdn.terceiro.test/rastreador.js');
+    expect(sw.urlsBuscadas()).not.toContain(`${ORIGEM}/api/pacientes/estilo.css`);
+    // /offline vai à rede uma vez só (o HTML é lido do cache depois do `cache.add`).
+    expect(sw.urlsBuscadas().filter((u) => u === `${ORIGEM}/offline`)).toHaveLength(1);
+    expect(sw.self.skipWaiting).toHaveBeenCalled();
+  });
 
-    // Mock do fetch
-    fetchMock = vi.fn() as FetchMock;
-    originalFetch = global.fetch;
-    global.fetch = fetchMock as unknown as typeof global.fetch;
+  it('install sem ?v= usa o cache "dev"; recurso com erro não entra no cache', async () => {
+    const sw = carregarSw({ rotas: { '/_next/static/css/app.css': () => new Response('x', { status: 404 }) } });
+    await sw.ciclo('install');
+    expect(sw.nomes()).toEqual(['plataforma-saude-dev']);
+    expect(sw.conteudo('plataforma-saude-dev')).not.toContain('/_next/static/css/app.css');
+    expect(sw.conteudo('plataforma-saude-dev')).toContain('/offline');
+  });
 
-    // Mock do caches global
-    originalCaches = global.caches;
-    (global.caches as unknown) = cachesMock;
+  it('activate apaga os caches de builds anteriores e mantém só o atual', async () => {
+    const sw = carregarSw({ versao: 'build3', cachesExistentes: ['plataforma-saude-build1', 'plataforma-saude-build2'] });
+    await sw.ciclo('install');
+    await sw.ciclo('activate');
+    expect(sw.nomes()).toEqual(['plataforma-saude-build3']);
+    expect(sw.caches.delete).toHaveBeenCalledWith('plataforma-saude-build1');
+    expect(sw.caches.delete).toHaveBeenCalledWith('plataforma-saude-build2');
+    expect(sw.self.clients.claim).toHaveBeenCalled();
+  });
 
-    // Mock do self
-    selfMock = {
-      location: {
-        href: 'https://example.com/sw.js?v=build123',
-        origin: 'https://example.com',
-        searchParams: new URLSearchParams('v=build123'),
+  it('POST não é interceptado nem cacheado', async () => {
+    const sw = carregarSw({ versao: 'b1' });
+    await sw.ciclo('install');
+    const antes = sw.tudoNoCache().length;
+    const chamadasAntes = sw.rede.mock.calls.length;
+    expect(await sw.buscar('/api/pacientes', { method: 'POST' })).toBeUndefined();
+    expect(await sw.buscar('/_next/static/chunks/novo.js', { method: 'POST' })).toBeUndefined();
+    expect(sw.rede.mock.calls.length).toBe(chamadasAntes);
+    expect(sw.tudoNoCache().length).toBe(antes);
+  });
+
+  it('navegação sem internet cai em /offline', async () => {
+    const sw = carregarSw({ versao: 'b1', rotas: { '/inicio': () => Promise.reject(new TypeError('sem rede')) } });
+    await sw.ciclo('install');
+    const res = await sw.buscar('/inicio', { mode: 'navigate' });
+    expect(res).toBeDefined();
+    expect(await res!.text()).toContain('Sem conexão');
+  });
+
+  it('página com dado de paciente não entra no cache, nem para outra clínica ver sem internet', async () => {
+    // Clínica A abre o prontuário de um paciente fictício com internet...
+    let online = true;
+    const sw = carregarSw({
+      versao: 'b1',
+      rotas: {
+        '/pacientes/pac-ficticio-a': () =>
+          online ? new Response('Prontuário de Fulano Ficticio (clinica A)', { status: 200 }) : Promise.reject(new TypeError('sem rede')),
+        '/api/pacientes': () => new Response('[{"nome":"Fulano Ficticio"}]', { status: 200 }),
       },
-      skipWaiting: vi.fn(),
-      clients: { claim: vi.fn() },
-      addEventListener: vi.fn(),
-    };
-    (global.self as unknown) = selfMock;
+    });
+    await sw.ciclo('install');
+    const pagina = await sw.buscar('/pacientes/pac-ficticio-a', { mode: 'navigate' });
+    expect(await pagina!.text()).toContain('Fulano Ficticio');
+    // ...e a API é chamada direto, sem o sw responder.
+    expect(await sw.buscar('/api/pacientes')).toBeUndefined();
+
+    // Sem internet, quem abrir a mesma URL (ex.: outra clínica no mesmo aparelho) só vê o aviso genérico.
+    online = false;
+    const offline = await sw.buscar('/pacientes/pac-ficticio-a', { mode: 'navigate' });
+    const texto = await offline!.text();
+    expect(texto).toContain('Sem conexão');
+    expect(texto).not.toContain('Fulano Ficticio');
+
+    for (const url of sw.tudoNoCache()) {
+      const { origin, pathname } = new URL(url);
+      expect(origin).toBe(ORIGEM);
+      expect(PERMITIDOS_NO_CACHE.some((re) => re.test(pathname)), `fora da lista: ${pathname}`).toBe(true);
+    }
   });
 
-  afterEach(() => {
-    global.fetch = originalFetch;
-    (global.caches as unknown) = originalCaches;
-    (global.self as unknown) = undefined;
-    vi.clearAllMocks();
+  it('estático: cache-first, guarda resposta boa e não guarda 404', async () => {
+    const sw = carregarSw({
+      versao: 'b1',
+      rotas: { '/_next/static/chunks/quebrado.js': () => new Response('não achou', { status: 404 }) },
+    });
+    await sw.ciclo('install');
+
+    await sw.buscar('/_next/static/chunks/pagina.js');
+    expect(sw.conteudo('plataforma-saude-b1')).toContain('/_next/static/chunks/pagina.js');
+    const chamadas = sw.rede.mock.calls.length;
+    expect(await (await sw.buscar('/_next/static/chunks/pagina.js'))!.text()).toBe('recurso fictício');
+    expect(sw.rede.mock.calls.length).toBe(chamadas); // veio do cache, sem rede
+
+    const res404 = await sw.buscar('/_next/static/chunks/quebrado.js');
+    expect(res404!.status).toBe(404);
+    expect(sw.conteudo('plataforma-saude-b1')).not.toContain('/_next/static/chunks/quebrado.js');
   });
 
-  it('gera nome de cache único por versão do build', () => {
-    const VERSAO = new URL(self.location.href).searchParams.get('v') || 'dev';
-    const CACHE = `plataforma-saude-${VERSAO}`;
-    expect(CACHE).toBe('plataforma-saude-build123');
-  });
-
-  it('muda o nome do cache quando a versão muda', async () => {
-    // Primeira versão
-    selfMock.location = {
-      href: 'https://example.com/sw.js?v=build1',
-      origin: 'https://example.com',
-      searchParams: new URLSearchParams('v=build1'),
-    };
-    let VERSAO = new URL(self.location.href).searchParams.get('v') || 'dev';
-    let CACHE = `plataforma-saude-${VERSAO}`;
-    await cachesMock.open(CACHE);
-    expect(cachesMock.open).toHaveBeenCalledWith('plataforma-saude-build1');
-
-    // Segunda versão (novo deploy)
-    selfMock.location = {
-      href: 'https://example.com/sw.js?v=build2',
-      origin: 'https://example.com',
-      searchParams: new URLSearchParams('v=build2'),
-    };
-    VERSAO = new URL(self.location.href).searchParams.get('v') || 'dev';
-    CACHE = `plataforma-saude-${VERSAO}`;
-    await cachesMock.open(CACHE);
-    expect(cachesMock.open).toHaveBeenCalledWith('plataforma-saude-build2');
-  });
-
-  it('activate apaga caches de versões anteriores', async () => {
-    // Criar caches de versões antigas
-    await cachesMock.open('plataforma-saude-build1');
-    await cachesMock.open('plataforma-saude-build2');
-    await cachesMock.open('plataforma-saude-build3');
-
-    // Versão atual
-    const CACHE_ATUAL = 'plataforma-saude-build3';
-
-    // Simular lógica do activate
-    const keys = await cachesMock.keys();
-    const paraApagar = keys.filter((k: string) => k !== CACHE_ATUAL);
-    await Promise.all(paraApagar.map((k: string) => cachesMock.delete(k)));
-
-    const keysRestantes = await cachesMock.keys();
-    expect(keysRestantes).toEqual(['plataforma-saude-build3']);
-    expect(cachesMock.delete).toHaveBeenCalledWith('plataforma-saude-build1');
-    expect(cachesMock.delete).toHaveBeenCalledWith('plataforma-saude-build2');
-    expect(cachesMock.delete).not.toHaveBeenCalledWith('plataforma-saude-build3');
-  });
-
-  it('install adiciona página offline e pré-carrega recursos', async () => {
-    const CACHE = 'plataforma-saude-test';
-    const cache = await cachesMock.open(CACHE);
-
-    // Mock fetch para a página offline
-    const offlineHtml = `
-      <html>
-        <head>
-          <link rel="stylesheet" href="/_next/static/chunks/app.css">
-          <link rel="preload" href="/_next/static/media/font.woff2" as="font">
-          <script src="/_next/static/chunks/app.js"></script>
-          <link rel="icon" href="/icones/icone-192.png">
-          <link rel="manifest" href="/manifest.webmanifest">
-        </head>
-        <body>Offline</body>
-      </html>
-    `;
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(offlineHtml), clone: () => ({ ok: true }) })
-      .mockResolvedValue({ ok: true, clone: () => ({ ok: true }) });
-
-    // Simular install
-    await cache.add('/offline');
-    expect(cache.add).toHaveBeenCalledWith('/offline');
-  });
-
-  it('fetch de navegação cai para offline quando rede falha', async () => {
-    const CACHE = 'plataforma-saude-test';
-    const cache = await cachesMock.open(CACHE);
-    const offlineResponse = new Response('Offline page', { status: 200 });
-    cache.match.mockResolvedValue(offlineResponse);
-
-    // Simular navegação falhando
-    fetchMock.mockRejectedValueOnce(new Error('Offline'));
-
-    // Request no Node não suporta mode: 'navigate', testamos só a lógica de fallback
-    // O SW faria: fetch(req).catch(() => caches.match(OFFLINE))
-    // Aqui verificamos que o cache tem a página offline
-    const cached = await cache.match('/offline');
-    expect(cached).toBe(offlineResponse);
-  });
-
-  it('fetch de estáticos usa cache-first e guarda respostas OK', async () => {
-    const CACHE = 'plataforma-saude-test';
-    const cache = await cachesMock.open(CACHE);
-    const cssResponse = new Response('.css{color:red}', { status: 200 });
-    const errorResponse = new Response('Not Found', { status: 404 });
-
-    // Primeira vez: não está no cache, busca na rede (OK) e guarda
-    cache.match.mockResolvedValueOnce(undefined);
-    fetchMock.mockResolvedValueOnce(cssResponse.clone());
-
-    const req = new Request('https://example.com/_next/static/chunks/app.css');
-    const cached = await cache.match(req);
-    expect(cached).toBeUndefined();
-
-    // Simular fetch e put
-    const res = await fetchMock(req);
-    expect(res.ok).toBe(true);
-
-    // Segunda vez: está no cache
-    cache.match.mockResolvedValueOnce(cssResponse);
-    const cached2 = await cache.match(req);
-    expect(cached2).toBe(cssResponse);
-
-    // Erro 404 não entra no cache
-    cache.match.mockResolvedValueOnce(undefined);
-    fetchMock.mockResolvedValueOnce(errorResponse);
-    const res404 = await fetchMock(req);
-    expect(res404.ok).toBe(false);
-  });
-
-  it('ignora requisições não-GET e cross-origin', () => {
-    // POST não deve ser interceptado
-    const postReq = new Request('https://example.com/api/pacientes', { method: 'POST' });
-    expect(postReq.method).toBe('POST');
-
-    // Cross-origin não deve ser interceptado
-    const crossReq = new Request('https://outro.com/recurso', { method: 'GET' });
-    expect(new URL(crossReq.url).origin).not.toBe('https://example.com');
+  it('não intercepta outra origem', async () => {
+    const sw = carregarSw({ versao: 'b1' });
+    await sw.ciclo('install');
+    expect(await sw.buscar('https://cdn.terceiro.test/_next/static/x.js')).toBeUndefined();
+    expect(sw.tudoNoCache().some((u) => u.startsWith('https://cdn.terceiro.test'))).toBe(false);
   });
 });
