@@ -834,3 +834,7 @@ destravando a auditoria de todos.
 - **Guardião aprova o #227 + #230 + #233.** Retirar a trava não antecipa o provedor real: `createProviders` ainda
   bloqueia as rotas reais até a D3; o PR da primeira rota real precisa vir com pseudonimização e DPA, ou veto. Falta só
   o CloudTrail no staging (não bloqueia). Postado no #227.
+- **#239 aberto (código do B13)**, base `eng/desenho-b13`: migração 0082, tarefa avulsa com `pedir`/`emitir`/`cancelar`
+  (viva voz obrigatória, `mesmo_operador` recusado), conclusão só no TOTP, suspensão por login da conta antiga,
+  contestação, alarme `CONTA_SUBSTITUIDA_ENTROU`, guarda dos papéis e runbook. CI verde (16 checks; RLS com 9 testes).
+  Fora: Terraform (o tf está no #204), fase `retomar`, dias úteis, aviso no app e RIPD. Enviado ao Guardião.
