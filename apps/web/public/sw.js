@@ -11,13 +11,79 @@ const VERSAO = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = `plataforma-saude-${VERSAO}`;
 const OFFLINE = '/offline';
 
+/**
+ * Extrai URLs de recursos (CSS, JS, fontes, ícones) do HTML da página offline.
+ * Usa regex simples pois o HTML é controlado por nós e bem formado.
+ */
+function extrairRecursosOffline(html) {
+  const urls = new Set();
+  // <link rel="stylesheet" href="..."> | <link rel="preload" href="..." as="style"> | <link rel="preload" href="..." as="font">
+  const linkRegex = /<link\s+[^>]*rel=(["'])?(?:stylesheet|preload)\1[^>]*href=(["'])([^"']+)\2/gi;
+  // <script src="..."></script> | <script src="..." async></script>
+  const scriptRegex = /<script\s+[^>]*src=(["'])([^"']+)\1/gi;
+  // <link rel="icon" href="..."> | <link rel="apple-touch-icon" href="..."> | <link rel="manifest" href="...">
+  const iconRegex = /<link\s+[^>]*rel=(["'])(?:icon|apple-touch-icon|manifest)\1[^>]*href=(["'])([^"']+)\2/gi;
+
+  let match;
+  while ((match = linkRegex.exec(html)) !== null) {
+    urls.add(match[3]);
+  }
+  while ((match = scriptRegex.exec(html)) !== null) {
+    urls.add(match[2]);
+  }
+  while ((match = iconRegex.exec(html)) !== null) {
+    urls.add(match[3]);
+  }
+
+  // Filtrar só recursos da nossa origem e estáticos
+  return Array.from(urls).filter((u) => {
+    try {
+      const url = new URL(u, self.location.origin);
+      return url.origin === self.location.origin &&
+        (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icones/') || url.pathname === '/manifest.webmanifest');
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Pré-carrega os recursos críticos da página offline durante a instalação.
+ */
+async function precarregarRecursosOffline(cache) {
+  try {
+    const resp = await fetch(OFFLINE, { credentials: 'same-origin' });
+    if (!resp.ok) return;
+    const html = await resp.text();
+    const recursos = extrairRecursosOffline(html);
+    await Promise.all(
+      recursos.map((url) =>
+        fetch(url, { credentials: 'same-origin' })
+          .then((r) => r.ok && cache.put(url, r.clone()))
+          .catch(() => { /* ignora falhas individuais */ }),
+      ),
+    );
+  } catch {
+    // Se falhar ao buscar a página offline, segue sem pré-carregar (o cache on-demand cuida depois)
+  }
+}
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.add(OFFLINE)));
+  event.waitUntil(
+    caches.open(CACHE).then(async (cache) => {
+      await cache.add(OFFLINE);
+      await precarregarRecursosOffline(cache);
+    }),
+  );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))));
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
+    ),
+  );
   self.clients.claim();
 });
 
@@ -30,11 +96,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(fetch(req).catch(() => caches.match(OFFLINE)));
     return;
   }
-  if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icones/')) {
+  if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/icones/') || url.pathname === '/manifest.webmanifest') {
     event.respondWith(
       caches.match(req).then(
-        (r) =>
-          r ||
+        (cached) =>
+          cached ||
           fetch(req).then((res) => {
             // 404 e erro não entram no cache: guardado uma vez, ficaria servindo o erro.
             if (res.ok) {
