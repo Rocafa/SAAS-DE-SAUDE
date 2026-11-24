@@ -777,3 +777,6 @@ destravando a auditoria de todos.
   pontos (autoaprovação do RT com outro admin ativo; admin não podia confirmar o pedido do RT; sem janela de 24 h nem
   409); prevaleceu o parecer, e os dois testes dele que afirmavam isso saíram. Explicado no #220. O e2e local fica
   instável sob carga (2 de 5 rodadas inteiras); na CI passou.
+- **#201 aprovado** (Dependabot, next 16.4.5): corrige os 7 alertas médios do next; só patches no lockfile; CI toda
+  verde. A minha aprovação satisfaz a proteção (dono do código). O merge fica com o sócio ou com o @Rocafa: pela regra
+  "quem abriu mescla", não mesclo PR que não é nosso sem um OK explícito.
