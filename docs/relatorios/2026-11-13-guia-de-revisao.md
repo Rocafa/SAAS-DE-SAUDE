@@ -6,7 +6,9 @@
   o #209, que não é mais necessário.
 - Obrigado pelos merges de 23/11 (#214, #215, #221, #223, #224). Atualizei os nossos PRs com a `main`; todos verdes.
 - **Ordem de aprovação agora:** #210 (reaprovar: entrou só o merge da `main` e o lockfile regenerado), #189 (já
-  aprovado), #116 (reaprovar), #155, #194, #201 (next 16.4.5, corrige 7 alertas médios), #153 e #154.
+  aprovado), #116 (reaprovar), #155, #194, #153, #154 e #237 (Dependabot espera 14 dias; better-auth em PR próprio).
+- Do Dependabot, mesclei com o OK do @Rocafa o #201 (next 16.4.5, fecha 7 alertas médios), o #184, o #186 e o #200.
+  O grupo #236 fica em espera até as versões completarem 14 dias.
 - Os meus PRs de correção para as tuas branches (tabela abaixo) continuam prontos. O #234 está conciliando com o teu
   commit "exige MFA do RT" no #220.
 
