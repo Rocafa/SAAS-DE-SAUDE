@@ -1,5 +1,15 @@
 # Guia de revisão para o @Lopesloro — 13/11/2026
 
+## Atualização de 24/11/2026, comece por aqui
+
+- **O alerta do picomatch foi retirado pelo GitHub em 18/11**, e a auditoria voltou a passar em todos os PRs. Fechei
+  o #209, que não é mais necessário.
+- Obrigado pelos merges de 23/11 (#214, #215, #221, #223, #224). Atualizei os nossos PRs com a `main`; todos verdes.
+- **Ordem de aprovação agora:** #210 (reaprovar: entrou só o merge da `main` e o lockfile regenerado), #189 (já
+  aprovado), #116 (reaprovar), #155, #194, #201 (next 16.4.5, corrige 7 alertas médios), #153 e #154.
+- Os meus PRs de correção para as tuas branches (tabela abaixo) continuam prontos. O #234 está conciliando com o teu
+  commit "exige MFA do RT" no #220.
+
 ## Atualização de 23/11/2026
 
 - **O #209 continua sendo o único que destrava a auditoria.** O picomatch segue sem correção (4.0.7 é a última no
