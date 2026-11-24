@@ -793,3 +793,10 @@ destravando a auditoria de todos.
   espera, comentado.
 - **#237 aberto** (`devops/dependabot-cooldown`): `cooldown` de 14 dias no npm (segurança continua imediata) e
   better-auth fora do grupo, em PR próprio. Só configuração; YAML validado. Precisa da aprovação do sócio.
+
+### 24/11 — noite: tarefa agendada atualizada
+
+- A tarefa `pilha-login-merges-2h` estava desatualizada (falava da pilha antiga, já mesclada) e só rodava das 8h às 23h.
+  Agora roda a cada 2 h, o dia todo, com o roteiro de hoje: merges dos nossos PRs aprovados (#210, #189, #116, #155,
+  #194, #153, #154, #237), Dependabot (autorizado, com 14 dias de maturidade e SHA conferido), acompanhamento dos meus
+  PRs de correção para as branches do sócio e revisão de PRs novos dele. Ela não depende desta sessão ficar aberta.
