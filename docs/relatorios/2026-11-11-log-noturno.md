@@ -787,3 +787,5 @@ destravando a auditoria de todos.
   13/11) e o better-auth mexe na base da pilha do login revisada na 1.7.12. Explicado no PR. Revisitar a partir de 27/11.
 - O #201 mudou o lockfile: #210 e #116 vão precisar do lockfile regenerado de novo.
 - #210 e #116: lockfile regenerado de novo depois do #201, com o mesmo efeito de cada PR (+4/−18 e +15/−20).
+- **#184, #186 e #200 mesclados** (pnpm/action-setup 6.1.1, setup-k6-action 1.3.0, digest novo do node 22): cada um
+  com rebase, CI toda verde, diff igual ao revisado e aprovação. Do Dependabot sobra só o #202 (em espera até 27/11).
