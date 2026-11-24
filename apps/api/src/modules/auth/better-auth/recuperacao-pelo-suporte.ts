@@ -16,7 +16,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { TenantId } from '@plataforma/shared';
 import { AuditAction } from '@plataforma/shared';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
-import { recuperacao, sessao, usuario } from '../../../db/identidade';
+import { recuperacao, sessao, trocaDoAdmin, usuario } from '../../../db/identidade';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca } from '../../../security/log-de-seguranca';
@@ -140,7 +140,18 @@ export async function emitirRecuperacaoPeloSuporte(
           .select({ n: sql<number>`count(*)::int` })
           .from(recuperacao)
           .where(and(eq(recuperacao.origem, 'suporte'), eq(recuperacao.usuarioId, usuarioId), gt(recuperacao.criadoEm, sql`now() - interval '12 months'`)));
-        if ((porClinica?.n ?? 0) >= TETO_DO_SUPORTE_POR_CLINICA_EM_30_DIAS || (porPessoa?.n ?? 0) >= TETO_DO_SUPORTE_POR_PESSOA_EM_12_MESES) {
+        // B13 (seção 8 do desenho da troca): o teto SOMA as trocas do admin único (pedidas, em qualquer estado).
+        const [trocasNaClinica] = await ta
+          .select({ n: sql<number>`count(*)::int` })
+          .from(trocaDoAdmin)
+          .where(and(eq(trocaDoAdmin.clinicaId, clinicaId), gt(trocaDoAdmin.pedidoEm, sql`now() - interval '30 days'`)));
+        const [trocasDaPessoa] = await ta
+          .select({ n: sql<number>`count(*)::int` })
+          .from(trocaDoAdmin)
+          .where(and(eq(trocaDoAdmin.usuarioAntigo, usuarioId), gt(trocaDoAdmin.pedidoEm, sql`now() - interval '12 months'`)));
+        const naClinica = (porClinica?.n ?? 0) + (trocasNaClinica?.n ?? 0);
+        const daPessoa = (porPessoa?.n ?? 0) + (trocasDaPessoa?.n ?? 0);
+        if (naClinica >= TETO_DO_SUPORTE_POR_CLINICA_EM_30_DIAS || daPessoa >= TETO_DO_SUPORTE_POR_PESSOA_EM_12_MESES) {
           throw new RecuperacaoPeloSuporteRecusada('teto');
         }
         // R4: o token novo invalida os pendentes da pessoa (de qualquer clínica e origem).

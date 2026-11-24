@@ -36,6 +36,8 @@ export const AUDITADAS: readonly string[] = [
   'POST /clinica/convites/:id/revogar',
   'POST /clinica/membros/:usuarioId/desbloqueio',
   'POST /clinica/membros/:usuarioId/recuperacao',
+  // B13: "não fui eu" da conta antiga (trilha admin_replacement_contested e member_revoke, no provedor).
+  'POST /sessao/troca-do-admin/contestar',
   'POST /convites/aceitar',
   'POST /recuperacao/usar',
   'POST /ativacao/usar',
@@ -274,6 +276,8 @@ export const ROTAS_COM_MFA_RECENTE: readonly string[] = [
   'POST /clinica/convites/:id/revogar',
   'POST /clinica/membros/:usuarioId/desbloqueio',
   'POST /clinica/membros/:usuarioId/recuperacao',
+  // B13: "não fui eu" da conta antiga (trilha admin_replacement_contested e member_revoke, no provedor).
+  'POST /sessao/troca-do-admin/contestar',
   'POST /clinica/membros',
   'POST /clinica/portal/convites',
   'POST /clinica/portal/solicitacoes/:id/situacao',

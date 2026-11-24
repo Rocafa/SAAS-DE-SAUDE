@@ -17,11 +17,11 @@
  * valor gravado é o token). Configuração falha fechada: sem `SSM_KMS_KEY_ID` válido, região fora de `sa-east-1` ou
  * variável que troque a credencial da tarefa, não há cliente (`ssm_nao_configurado`).
  */
-import { DeleteParameterCommand, GetParameterCommand, PutParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
+import { DeleteParameterCommand, DescribeParametersCommand, GetParameterCommand, PutParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { variaveisAwsProibidasPresentes } from '../modules/crypto/kms-client';
 
 /** Validade da entrega por fluxo, em horas (igual à validade do token no banco: 0076 e 0077). */
-export const VALIDADE_DA_ENTREGA_HORAS = { provisionamento: 72, recuperacao: 24 } as const;
+export const VALIDADE_DA_ENTREGA_HORAS = { provisionamento: 72, recuperacao: 24, troca: 24 } as const;
 
 /** Regiões aceitas (lista fechada): o pedido tem e-mail de pessoa e a entrega, o token. */
 const REGIOES_SSM_PERMITIDAS: readonly string[] = ['sa-east-1'];
@@ -45,7 +45,7 @@ export class FalhaDoSsm extends Error {
   }
 }
 
-export type ComandoDoSsm = GetParameterCommand | PutParameterCommand | DeleteParameterCommand;
+export type ComandoDoSsm = GetParameterCommand | PutParameterCommand | DeleteParameterCommand | DescribeParametersCommand;
 
 /** O único método do `SSMClient` usado aqui; o teste injeta um dublê que confere a entrada de cada comando. */
 export interface EnviaAoSsm {
@@ -56,6 +56,11 @@ export interface ParametrosSsm {
   readonly ler: (nome: string) => Promise<string | null>;
   readonly gravar: (nome: string, valor: string) => Promise<void>;
   readonly apagar: (nome: string) => Promise<void>;
+  /**
+   * Hora da gravação e vencimento (política `Expiration`) do parâmetro, sem ler o valor. `null` se ele não existe;
+   * `venceEm` nulo se não há `Expiration`. Usada pela troca do admin (B13) para recusar pedido com vencimento longo.
+   */
+  readonly vencimento: (nome: string) => Promise<{ readonly gravadoEm: Date | null; readonly venceEm: Date | null } | null>;
 }
 
 export interface OpcoesDoCliente {
@@ -105,6 +110,27 @@ export function criarParametrosSsm({ ssm, chaveKms, validadeHoras, agora = () =>
       } catch (err) {
         if (nomeDoErro(err) === 'ParameterNotFound') return;
         throw new FalhaDoSsm('apagar');
+      }
+    },
+    async vencimento(nome) {
+      try {
+        // DescribeParameters devolve as políticas e a data da gravação (GetParameter não devolve). Só metadados.
+        const r = (await ssm.send(
+          new DescribeParametersCommand({ ParameterFilters: [{ Key: 'Name', Option: 'Equals', Values: [nome] }], MaxResults: 1 }),
+        )) as { Parameters?: { LastModifiedDate?: Date | string; Policies?: { PolicyType?: string; PolicyText?: string }[] }[] };
+        const p = r.Parameters?.[0];
+        if (!p) return null;
+        const gravadoEm = p.LastModifiedDate ? new Date(p.LastModifiedDate) : null;
+        let venceEm: Date | null = null;
+        for (const pol of p.Policies ?? []) {
+          if (pol.PolicyType !== 'Expiration' || typeof pol.PolicyText !== 'string') continue;
+          const texto = JSON.parse(pol.PolicyText) as { Attributes?: { Timestamp?: unknown } };
+          const t = typeof texto.Attributes?.Timestamp === 'string' ? Date.parse(texto.Attributes.Timestamp) : Number.NaN;
+          if (Number.isFinite(t)) venceEm = new Date(t);
+        }
+        return { gravadoEm: gravadoEm && Number.isFinite(gravadoEm.getTime()) ? gravadoEm : null, venceEm };
+      } catch {
+        throw new FalhaDoSsm('ler');
       }
     },
   };

@@ -31,7 +31,7 @@ describe('cliente SSM das tarefas avulsas (C4 do parecer de 16/11; C2 do parecer
   });
 
   it('validades: 72 h no provisionamento e 24 h na recuperação (iguais às do banco)', () => {
-    expect(VALIDADE_DA_ENTREGA_HORAS).toEqual({ provisionamento: 72, recuperacao: 24 });
+    expect(VALIDADE_DA_ENTREGA_HORAS).toEqual({ provisionamento: 72, recuperacao: 24, troca: 24 });
   });
 
   it('gravar sobre entrega existente: EntregaPendente, sem tentar de novo e sem a mensagem do SDK', async () => {
@@ -51,6 +51,20 @@ describe('cliente SSM das tarefas avulsas (C4 do parecer de 16/11; C2 do parecer
     expect(err.cause).toBeUndefined();
     expect(JSON.stringify({ m: err.message, s: err.stack })).not.toContain(TOKEN_FICTICIO);
     expect(JSON.stringify({ m: err.message, s: err.stack })).not.toContain(ENTREGA);
+  });
+
+  it('vencimento: DescribeParameters pelo nome exato; lê a data da gravação e o Expiration, sem o valor', async () => {
+    const politica = JSON.stringify({ Type: 'Expiration', Version: '1.0', Attributes: { Timestamp: '2026-11-27T11:00:00.000Z' } });
+    const { ssm, send } = dubleDoSsm(() =>
+      Promise.resolve({ Parameters: [{ LastModifiedDate: new Date('2026-11-24T11:00:00.000Z'), Policies: [{ PolicyType: 'Expiration', PolicyText: politica }] }] }),
+    );
+    const p = criarParametrosSsm({ ssm, chaveKms: CHAVE, validadeHoras: 24 });
+    expect(await p.vencimento('/troca-admin/x')).toEqual({ gravadoEm: new Date('2026-11-24T11:00:00.000Z'), venceEm: new Date('2026-11-27T11:00:00.000Z') });
+    expect(send.mock.calls[0]?.[0].input).toEqual({ ParameterFilters: [{ Key: 'Name', Option: 'Equals', Values: ['/troca-admin/x'] }], MaxResults: 1 });
+    const semPolitica = dubleDoSsm(() => Promise.resolve({ Parameters: [{ Policies: [] }] }));
+    expect(await criarParametrosSsm({ ssm: semPolitica.ssm, chaveKms: CHAVE, validadeHoras: 24 }).vencimento('/troca-admin/x')).toEqual({ gravadoEm: null, venceEm: null });
+    const ausente = dubleDoSsm(() => Promise.resolve({ Parameters: [] }));
+    expect(await criarParametrosSsm({ ssm: ausente.ssm, chaveKms: CHAVE, validadeHoras: 24 }).vencimento('/troca-admin/x')).toBeNull();
   });
 
   it('ler: GetParameter com WithDecryption; ausente vira null', async () => {

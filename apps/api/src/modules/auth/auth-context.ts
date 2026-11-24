@@ -147,6 +147,16 @@ export function ehProvedorDeAtivacao(p: AuthProvider): p is AuthProvider & Prove
   return typeof (p as Partial<ProvedorDeAtivacao>).usarAtivacao === 'function';
 }
 
+/** B13: "não fui eu" da conta antiga numa troca do admin único em andamento (seção 5 do desenho). */
+export interface ProvedorDeTrocaDoAdmin {
+  /** Devolve se havia troca em andamento a contestar. */
+  contestarTrocaDoAdmin(userId: string): Promise<boolean>;
+}
+
+export function ehProvedorDeTrocaDoAdmin(p: AuthProvider): p is AuthProvider & ProvedorDeTrocaDoAdmin {
+  return typeof (p as Partial<ProvedorDeTrocaDoAdmin>).contestarTrocaDoAdmin === 'function';
+}
+
 export function ehProvedorDeRecuperacao(p: AuthProvider): p is AuthProvider & ProvedorDeRecuperacao {
   return typeof (p as Partial<ProvedorDeRecuperacao>).usarRecuperacao === 'function';
 }

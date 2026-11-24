@@ -56,6 +56,16 @@ export const EVENTOS_DE_SEGURANCA = {
   ATIVACAO_BLOQUEADA: { severidade: 'alto', alarme: 'imediato', descricao: 'token de ativação do fundador invalidado na 5ª conferência de e-mail errada (B11; volta só por reemissão)' },
   ATIVACAO_VENCIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'token de ativação do fundador venceu sem uso; o expurgo zerou o HMAC do e-mail (B11, PR 3; a clínica segue fora do alcance do fundador)' },
   FUNDADOR_ATIVADO: { severidade: 'alto', alarme: 'imediato', descricao: 'fundador ativou a clínica provisionada (B11; dispara a confirmação fora de banda antes do importador)' },
+  // B13: troca do admin único que perdeu senha e fator (operador e chamado só aqui e no CloudTrail, nunca na trilha).
+  TROCA_DO_ADMIN_PEDIDA: { severidade: 'alto', alarme: 'imediato', descricao: 'suporte abriu a troca do admin único (B13; janela antes da emissão)' },
+  TROCA_DO_ADMIN_CONTESTADA: { severidade: 'critico', alarme: 'imediato', descricao: 'a conta antiga contestou a troca do admin ("não fui eu"; B13; é incidente)' },
+  TROCA_DO_ADMIN_SUSPENSA: { severidade: 'critico', alarme: 'imediato', descricao: 'login completo da conta antiga com a troca em andamento; a troca parou até a decisão do DPO (B13)' },
+  TROCA_DO_ADMIN_CANCELADA: { severidade: 'alto', alarme: 'volume', descricao: 'troca do admin cancelada pelo contrato, pelo DPO ou pela tarefa (B13)' },
+  TROCA_DO_ADMIN_TETO: { severidade: 'alto', alarme: 'volume', descricao: 'troca do admin recusada pelo teto somado com a recuperação do B12 (revisão manual)' },
+  TROCA_DO_ADMIN_VENCIDA: { severidade: 'aviso', alarme: 'volume', descricao: 'troca do admin encerrada depois da segunda falha de ativação ou de cadastro do fator (B13)' },
+  TROCA_DO_ADMIN_ATIVADA: { severidade: 'alto', alarme: 'volume', descricao: 'a conta nova da troca do admin nasceu pelo token; falta confirmar o TOTP (B13, R1)' },
+  ADMIN_SUBSTITUIDO: { severidade: 'alto', alarme: 'imediato', descricao: 'troca do admin concluída na confirmação do TOTP da conta nova; o vínculo antigo caiu (B13; confirmação fora de banda)' },
+  CONTA_SUBSTITUIDA_ENTROU: { severidade: 'critico', alarme: 'imediato', descricao: 'a conta antiga de uma troca concluída fez login (B13, R5; alarme ao DPO, é incidente)' },
 } as const satisfies Record<string, { severidade: Severidade; alarme: 'imediato' | 'volume'; descricao: string }>;
 
 export type EventoDeSeguranca = keyof typeof EVENTOS_DE_SEGURANCA;
@@ -142,6 +152,20 @@ export const MOTIVOS_DE_SEGURANCA = [
   'conta_existente',
   // R2 do parecer do #205: o expurgo das ativações não leu a trilha e reteve a linha.
   'expurgo_da_ativacao',
+  // B13: troca do admin único (motivos da lista fechada do pedido e de quem encerrou).
+  'troca_do_admin',
+  'perdeu_senha_e_fator',
+  'titular_indisponivel',
+  'suspeita_de_invasao',
+  'login_da_conta_antiga',
+  'login_da_conta_substituida',
+  'senha_da_conta_substituida',
+  'conclusao_da_troca',
+  'contestacao_da_troca',
+  'contrato',
+  'dpo',
+  'titular',
+  'sistema',
 ] as const;
 export const REGRAS_DE_SEGURANCA = [
   'paginas_de_pacientes',

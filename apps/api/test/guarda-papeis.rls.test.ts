@@ -72,10 +72,17 @@ const ESPERADO: Readonly<Record<Papel, Esperado>> = {
       // Recuperação (0068) e ativação do fundador (0076): DELETE só pelo expurgo de 30 dias (0070, 0079).
       'identidade.recuperacao': 'DELETE,INSERT,SELECT,UPDATE',
       'identidade.ativacao_do_fundador': 'DELETE,INSERT,SELECT,UPDATE',
+      // Troca do admin único (0082, B13): leitura, expurgo de 13 meses (o trigger só deixa a troca encerrada sair) e,
+      // por coluna, só estado e quem encerrou (contestação, suspensão no login, ativação e conclusão).
+      'identidade.troca_do_admin': 'DELETE,SELECT',
     },
-    colunas: {},
+    colunas: {
+      'identidade.troca_do_admin.estado': 'UPDATE',
+      'identidade.troca_do_admin.encerrada_por': 'UPDATE',
+    },
     funcoes: [],
     efetivas: {
+      'identidade.troca_do_admin': 'DELETE,SELECT,UPDATE',
       'identidade.usuario': 'INSERT,SELECT,UPDATE',
       'identidade.conta': 'INSERT,SELECT,UPDATE',
       'identidade.sessao': 'DELETE,INSERT,SELECT,UPDATE',
@@ -91,6 +98,8 @@ const ESPERADO: Readonly<Record<Papel, Esperado>> = {
     tabelas: {
       // 0080: só insere a ativação (sem UPDATE nem DELETE).
       'identidade.ativacao_do_fundador': 'INSERT',
+      // 0082 (B13, P7): grava o pedido da troca; o trigger o faz nascer `aguardando`.
+      'identidade.troca_do_admin': 'INSERT',
       // Clínica, vínculo e trilha, sob o RLS da clínica do contexto.
       'public.tenants': 'INSERT,SELECT',
       'public.clinic_members': 'INSERT,SELECT',
@@ -99,12 +108,35 @@ const ESPERADO: Readonly<Record<Papel, Esperado>> = {
     colunas: {
       // Repetição do pedido: só o id (nem o hash do token, nem o HMAC do e-mail).
       'identidade.ativacao_do_fundador.id': 'SELECT',
+      // 0082: a reemissão da troca vê se o token venceu sem uso (sem o hash nem o HMAC).
+      'identidade.ativacao_do_fundador.troca_id': 'SELECT',
+      'identidade.ativacao_do_fundador.usado_em': 'SELECT',
+      'identidade.ativacao_do_fundador.expira_em': 'SELECT',
       // Prova da conta nascida da ativação (C3). Sem `email` (R1 do #207): busca e conferência só pelas funções.
       'identidade.usuario.id': 'SELECT',
       'identidade.usuario.clinica_de_origem': 'SELECT',
+      // 0082: a troca sem o HMAC do e-mail; UPDATE só de estado e de quem encerrou (o trigger confere o grafo, R3).
+      'identidade.troca_do_admin.id': 'SELECT',
+      'identidade.troca_do_admin.clinica_id': 'SELECT',
+      'identidade.troca_do_admin.usuario_antigo': 'SELECT',
+      'identidade.troca_do_admin.usuario_novo': 'SELECT',
+      'identidade.troca_do_admin.operador_pedido': 'SELECT',
+      'identidade.troca_do_admin.motivo': 'SELECT',
+      'identidade.troca_do_admin.chamado': 'SELECT',
+      'identidade.troca_do_admin.contrato': 'SELECT',
+      'identidade.troca_do_admin.pedido_em': 'SELECT',
+      'identidade.troca_do_admin.libera_em': 'SELECT',
+      'identidade.troca_do_admin.estado': 'SELECT,UPDATE',
+      'identidade.troca_do_admin.encerrada_em': 'SELECT',
+      'identidade.troca_do_admin.encerrada_por': 'SELECT,UPDATE',
+      'identidade.troca_do_admin.reemissoes': 'SELECT',
+      'identidade.troca_do_admin.conta_antiga_suspensa': 'SELECT',
+      // 0082: revogação do vínculo inerte da troca encerrada, pelo sentinela (o clinic_members_guard confere).
+      'public.clinic_members.revoked_by': 'UPDATE',
+      'public.clinic_members.revoked_at': 'UPDATE',
     },
-    // Contexto (clínica e sessão de SISTEMA, sem app_set_user), policy do portal, cadeia da trilha, prova da 0078 e as
-    // duas funções pela chave do e-mail (R1 do #207).
+    // Contexto (clínica e sessão de SISTEMA, sem app_set_user), policy do portal, cadeia da trilha, prova da 0078, as
+    // duas funções pela chave do e-mail (R1 do #207) e as funções estreitas da troca do admin (0082).
     funcoes: [
       'app_audit_chain_tail(uuid)',
       'app_current_tenant()',
@@ -116,12 +148,21 @@ const ESPERADO: Readonly<Record<Papel, Esperado>> = {
       'app_trilha_do_provisionamento(uuid,text,text,uuid)',
       'identidade.conta_por_email(text)',
       'identidade.email_da_conta_confere(uuid,text)',
+      'identidade.admins_com_fator(uuid[])',
+      'identidade.conta_admin_apta(uuid)',
+      'identidade.contagem_admin_unico(uuid,uuid)',
+      'identidade.derrubar_sessoes_da_troca(uuid)',
+      'identidade.reativar_conta_da_troca(uuid)',
+      'identidade.emitir_ativacao_da_troca(uuid,uuid,text)',
+      'identidade.emitir_fator_da_troca(uuid,uuid,text)',
+      'identidade.encerrar_tokens_da_troca(uuid)',
     ],
     efetivas: {
       'identidade.ativacao_do_fundador': 'INSERT,SELECT',
       'identidade.usuario': 'SELECT',
+      'identidade.troca_do_admin': 'INSERT,SELECT,UPDATE',
       'public.tenants': 'INSERT,SELECT',
-      'public.clinic_members': 'INSERT,SELECT',
+      'public.clinic_members': 'INSERT,SELECT,UPDATE',
       'public.audit_log': 'INSERT,SELECT',
     },
   },
@@ -357,7 +398,7 @@ describe('guarda dos papéis: autoteste (a guarda mede algo; tudo desfeito no RO
       (tx) => colunasDo(tx, 'app_provisionamento'),
     );
     expect(visto).not.toEqual(ESPERADO.app_provisionamento.colunas);
-    expect(visto['identidade.ativacao_do_fundador.usado_em']).toBe('UPDATE');
+    expect(visto['identidade.ativacao_do_fundador.usado_em']).toBe('SELECT,UPDATE');
     expect(await colunasDo(sql, 'app_provisionamento')).toEqual(ESPERADO.app_provisionamento.colunas);
   });
 
