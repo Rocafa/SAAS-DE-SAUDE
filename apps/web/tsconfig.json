@@ -12,6 +12,7 @@
     "declaration": false,
     "sourceMap": false,
     "exactOptionalPropertyTypes": false,
+    "allowImportingTsExtensions": true,
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./*"] }
   },

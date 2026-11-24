@@ -5,7 +5,8 @@
     "outDir": "dist",
     "types": ["node"],
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src", "test", "*.mts"]
 }
