@@ -838,3 +838,7 @@ destravando a auditoria de todos.
   (viva voz obrigatória, `mesmo_operador` recusado), conclusão só no TOTP, suspensão por login da conta antiga,
   contestação, alarme `CONTA_SUBSTITUIDA_ENTROU`, guarda dos papéis e runbook. CI verde (16 checks; RLS com 9 testes).
   Fora: Terraform (o tf está no #204), fase `retomar`, dias úteis, aviso no app e RIPD. Enviado ao Guardião.
+- **Guardião no #239: aprovado com ressalvas.** R1–R5 conferidas no código; desvios aceitos. Condição para o merge: a
+  suspensão pelo login da conta antiga precisa derrubar tokens e sessões da conta nova e recusar o cadastro do fator
+  fora de `ativada`. Menores: limitar as transições do `app_auth`; `TRILHA_NAO_GRAVADA` na contestação parcial.
+  Terraform, RIPD e aviso no app bloqueiam o B13 em produção, não o merge. Correções pedidas ao agente.
