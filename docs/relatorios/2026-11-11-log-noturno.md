@@ -842,3 +842,5 @@ destravando a auditoria de todos.
   suspensão pelo login da conta antiga precisa derrubar tokens e sessões da conta nova e recusar o cadastro do fator
   fora de `ativada`. Menores: limitar as transições do `app_auth`; `TRILHA_NAO_GRAVADA` na contestação parcial.
   Terraform, RIPD e aviso no app bloqueiam o B13 em produção, não o merge. Correções pedidas ao agente.
+- Em paralelo: atualização do RIPD da identidade para o B13 (§3, §4, §5 item 8, §5a, §8) no #238, um dos itens que
+  bloqueiam o B13 em produção.
