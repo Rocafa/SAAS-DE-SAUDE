@@ -48,6 +48,7 @@ import type {
   Repeticao,
   StatusAgendamento,
   TipoAtendimento,
+  TrocaDoAdminEmJanela,
   Usuario,
 } from './tipos';
 import { comTruncado } from './tipos';
@@ -76,6 +77,8 @@ export type ApiHttpPacientesAgenda = Pick<
   | 'pendenciasDoDia'
   | 'buscarPacientes'
   | 'esquecerCache'
+  | 'trocaDoAdminEmJanela'
+  | 'contestarTrocaDoAdmin'
 >;
 
 export interface OpcoesHttp {
@@ -142,6 +145,8 @@ export const MENSAGENS = {
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',
   faltaTipo: 'Falta o tipo de atendimento. Escolha um da lista.',
+  mfaRecente:
+    'Por segurança, confirme que é você: saia, entre de novo com a senha e o código do aplicativo autenticador e repita em até 15 minutos.',
 } as const;
 
 const NOMES_CAMPOS: Record<string, string> = {
@@ -175,6 +180,7 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
   }
   if (status === 401) return new ErroApi(MENSAGENS.sessao, 401);
   if (status === 403) {
+    if (codigo === 'mfa_recente_obrigatorio') return new ErroApi(MENSAGENS.mfaRecente, 403, codigo);
     if (codigo === 'assinatura_bloqueia_escrita' || codigo === 'janela_de_saida_encerrada') return new ErroApi(MENSAGENS.assinatura, 403, codigo);
     if (codigo === 'conferencia_exige_perfil') return new ErroApi(MENSAGENS.conferenciaPerfil, 403, codigo);
     if (codigo === 'perfil_nao_registrado') return new ErroApi(MENSAGENS.perfilNaoRegistrado, 403, codigo);
@@ -706,6 +712,20 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
       const ids = series.get(serieId) ?? [];
       await Promise.all(ids.map(cancelar));
       series.delete(serieId);
+    },
+    /** B13: a API decide (conta antiga, clínica da sessão); o adaptador só confere a forma e nunca envia clínica. */
+    async trocaDoAdminEmJanela(): Promise<TrocaDoAdminEmJanela | null> {
+      const r = await chamar<{ troca?: unknown }>('GET', '/sessao/troca-do-admin');
+      const t = r?.troca as { liberaEm?: unknown; suspensa?: unknown } | null | undefined;
+      if (t === null || t === undefined) return null;
+      if (typeof t.liberaEm !== 'string' || Number.isNaN(Date.parse(t.liberaEm)) || typeof t.suspensa !== 'boolean') {
+        throw new ErroApi(MENSAGENS.servidor, 200, 'resposta_invalida');
+      }
+      // Só os dois campos do contrato seguem para a tela, mesmo que o servidor mande mais.
+      return { liberaEm: t.liberaEm, suspensa: t.suspensa };
+    },
+    async contestarTrocaDoAdmin(): Promise<void> {
+      await chamar('POST', '/sessao/troca-do-admin/contestar', {});
     },
     async pendenciasDoDia(data): Promise<Pendencia[]> {
       const doDia = await listarAgendamentos({ de: data, ate: data });

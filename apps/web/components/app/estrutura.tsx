@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { SemInternet } from '@/components/ui/estados';
 import type { Alvo } from '@/lib/ajudante/catalogo';
 import { cn } from '@/lib/utils';
+import { AvisoTrocaDoAdmin } from './aviso-troca-do-admin';
 import { useDados, useOnline } from './dados';
 
 interface ItemMenu {
@@ -79,6 +80,7 @@ export function Estrutura({ children }: { children: ReactNode }) {
 
       <div className="flex min-h-dvh flex-col pb-52 md:pb-28">
         {!online && <SemInternet />}
+        <AvisoTrocaDoAdmin />
         {modo === 'fake' && (
           <p className="border-b-2 border-borda bg-superficie-2 px-4 py-2 text-center text-[0.95rem] font-bold">
             Demonstração com pacientes fictícios. Nenhum dado é real nem é gravado de verdade.

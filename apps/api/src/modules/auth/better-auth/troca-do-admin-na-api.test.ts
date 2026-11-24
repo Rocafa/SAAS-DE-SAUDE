@@ -6,7 +6,7 @@ import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ativacaoDoFundador, recuperacao, sessao, trocaDoAdmin } from '../../../db/identidade';
 import { zerarJanelasDoLog } from '../../../security/log-de-seguranca';
-import { aoLoginCompletoDaConta, contestarTrocaDoAdmin } from './troca-do-admin-na-api';
+import { aoLoginCompletoDaConta, contestarTrocaDoAdmin, trocaEmJanelaDaSessao } from './troca-do-admin-na-api';
 
 const PEDIDO = '7d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 const CLINICA = '2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -84,6 +84,54 @@ describe('ressalva 1 do #239: login completo da conta antiga com a troca ativada
     await aoLoginCompletoDaConta({ dbAuth: dbAuth as never, dbClinica: {} as never }, ANTIGO);
     expect(mexidas).toEqual([trocaDoAdmin]);
     expect(eventos().some((e) => e['evento'] === 'TROCA_DO_ADMIN_SUSPENSA')).toBe(false);
+  });
+});
+
+describe('aviso fixo do app: troca em janela para a sessão', () => {
+  const LIBERA = new Date('2026-11-26T15:00:00.000Z');
+  /** Clínica falsa: a transação do RLS devolve `vinculos` e anota os comandos de contexto. */
+  function clinica(vinculos: unknown[]) {
+    const contexto: string[] = [];
+    const db = {
+      transaction: (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          execute: (q: { queryChunks?: unknown[] }) => {
+            contexto.push(JSON.stringify(q.queryChunks ?? ''));
+            return Promise.resolve(undefined);
+          },
+          select: () => cadeia(vinculos),
+        }),
+    };
+    return { db, contexto };
+  }
+
+  it('conta antiga com vínculo ativo na clínica da sessão: só o fim da janela e a suspensão', async () => {
+    const c = clinica([{ id: 'm1' }]);
+    const dbAuth = { select: () => cadeia([{ liberaEm: LIBERA, estado: 'aguardando', usuarioNovo: NOVO, chamado: 'SUP-77' }]) };
+    const r = await trocaEmJanelaDaSessao({ dbAuth: dbAuth as never, dbClinica: c.db as never }, ANTIGO, CLINICA);
+    // Minimização: nem conta nova, nem chamado, nem e-mail, mesmo que a leitura traga mais.
+    expect(r).toEqual({ liberaEm: LIBERA.toISOString(), suspensa: false });
+    // A conferência do vínculo roda sob o RLS da clínica da sessão, como a própria pessoa.
+    expect(c.contexto.join(' ')).toContain('app_set_tenant');
+    expect(c.contexto.join(' ')).toContain('app_set_user');
+  });
+
+  it('troca suspensa (login completo da conta antiga): o aviso continua, marcado como suspensa', async () => {
+    const dbAuth = { select: () => cadeia([{ liberaEm: LIBERA, estado: 'suspensa' }]) };
+    const r = await trocaEmJanelaDaSessao({ dbAuth: dbAuth as never, dbClinica: clinica([{ id: 'm1' }]).db as never }, ANTIGO, CLINICA);
+    expect(r).toEqual({ liberaEm: LIBERA.toISOString(), suspensa: true });
+  });
+
+  it('sem troca em andamento para a pessoa nesta clínica: null, sem abrir a clínica', async () => {
+    const c = clinica([{ id: 'm1' }]);
+    const dbAuth = { select: () => cadeia([]) };
+    expect(await trocaEmJanelaDaSessao({ dbAuth: dbAuth as never, dbClinica: c.db as never }, ANTIGO, CLINICA)).toBeNull();
+    expect(c.contexto).toEqual([]);
+  });
+
+  it('troca existe, mas sem vínculo ativo na clínica (RLS não vê): null', async () => {
+    const dbAuth = { select: () => cadeia([{ liberaEm: LIBERA, estado: 'aguardando' }]) };
+    expect(await trocaEmJanelaDaSessao({ dbAuth: dbAuth as never, dbClinica: clinica([]).db as never }, ANTIGO, CLINICA)).toBeNull();
   });
 });
 

@@ -220,6 +220,42 @@ export async function contestarTrocaDoAdmin(b: BancosDaTrocaNaApi, userId: strin
   return true;
 }
 
+/** O que o aviso fixo do app recebe (minimização): nada do e-mail novo, da conta nova, do chamado nem de quem pediu. */
+export interface TrocaEmJanela {
+  /** Fim da janela de 48 h (ISO 8601, UTC). */
+  readonly liberaEm: string;
+  /** A troca está parada (login completo da conta antiga ou suspeita), à espera da decisão do DPO. */
+  readonly suspensa: boolean;
+}
+
+/**
+ * Aviso fixo do app (seção 5, canal "App, pela conta antiga"): a troca em andamento em que a pessoa da sessão é a
+ * conta ANTIGA, NA clínica da sessão (o tenant vem só da sessão no servidor). Mesmos estados que o "não fui eu"
+ * aceita. Outra clínica, outro membro e a conta nova não veem nada. Defesa em profundidade: o vínculo ativo da pessoa
+ * nessa clínica é conferido na própria clínica, sob o RLS (sem vínculo, sem aviso).
+ */
+export async function trocaEmJanelaDaSessao(b: BancosDaTrocaNaApi, userId: string, clinicaId: string): Promise<TrocaEmJanela | null> {
+  const [t] = await b.dbAuth
+    .select({ liberaEm: trocaDoAdmin.liberaEm, estado: trocaDoAdmin.estado })
+    .from(trocaDoAdmin)
+    .where(and(eq(trocaDoAdmin.usuarioAntigo, userId), eq(trocaDoAdmin.clinicaId, clinicaId), inArray(trocaDoAdmin.estado, [...ESTADOS_ABERTOS_DA_TROCA])))
+    .limit(1);
+  if (!t) return null;
+  const vinculo = await withTenant(
+    b.dbClinica,
+    clinicaId as TenantId,
+    (ct) =>
+      ct
+        .select({ id: clinicMembers.id })
+        .from(clinicMembers)
+        .where(and(eq(clinicMembers.tenantId, clinicaId), eq(clinicMembers.userId, userId), isNull(clinicMembers.revokedAt)))
+        .limit(1),
+    userId,
+  );
+  if (vinculo.length === 0) return null;
+  return { liberaEm: t.liberaEm.toISOString(), suspensa: t.estado === 'suspensa' };
+}
+
 /** Job `identidade-expurgo`: refaz a conclusão das trocas `ativada` cuja conta nova já tem o TOTP (R1). */
 export async function concluirTrocasPendentes(b: BancosDaTrocaNaApi): Promise<number> {
   const prontas = await b.dbAuth

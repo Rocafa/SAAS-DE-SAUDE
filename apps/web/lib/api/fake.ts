@@ -36,6 +36,7 @@ import type {
   Recibo,
   StatusAgendamento,
   TipoAtendimento,
+  TrocaDoAdminEmJanela,
   Usuario,
 } from './tipos';
 
@@ -167,7 +168,15 @@ export interface OpcoesFake {
   simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
   /** Papel de quem ENTRA na demonstração (padrão: admin). `entrarComo` troca depois. */
   papel?: Papel;
+  /**
+   * B13, para a demonstração do aviso fixo: uma troca do admin único pedida para a ADMINISTRADORA da demonstração
+   * (`u1`), com a janela de 48 h aberta (`em_janela`, termina em 36 h) ou parada à espera do DPO (`suspensa`).
+   */
+  trocaDoAdmin?: 'em_janela' | 'suspensa';
 }
+
+/** Conta antiga da troca simulada (a administradora da demonstração). */
+const CONTA_ANTIGA_DEMO = 'u1';
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   const agora = opcoes.agora ?? new Date();
@@ -303,6 +312,9 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     auditoria.unshift({ id: novoId('v'), quando: `${hojeIso} ${new Date().toTimeString().slice(0, 5)}`, quem: usuario.nome, acao });
   let assinatura: Assinatura = { plano: 'Clínica (até 5 profissionais)', valorMensal: 349, status: 'ativa', proximaCobranca: paraIsoLocal(somarDias(agora, 18)) };
   const exportacoes: PedidoExportacao[] = [];
+  let trocaDoAdmin: TrocaDoAdminEmJanela | null = opcoes.trocaDoAdmin
+    ? { liberaEm: new Date(agora.getTime() + 36 * 3_600_000).toISOString(), suspensa: opcoes.trocaDoAdmin === 'suspensa' }
+    : null;
   const anexos: Anexo[] = vazio
     ? []
     : [
@@ -329,6 +341,14 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   return {
     usuarioAtual: () => resposta<Usuario>(usuario),
     usuariosDemo: () => resposta(USUARIOS),
+    // Como a API: só a conta antiga vê a própria troca; qualquer outra pessoa da clínica recebe null.
+    trocaDoAdminEmJanela: () => resposta(usuario.id === CONTA_ANTIGA_DEMO ? trocaDoAdmin : null),
+    async contestarTrocaDoAdmin() {
+      if (usuario.id !== CONTA_ANTIGA_DEMO || !trocaDoAdmin) throw new ErroApi(MENSAGENS.naoEncontrado, 404);
+      trocaDoAdmin = null;
+      registrar('Contestou o pedido de troca do administrador ("Não fui eu")');
+      await resposta(null);
+    },
     async registrarEmissaoDocumento(d) {
       if (d.tipo === 'atestado') {
         if (!ehPerfilClinico(usuario)) throw new Error('O atestado é emitido pelo profissional que atendeu.');
