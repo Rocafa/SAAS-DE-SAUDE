@@ -826,3 +826,8 @@ destravando a auditoria de todos.
   atualizado. P1, P2, P5 e P6 no guia do sócio, com o meu voto nas recomendações.
 - Próximo: código do B13 sobre o #238, com as recomendações como padrão (constantes documentadas) até os sócios
   decidirem.
+- #233 (5d38396, fa70aee): item 3 implementado. Tentativa (`ai_attempt`) commitada antes do envio, chamada fora de
+  transação, resultado (`ai_result`) noutra transação curta; teste com pool de 1 conexão. Trava do provedor real
+  retirada. CI verde (13 jobs); vitest 1178, build e boot ok. Enviado ao Guardião, com a pergunta se retirar a trava
+  antecipa o provedor real antes da D3 (envio sem pseudonimizar).
+- Em andamento: código do B13 sobre o #238.
