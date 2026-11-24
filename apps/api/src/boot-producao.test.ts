@@ -65,7 +65,7 @@ function providerDe(mod: DynamicModule, alvo: unknown, token: symbol): Provider 
 
 describe('boot em NODE_ENV=production: só a D4 impede a subida', () => {
   const original = { ...process.env };
-  const nomes = [...Object.keys(ambienteDeProducao()), 'REDIS_URL', 'AWS_DEFAULT_REGION', 'FIELD_KEYS_DEV_ROOT_SECRET', 'SUPPORT_PSEUDONYM_KEY', 'AI_PROVIDER'];
+  const nomes = [...Object.keys(ambienteDeProducao()), 'REDIS_URL', 'AWS_DEFAULT_REGION', 'FIELD_KEYS_DEV_ROOT_SECRET', 'SUPPORT_PSEUDONYM_KEY'];
   let env: Record<string, string>;
 
   beforeEach(() => {
@@ -169,16 +169,5 @@ describe('boot em NODE_ENV=production: só a D4 impede a subida', () => {
     const tudo = saidas.join('\n');
     for (const nome of ['PAGINATION_CURSOR_KEY', 'RATE_LIMIT_HASH_KEY']) expect(tudo).not.toContain(env[nome]);
     expect(tudo).not.toContain(ARN_HMAC);
-  });
-
-  // Trava do item 3 do veto do Guardião no #227: chamada ao modelo ainda dentro da transação da trilha.
-  it.each(['vertex-gemini-sp', 'maritaca', 'openai'])('AI_PROVIDER=%s (provedor real) derruba o boot com mensagem clara', (id) => {
-    process.env.AI_PROVIDER = id;
-    expect(() => AppModule.forRoot(config, adapters({ kms: kmsDuplo() }))).toThrow(/dentro da transação da trilha de IA/);
-  });
-
-  it.each([undefined, 'fake'])('AI_PROVIDER=%s não aciona a trava: a API monta', (id) => {
-    if (id) process.env.AI_PROVIDER = id;
-    expect(() => AppModule.forRoot(config, adapters({ kms: kmsDuplo() }))).not.toThrow();
   });
 });

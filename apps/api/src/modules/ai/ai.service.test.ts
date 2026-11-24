@@ -1,7 +1,6 @@
 import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
 import { criarAuditoriaFalsa } from '../../../test/apoio-auditoria-ia';
-import { assertTravaDaChamadaIa, CHAMADA_IA_DENTRO_DA_TRANSACAO } from '../audit/registro-ia';
 import { AI_PROVIDER_IDS, AiModule, createProviders, parseAiProvider } from './ai.module';
 import { AiDeniedError, AiService, AiUnavailableError, promptHash, type AiGenerateInput } from './ai.service';
 import type { LlmProvider } from './llm-provider';
@@ -63,7 +62,14 @@ describe('AiService', () => {
     const { service, linhas } = servico([quebrada, boa]);
     const draft = await service.generate(input);
     expect(draft.provenance.providerId).toBe('br-boa');
-    expect(linhas.map((l) => l.metadata.decision)).toEqual(['nao_aplicavel', 'pendente']);
+    // Cada rota: tentativa (antes do envio) + resultado (depois), com o mesmo use_id.
+    expect(linhas.map((l) => l.scope)).toEqual(['ai_attempt', 'ai_result', 'ai_attempt', 'ai_result']);
+    expect(linhas.filter((l) => l.scope === 'ai_result').map((l) => [l.metadata.status, l.metadata.decision])).toEqual([
+      ['erro', 'nao_aplicavel'],
+      ['sucesso', 'pendente'],
+    ]);
+    expect(linhas[1]?.metadata.use_id).toBe(linhas[0]?.metadata.use_id);
+    expect(linhas[3]?.metadata.use_id).toBe(draft.auditId);
   });
 
   it('rota BR falhou e só sobrou rota estrangeira: dado sensível não sai, erro de indisponibilidade', async () => {
@@ -77,9 +83,10 @@ describe('AiService', () => {
   it('prazo estourado cancela a chamada e passa para a próxima rota', async () => {
     const lenta = new FakeLlmProvider({ id: 'br-lenta', delayMs: 1_000 });
     const rapida = new FakeLlmProvider({ id: 'br-rapida' });
-    const { service } = servico([lenta, rapida]);
+    const { service, linhas } = servico([lenta, rapida]);
     const draft = await service.generate({ ...input, timeoutMs: 20 });
     expect(draft.provenance.providerId).toBe('br-rapida');
+    expect(linhas[1]?.metadata).toMatchObject({ status: 'timeout', output_hash: null });
   });
 
   it('resposta bloqueada por filtro de conteúdo não vira rascunho', async () => {
@@ -89,7 +96,12 @@ describe('AiService', () => {
     });
     const { service, linhas } = servico([filtrada]);
     await expect(service.generate(input)).rejects.toBeInstanceOf(AiUnavailableError);
-    expect(linhas[0]?.metadata).toMatchObject({ output_hash: null, decision: 'nao_aplicavel' });
+    expect(linhas[1]?.metadata).toMatchObject({
+      status: 'erro',
+      finish_reason: 'content_filter',
+      output_hash: null,
+      decision: 'nao_aplicavel',
+    });
   });
 });
 
@@ -121,23 +133,8 @@ describe('configuração do provedor (AI_PROVIDER)', () => {
   });
 });
 
-describe('trava: provedor real enquanto a chamada roda na transação (item 3 do veto do #227)', () => {
-  it('a trava está ligada no código atual', () => {
-    expect(CHAMADA_IA_DENTRO_DA_TRANSACAO).toBe(true);
-  });
-
-  it.each(AI_PROVIDER_IDS.filter((id) => id !== 'fake'))('AI_PROVIDER=%s: erro de boot', (id) => {
-    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: id })).toThrow(/dentro da transação da trilha de IA/);
-    expect(() => AiModule.forRoot()).not.toThrow(); // process.env do teste não tem AI_PROVIDER real
-  });
-
-  it('fake ou ausente: sobe; com os eventos separados, a trava deixa passar', () => {
-    expect(() => assertTravaDaChamadaIa({})).not.toThrow();
-    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: 'fake' })).not.toThrow();
-    expect(() => assertTravaDaChamadaIa({ AI_PROVIDER: 'maritaca' }, false)).not.toThrow();
-  });
-
-  it('AiModule: provedor injetado que não é o fake derruba o boot; o fake monta', () => {
+describe('sem trava de provedor real (item 3 do veto do #227 entregue: chamada fora da transação)', () => {
+  it('AiModule monta com provedor injetado que não é o fake', () => {
     const real: LlmProvider = {
       id: 'real-de-teste',
       residency: 'BR',
@@ -145,7 +142,6 @@ describe('trava: provedor real enquanto a chamada roda na transação (item 3 do
       tasks: ['escriba'],
       generate: () => Promise.reject(new Error('não deve ser chamado')),
     };
-    expect(() => AiModule.forRoot({ providers: [real] })).toThrow(/provedor de IA real bloqueado/);
-    expect(() => AiModule.forRoot({ providers: [new FakeLlmProvider()] })).not.toThrow();
+    expect(() => AiModule.forRoot({ providers: [real] })).not.toThrow();
   });
 });

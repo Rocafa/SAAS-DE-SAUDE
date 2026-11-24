@@ -32,17 +32,24 @@ export function criarAuditoriaFalsa(
     agora?: () => Date;
     monotonico?: () => number;
     falharInsert?: boolean;
+    /** Falha só o INSERT deste escopo (ex.: `ai_result`), para provar a tentativa sem resultado. */
+    falharInsertDoEscopo?: string;
     falharCommit?: boolean;
+    /** Status da assinatura da clínica (padrão `active`); `read_only` bloqueia escrita. */
+    assinatura?: string;
     signer?: PseudonymSigner;
     linhasIniciais?: readonly LinhaAuditoriaCapturada[];
   } = {},
 ) {
   const linhas: LinhaAuditoriaCapturada[] = [...(opcoes.linhasIniciais ?? [])];
   const travas: string[] = [];
+  // Linhas só ficam visíveis no COMMIT, como no banco: rollback descarta o que a transação inseriu.
+  let pendentes: LinhaAuditoriaCapturada[] = [];
+  let abertas = 0;
   const tenant = {
     id: ctx.tenantId,
     displayName: 'Clínica fictícia de teste',
-    subscriptionStatus: 'active',
+    subscriptionStatus: opcoes.assinatura ?? 'active',
     cancelledAt: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
   };
@@ -66,8 +73,10 @@ export function criarAuditoriaFalsa(
       if (table !== auditLog) throw new Error('tabela inesperada no teste');
       return {
         values(row: LinhaAuditoriaCapturada) {
-          if (opcoes.falharInsert) return Promise.reject(new Error('falha de auditoria de teste'));
-          linhas.push(row);
+          if (opcoes.falharInsert || opcoes.falharInsertDoEscopo === row.scope) {
+            return Promise.reject(new Error('falha de auditoria de teste'));
+          }
+          pendentes.push(row);
           return Promise.resolve();
         },
       };
@@ -76,14 +85,24 @@ export function criarAuditoriaFalsa(
   const db = {
     async run<T>(tenantId: TenantId, operacao: (tx: TenantTx) => Promise<T>, userId?: string): Promise<T> {
       if (tenantId !== ctx.tenantId || !userId) throw new Error('contexto trocado no teste');
-      const resultado = await operacao(tx);
-      if (opcoes.falharCommit) throw new Error('falha de commit de teste');
-      return resultado;
+      abertas++;
+      pendentes = [];
+      try {
+        const resultado = await operacao(tx);
+        if (opcoes.falharCommit) throw new Error('falha de commit de teste');
+        linhas.push(...pendentes);
+        return resultado;
+      } finally {
+        pendentes = [];
+        abertas--;
+      }
     },
   } as unknown as TenantDatabase;
   return {
     linhas,
     travas,
+    /** Transações abertas agora: o provedor tem de ver 0 (nenhuma conexão presa durante a chamada). */
+    transacoesAbertas: () => abertas,
     auditoria: new AuditoriaIaService(db, opcoes.signer ?? signerDeTeste(), opcoes.agora, opcoes.monotonico),
   };
 }

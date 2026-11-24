@@ -1,7 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { AiService } from './ai.service';
 import type { LlmProvider } from './llm-provider';
-import { assertTravaDaChamadaIa, AuditoriaIaService, CHAMADA_IA_DENTRO_DA_TRANSACAO } from '../audit/registro-ia';
+import { AuditoriaIaService } from '../audit/registro-ia';
 import { FakeLlmProvider } from './providers/fake-llm.provider';
 
 /**
@@ -41,14 +41,7 @@ export function createProviders(id: AiProviderId): LlmProvider[] {
 @Module({})
 export class AiModule {
   static forRoot(options: { providers?: readonly LlmProvider[] } = {}): DynamicModule {
-    assertTravaDaChamadaIa(process.env);
     const providers = options.providers ?? createProviders(parseAiProvider());
-    // A mesma trava vale para provedor injetado: só o fake passa enquanto a chamada roda na transação.
-    if (CHAMADA_IA_DENTRO_DA_TRANSACAO && providers.some((p) => !(p instanceof FakeLlmProvider))) {
-      throw new Error(
-        'provedor de IA real bloqueado: a chamada ao modelo ainda roda dentro da transação da trilha (item 3 do veto do Guardião no #227)',
-      );
-    }
     return {
       module: AiModule,
       providers: [{ provide: AiService, useFactory: (auditoria: AuditoriaIaService) => new AiService(providers, auditoria), inject: [AuditoriaIaService] }],
