@@ -336,7 +336,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
   }
 
   /** MFA recente de quem está na sessão (pedido e aprovação da exportação total, G2). */
-  function conferirMfa(codigo: string): void {
+  function exigirMfa(codigo: string): void {
     if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
     if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
   }
@@ -714,7 +714,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     },
     async pedirExportacao(codigo) {
       exigirAdmin();
-      conferirMfa(codigo);
+      exigirMfa(codigo);
       const confirmacao: PedidoExportacao['confirmacao'] = !ehResponsavelTecnico(usuario)
         ? 'rt'
         : outroAdminAtivo(usuario.id)
@@ -742,7 +742,10 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         throw new ErroApi('Este pedido não está mais aguardando aprovação. Se precisar, faça um pedido novo.', 409, 'pedido_encerrado');
       }
       if (p.confirmacao === 'rt' && !rt) {
-        throw new ErroApi('Só o responsável técnico da clínica aprova a exportação.', 403, 'proibido');
+        if (usuario.id === p.pedidoPor) {
+          throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
+        }
+        throw new ErroApi('Somente o responsável técnico pode aprovar a exportação.', 403, 'responsavel_tecnico_obrigatorio');
       }
       if (p.confirmacao === 'admin') {
         if (usuario.id === p.pedidoPor) {
@@ -756,19 +759,19 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
           throw new ErroApi('Agora a clínica tem outro administrador ativo: faça um pedido novo para ele confirmar.', 403, 'autoaprovacao_proibida');
         }
       }
-      conferirMfa(codigo);
+      exigirMfa(codigo);
       const autoaprovacao = p.confirmacao === 'autoaprovacao';
       // R10: na autoaprovação a janela de segurança é obrigatória; o prazo de 24 h conta da liberação.
       const liberacao = autoaprovacao ? new Date(agora.getTime() + JANELA_SEGURANCA_EXPORTACAO_HORAS * 36e5) : agora;
       p.status = 'pronto';
       p.aprovadoPor = usuario.id;
-      p.autoaprovacao = autoaprovacao;
+      p.aprovacaoAutonoma = autoaprovacao;
       if (autoaprovacao) p.liberadoEm = `${paraIsoLocal(liberacao)} ${String(liberacao.getHours()).padStart(2, '0')}:${String(liberacao.getMinutes()).padStart(2, '0')}`;
       p.expiraEm = paraIsoLocal(somarDias(liberacao, 1));
       p.downloadsRestantes = 3;
       registrar(
         autoaprovacao
-          ? `Responsável técnico aprovou a própria exportação (autoaprovação: quem pediu é o RT; link liberado em ${p.liberadoEm})`
+          ? `Responsável técnico autônomo aprovou a própria exportação (autoaprovação; link liberado em ${p.liberadoEm})`
           : p.confirmacao === 'admin'
             ? 'Administrador confirmou a exportação pedida pelo responsável técnico'
             : 'Responsável técnico aprovou a exportação',

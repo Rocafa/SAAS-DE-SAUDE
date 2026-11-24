@@ -299,7 +299,7 @@ export interface PedidoExportacao {
   /** Identidade de quem aprovou, autenticado e com MFA próprio. */
   aprovadoPor?: string;
   /** `true` quando o RT autônomo aprovou o próprio pedido: registrado na auditoria. */
-  autoaprovacao?: boolean;
+  aprovacaoAutonoma?: boolean;
   /** Janela de segurança (R10), obrigatória na autoaprovação: o link só é liberado a partir daqui ("AAAA-MM-DD HH:MM"). */
   liberadoEm?: string;
   /** `aguardando_rt` = aguardando a confirmação prevista em `confirmacao`; `cancelado` = "Não fui eu". */

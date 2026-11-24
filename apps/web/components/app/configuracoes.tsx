@@ -402,7 +402,7 @@ function SecaoPrivacidade() {
   const [carregandoPedido, setCarregandoPedido] = useState(true);
   const [tentativaPedido, setTentativaPedido] = useState(0);
   const [aprovando, setAprovando] = useState(false);
-  const [codigoRt, setCodigoRt] = useState('');
+  const [codigoAprovacao, setCodigoAprovacao] = useState('');
   const usuarioId = usuario?.id;
   const papel = usuario?.papel;
   const admin = papel === 'admin';
@@ -411,6 +411,8 @@ function SecaoPrivacidade() {
   const podeVer = admin || rt;
 
   useEffect(() => {
+    // MFA pertence a quem está na sessão agora: nunca carregar o código ao trocar de usuário.
+    setCodigoAprovacao('');
     if (!usuarioId || !podeVer) {
       setCarregandoPedido(false);
       return;
@@ -454,8 +456,8 @@ function SecaoPrivacidade() {
     setAprovando(true);
     setErroAprovacao('');
     try {
-      setPedido(await api.aprovarExportacao(pedido.id, codigoRt));
-      setCodigoRt('');
+      setPedido(await api.aprovarExportacao(pedido.id, codigoAprovacao));
+      setCodigoAprovacao('');
       atualizar();
     } catch (err) {
       setErroAprovacao(err instanceof Error ? err.message : 'Não deu para aprovar.');
@@ -537,8 +539,9 @@ function SecaoPrivacidade() {
                   </p>
                 )}
                 <Campo id="x-cod-rt" rotulo="Seu código do aplicativo autenticador (6 números)">
-                  <input id="x-cod-rt" inputMode="numeric" autoComplete="one-time-code" value={codigoRt} onChange={(e) => setCodigoRt(e.target.value)} className={CAMPO} />
+                  <input id="x-cod-rt" inputMode="numeric" autoComplete="one-time-code" value={codigoAprovacao} onChange={(e) => setCodigoAprovacao(e.target.value)} className={CAMPO} />
                 </Campo>
+                <p className="text-texto-suave">Na demonstração, use 123456.</p>
                 {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
                 <Botao type="submit" variante="contorno" className="self-start" disabled={aprovando}>
                   <ShieldCheck aria-hidden />

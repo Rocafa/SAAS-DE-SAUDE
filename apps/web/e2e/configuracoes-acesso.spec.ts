@@ -1,4 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+/** Troca de usuário por navegação client-side: o pedido fictício vive só na memória da aba. */
+async function entrarComo(page: Page, nome: RegExp) {
+  await page.getByRole('link', { name: 'Mais', exact: true }).click();
+  const usuario = page.getByRole('button', { name: nome });
+  await usuario.click();
+  await expect(usuario).toHaveAttribute('aria-pressed', 'true');
+}
+
+async function pedirExportacao(page: Page) {
+  await page.getByRole('button', { name: 'Baixar todos os dados da clínica' }).click();
+  await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
+  await page.getByLabel(/Estou ciente/).check();
+  await page.getByRole('button', { name: 'Confirmar pedido' }).click();
+}
 
 test.describe('Garantias na tela', () => {
   test('G4: cancelar a assinatura em até 3 cliques a partir de "Mais", sem ligação', async ({ page }) => {
@@ -33,18 +48,17 @@ test.describe('Garantias na tela', () => {
     await expect(page.getByRole('button', { name: /Aprovar como responsável técnico/ })).toHaveCount(0);
     await expect(page.getByText(/Só o responsável técnico aprova/)).toBeVisible();
 
-    await page.getByRole('link', { name: 'Mais', exact: true }).click();
-    const rt = page.getByRole('button', { name: /Dra\. Lúcia Prates \(administradora/ });
-    await rt.click();
-    await expect(rt).toHaveAttribute('aria-pressed', 'true');
+    await entrarComo(page, /Dra\. Lúcia Prates \(administradora/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
     await expect(page.getByText(/registrada como autoaprovação/)).toHaveCount(0);
     await page.getByLabel(/Seu código do aplicativo autenticador/).fill('000000');
     await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'Código não confere' })).toBeVisible();
+    await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
     await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
-    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
+    // Duplo clique não aprova duas vezes (o 409 e o `aprovando` seguram): uma linha só na auditoria.
+    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).dblclick();
     await expect(page.getByText(/O link foi para o e-mail de quem pediu/)).toBeVisible();
     await expect(page.getByText(/pode ser baixado 3 vezes/)).toBeVisible();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toHaveCount(0);
@@ -55,22 +69,14 @@ test.describe('Garantias na tela', () => {
 
   test('G2: o RT pede, não se autoaprova (há outro admin ativo) e a outra administradora confirma com o código dela', async ({ page }) => {
     await page.goto('/mais');
-    const rt = page.getByRole('button', { name: /Dra\. Lúcia Prates \(administradora/ });
-    await rt.click();
-    await expect(rt).toHaveAttribute('aria-pressed', 'true');
+    await entrarComo(page, /Dra\. Lúcia Prates \(administradora/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
-    await page.getByRole('button', { name: 'Baixar todos os dados da clínica' }).click();
-    await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
-    await page.getByLabel(/Estou ciente/).check();
-    await page.getByRole('button', { name: 'Confirmar pedido' }).click();
+    await pedirExportacao(page);
     await expect(page.getByText(/Falta a confirmação de outro administrador/)).toBeVisible();
     await expect(page.getByRole('button', { name: /Aprovar como responsável técnico|Confirmar como administrador/ })).toHaveCount(0);
     await expect(page.getByText(/registrada como autoaprovação/)).toHaveCount(0);
 
-    await page.getByRole('link', { name: 'Mais', exact: true }).click();
-    const admin = page.getByRole('button', { name: /Administradora \(demonstração\)/ });
-    await admin.click();
-    await expect(admin).toHaveAttribute('aria-pressed', 'true');
+    await entrarComo(page, /Administradora \(demonstração\)/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
     await expect(page.getByText(/Falta a confirmação de outro administrador/)).toBeVisible();
     await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
