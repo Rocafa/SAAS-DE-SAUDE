@@ -1,13 +1,19 @@
-import type { TenantId } from '@plataforma/shared';
+import type { RequestContext, TenantId, UserId } from '@plataforma/shared';
 import { describe, expect, it } from 'vitest';
+import { criarAuditoriaFalsa } from '../../../test/apoio-auditoria-ia';
 import { AI_PROVIDER_IDS, createProviders, parseAiProvider } from './ai.module';
 import { AiDeniedError, AiService, AiUnavailableError, promptHash, type AiGenerateInput } from './ai.service';
+import type { LlmProvider } from './llm-provider';
 import { FakeLlmProvider } from './providers/fake-llm.provider';
 
-const tenantId = 'tenant-sintetico-1' as TenantId;
+const ctx: RequestContext = {
+  tenantId: 'tenant-sintetico-1' as TenantId,
+  userId: '22222222-2222-4222-8222-222222222222' as UserId,
+  roles: ['profissional'],
+};
 const fixedNow = new Date('2026-10-10T12:00:00.000Z');
 const input: AiGenerateInput = {
-  tenantId,
+  ctx,
   task: 'escriba',
   niche: 'fisio_to',
   sensitivity: 'sensivel',
@@ -17,11 +23,17 @@ const input: AiGenerateInput = {
   input: 'Transcrição sintética.',
 };
 
+function servico(providers: readonly LlmProvider[]) {
+  const { auditoria, linhas } = criarAuditoriaFalsa(ctx, { agora: () => fixedNow });
+  return { service: new AiService(providers, auditoria), linhas };
+}
+
 describe('AiService', () => {
   it('devolve rascunho com proveniência e revisão humana obrigatória', async () => {
-    const service = new AiService([new FakeLlmProvider({ version: '1.2.3' })], () => fixedNow);
+    const { service } = servico([new FakeLlmProvider({ version: '1.2.3' })]);
     const draft = await service.generate(input);
     expect(draft.requiresHumanReview).toBe(true);
+    expect(draft.auditId).toMatch(/^[0-9a-f-]{36}$/);
     expect(draft.provenance).toEqual({
       providerId: 'fake-br',
       model: { provider: 'fake', name: 'fake-llm', version: '1.2.3' },
@@ -38,29 +50,34 @@ describe('AiService', () => {
 
   it('recusa do paciente: nega sem chamar nenhum modelo', async () => {
     const fake = new FakeLlmProvider();
-    const service = new AiService([fake]);
+    const { service, linhas } = servico([fake]);
     await expect(service.generate({ ...input, patientConsent: 'recusou' })).rejects.toBeInstanceOf(AiDeniedError);
     expect(fake.calls).toBe(0);
+    expect(linhas[0]?.action).toBe('ai_refusal');
   });
 
-  it('rota BR falhou: tenta a próxima rota BR', async () => {
+  it('rota BR falhou: tenta a próxima rota BR e audita as duas tentativas', async () => {
     const quebrada = new FakeLlmProvider({ id: 'br-quebrada', failWith: new Error('503') });
     const boa = new FakeLlmProvider({ id: 'br-boa' });
-    const draft = await new AiService([quebrada, boa]).generate(input);
+    const { service, linhas } = servico([quebrada, boa]);
+    const draft = await service.generate(input);
     expect(draft.provenance.providerId).toBe('br-boa');
+    expect(linhas.map((l) => l.metadata.decision)).toEqual(['nao_aplicavel', 'pendente']);
   });
 
   it('rota BR falhou e só sobrou rota estrangeira: dado sensível não sai, erro de indisponibilidade', async () => {
     const quebrada = new FakeLlmProvider({ id: 'br-quebrada', failWith: new Error('503') });
     const estrangeira = new FakeLlmProvider({ id: 'ext', residency: 'EXTERIOR' });
-    await expect(new AiService([quebrada, estrangeira]).generate(input)).rejects.toBeInstanceOf(AiUnavailableError);
+    const { service } = servico([quebrada, estrangeira]);
+    await expect(service.generate(input)).rejects.toBeInstanceOf(AiUnavailableError);
     expect(estrangeira.calls).toBe(0);
   });
 
   it('prazo estourado cancela a chamada e passa para a próxima rota', async () => {
     const lenta = new FakeLlmProvider({ id: 'br-lenta', delayMs: 1_000 });
     const rapida = new FakeLlmProvider({ id: 'br-rapida' });
-    const draft = await new AiService([lenta, rapida]).generate({ ...input, timeoutMs: 20 });
+    const { service } = servico([lenta, rapida]);
+    const draft = await service.generate({ ...input, timeoutMs: 20 });
     expect(draft.provenance.providerId).toBe('br-rapida');
   });
 
@@ -69,7 +86,9 @@ describe('AiService', () => {
       id: 'br-filtro',
       responder: () => ({ text: '', finishReason: 'content_filter' }),
     });
-    await expect(new AiService([filtrada]).generate(input)).rejects.toBeInstanceOf(AiUnavailableError);
+    const { service, linhas } = servico([filtrada]);
+    await expect(service.generate(input)).rejects.toBeInstanceOf(AiUnavailableError);
+    expect(linhas[0]?.metadata).toMatchObject({ output_hash: null, decision: 'nao_aplicavel' });
   });
 });
 
