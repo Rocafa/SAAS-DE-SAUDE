@@ -9,6 +9,9 @@
   aprovado), #116 (reaprovar), #155, #194, #153, #154 e #237 (Dependabot espera 14 dias; better-auth em PR próprio).
 - Do Dependabot, mesclei com o OK do @Rocafa o #201 (next 16.4.5, fecha 7 alertas médios), o #184, o #186 e o #200.
   O grupo #236 fica em espera até as versões completarem 14 dias.
+- **B13 completo para revisão** (admin único que perdeu senha e fator), todos com parecer favorável do Guardião e CI
+  verde, empilhados no topo da pilha do provisionamento: #238 (desenho v2 e RIPD, sobre o #208) → #239 (código) → #241
+  (aviso fixo no app com "Não fui eu"); e o #240 (Terraform, sobre o #204).
 - **Decisões tuas novas, do B13 (#238, admin único que perdeu senha e fator; desenho v2 aprovado com ressalvas pelo
   Guardião):** P1 48 h corridas ou úteis (recomendação: corridas, com um dia útil inteiro dentro); P2 suspender a conta
   antiga já no pedido quando houver suspeita (recomendação: sim, com decisão do DPO registrada); P5 quem indica o admin
