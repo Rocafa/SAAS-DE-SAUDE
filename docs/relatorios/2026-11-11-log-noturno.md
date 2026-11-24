@@ -800,3 +800,6 @@ destravando a auditoria de todos.
   Agora roda a cada 2 h, o dia todo, com o roteiro de hoje: merges dos nossos PRs aprovados (#210, #189, #116, #155,
   #194, #153, #154, #237), Dependabot (autorizado, com 14 dias de maturidade e SHA conferido), acompanhamento dos meus
   PRs de correção para as branches do sócio e revisão de PRs novos dele. Ela não depende desta sessão ficar aberta.
+- Em vez de só esperar: disparado o item 3 do veto do #227 no #233 (tentativa e resultado em dois eventos, chamada ao
+  modelo fora da transação, teste de que o pool não fica preso). Se completo e testado, sai a trava do provedor real.
+  Volta ao Guardião depois.
