@@ -849,3 +849,14 @@ destravando a auditoria de todos.
 - #238 (794f9a9): RIPD da identidade atualizado para o B13 (§3/§3.1 dados e prazos, §4 riscos, §5 item 8 medidas,
   §5a controles com evidências do #239, §8 riscos aceitos e P1/P2/P5/P6 pendentes). Item "RIPD" do B13 resolvido;
   para produção faltam o Terraform (#204) e o aviso fixo no app.
+
+### Checagem de 24/11 07:15 UTC
+
+- Nenhum merge desde a última nota. O sócio não agiu desde 03:20 UTC.
+- Nossos PRs: só o #189 está aprovado, mas está BEHIND e com a "Auditoria de dependências" vermelha (execução antiga,
+  de 17/11). Pela regra (CI toda verde), não mexi. #210, #116, #155, #194, #153, #154 e #237 sem aprovação.
+- Dependabot: só o #236, em espera (aguarda o #237 ou os 14 dias).
+- PRs de correção (#228, #229, #231, #233, #234 CLEAN; #232 UNSTABLE pelo CodeQL): nenhum mesclado pelo sócio, nenhum
+  em conflito. Nada a fazer.
+- PRs novos do sócio sem revisão nossa: nenhum (#143 e #157 já têm revisão nossa).
+- Guia do sócio sem mudança.
