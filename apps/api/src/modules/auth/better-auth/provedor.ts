@@ -1052,8 +1052,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
   async cadastroLiberado(sessaoId: string): Promise<boolean> {
-    const [s] = await this.d.dbAuth.select({ ate: sessao.cadastroPendenteAte }).from(sessao).where(eq(sessao.id, sessaoId));
-    return s?.ate != null && s.ate.getTime() > this.agora().getTime();
+    const [s] = await this.d.dbAuth.select({ ate: sessao.cadastroPendenteAte, userId: sessao.userId }).from(sessao).where(eq(sessao.id, sessaoId));
+    if (s?.ate == null || s.ate.getTime() <= this.agora().getTime()) return false;
+    // B13 (ressalva 1 do parecer do código, #239): a conta nova de uma troca só cadastra o fator com a troca `ativada`
+    // (suspensa, contestada, cancelada ou vencida: recusa). O banco recusa também (0082).
+    const [t] = await this.d.dbAuth.select({ estado: trocaDoAdmin.estado }).from(trocaDoAdmin).where(eq(trocaDoAdmin.usuarioNovo, s.userId));
+    return !t || t.estado === 'ativada' || t.estado === 'concluida';
   }
 
   /** Conta nova do convite: senha conferida contra vazadas, e-mail único (corrida = conta existente). */

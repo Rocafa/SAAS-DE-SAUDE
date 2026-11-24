@@ -161,6 +161,7 @@ export const MOTIVOS_DE_SEGURANCA = [
   'login_da_conta_substituida',
   'senha_da_conta_substituida',
   'conclusao_da_troca',
+  'contestacao_da_troca',
   'contrato',
   'dpo',
   'titular',

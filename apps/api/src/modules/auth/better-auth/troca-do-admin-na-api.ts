@@ -130,7 +130,7 @@ export async function concluirTrocaDoAdmin(b: BancosDaTrocaNaApi, usuarioNovo: s
  */
 export async function aoLoginCompletoDaConta(b: BancosDaTrocaNaApi, userId: string): Promise<void> {
   const trocas = await b.dbAuth
-    .select({ id: trocaDoAdmin.id, clinicaId: trocaDoAdmin.clinicaId, chamado: trocaDoAdmin.chamado, estado: trocaDoAdmin.estado })
+    .select({ id: trocaDoAdmin.id, clinicaId: trocaDoAdmin.clinicaId, chamado: trocaDoAdmin.chamado, estado: trocaDoAdmin.estado, usuarioNovo: trocaDoAdmin.usuarioNovo })
     .from(trocaDoAdmin)
     .where(and(eq(trocaDoAdmin.usuarioAntigo, userId), inArray(trocaDoAdmin.estado, [...EM_ANDAMENTO, 'concluida'])));
   for (const t of trocas) {
@@ -146,12 +146,26 @@ export async function aoLoginCompletoDaConta(b: BancosDaTrocaNaApi, userId: stri
       ).catch(() => registrarNoMaximoUmaVez(`troca-login:${t.id}`, 60_000, 'TRILHA_NAO_GRAVADA', { motivo: 'login_da_conta_substituida', ...ids }));
       continue;
     }
-    const suspensa = await b.dbAuth
-      .update(trocaDoAdmin)
-      .set({ estado: 'suspensa', encerradaPor: 'login_da_conta_antiga' })
-      .where(and(eq(trocaDoAdmin.id, t.id), eq(trocaDoAdmin.estado, t.estado)))
-      .returning({ id: trocaDoAdmin.id });
-    if (suspensa.length > 0) registrarEventoDeSeguranca('TROCA_DO_ADMIN_SUSPENSA', { motivo: 'login_da_conta_antiga', ...ids });
+    // Ressalva 1 do parecer do código (#239): a suspensão derruba, na MESMA transação, os tokens vivos da conta nova
+    // (ativação da troca e fator da reemissão) e todas as sessões dela, inclusive a de cadastro pendente. Mesma regra
+    // de `identidade.encerrar_tokens_da_troca` (que é do papel da tarefa), aqui pelo `app_auth`. O cadastro do fator
+    // da conta nova fora de troca `ativada` também é recusado no banco (0082) e em `cadastroLiberado`.
+    const suspensa = await b.dbAuth.transaction(async (ta) => {
+      const mudou = await ta
+        .update(trocaDoAdmin)
+        .set({ estado: 'suspensa', encerradaPor: 'login_da_conta_antiga' })
+        .where(and(eq(trocaDoAdmin.id, t.id), eq(trocaDoAdmin.estado, t.estado)))
+        .returning({ id: trocaDoAdmin.id });
+      if (mudou.length === 0) return false;
+      await ta
+        .update(ativacaoDoFundador)
+        .set({ usadoEm: sql`now()`, emailHmac: EMAIL_DESCARTADO })
+        .where(and(eq(ativacaoDoFundador.trocaId, t.id), isNull(ativacaoDoFundador.usadoEm)));
+      await ta.update(recuperacao).set({ usadoEm: new Date() }).where(and(eq(recuperacao.usuarioId, t.usuarioNovo), isNull(recuperacao.usadoEm)));
+      await ta.delete(sessao).where(eq(sessao.userId, t.usuarioNovo));
+      return true;
+    });
+    if (suspensa) registrarEventoDeSeguranca('TROCA_DO_ADMIN_SUSPENSA', { motivo: 'login_da_conta_antiga', ...ids });
   }
 }
 
@@ -166,6 +180,9 @@ export async function contestarTrocaDoAdmin(b: BancosDaTrocaNaApi, userId: strin
     .where(and(eq(trocaDoAdmin.usuarioAntigo, userId), inArray(trocaDoAdmin.estado, [...ESTADOS_ABERTOS_DA_TROCA])));
   if (!t) return false;
   const tenantId = t.clinicaId as TenantId;
+  // Ressalva 3 do parecer do código (#239): a trilha da clínica confirma ANTES da identidade. Se a clínica gravou e a
+  // identidade falhou depois, a trilha diz "contestada" e a troca não: alarme imediato (TRILHA_NAO_GRAVADA).
+  let clinicaGravou = false;
   try {
     await b.dbAuth.transaction(async (ta) => {
       const mudou = await ta
@@ -190,9 +207,13 @@ export async function contestarTrocaDoAdmin(b: BancosDaTrocaNaApi, userId: strin
         },
         userId,
       );
+      clinicaGravou = true;
     });
   } catch (err) {
     if (err instanceof TrocaMudou) return false;
+    if (clinicaGravou) {
+      registrarEventoDeSeguranca('TRILHA_NAO_GRAVADA', { motivo: 'contestacao_da_troca', tenantId: t.clinicaId, userId, chamado: t.chamado, pedido: t.id });
+    }
     throw err;
   }
   registrarEventoDeSeguranca('TROCA_DO_ADMIN_CONTESTADA', { motivo: 'titular', tenantId: t.clinicaId, userId, chamado: t.chamado, pedido: t.id });

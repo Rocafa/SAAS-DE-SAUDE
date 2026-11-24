@@ -119,6 +119,12 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Ressalva 2 do parecer do código (#239): pela API (login da autenticação, que não é o da tarefa), só ativação,
+  -- conclusão, contestação e suspensão. Cancelar, vencer, emitir e retomar são da tarefa.
+  IF v_auth AND NOT v_prov AND NEW.estado NOT IN ('ativada', 'concluida', 'contestada', 'suspensa') THEN
+    RAISE EXCEPTION 'troca do admin: pela API, só ativada, concluida, contestada ou suspensa' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   v_ok := CASE OLD.estado
     WHEN 'aguardando' THEN NEW.estado IN ('emitida', 'contestada', 'suspensa', 'cancelada')
     WHEN 'suspensa' THEN NEW.estado IN ('aguardando', 'contestada', 'cancelada')
@@ -230,6 +236,27 @@ $$;
 REVOKE ALL ON FUNCTION identidade.usuario_novo_da_troca() FROM PUBLIC;
 CREATE TRIGGER usuario_novo_da_troca BEFORE INSERT ON identidade.usuario
   FOR EACH ROW EXECUTE FUNCTION identidade.usuario_novo_da_troca();
+
+-- Ressalva 1 do parecer do código (#239): a conta nova de uma troca só confirma o TOTP com a troca `ativada` (ou já
+-- concluída, para trocar de aparelho depois). Suspensa, contestada, cancelada ou vencida: o cadastro do fator é recusado
+-- aqui, além de `cadastroLiberado` na API.
+CREATE FUNCTION identidade.fator_da_conta_nova_da_troca() RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = pg_catalog, identidade, pg_temp
+AS $$
+BEGIN
+  IF NEW.dois_fatores_ativo AND NOT OLD.dois_fatores_ativo
+     AND EXISTS (SELECT 1 FROM identidade.troca_do_admin t
+                  WHERE t.usuario_novo = NEW.id AND t.estado NOT IN ('ativada', 'concluida')) THEN
+    RAISE EXCEPTION 'conta nova de troca fora de ativada não cadastra fator' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION identidade.fator_da_conta_nova_da_troca() FROM PUBLIC;
+CREATE TRIGGER fator_da_conta_nova_da_troca BEFORE UPDATE OF dois_fatores_ativo ON identidade.usuario
+  FOR EACH ROW EXECUTE FUNCTION identidade.fator_da_conta_nova_da_troca();
 
 -- ------------------------------------------------------------------ 5. conta substituída e suspensa
 

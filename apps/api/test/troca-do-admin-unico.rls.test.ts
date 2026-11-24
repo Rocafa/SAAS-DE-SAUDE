@@ -352,6 +352,40 @@ describe('B13: login completo da conta antiga na janela suspende a troca', () =>
   });
 });
 
+describe('B13: ressalva 1 do #239, suspensão com a conta nova já ativada', () => {
+  it('login completo da conta antiga com a troca ativada: suspensa, tokens e sessões da conta nova caem e o TOTP é recusado', async () => {
+    const clinicaId = await api.novaClinica();
+    const antigo = await contaComFator(clinicaId, 'admin');
+    const p = pedidoFicticio(clinicaId, antigo);
+    await pedir(p);
+    await liberar(p.pedido);
+    const cadastro = await ativar(await emitir(p), p.email);
+    const { usuarioNovo } = await troca(p.pedido);
+    // Começa o cadastro do fator (segredo gerado) antes do login da conta antiga.
+    const inicio = await postar('/two-factor/enable', cadastro, { password: SENHA });
+    expect(inicio.status).toBe(200);
+    const [sessaoDeCadastro] = await dbAuth.db.select({ id: sessao.id }).from(sessao).where(eq(sessao.userId, usuarioNovo));
+    expect(sessaoDeCadastro).toBeDefined();
+
+    const eventos = await eventosDurante(() => provedor.aposMfaVerificado(randomUUID(), antigo, 'login_em_duas_etapas'));
+    expect(await troca(p.pedido)).toMatchObject({ estado: 'suspensa', encerradaPor: 'login_da_conta_antiga' });
+    expect(evento(eventos, 'TROCA_DO_ADMIN_SUSPENSA')).toHaveLength(1);
+    // Tokens e sessões da conta nova (inclusive a de cadastro pendente) caíram.
+    expect(await dbAuth.db.select().from(ativacaoDoFundador).where(and(eq(ativacaoDoFundador.trocaId, p.pedido), isNull(ativacaoDoFundador.usadoEm)))).toEqual([]);
+    expect(await dbAuth.db.select().from(sessao).where(eq(sessao.userId, usuarioNovo))).toEqual([]);
+    expect(await provedor.cadastroLiberado(sessaoDeCadastro!.id)).toBe(false);
+    // A confirmação do TOTP pela sessão derrubada não passa...
+    const fim = await postar('/two-factor/verify-totp', inicio.cookies, { code: codigoTotp(segredoDoUri(String(inicio.json['totpURI'])), 0) });
+    expect(fim.status).not.toBe(200);
+    // ...e o banco recusa marcar o fator da conta nova com a troca fora de `ativada`.
+    expect(recusou42501(await errosPg(dbAuth.db.update(usuario).set({ twoFactorEnabled: true }).where(eq(usuario.id, usuarioNovo))), /não cadastra fator/)).toBe(true);
+    const [nova] = await dbAuth.db.select({ fator: usuario.twoFactorEnabled }).from(usuario).where(eq(usuario.id, usuarioNovo));
+    expect(nova?.fator).toBe(false);
+    // Nada da conta antiga mudou: segue admin.
+    expect((await membros(clinicaId, antigo)).every((m) => m.revokedAt === null)).toBe(true);
+  });
+});
+
 describe('B13: R4, quem pediu não emite', () => {
   it('mesmo_operador: nada é concedido nem emitido', async () => {
     const clinicaId = await api.novaClinica();
@@ -377,8 +411,11 @@ describe('B13: R3, o trigger de transições e o nascimento da conta nova', () =
     // aguardando -> ativada/concluida: fora do grafo.
     expect(recusou42501(await mudar(dbAuth, { estado: 'ativada' }), /transição/)).toBe(true);
     expect(recusou42501(await mudar(dbAuth, { estado: 'concluida', encerradaPor: 'sistema' }), /transição/)).toBe(true);
-    // Emissão pela API: só a tarefa emite.
-    expect(recusou42501(await mudar(dbAuth, { estado: 'emitida' }), /emissão só pela tarefa/)).toBe(true);
+    // Ressalva 2 do #239: pela API, só ativada, concluida, contestada e suspensa (emitir, cancelar e vencer são da tarefa).
+    expect(recusou42501(await mudar(dbAuth, { estado: 'emitida' }), /pela API, só/)).toBe(true);
+    expect(recusou42501(await mudar(dbAuth, { estado: 'cancelada', encerradaPor: 'sistema' }), /pela API, só/)).toBe(true);
+    expect(recusou42501(await mudar(dbAuth, { estado: 'vencida', encerradaPor: 'sistema' }), /pela API, só/)).toBe(true);
+    expect((await troca(p.pedido)).estado).toBe('aguardando');
     // Emissão pela tarefa antes da janela: recusada pelo banco também.
     expect(recusou42501(await mudar(dbProv, { estado: 'emitida' }), /depois da janela/)).toBe(true);
     // Coluna fixa (o chamado) não muda.
