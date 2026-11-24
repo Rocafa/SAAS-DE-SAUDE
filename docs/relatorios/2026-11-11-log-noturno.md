@@ -887,3 +887,5 @@ destravando a auditoria de todos.
 - #239 (eb8b42b): a tarefa recusa e apaga o pedido sem `Expiration` ou com vencimento acima de 72 h; CI verde.
   #241 (1336f56): `main` do #239 mesclada, CI verde (um teste de logs passou do limite de 5 s na primeira rodada e
   passou na reexecução). O #240 precisa de `ssm:DescribeParameters` para a tarefa: pedido ao agente de infra.
+- **Guardião aprova o #240** (6c7f7b7) com `DescribeParameters` limitado à VPC; condição: nomes de parâmetros nunca
+  levam dado pessoal (hoje só UUID). O agente de infra parou no limite de uso depois do push; a CI foi conferida aqui.
