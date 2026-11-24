@@ -143,6 +143,15 @@ A garantia de que nenhuma rota nova nasce sem trilha é um teste sem banco, em `
 - **Fora de controller (R6 do #117):** todo handler HTTP registrado fora de controller (`app.use`, rota no adaptador,
   `MiddlewareConsumer`) tem de estar em `HANDLERS_FORA_DE_CONTROLLER`, com o motivo. Hoje são só os 4 middlewares de
   segurança; o login da D4 entra aí com parecer e com a auditoria de login, logout, falha e troca de credencial.
+- **Filas, jobs e eventos (R3.3/R6):** `HANDLERS_ASSINCRONOS` é a lista fechada dos pontos de entrada fora de
+  controller: os 9 objetos `DefinicaoDeJob`, o trabalhador BullMQ e os dois `setInterval` de monitoramento. A análise
+  também descobre `Worker`, `@Processor`/`process`, `@OnEvent`, `@Process`, `@OnQueueEvent`, `@OnWorkerEvent`, `@Cron`,
+  `@Interval`, `@Timeout` e `setInterval`; handler novo ou declaração que sobra falha o CI. Todo job declara sua política
+  (`sempre` ou `com_efeito`) e usa o `ExecutorDeJobs`, cuja ligação com `JobsService.registrarTrilha` até `insertAudit`
+  é conferida pelo compilador. O trabalhador central só recebe essa declaração se estiver na fábrica real do agendador.
+  Outros handlers precisam de caminho próprio até `insertAudit` (`propria`) ou de exceção `sem_dado` com motivo; se a
+  exceção passar a alcançar a trilha, a declaração tem de mudar. Os testes unitários do executor e os testes RLS
+  continuam provando a gravação por clínica, inclusive na falha.
 - **Leitura (R5):** o mesmo vale para toda rota `GET`: `AUDITADAS_LEITURA` (com a prova de alcance) ou
   `LEITURA_SEM_DADO_DE_PACIENTE` (com o motivo). Rota sob caminho clínico (por prefixo: pacientes, prontuário,
   atendimentos, agenda, guias, pacotes, convênios, o financeiro inteiro salvo as configurações, importações, o portal

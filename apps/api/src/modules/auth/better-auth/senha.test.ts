@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import { conferirSenha, gerarHashDeSenha, PARAMETROS_SCRYPT } from './senha';
 
-describe('hash de senha (scrypt, OWASP)', () => {
+// O scrypt OWASP é propositalmente caro; com workers paralelos, 5 s mede contenção de CPU, não regressão de comportamento.
+describe('hash de senha (scrypt, OWASP)', { timeout: 30_000 }, () => {
   it('usa N=2^16, r=8, p=2, e o hash não contém a senha', async () => {
     const hash = await gerarHashDeSenha('Senha-Ficticia-123!');
     expect(hash).toMatch(/^scrypt\$65536\$8\$2\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/);
