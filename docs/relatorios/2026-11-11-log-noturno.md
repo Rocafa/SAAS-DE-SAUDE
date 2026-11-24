@@ -754,3 +754,6 @@ destravando a auditoria de todos.
   novo) e vai precisar de reaprovação. O #189 (aprovado, atrás) fica como está até o #209 entrar, para não perder a
   aprovação à toa.
 - Meus PRs de correção (#228–#234) seguem abertos para as branches do sócio; ele ainda não os mesclou.
+- `main` mesclada sem conflito no #194, #153, #154 e #155. No #154 (trava de logs) e no #155 rodei o vitest da API
+  antes do push: exit 0 (1154 e 1159 testes). A pilha acima do #155 não foi propagada agora: ela mira branches, não a
+  `main`, e cada propagação custa uma rodada de CI em 15 PRs; fica para quando o #155 for aprovado.
