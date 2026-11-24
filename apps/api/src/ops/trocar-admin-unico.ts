@@ -43,6 +43,7 @@ export type CodigoDoComando =
   | 'parametro_invalido'
   | 'entrega_pendente'
   | 'ssm_nao_configurado'
+  | 'pedido_vencimento_invalido'
   | 'erro'
   | Exclude<RecusaDaTroca, 'entrada_invalida'>;
 
@@ -52,10 +53,13 @@ export interface ParametrosDaTroca {
   /** SecureString com a chave do fluxo, 24 h, sem sobrescrever (`EntregaPendente` se a anterior ainda está lá). */
   readonly gravar: (nome: string, valor: string) => Promise<void>;
   readonly apagar: (nome: string) => Promise<void>;
+  /** Gravação e vencimento (`Expiration`) do parâmetro, sem o valor (`parametros-ssm.ts`). */
+  readonly vencimento: (nome: string) => Promise<{ readonly gravadoEm: Date | null; readonly venceEm: Date | null } | null>;
 }
 
 export interface DependenciasDoComando {
   readonly parametros: ParametrosDaTroca;
+  readonly agora?: () => Date;
   readonly pedir: (p: PedidoDeTroca) => Promise<ResultadoDoPedido>;
   readonly emitir: (e: EmissaoDaTroca, guardarToken: (token: string) => Promise<void>) => Promise<ResultadoDaEmissao>;
   readonly cancelar: (c: CancelamentoDaTroca) => Promise<{ readonly clinicaId: string }>;
@@ -128,6 +132,15 @@ function lerConteudo(valor: string): { email: string } | null {
 
 const falha = (codigo: CodigoDoComando): SaidaDoComando => ({ codigo, linha: codigo });
 
+/** Vencimento máximo do parâmetro do pedido (`Expiration`), contado da gravação. Tolerância de relógio: 1 min. */
+export const VALIDADE_MAXIMA_DO_PEDIDO_HORAS = 72;
+
+export function vencimentoDoPedidoConfere(v: { readonly gravadoEm: Date | null; readonly venceEm: Date | null } | null, agora: Date): boolean {
+  if (!v?.venceEm) return false;
+  const base = v.gravadoEm ?? agora;
+  return v.venceEm.getTime() - base.getTime() <= VALIDADE_MAXIMA_DO_PEDIDO_HORAS * 3_600_000 + 60_000;
+}
+
 function codigoDoErro(err: unknown): CodigoDoComando {
   if (err instanceof EntregaPendente) return 'entrega_pendente';
   if (err instanceof TrocaRecusada) return err.codigo === 'entrada_invalida' ? 'uso_incorreto' : err.codigo;
@@ -164,8 +177,19 @@ async function pedir(pedido: string, args: Argumentos, deps: DependenciasDoComan
   }
   if (valor === null) return falha('parametro_ausente');
   let saida: SaidaDoComando;
-  const conteudo = lerConteudo(valor);
-  if (!conteudo) {
+  // Recomendação do Guardião no parecer do #240: o pedido (com o e-mail) não fica no SSM mais que 72 h. A tarefa confere
+  // a política `Expiration` em vez de confiar só no comando do operador: sem ela, ou vencendo depois de 72 h da gravação
+  // (ou de agora, sem a data da gravação), recusa; o parâmetro é apagado logo abaixo, como em toda saída.
+  let vencimentoOk: boolean;
+  try {
+    vencimentoOk = vencimentoDoPedidoConfere(await deps.parametros.vencimento(nome), (deps.agora ?? (() => new Date()))());
+  } catch {
+    vencimentoOk = false;
+  }
+  const conteudo = vencimentoOk ? lerConteudo(valor) : null;
+  if (!vencimentoOk) {
+    saida = falha('pedido_vencimento_invalido');
+  } else if (!conteudo) {
     saida = falha('parametro_invalido');
   } else {
     const v = args.valores;
