@@ -809,3 +809,6 @@ destravando a auditoria de todos.
   - **B13** (admin único que perdeu senha e fator): ainda sem desenho. Desenho em andamento num PR sobre o topo da
     pilha (#208), com conta nova pelo provisionamento, revogação do vínculo antigo e 48 h; depois vai ao Guardião. O
     checklist de prontidão também será corrigido (B11 e B12 já têm código nos #195–#208).
+- #231 (9196cdf): a linha de autor só aparece com `autor` preenchido (435 testes do web, exit 0). A API real não tem
+  rota de linha do tempo; no modo http a ficha cai no fake, pela regra já documentada em `selecionar.ts`. Sugeri no
+  #222 esconder a aba ou mostrar "ainda não disponível" no modo http até existir a rota.
