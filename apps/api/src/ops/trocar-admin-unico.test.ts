@@ -20,12 +20,18 @@ const CANCELAR = ['--fase', 'cancelar', '--pedido', PEDIDO, '--chamado', 'SUP-77
 type Fn = ReturnType<typeof vi.fn>;
 type Dubles = DependenciasDoComando & { pedir: Fn; emitir: Fn; cancelar: Fn; parametros: { ler: Fn; gravar: Fn; apagar: Fn } };
 
-function deps(over: Partial<Record<'pedir' | 'emitir' | 'cancelar' | 'ler' | 'gravar' | 'apagar', Fn>> = {}): Dubles {
+const AGORA = new Date('2026-11-24T12:00:00.000Z');
+const GRAVADO = new Date('2026-11-24T11:00:00.000Z');
+const horasDepois = (base: Date, h: number) => new Date(base.getTime() + h * 3_600_000);
+
+function deps(over: Partial<Record<'pedir' | 'emitir' | 'cancelar' | 'ler' | 'gravar' | 'apagar' | 'vencimento', Fn>> = {}): Dubles {
   return {
+    agora: () => AGORA,
     parametros: {
       ler: over.ler ?? vi.fn(() => Promise.resolve(JSON.stringify({ email: EMAIL_FICTICIO }))),
       gravar: over.gravar ?? vi.fn(() => Promise.resolve()),
       apagar: over.apagar ?? vi.fn(() => Promise.resolve()),
+      vencimento: over.vencimento ?? vi.fn(() => Promise.resolve({ gravadoEm: GRAVADO, venceEm: horasDepois(GRAVADO, 72) })),
     },
     pedir: over.pedir ?? vi.fn(() => Promise.resolve({ liberaEm: '2026-11-26T12:00:00.000Z', sessoesDerrubadas: 0 })),
     emitir:
@@ -58,6 +64,28 @@ describe('comando da troca do admin único (B13): pedir', () => {
       email: EMAIL_FICTICIO,
     });
     for (const proibido of [EMAIL_FICTICIO, OPERADOR_A, 'SUP-']) expect(saida.linha).not.toContain(proibido);
+  });
+
+  it('parecer do #240: pedido com Expiration de 72 h passa; de 96 h, ou sem Expiration, é recusado e apagado', async () => {
+    const ok = deps();
+    expect((await executarComando(PEDIR, ENV, ok)).codigo).toBe('ok');
+    expect(ok.parametros.vencimento).toHaveBeenCalledWith(parametroDoPedido(PEDIDO));
+    for (const v of [
+      { gravadoEm: GRAVADO, venceEm: horasDepois(GRAVADO, 96) },
+      { gravadoEm: GRAVADO, venceEm: null },
+      // Sem a data da gravação, conta de agora.
+      { gravadoEm: null, venceEm: horasDepois(AGORA, 96) },
+    ]) {
+      const d = deps({ vencimento: vi.fn(() => Promise.resolve(v)) });
+      expect(await executarComando(PEDIR, ENV, d)).toEqual({ codigo: 'pedido_vencimento_invalido', linha: 'pedido_vencimento_invalido' });
+      expect(d.pedir).not.toHaveBeenCalled();
+      expect(d.parametros.apagar).toHaveBeenCalledWith(parametroDoPedido(PEDIDO));
+    }
+    const semData = deps({ vencimento: vi.fn(() => Promise.resolve({ gravadoEm: null, venceEm: horasDepois(AGORA, 72) })) });
+    expect((await executarComando(PEDIR, ENV, semData)).codigo).toBe('ok');
+    const ssmFora = deps({ vencimento: vi.fn(() => Promise.reject(new FalhaDoSsm('ler'))) });
+    expect((await executarComando(PEDIR, ENV, ssmFora)).codigo).toBe('pedido_vencimento_invalido');
+    expect(ssmFora.parametros.apagar).toHaveBeenCalled();
   });
 
   it('P2: --suspender-conta-antiga chega à função só no pedir; nas outras fases é uso incorreto', async () => {
