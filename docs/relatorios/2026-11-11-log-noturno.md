@@ -884,3 +884,6 @@ destravando a auditoria de todos.
 - **Guardião aprova o #241.** Com isso o B13 tem desenho (#238, com RIPD), código (#239), aviso no app (#241) e
   Terraform (#240), todos aprovados pelo Guardião e com CI verde. Faltam as decisões P1, P2, P5 e P6 dos sócios, a
   aprovação do @Lopesloro e a prova no staging.
+- #239 (eb8b42b): a tarefa recusa e apaga o pedido sem `Expiration` ou com vencimento acima de 72 h; CI verde.
+  #241 (1336f56): `main` do #239 mesclada, CI verde (um teste de logs passou do limite de 5 s na primeira rodada e
+  passou na reexecução). O #240 precisa de `ssm:DescribeParameters` para a tarefa: pedido ao agente de infra.
