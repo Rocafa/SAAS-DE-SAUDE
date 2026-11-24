@@ -14,12 +14,13 @@ import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm
 import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
-import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, trocaDoAdmin, usuario, verificacao, vinculo } from '../../../db/identidade';
+import { aoLoginCompletoDaConta, concluirTrocaDoAdmin, concluirTrocasPendentes, contestarTrocaDoAdmin, expurgarTrocasAntigas } from './troca-do-admin-na-api';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
 import { avisarAdminsDeAnomalia } from '../../records/avisos';
-import type { ProvedorDeAtivacao, ResultadoDaAtivacao, ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
+import type { ProvedorDeAtivacao, ProvedorDeTrocaDoAdmin, ResultadoDaAtivacao, ResultadoDaRecuperacao, TipoDeRecuperacao, ProvedorDeRecuperacao } from '../auth-context';
 import { hmacDoEmail } from '../convites';
 import { EMAIL_DESCARTADO } from '../convites-retencao';
 import { chaveDeHmac } from '../../../security/rate-limit-store';
@@ -92,7 +93,7 @@ export const TETO_DIARIO_DE_RECUPERACOES = 10;
 /** R8: a sessão aberta no aceite só serve ao cadastro do TOTP, por no máximo 15 min. */
 export const PRAZO_DO_CADASTRO_PENDENTE_MS = 15 * 60 * 1000;
 
-export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao, ProvedorDeAtivacao {
+export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, ProvedorDeConvite, ProvedorDeCredencial, ProvedorDeRecuperacao, ProvedorDeAtivacao, ProvedorDeTrocaDoAdmin {
   readonly tipo = 'better-auth';
   private readonly agora: () => Date;
 
@@ -314,6 +315,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     ativacoesExpurgadas: number;
     ativacoesRetidas: number;
     ativacoesSemLeituraDaTrilha: number;
+    trocasConcluidas: number;
+    trocasExpurgadas: number;
   }> {
     const agora = this.agora();
     const umDia = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
@@ -347,7 +350,11 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       const desligou = await this.d.dbAuth.transaction(async (tx) => {
         const r = await tx
           .update(usuario)
-          .set({ ativo: false, inativaPor: 'sem_vinculo' })
+          // B13 (R5): a conta com troca concluída vira `substituida`, nunca `sem_vinculo` (que a concessão reativaria).
+          .set({
+            ativo: false,
+            inativaPor: sql`case when exists (select 1 from identidade.troca_do_admin t where t.usuario_antigo = ${id}::uuid and t.estado = 'concluida') then 'substituida' else 'sem_vinculo' end`,
+          })
           .where(and(eq(usuario.id, id), eq(usuario.ativo, true), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
           .returning({ id: usuario.id });
         if (r.length === 0) return false;
@@ -381,7 +388,8 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .where(
         and(
           eq(usuario.ativo, false),
-          eq(usuario.inativaPor, 'sem_vinculo'),
+          // B13 (R5): a substituída também passa pelo expurgo em 90 dias (senha, TOTP, e-mail e nome).
+          inArray(usuario.inativaPor, ['sem_vinculo', 'substituida']),
           lt(usuario.inativaDesde, noventaDias),
         ),
       );
@@ -396,7 +404,7 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
           .update(usuario)
           .set({ twoFactorEnabled: false, email: `desligada-${id}@desligada.invalid`, name: 'Conta desligada', image: null, inativaPor: 'expurgada' })
           // G1 do #176: nunca expurgar quem tem vínculo (conta inativa por corrida com uma concessão).
-          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), eq(usuario.inativaPor, 'sem_vinculo'), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
+          .where(and(eq(usuario.id, id), eq(usuario.ativo, false), inArray(usuario.inativaPor, ['sem_vinculo', 'substituida']), sql`not exists (select 1 from identidade.vinculo v where v.usuario_id = ${usuario.id})`))
           .returning({ id: usuario.id });
         if (marcada.length === 0) return false;
         await tx.update(conta).set({ password: null }).where(and(eq(conta.userId, id), eq(conta.providerId, 'credential')));
@@ -442,6 +450,9 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       contasSemVinculo: semVinculo.length,
       contasReativadas: reativadas.length,
       ...ativacoes,
+      // B13 (R1): a conclusão que falhou na confirmação do TOTP é refeita aqui; a troca encerrada sai em 13 meses.
+      trocasConcluidas: await concluirTrocasPendentes({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }),
+      trocasExpurgadas: await expurgarTrocasAntigas({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }),
     };
   }
 
@@ -463,7 +474,15 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
     const vencidas = await this.d.dbAuth
       .update(ativacaoDoFundador)
       .set({ emailHmac: EMAIL_DESCARTADO })
-      .where(and(isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, agora), ne(ativacaoDoFundador.emailHmac, EMAIL_DESCARTADO)))
+      // B13: o token vencido da troca guarda o HMAC até a única reemissão ou o encerramento da troca, que o zeram.
+      .where(
+        and(
+          isNull(ativacaoDoFundador.usadoEm),
+          lt(ativacaoDoFundador.expiraEm, agora),
+          ne(ativacaoDoFundador.emailHmac, EMAIL_DESCARTADO),
+          eq(ativacaoDoFundador.origem, 'provisionamento'),
+        ),
+      )
       .returning({ id: ativacaoDoFundador.id, clinicaId: ativacaoDoFundador.clinicaId });
     // Uma vez por linha (o filtro do HMAC não repete); a bloqueada já saiu como ATIVACAO_BLOQUEADA com o HMAC zerado.
     for (const v of vencidas) registrarEventoDeSeguranca('ATIVACAO_VENCIDA', { tenantId: v.clinicaId, pedido: v.id });
@@ -472,14 +491,15 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       .where(lt(ativacaoDoFundador.usadoEm, trintaDias))
       .returning({ id: ativacaoDoFundador.id });
     const pendentes = await this.d.dbAuth
-      .select({ id: ativacaoDoFundador.id, clinicaId: ativacaoDoFundador.clinicaId })
+      .select({ id: ativacaoDoFundador.id, clinicaId: ativacaoDoFundador.clinicaId, origem: ativacaoDoFundador.origem })
       .from(ativacaoDoFundador)
       .where(and(isNull(ativacaoDoFundador.usadoEm), lt(ativacaoDoFundador.expiraEm, trintaDias)));
     let expurgadas = usadas.length;
     let retidas = 0;
     let semLeitura = 0;
-    for (const { id, clinicaId } of pendentes) {
-      const ativada = await fundadorAtivadoNaTrilha(this.d.dbClinica, clinicaId as TenantId).catch(() => null);
+    for (const { id, clinicaId, origem } of pendentes) {
+      // B13 (seção 12): a exceção A2 não vale para o token da troca; ele sai em 30 dias como qualquer outro.
+      const ativada = origem === 'troca' ? true : await fundadorAtivadoNaTrilha(this.d.dbClinica, clinicaId as TenantId).catch(() => null);
       if (ativada === null) {
         // R2 do parecer do #205: a retenção por falha de leitura não pode se confundir com a da clínica nunca ativada.
         semLeitura += 1;
@@ -897,7 +917,12 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       registrarEventoDeSeguranca('ATIVACAO_FALHOU', { motivo: consumiu, ...ids });
       return 'invalido';
     }
-    registrarEventoDeSeguranca('FUNDADOR_ATIVADO', { motivo: contaNova ? 'conta_nova' : 'conta_existente', userId: a.usuarioId, contrato: a.contrato, ...ids });
+    if (a.origem === 'troca') {
+      // B13: a conta nova nasceu; a troca só conclui na confirmação do TOTP (R1).
+      registrarEventoDeSeguranca('TROCA_DO_ADMIN_ATIVADA', { motivo: 'troca_do_admin', userId: a.usuarioId, chamado: a.chamado ?? undefined, ...ids });
+    } else {
+      registrarEventoDeSeguranca('FUNDADOR_ATIVADO', { motivo: contaNova ? 'conta_nova' : 'conta_existente', userId: a.usuarioId, contrato: a.contrato, ...ids });
+    }
     if (!contaNova) return { cookies: [], contaExistente: true };
     const cookies = await this.abrirSessaoDeCadastro({ email, senha: e.senha, cabecalhos: e.cabecalhos });
     return { cookies, contaExistente: false };
@@ -908,10 +933,11 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * trilha `founder_activated`, tudo antes do COMMIT do `app_auth`: se a clínica recusar, nada fica (R8).
    */
   private async consumirAtivacao(
-    a: { id: string; clinicaId: string; usuarioId: string; contrato: string },
+    a: { id: string; clinicaId: string; usuarioId: string; contrato: string; origem: 'provisionamento' | 'troca'; trocaId: string | null },
     email: string,
     contaNova: { nome: string; hash: string } | null,
   ): Promise<true | 'token_invalido' | 'fundador_nao_confere' | 'email_em_uso'> {
+    if (a.origem === 'troca') return this.consumirAtivacaoDaTroca(a, email, contaNova);
     try {
       return await this.d.dbAuth.transaction(async (tx) => {
         const usado = await tx
@@ -959,6 +985,69 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
       if (contaNova && ehViolacaoDeUnicidade(err)) return 'email_em_uso';
       throw err;
     }
+  }
+
+  /**
+   * B13 (troca do admin único), seção 4 do desenho: o alvo não é o fundador. Confere que a troca está `emitida` e que o
+   * uuid reservado tem o vínculo admin ativo da emissão; a troca vai a `ativada` e a conta NOVA nasce aqui (o trigger
+   * da 0082 recusa esse uuid em qualquer outro caminho; R3). `founder_user_id` não muda e NADA da conta antiga muda
+   * neste passo (R1): a conclusão é na confirmação do TOTP.
+   */
+  private async consumirAtivacaoDaTroca(
+    a: { id: string; clinicaId: string; usuarioId: string; trocaId: string | null },
+    email: string,
+    contaNova: { nome: string; hash: string } | null,
+  ): Promise<true | 'token_invalido' | 'fundador_nao_confere' | 'email_em_uso'> {
+    if (!a.trocaId || !contaNova) return 'fundador_nao_confere';
+    const trocaId = a.trocaId;
+    try {
+      return await this.d.dbAuth.transaction(async (tx) => {
+        const usado = await tx
+          .update(ativacaoDoFundador)
+          .set({ usadoEm: sql`now()`, emailHmac: EMAIL_DESCARTADO })
+          .where(
+            and(
+              eq(ativacaoDoFundador.id, a.id),
+              eq(ativacaoDoFundador.origem, 'troca'),
+              isNull(ativacaoDoFundador.usadoEm),
+              gt(ativacaoDoFundador.expiraEm, sql`now()`),
+              lt(ativacaoDoFundador.falhas, TETO_DE_FALHAS_DA_ATIVACAO),
+            ),
+          )
+          .returning({ id: ativacaoDoFundador.id });
+        if (usado.length === 0) return 'token_invalido' as const;
+        const ativada = await tx
+          .update(trocaDoAdmin)
+          .set({ estado: 'ativada' })
+          .where(and(eq(trocaDoAdmin.id, trocaId), eq(trocaDoAdmin.estado, 'emitida'), eq(trocaDoAdmin.usuarioNovo, a.usuarioId), eq(trocaDoAdmin.clinicaId, a.clinicaId)))
+          .returning({ id: trocaDoAdmin.id });
+        if (ativada.length === 0) throw new FundadorNaoConfere();
+        await tx.insert(usuario).values({ id: a.usuarioId, name: contaNova.nome, email, emailVerified: false, clinicaDeOrigem: a.clinicaId });
+        await tx.insert(conta).values({ id: randomUUID(), accountId: a.usuarioId, providerId: 'credential', userId: a.usuarioId, password: contaNova.hash });
+        await withTenant(
+          this.d.dbClinica,
+          a.clinicaId as TenantId,
+          async (ct) => {
+            const [m] = await ct
+              .select({ id: clinicMembers.id })
+              .from(clinicMembers)
+              .where(and(eq(clinicMembers.tenantId, a.clinicaId), eq(clinicMembers.userId, a.usuarioId), eq(clinicMembers.role, 'admin'), isNull(clinicMembers.revokedAt)));
+            if (!m) throw new FundadorNaoConfere();
+          },
+          a.usuarioId,
+        );
+        return true as const;
+      });
+    } catch (err) {
+      if (err instanceof FundadorNaoConfere) return 'fundador_nao_confere';
+      if (ehViolacaoDeUnicidade(err)) return 'email_em_uso';
+      throw err;
+    }
+  }
+
+  /** B13, seção 5: "não fui eu" pela conta antiga (a rota exige MFA recente). */
+  contestarTrocaDoAdmin(userId: string): Promise<boolean> {
+    return contestarTrocaDoAdmin({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }, userId);
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */
@@ -1314,7 +1403,20 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
    * várias clínicas e nenhuma escolhida, o MFA não é marcado: a escolha (PR 3) vem antes da reverificação.
    */
   async aposMfaVerificado(sessaoId: string, userId: string, motivo: 'login_em_duas_etapas' | 'reverificacao' | 'cadastro_do_fator'): Promise<ResultadoDoMfa> {
-    const [s] = await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
+    // B13 (troca do admin único). Falha aqui nunca derruba o TOTP aceito: o job refaz a conclusão e o log alarma.
+    const bancos = { dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica };
+    if (motivo === 'cadastro_do_fator') {
+      // R1: a troca só conclui (e o vínculo antigo só cai) quando a conta nova confirma o TOTP.
+      await concluirTrocaDoAdmin(bancos, userId).catch(() =>
+        registrarNoMaximoUmaVez(`troca-conclusao:${userId}`, 60_000, 'TRILHA_NAO_GRAVADA', { motivo: 'conclusao_da_troca', userId }),
+      );
+    } else if (motivo === 'login_em_duas_etapas') {
+      // Login completo da conta antiga: suspende a troca em andamento ou alarma depois da conclusão (R5).
+      await aoLoginCompletoDaConta(bancos, userId).catch(() =>
+        registrarNoMaximoUmaVez(`troca-login:${userId}`, 60_000, 'TRILHA_NAO_GRAVADA', { motivo: 'login_da_conta_antiga', userId }),
+      );
+    }
+    const [s]= await this.d.dbAuth.select({ clinicaAtiva: sessao.clinicaAtiva }).from(sessao).where(and(eq(sessao.id, sessaoId), eq(sessao.userId, userId)));
     if (!s) return 'nada';
     await this.d.dbAuth.update(sessao).set({ cadastroPendenteAte: null }).where(eq(sessao.id, sessaoId));
     let tenantId = s.clinicaAtiva;

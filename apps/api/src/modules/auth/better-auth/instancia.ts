@@ -156,8 +156,12 @@ export function criarAutenticacao(o: OpcoesDaAutenticacao): Auth {
           // R10: só HMAC na tabela. O IP chega em HMAC pelo nosso cabeçalho; o user-agent vira HMAC aqui.
           before: async (s) => {
             // Conta inativa (desligada) não abre sessão nem gera LOGIN_OK (ressalva do parecer do código, #149).
-            const [u] = await o.db.select({ ativo: usuario.ativo }).from(usuario).where(eq(usuario.id, s.userId));
-            if (!u?.ativo) return false;
+            const [u] = await o.db.select({ ativo: usuario.ativo, inativaPor: usuario.inativaPor }).from(usuario).where(eq(usuario.id, s.userId));
+            if (!u?.ativo) {
+              // B13 (R5): a senha certa de uma conta substituída numa troca do admin é alarme crítico ao DPO.
+              if (u?.inativaPor === 'substituida') registrarEventoDeSeguranca('CONTA_SUBSTITUIDA_ENTROU', { motivo: 'senha_da_conta_substituida', userId: s.userId });
+              return false;
+            }
             return {
               data: {
                 ...s,

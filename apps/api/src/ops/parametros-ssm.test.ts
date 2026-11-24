@@ -31,7 +31,7 @@ describe('cliente SSM das tarefas avulsas (C4 do parecer de 16/11; C2 do parecer
   });
 
   it('validades: 72 h no provisionamento e 24 h na recuperação (iguais às do banco)', () => {
-    expect(VALIDADE_DA_ENTREGA_HORAS).toEqual({ provisionamento: 72, recuperacao: 24 });
+    expect(VALIDADE_DA_ENTREGA_HORAS).toEqual({ provisionamento: 72, recuperacao: 24, troca: 24 });
   });
 
   it('gravar sobre entrega existente: EntregaPendente, sem tentar de novo e sem a mensagem do SDK', async () => {

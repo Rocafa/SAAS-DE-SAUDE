@@ -20,6 +20,7 @@ import {
   AUTH_PROVIDER,
   ehProvedorDeCredencial,
   ehProvedorDeRecuperacao,
+  ehProvedorDeTrocaDoAdmin,
   paraRequestContext,
   type AuthContext,
   type AuthProvider,
@@ -118,6 +119,15 @@ export class CredenciaisService {
     return r;
   }
 
+  /**
+   * B13, seção 5: "não fui eu". A conta antiga (com senha, TOTP e MFA recente) contesta a troca do admin em andamento;
+   * sem troca a contestar, 404. A trilha (`admin_replacement_contested`) e o alarme crítico saem no provedor.
+   */
+  async contestarTrocaDoAdmin(userId: string): Promise<void> {
+    if (!ehProvedorDeTrocaDoAdmin(this.provider)) throw new NotFoundException({ statusCode: 404, message: 'Not Found' });
+    if (!(await this.provider.contestarTrocaDoAdmin(userId))) throw new NaoEncontradoError();
+  }
+
   /** R16: só quem tem vínculo ATIVO na clínica do admin; a trilha fica na clínica do admin. */
   async desbloquear(ctx: RequestContext, usuarioId: string): Promise<void> {
     const credenciais = this.credenciais;
@@ -157,6 +167,14 @@ export class CredenciaisController {
     if (nova.length < 12) throw new ConflitoError('senha_curta', ['senhaNova']);
     const cookies = await this.service.trocarSenha({ headers: req.headers, userId: auth.userId, atual, nova });
     if (cookies.length > 0) res.append('Set-Cookie', cookies);
+  }
+
+  @Post('sessao/troca-do-admin/contestar')
+  @ExigeMfaRecente()
+  @HttpCode(204)
+  @Permissao('sessao:ler')
+  contestarTrocaDoAdmin(@Sessao() auth: AuthContext): Promise<void> {
+    return this.service.contestarTrocaDoAdmin(auth.userId);
   }
 
   @Post('clinica/membros/:usuarioId/recuperacao')

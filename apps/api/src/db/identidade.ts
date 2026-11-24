@@ -18,7 +18,8 @@ export const usuario = identidade.table('usuario', {
   image: text('imagem'),
   ativo: boolean('ativo').notNull().default(true),
   /** 0069 (R1 do código do 3b-3): por que a conta está inativa; só 'sem_vinculo' volta a valer numa concessão. */
-  inativaPor: text('inativa_por', { enum: ['sem_vinculo', 'anonimizada', 'convite_desfeito', 'expurgada'] }),
+  // 0082 (B13): 'substituida' (R5, definitiva) e 'suspensa_na_troca' (P2, volta no cancelamento).
+  inativaPor: text('inativa_por', { enum: ['sem_vinculo', 'anonimizada', 'convite_desfeito', 'expurgada', 'substituida', 'suspensa_na_troca'] }),
   /** 0071: quando ficou inativa (o expurgo apaga a credencial da desligada há mais de 90 dias). */
   inativaDesde: timestamp('inativa_desde', { withTimezone: true }),
   /** Cadastro do TOTP concluído (0065): o login passa a pedir o código. */
@@ -143,4 +144,39 @@ export const ativacaoDoFundador = identidade.table('ativacao_do_fundador', {
   expiraEm: timestamp('expira_em', { withTimezone: true }).notNull(),
   usadoEm: timestamp('usado_em', { withTimezone: true }),
   falhas: integer('falhas').notNull().default(0),
+  /** 0082 (B13): 'troca' = conta nova da troca do admin único (24 h, sempre conta nova, com chamado e troca). */
+  origem: text('origem', { enum: ['provisionamento', 'troca'] }).notNull().default('provisionamento'),
+  chamado: text('chamado'),
+  trocaId: uuid('troca_id'),
+});
+
+/**
+ * Troca do admin único que perdeu senha e fator (0082; B13, parecer do Guardião de 24/11/2026). `id` = uuid do pedido.
+ * Só ids, códigos e o HMAC do e-mail novo (zerado na emissão e no encerramento). `operadorPedido` fica SÓ aqui (R4),
+ * nunca na trilha da clínica. O trigger da 0082 aceita só o grafo de estados do desenho (R3).
+ */
+export const ESTADOS_DA_TROCA = ['aguardando', 'emitida', 'liberada_sem_token', 'ativada', 'concluida', 'contestada', 'suspensa', 'cancelada', 'vencida'] as const;
+export type EstadoDaTroca = (typeof ESTADOS_DA_TROCA)[number];
+/** Estados finais (nenhuma transição sai deles). */
+export const ESTADOS_FINAIS_DA_TROCA: readonly EstadoDaTroca[] = ['concluida', 'contestada', 'cancelada', 'vencida'];
+/** Estados em andamento (contam como pedido pendente da clínica). */
+export const ESTADOS_ABERTOS_DA_TROCA: readonly EstadoDaTroca[] = ['aguardando', 'emitida', 'liberada_sem_token', 'ativada', 'suspensa'];
+
+export const trocaDoAdmin = identidade.table('troca_do_admin', {
+  id: uuid('id').primaryKey(),
+  clinicaId: uuid('clinica_id').notNull(),
+  usuarioAntigo: uuid('usuario_antigo').notNull(),
+  usuarioNovo: uuid('usuario_novo').notNull(),
+  operadorPedido: uuid('operador_pedido').notNull(),
+  emailHmac: text('email_hmac').notNull(),
+  motivo: text('motivo', { enum: ['perdeu_senha_e_fator', 'titular_indisponivel', 'suspeita_de_invasao'] }).notNull(),
+  chamado: text('chamado').notNull(),
+  contrato: text('contrato').notNull(),
+  pedidoEm: timestamp('pedido_em', { withTimezone: true }).notNull().defaultNow(),
+  liberaEm: timestamp('libera_em', { withTimezone: true }).notNull(),
+  estado: text('estado', { enum: ESTADOS_DA_TROCA }).notNull().default('aguardando'),
+  encerradaEm: timestamp('encerrada_em', { withTimezone: true }),
+  encerradaPor: text('encerrada_por', { enum: ['contrato', 'dpo', 'titular', 'login_da_conta_antiga', 'sistema'] }),
+  reemissoes: integer('reemissoes').notNull().default(0),
+  contaAntigaSuspensa: boolean('conta_antiga_suspensa').notNull().default(false),
 });

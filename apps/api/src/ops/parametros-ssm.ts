@@ -21,7 +21,7 @@ import { DeleteParameterCommand, GetParameterCommand, PutParameterCommand, SSMCl
 import { variaveisAwsProibidasPresentes } from '../modules/crypto/kms-client';
 
 /** Validade da entrega por fluxo, em horas (igual à validade do token no banco: 0076 e 0077). */
-export const VALIDADE_DA_ENTREGA_HORAS = { provisionamento: 72, recuperacao: 24 } as const;
+export const VALIDADE_DA_ENTREGA_HORAS = { provisionamento: 72, recuperacao: 24, troca: 24 } as const;
 
 /** Regiões aceitas (lista fechada): o pedido tem e-mail de pessoa e a entrega, o token. */
 const REGIOES_SSM_PERMITIDAS: readonly string[] = ['sa-east-1'];
