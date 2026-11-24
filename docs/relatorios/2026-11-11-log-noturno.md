@@ -863,3 +863,5 @@ destravando a auditoria de todos.
 - #239 (e3c5e37): ressalvas corrigidas (suspensão derruba tokens e sessões da conta nova e o banco recusa o fator fora
   de `ativada`; `app_auth` limitado nas transições; `TRILHA_NAO_GRAVADA` na contestação parcial). CI verde. De volta ao
   Guardião. Em paralelo: aviso fixo no app para a conta antiga, com "Não fui eu", num PR sobre o #239.
+- **Guardião aprova o #239** (e3c5e37): sem grant novo ao `app_auth` além de `troca_do_admin`. Para produção faltam o
+  Terraform (#204) e o aviso no app (em andamento); o RIPD já está no #238.
