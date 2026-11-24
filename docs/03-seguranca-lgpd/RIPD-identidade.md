@@ -62,6 +62,7 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 | Quem usa o token percebe se a conta já existe (R18) | Aceito: o aceite muda de modo (conta nova ou login completo). Só quem tem o token percebe, e o token é entregue a uma pessoa determinada. |
 | Rotação do `BETTER_AUTH_SECRET` invalida o TOTP de todos (R9 do #152) | Segredos versionados antes de abrir produção (3c) |
 | Proxy mal configurado faz todos parecerem uma origem só | `HTTP_TRUST_PROXY_HOPS` conferido no staging (3c) |
+| **Troca do admin único sem e-mail (B13, R2 do parecer de 24/11):** sem provedor de e-mail, o titular legítimo não recebe o "não fui eu" no e-mail antigo e só pode contestar pelo contrato ou pelo app | confirmação de viva voz obrigatória, pela ligação de retorno ao telefone do contrato, no `pedir` e de novo antes do `emitir`; aviso escrito ao signatário; aviso no app da conta antiga; janela de 48 h; o login da conta antiga suspende a troca (`docs/04-arquitetura/troca-do-admin-unico.md`). **Risco aceito até a D3** (§8) |
 
 ## 5. Procedimentos de suporte (fora da API, com trilha)
 
@@ -101,6 +102,7 @@ O risco residual é aceitável **depois** do checklist do 3c: segredos versionad
 | Quem entrega o token de ativação conhece o token e o e-mail e poderia ativar no lugar do fundador (B11, R3) | encarregado | _pendente_ |
 | O `--operador` do comando do suporte é declarado; a prova é o CloudTrail (B12) | encarregado | _pendente_ |
 | Clínica criada à mão pelo `app_migrator` (único caminho sem fundador, 0081) não grava `tenant_create` na trilha (R2 do parecer do #208). **Antes da primeira clínica real:** toda criação manual por esse papel registra o chamado e o operador nominal (CloudTrail da tarefa de migração) | encarregado | _pendente_ |
+| Troca do admin único (B13) sem provedor de e-mail: o "não fui eu" não chega ao e-mail antigo, e a contestação depende do contrato (com viva voz obrigatória no `pedir` e antes do `emitir`) e do app (R2 do parecer de 24/11). Vale **até a D3**: com o provedor, o aviso ao e-mail antigo entra como canal | encarregado e sócios | _pendente_ |
 | O papel `app_provisionamento` pode abrir o contexto de qualquer clínica e ler `tenants`, `clinic_members` e `audit_log` dela (O1 do parecer do #207); não chega a paciente, prontuário nem financeiro. Portão: IAM da tarefa com duas pessoas e MFA | encarregado | _pendente_ |
 
 Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, B5).
@@ -112,3 +114,4 @@ Assinatura do encarregado: _pendente_ (exigida antes da abertura de produção, 
 | 2026-11-06 | Rascunho (Maestro). |
 | 2026-11-08 | Ressalvas 2 a 6 do parecer do 3c parcial: base legal, §0, controles, prazo da credencial de conta inativa, egresso, suporte e ordem judicial. |
 | 2026-11-17 | G3 do parecer do #207 fechada pela 0081: sai do §8 o risco aceito "clínica sem fundador criada na sessão de sistema sem trilha"; o controle entra no §5a. |
+| 2026-11-24 | R2 do parecer do desenho do B13: o risco da troca do admin único sem provedor de e-mail entra no §4 e no §8, aceito até a D3. |
