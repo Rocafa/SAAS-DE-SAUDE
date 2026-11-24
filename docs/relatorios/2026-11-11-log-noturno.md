@@ -889,3 +889,7 @@ destravando a auditoria de todos.
   passou na reexecução). O #240 precisa de `ssm:DescribeParameters` para a tarefa: pedido ao agente de infra.
 - **Guardião aprova o #240** (6c7f7b7) com `DescribeParameters` limitado à VPC; condição: nomes de parâmetros nunca
   levam dado pessoal (hoje só UUID). O agente de infra parou no limite de uso depois do push; a CI foi conferida aqui.
+
+### Checagem de 24/11 13:15 UTC
+
+- Nada mudou desde a última checagem (#189 ainda BEHIND com auditoria vermelha; sem aprovação nova, merge ou ação do sócio).
