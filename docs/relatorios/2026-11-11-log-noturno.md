@@ -780,3 +780,9 @@ destravando a auditoria de todos.
 - **#201 aprovado** (Dependabot, next 16.4.5): corrige os 7 alertas médios do next; só patches no lockfile; CI toda
   verde. A minha aprovação satisfaz a proteção (dono do código). O merge fica com o sócio ou com o @Rocafa: pela regra
   "quem abriu mescla", não mesclo PR que não é nosso sem um OK explícito.
+- Com o OK do @Rocafa, passo a mesclar PRs do Dependabot revisados, aprovados e verdes. **#201 mesclado** (next 16.4.5,
+  7 alertas médios fechados). #184, #186 e #200 (pins de ação e digest do node; SHAs conferidos contra as tags
+  oficiais) em processamento sequencial: rebase, CI verde, diff igual ao revisado, aprova e mescla.
+- **#202 em espera:** versões com menos de 14 dias (better-auth 1.7.23 de 13/11, nest 12.5 e bullmq de 12/11, KMS de
+  13/11) e o better-auth mexe na base da pilha do login revisada na 1.7.12. Explicado no PR. Revisitar a partir de 27/11.
+- O #201 mudou o lockfile: #210 e #116 vão precisar do lockfile regenerado de novo.
