@@ -874,3 +874,4 @@ destravando a auditoria de todos.
 - **Guardião no #240: aprovado com ressalvas.** KMS reaproveitado aceito. R1: entryPoint por igualdade exata por família
   (senão uma roda o programa da outra sem alerta). R2: documentar que o IAM não limita o prazo do vencimento. CI do #240
   toda verde. Correções pedidas ao agente.
+- **Guardião aprova o #240** (fc11da1). Recomendação sem bloquear: a tarefa recusar pedido com vencimento acima de 72 h.
