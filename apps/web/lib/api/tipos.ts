@@ -141,6 +141,8 @@ export interface EventoLinhaTempo {
   hora?: string;
   tipo: 'consulta' | 'falta' | 'cancelamento' | 'recibo' | 'anexo' | 'cadastro';
   texto: string;
+  /** Autor ou origem administrativa conhecida pelo adaptador; nunca é deduzido de quem abriu a ficha. */
+  autor?: string;
 }
 
 export interface NovoPaciente {
