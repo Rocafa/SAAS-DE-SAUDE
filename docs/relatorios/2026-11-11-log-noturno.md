@@ -875,3 +875,9 @@ destravando a auditoria de todos.
   (senão uma roda o programa da outra sem alerta). R2: documentar que o IAM não limita o prazo do vencimento. CI do #240
   toda verde. Correções pedidas ao agente.
 - **Guardião aprova o #240** (fc11da1). Recomendação sem bloquear: a tarefa recusar pedido com vencimento acima de 72 h.
+- **#241 aberto** (aviso fixo no app do B13, base `eng/troca-do-admin-unico`): `GET /sessao/troca-do-admin` só para a
+  conta antiga, com fim da janela e se está suspensa; aviso não dispensável com "Não fui eu". Testes de RLS, componente
+  e e2e; CI verde. Mexe em `LEITURA_SEM_DADO_DE_PACIENTE`: enviado ao Guardião.
+- No #239: a tarefa vai recusar e apagar pedido com vencimento acima de 72 h (recomendação do Guardião no #240).
+- Avisos de "next upgrade --agent=security" no build: os 7 alertas do next foram fechados pelo #201 (16.4.5); o resto
+  vem com o grupo do Dependabot depois do cooldown.
