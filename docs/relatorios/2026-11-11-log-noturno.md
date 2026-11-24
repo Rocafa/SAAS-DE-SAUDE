@@ -846,3 +846,6 @@ destravando a auditoria de todos.
   bloqueiam o B13 em produção.
 - Limite de uso de 5 h atingido por volta das 04:00 (horário de Brasília): os dois agentes (ressalvas do #239 e RIPD do
   B13) pararam no meio. Retomados de onde estavam depois da renovação.
+- #238 (794f9a9): RIPD da identidade atualizado para o B13 (§3/§3.1 dados e prazos, §4 riscos, §5 item 8 medidas,
+  §5a controles com evidências do #239, §8 riscos aceitos e P1/P2/P5/P6 pendentes). Item "RIPD" do B13 resolvido;
+  para produção faltam o Terraform (#204) e o aviso fixo no app.
