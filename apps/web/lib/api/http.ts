@@ -33,12 +33,20 @@
  * - Ressalvas do Guardião no #76: a busca segue a regra da lista (sem sessão guardada, confere antes da
  *   página 1; sessão trocada no recomeço ou no fim → `sessao_mudou`). Lista e busca param em 1.000
  *   nomes e marcam `truncado: true` (a tela avisa "refine a busca", sem dado de paciente no aviso).
+ * - Equipe e trilha de acesso (`clinica/membros`, `clinica/auditoria`): admin com MFA recente; o servidor
+ *   decide permissão e visibilidade (403 `mfa_recente_obrigatorio`, 409 `ultimo_admin`). A API não manda
+ *   nome nem e-mail da equipe e não tem rota de convite: a tela não inventa um nem o outro, e `convidar`
+ *   é recusado com 501. A trilha pagina por cursor (até 3 páginas de 100; `truncado` se sobrar).
  */
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import type {
   AlteracaoPaciente,
   Agendamento,
+  EventoAuditoria,
+  ListaAuditoria,
   ListaPacientes,
+  MembroEquipe,
+  PapelEquipe,
   NovoAgendamento,
   NovoPaciente,
   Paciente,
@@ -53,7 +61,11 @@ import type {
 import { comTruncado } from './tipos';
 import { CURSOR_INVALIDO, type PaginaPorCursor } from '@plataforma/shared';
 
-/** Parte da ApiClinica que já fala com a API real. */
+/**
+ * Parte da ApiClinica que já fala com a API real. Equipe (`clinica/membros`) e trilha de acesso
+ * (`clinica/auditoria`) também: o que a API não tem (convite por e-mail) é RECUSADO com 501, nunca
+ * entregue ao fake em silêncio.
+ */
 export type ApiHttpPacientesAgenda = Pick<
   ApiClinica,
   | 'usuarioAtual'
@@ -76,6 +88,11 @@ export type ApiHttpPacientesAgenda = Pick<
   | 'pendenciasDoDia'
   | 'buscarPacientes'
   | 'esquecerCache'
+  | 'listarEquipe'
+  | 'convidar'
+  | 'removerAcesso'
+  | 'devolverAcesso'
+  | 'listarAuditoria'
 >;
 
 export interface OpcoesHttp {
@@ -142,6 +159,12 @@ export const MENSAGENS = {
   semPacote: 'Pacote de sessões ainda não está disponível nesta versão. Marque as sessões sem o pacote.',
   faltaProfissional: 'Falta o profissional. Escolha um nome da lista.',
   faltaTipo: 'Falta o tipo de atendimento. Escolha um da lista.',
+  mfaRecente: 'Por segurança, confirme sua identidade com o código do autenticador de novo e repita a ação.',
+  mfaObrigatorio: 'Esta ação exige a verificação em duas etapas. Ative o autenticador na sua conta, entre de novo e repita.',
+  ultimoAdmin: 'A clínica precisa de pelo menos um administrador. Dê o perfil de administrador a outra pessoa antes de tirar este.',
+  perfilInvalido: 'Esse perfil não existe. Atualize a tela e tente de novo.',
+  semConvite: 'Convidar por e-mail ainda não está disponível nesta versão. Peça ao suporte para vincular a conta da pessoa.',
+  acessoInvalido: 'Não identificamos esse acesso. Atualize a tela e tente de novo.',
 } as const;
 
 const NOMES_CAMPOS: Record<string, string> = {
@@ -160,6 +183,9 @@ const NOMES_CAMPOS: Record<string, string> = {
   busca: 'busca',
   de: 'período',
   ate: 'período',
+  usuarioId: 'conta da pessoa',
+  perfil: 'perfil',
+  cursor: 'página',
 };
 
 /** Traduz a resposta de erro da API em mensagem fixa. Só lê `codigo` e nomes de `campos`. */
@@ -178,6 +204,8 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
     if (codigo === 'assinatura_bloqueia_escrita' || codigo === 'janela_de_saida_encerrada') return new ErroApi(MENSAGENS.assinatura, 403, codigo);
     if (codigo === 'conferencia_exige_perfil') return new ErroApi(MENSAGENS.conferenciaPerfil, 403, codigo);
     if (codigo === 'perfil_nao_registrado') return new ErroApi(MENSAGENS.perfilNaoRegistrado, 403, codigo);
+    if (codigo === 'mfa_recente_obrigatorio') return new ErroApi(MENSAGENS.mfaRecente, 403, codigo);
+    if (codigo === 'mfa_obrigatorio') return new ErroApi(MENSAGENS.mfaObrigatorio, 403, codigo);
     return new ErroApi(MENSAGENS.proibido, 403, codigo);
   }
   if (status === 404) return new ErroApi(MENSAGENS.naoEncontrado, 404);
@@ -187,6 +215,8 @@ export function mensagemDeErro(status: number, corpo: unknown): ErroApi {
     if (codigo === 'transicao_invalida' || codigo === 'status_nao_permite') return new ErroApi(MENSAGENS.transicao, 409, codigo);
     if (codigo === 'horario_no_passado') return new ErroApi(MENSAGENS.passado, 409, codigo);
     if (codigo === 'fora_do_horario') return new ErroApi(MENSAGENS.foraDoHorario, 409, codigo);
+    if (codigo === 'ultimo_admin') return new ErroApi(MENSAGENS.ultimoAdmin, 409, codigo);
+    if (codigo === 'perfil_invalido') return new ErroApi(MENSAGENS.perfilInvalido, 409, codigo);
     return new ErroApi(MENSAGENS.conflito, 409, codigo);
   }
   if (status === 422) {
@@ -225,6 +255,13 @@ const PERIODO_MAXIMO_DIAS = 180;
 const PAGINAS_MAXIMAS_INDICE = 10;
 const LIMITE_PAGINA = 100;
 /**
+ * Trilha de acesso: até 3 páginas de 100 (os 300 eventos mais recentes). Cada página consultada vira
+ * um evento na própria trilha (a API audita a consulta), então não se pagina sem teto; se ainda há
+ * mais, a lista sai com `truncado: true` e a tela avisa.
+ */
+const PAGINAS_MAXIMAS_AUDITORIA = 3;
+const PERFIS_DA_API: readonly PapelEquipe[] = ['admin', 'profissional', 'recepcao', 'financeiro', 'psicologo'];
+/**
  * Validade do retrato de pacientes em memória (ms). Clínica com 1000 nomes = 10 páginas por retrato:
  * no máximo 20 páginas em 10 min só com o retrato, abaixo do alerta de anomalia da API (40).
  */
@@ -241,6 +278,38 @@ function diasEntre(de: string, ate: string): number {
   const [a1, m1, d1] = de.split('-').map(Number) as [number, number, number];
   const [a2, m2, d2] = ate.split('-').map(Number) as [number, number, number];
   return Math.round((Date.UTC(a2, m2 - 1, d2) - Date.UTC(a1, m1 - 1, d1)) / 86_400_000);
+}
+
+/** `GET /clinica/membros` (MembroDto da API): só ids, perfil e quem/quando concedeu. Sem nome nem e-mail. */
+interface MembroApi {
+  usuarioId: string;
+  perfil: string;
+  concedidoPor: string;
+  concedidoEm: string;
+}
+
+/** `GET /clinica/auditoria` (PaginaDaTrilha da API). `proximo` = cursor opaco da próxima página; `null` = acabou. */
+interface LinhaTrilhaApi {
+  id: string;
+  em: string;
+  acao: string;
+  escopo: string;
+  atorId: string;
+  tipoDeAtor: string | null;
+  metadata: Record<string, unknown>;
+}
+interface PaginaTrilhaApi {
+  itens: LinhaTrilhaApi[];
+  proximo: string | null;
+}
+
+const chaveDoMembro = (usuarioId: string, perfil: string) => `${usuarioId}:${perfil}`;
+
+/** Instante ISO → `AAAA-MM-DD HH:MM` local (formato que a tela já lê). Só formata; não decide nada. */
+function quandoDaTrilha(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 16).replace('T', ' ');
+  return `${isoDia(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 interface SessaoApi {
@@ -420,7 +489,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
   const series = new Map<string, string[]>();
   let seqSerie = 0;
 
-  async function chamar<T>(metodo: 'GET' | 'POST' | 'PATCH', caminho: string, corpo?: unknown): Promise<T> {
+  async function chamar<T>(metodo: 'GET' | 'POST' | 'PATCH' | 'DELETE', caminho: string, corpo?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (corpo !== undefined) headers['Content-Type'] = 'application/json';
     const token = opcoes.obterToken?.();
@@ -439,7 +508,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
    * servidor pode responder os cabeçalhos e travar no meio do corpo.
    */
   async function chamarComRelogio<T>(
-    metodo: 'GET' | 'POST' | 'PATCH',
+    metodo: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     caminho: string,
     corpo: unknown,
     headers: Record<string, string>,
@@ -591,7 +660,70 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     await chamar('POST', `/agendamentos/${encodeURIComponent(id)}/cancelar`, {});
   }
 
+  /** Equipe vista na última listagem (só ids e perfil), para o "Desfazer" de quem perdeu o acesso. */
+  let membrosVistos = new Map<string, MembroEquipe>();
+
+  async function listarEquipe(): Promise<MembroEquipe[]> {
+    const r = await chamar<MembroApi[]>('GET', '/clinica/membros');
+    if (!Array.isArray(r)) throw new ErroApi(MENSAGENS.servidor, 200, 'resposta_invalida');
+    // A lista da API só traz perfis ativos; não traz nome nem e-mail, e a tela não os inventa.
+    const lista = r.map(
+      (m): MembroEquipe => ({
+        id: chaveDoMembro(m.usuarioId, m.perfil),
+        usuarioId: m.usuarioId,
+        papel: m.perfil as PapelEquipe,
+        situacao: 'ativo',
+      }),
+    );
+    membrosVistos = new Map(lista.map((m) => [m.id, m]));
+    return lista;
+  }
+
+  async function concederPerfil(usuarioId: string, perfil: string): Promise<void> {
+    await chamar('POST', '/clinica/membros', { usuarioId, perfil });
+  }
+
+  async function revogarPerfil(usuarioId: string, perfil: string): Promise<void> {
+    await chamar('DELETE', `/clinica/membros/${encodeURIComponent(usuarioId)}/${encodeURIComponent(perfil)}`);
+  }
+
+  async function listarAuditoria(): Promise<ListaAuditoria> {
+    const eventos: EventoAuditoria[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < PAGINAS_MAXIMAS_AUDITORIA; i++) {
+      const pagina = await chamar<PaginaTrilhaApi>('GET', `/clinica/auditoria${qs({ limite: LIMITE_PAGINA, cursor })}`);
+      if (!pagina || !Array.isArray(pagina.itens)) throw new ErroApi(MENSAGENS.servidor, 200, 'resposta_invalida');
+      for (const l of pagina.itens) {
+        // A API só manda ids e códigos: `quem` é o id do ator e `acao` o par ação · escopo, sem texto inventado.
+        eventos.push({ id: l.id, quando: quandoDaTrilha(l.em), quem: l.atorId, acao: `${l.acao} · ${l.escopo}` });
+      }
+      if (pagina.proximo === null) return eventos;
+      if (typeof pagina.proximo !== 'string' || !CURSOR_RE.test(pagina.proximo)) throw new ErroApi(MENSAGENS.servidor, 200, 'resposta_invalida');
+      cursor = pagina.proximo;
+    }
+    return Object.assign(eventos, { truncado: true as const });
+  }
+
   return {
+    listarEquipe,
+    listarAuditoria,
+    // Não há rota de convite na API (só `clinica/membros`, que pede o id de uma conta existente).
+    convidar: () => Promise.reject(new ErroApi(MENSAGENS.semConvite, 501)),
+    async removerAcesso(id) {
+      const [usuarioId, perfil] = id.split(':');
+      if (!usuarioId || !perfil || !UUID_RE.test(usuarioId) || !PERFIS_DA_API.includes(perfil as PapelEquipe)) {
+        throw new ErroApi(MENSAGENS.acessoInvalido, 404);
+      }
+      await revogarPerfil(usuarioId, perfil);
+      const visto = membrosVistos.get(id) ?? null;
+      membrosVistos.delete(id);
+      return visto;
+    },
+    async devolverAcesso(m) {
+      if (!m.usuarioId || !UUID_RE.test(m.usuarioId) || !PERFIS_DA_API.includes(m.papel)) throw new ErroApi(MENSAGENS.acessoInvalido, 404);
+      await concederPerfil(m.usuarioId, m.papel);
+      membrosVistos.set(m.id, m);
+    },
     async usuarioAtual(): Promise<Usuario> {
       const s = await lerSessao();
       anotarSessao(s);
@@ -600,6 +732,7 @@ export function criarApiHttp(opcoes: OpcoesHttp): ApiHttpPacientesAgenda {
     },
     listarPacientes: retratoDePacientes,
     esquecerCache() {
+      membrosVistos = new Map();
       invalidarRetrato();
       chaveSessao = null;
     },

@@ -829,3 +829,145 @@ describe('adaptador HTTP: ressalvas do Guardião no #76 (busca sem sessão guard
     expect(listagens(base.chamadas)).toHaveLength(10);
   });
 });
+
+describe('adaptador HTTP: equipe, convites e trilha de acesso', () => {
+  const ADMIN: SessaoFicticia = { usuarioId: U(1001), clinicaId: U(9001), perfis: ['admin'] };
+  const corpoErro = (status: number, codigo: string) => respostaJson(status, { statusCode: status, message: 'x', codigo });
+  const membroApi = (n: number, perfil: string) => ({ usuarioId: U(n), perfil, concedidoPor: U(1001), concedidoEm: '2026-11-01T12:00:00.000Z' });
+
+  it('listarEquipe: GET clinica/membros, uma linha por perfil, sem inventar nome nem e-mail', async () => {
+    const { chamadas, fetch } = simular(() => respostaJson(200, [membroApi(2001, 'admin'), membroApi(2002, 'psicologo')]), () => ADMIN);
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    const equipe = await api.listarEquipe();
+    const c = chamadas.find((x) => x.url.pathname === '/clinica/membros')!;
+    expect(c.metodo).toBe('GET');
+    expect(c.corpo).toBeUndefined();
+    expect(equipe).toEqual([
+      { id: `${U(2001)}:admin`, usuarioId: U(2001), papel: 'admin', situacao: 'ativo' },
+      { id: `${U(2002)}:psicologo`, usuarioId: U(2002), papel: 'psicologo', situacao: 'ativo' },
+    ]);
+    expect(equipe[0]).not.toHaveProperty('nome');
+    expect(equipe[0]).not.toHaveProperty('email');
+  });
+
+  it('removerAcesso: DELETE clinica/membros/:usuarioId/:perfil (204) e devolve a linha vista; devolverAcesso: POST com usuarioId e perfil', async () => {
+    const { chamadas, fetch } = simular((c) => {
+      if (c.metodo === 'GET') return respostaJson(200, [membroApi(2002, 'recepcao')]);
+      if (c.metodo === 'DELETE') return respostaJson(204, undefined);
+      return respostaJson(201, membroApi(2002, 'recepcao'));
+    });
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await api.listarEquipe();
+    const removido = await api.removerAcesso(`${U(2002)}:recepcao`);
+    const del = chamadas.find((x) => x.metodo === 'DELETE')!;
+    expect(del.url.pathname).toBe(`/clinica/membros/${U(2002)}/recepcao`);
+    expect(del.corpo).toBeUndefined();
+    expect(removido).toMatchObject({ usuarioId: U(2002), papel: 'recepcao' });
+    await api.devolverAcesso(removido!);
+    const post = chamadas.find((x) => x.metodo === 'POST')!;
+    expect(post.url.pathname).toBe('/clinica/membros');
+    expect(post.corpo).toEqual({ usuarioId: U(2002), perfil: 'recepcao' });
+  });
+
+  it('removerAcesso com id que não é usuarioId:perfil não chama a API', async () => {
+    const { chamadas, fetch } = simular(() => respostaJson(204, undefined));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await expect(api.removerAcesso('m1')).rejects.toMatchObject({ status: 404, message: MENSAGENS.acessoInvalido });
+    await expect(api.removerAcesso(`${U(2002)}:dono`)).rejects.toMatchObject({ status: 404 });
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it('403 de MFA recente: mensagem pede o código de novo, em listar, revogar e conceder', async () => {
+    const { fetch } = simular((c) => (c.url.pathname.startsWith('/clinica/') ? corpoErro(403, 'mfa_recente_obrigatorio') : respostaJson(200, {})));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await expect(api.removerAcesso(`${U(2002)}:admin`)).rejects.toMatchObject({ status: 403, codigo: 'mfa_recente_obrigatorio', message: MENSAGENS.mfaRecente });
+    await expect(api.devolverAcesso({ id: 'x', usuarioId: U(2002), papel: 'admin', situacao: 'ativo' })).rejects.toMatchObject({ message: MENSAGENS.mfaRecente });
+    await expect(api.listarAuditoria()).rejects.toMatchObject({ status: 403, message: MENSAGENS.mfaRecente });
+    expect(mensagemDeErro(403, { codigo: 'mfa_obrigatorio' }).message).toBe(MENSAGENS.mfaObrigatorio);
+  });
+
+  it('403 sem permissão continua genérico e 409 traduz último admin e perfil inválido', async () => {
+    expect(mensagemDeErro(403, { codigo: 'perfil_nao_registrado' }).message).toBe(MENSAGENS.perfilNaoRegistrado);
+    expect(mensagemDeErro(403, {}).message).toBe(MENSAGENS.proibido);
+    const { fetch } = simular((c) => (c.metodo === 'DELETE' ? corpoErro(409, 'ultimo_admin') : corpoErro(409, 'perfil_invalido')));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await expect(api.removerAcesso(`${U(2002)}:admin`)).rejects.toMatchObject({ status: 409, codigo: 'ultimo_admin', message: MENSAGENS.ultimoAdmin });
+    await expect(api.devolverAcesso({ id: 'x', usuarioId: U(2002), papel: 'financeiro', situacao: 'ativo' })).rejects.toMatchObject({
+      status: 409,
+      message: MENSAGENS.perfilInvalido,
+    });
+  });
+
+  it('convidar é recusado com 501 e não chama a API', async () => {
+    const { chamadas, fetch } = simular(() => respostaJson(200, {}));
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    await expect(api.convidar('alguem@exemplo.test', 'recepcao')).rejects.toMatchObject({ status: 501, message: MENSAGENS.semConvite });
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it('listarAuditoria: GET clinica/auditoria?limite=100, mapeia ids sem metadata e formata o horário', async () => {
+    const iso = '2026-11-10T15:30:00.000Z';
+    const { chamadas, fetch } = simular(() =>
+      respostaJson(200, {
+        itens: [{ id: U(3001), em: iso, acao: 'read', escopo: 'patients', atorId: U(2001), tipoDeAtor: 'user', metadata: { patient_id: U(4001) } }],
+        proximo: null,
+      }),
+    );
+    const api = criarApiHttp({ baseUrl: BASE, fetch });
+    const lista = await api.listarAuditoria();
+    const c = chamadas.find((x) => x.url.pathname === '/clinica/auditoria')!;
+    expect(c.metodo).toBe('GET');
+    expect(c.url.searchParams.get('limite')).toBe('100');
+    expect(c.url.searchParams.has('cursor')).toBe(false);
+    const d = new Date(iso);
+    const dois = (n: number) => String(n).padStart(2, '0');
+    const esperado = `${d.getFullYear()}-${dois(d.getMonth() + 1)}-${dois(d.getDate())} ${dois(d.getHours())}:${dois(d.getMinutes())}`;
+    expect(lista).toEqual([{ id: U(3001), quando: esperado, quem: U(2001), acao: 'read · patients' }]);
+    expect(lista.truncado).toBeUndefined();
+    expect(JSON.stringify(lista)).not.toContain(U(4001));
+  });
+
+  it('listarAuditoria pagina por cursor, repassa o cursor opaco e para quando proximo é null', async () => {
+    const linha = (n: number) => ({ id: U(n), em: '2026-11-10T15:30:00.000Z', acao: 'read', escopo: 'patients', atorId: U(2001), tipoDeAtor: 'user', metadata: {} });
+    const { chamadas, fetch } = simular((c) => {
+      const cursor = c.url.searchParams.get('cursor');
+      if (!cursor) return respostaJson(200, { itens: [linha(1), linha(2)], proximo: 'cursor-um' });
+      return respostaJson(200, { itens: [linha(3)], proximo: null });
+    });
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarAuditoria();
+    const idas = chamadas.filter((c) => c.url.pathname === '/clinica/auditoria');
+    expect(idas).toHaveLength(2);
+    expect(idas[1]!.url.searchParams.get('cursor')).toBe('cursor-um');
+    expect(lista.map((e) => e.id)).toEqual([U(1), U(2), U(3)]);
+    expect(lista.truncado).toBeUndefined();
+  });
+
+  it('listarAuditoria para no teto de 3 páginas e marca truncado', async () => {
+    let n = 0;
+    const { chamadas, fetch } = simular(() =>
+      respostaJson(200, {
+        itens: [{ id: U(++n), em: '2026-11-10T15:30:00.000Z', acao: 'read', escopo: 'patients', atorId: U(2001), tipoDeAtor: null, metadata: {} }],
+        proximo: `cursor-${n}`,
+      }),
+    );
+    const lista = await criarApiHttp({ baseUrl: BASE, fetch }).listarAuditoria();
+    expect(chamadas.filter((c) => c.url.pathname === '/clinica/auditoria')).toHaveLength(3);
+    expect(lista).toHaveLength(3);
+    expect(lista.truncado).toBe(true);
+  });
+
+  it('listarAuditoria recusa cursor fora do formato e corpo inesperado', async () => {
+    const { fetch } = simular(() => respostaJson(200, { itens: [], proximo: 'com espaço/e?query' }));
+    await expect(criarApiHttp({ baseUrl: BASE, fetch }).listarAuditoria()).rejects.toMatchObject({ codigo: 'resposta_invalida' });
+    const { fetch: f2 } = simular(() => respostaJson(200, { nada: true }));
+    await expect(criarApiHttp({ baseUrl: BASE, fetch: f2 }).listarAuditoria()).rejects.toMatchObject({ codigo: 'resposta_invalida' });
+  });
+
+  it('em modo http, nenhum método de equipe ou trilha cai no fake', async () => {
+    const { fetch } = simular(() => respostaJson(200, []), () => ADMIN);
+    const api = criarApi({ modo: 'http', origem: BASE }, { http: { fetch } });
+    expect(await api.listarEquipe()).toEqual([]);
+    await expect(api.convidar('alguem@exemplo.test', 'recepcao')).rejects.toMatchObject({ status: 501 });
+    expect(await api.listarAuditoria().catch((e: unknown) => e)).toMatchObject({ codigo: 'resposta_invalida' });
+  });
+});
