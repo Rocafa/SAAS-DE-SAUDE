@@ -786,3 +786,4 @@ destravando a auditoria de todos.
 - **#202 em espera:** versões com menos de 14 dias (better-auth 1.7.23 de 13/11, nest 12.5 e bullmq de 12/11, KMS de
   13/11) e o better-auth mexe na base da pilha do login revisada na 1.7.12. Explicado no PR. Revisitar a partir de 27/11.
 - O #201 mudou o lockfile: #210 e #116 vão precisar do lockfile regenerado de novo.
+- #210 e #116: lockfile regenerado de novo depois do #201, com o mesmo efeito de cada PR (+4/−18 e +15/−20).
