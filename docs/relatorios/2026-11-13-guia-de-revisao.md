@@ -36,7 +36,7 @@
 | #229 | #219 | regra única de psicologia; ciclo das notas lacra na dúvida; custódia pelo perfil | aprovado (veto atendido) |
 | #231 | #222 | seletor `Status` do e2e | — |
 | #232 | #213 | manifest permitido no cache do e2e | — |
-| #233 | #227 | injeção do serviço (inclui o #230), HMAC nos hashes, revisão herdada, trava do provedor real | veto retirado; falta o CloudTrail no staging |
+| #233 | #227 | injeção do serviço (inclui o #230), HMAC nos hashes, revisão herdada, tentativa e resultado em dois eventos com a chamada fora da transação | **aprovado** (24/11); falta só o CloudTrail no staging |
 | #234 | #220 | R9: só o RT aprova com MFA; autônomo com janela de 24 h; 409 em pedido pronto ou cancelado | aprovado (ressalvas feitas) |
 
 - **Decisões tuas:** no #226, dividir (a migração 0066 conflita com a pilha do Better Auth) e decidir o prazo do plano
