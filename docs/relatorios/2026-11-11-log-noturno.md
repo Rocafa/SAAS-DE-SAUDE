@@ -773,3 +773,7 @@ destravando a auditoria de todos.
   segue valendo (imagem de 268 para 82 MB) e agora precisa só da reaprovação.
 - Alertas abertos na `main`: 7 do next 16.4.3 (médios; todos corrigidos na 16.4.5, que é o #201 do Dependabot) e o do
   minimatch (#189). Pedi `@dependabot rebase` no #201.
+- #234 (bd233f0) conciliado com o 5956a33 do sócio e verde. O commit dele contradizia o parecer do Guardião em três
+  pontos (autoaprovação do RT com outro admin ativo; admin não podia confirmar o pedido do RT; sem janela de 24 h nem
+  409); prevaleceu o parecer, e os dois testes dele que afirmavam isso saíram. Explicado no #220. O e2e local fica
+  instável sob carga (2 de 5 rodadas inteiras); na CI passou.
