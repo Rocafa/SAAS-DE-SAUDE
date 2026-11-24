@@ -7,7 +7,7 @@
  * - Desbloqueio: o admin zera SÓ os contadores de bloqueio (e-mail e fator) de quem tem vínculo ativo na clínica dele;
  *   não troca senha nem fator. Fora da clínica: 404.
  */
-import { Body, Controller, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, Req, Res, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
@@ -128,6 +128,15 @@ export class CredenciaisService {
     if (!(await this.provider.contestarTrocaDoAdmin(userId))) throw new NaoEncontradoError();
   }
 
+  /**
+   * B13, aviso fixo do app: se a pessoa da sessão é a conta ANTIGA de uma troca em andamento NA clínica da sessão, o fim
+   * da janela e se está suspensa; senão `troca: null`. Com o dev provider (sem schema de identidade), `troca: null`.
+   */
+  async trocaDoAdminEmJanela(auth: AuthContext): Promise<{ troca: { liberaEm: string; suspensa: boolean } | null }> {
+    if (!ehProvedorDeTrocaDoAdmin(this.provider)) return { troca: null };
+    return { troca: await this.provider.trocaDoAdminEmJanela(auth.userId, auth.tenantId) };
+  }
+
   /** R16: só quem tem vínculo ATIVO na clínica do admin; a trilha fica na clínica do admin. */
   async desbloquear(ctx: RequestContext, usuarioId: string): Promise<void> {
     const credenciais = this.credenciais;
@@ -167,6 +176,13 @@ export class CredenciaisController {
     if (nova.length < 12) throw new ConflitoError('senha_curta', ['senhaNova']);
     const cookies = await this.service.trocarSenha({ headers: req.headers, userId: auth.userId, atual, nova });
     if (cookies.length > 0) res.append('Set-Cookie', cookies);
+  }
+
+  /** Aviso fixo do app (B13): só o fim da janela e a suspensão, e só para a conta antiga na clínica da sessão. */
+  @Get('sessao/troca-do-admin')
+  @Permissao('sessao:ler')
+  trocaDoAdminEmJanela(@Sessao() auth: AuthContext): Promise<{ troca: { liberaEm: string; suspensa: boolean } | null }> {
+    return this.service.trocaDoAdminEmJanela(auth);
   }
 
   @Post('sessao/troca-do-admin/contestar')

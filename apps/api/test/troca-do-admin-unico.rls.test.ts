@@ -20,6 +20,7 @@ import { CABECALHO_ORIGEM, criarAutenticacao, nomeDoCookie, type Autenticacao } 
 import { BetterAuthProvider } from '../src/modules/auth/better-auth/provedor';
 import { cancelarTrocaDoAdmin, emitirTrocaDoAdmin, pedirTrocaDoAdmin, type PedidoDeTroca } from '../src/modules/auth/better-auth/troca-do-admin';
 import { concluirTrocasPendentes } from '../src/modules/auth/better-auth/troca-do-admin-na-api';
+import { CredenciaisService } from '../src/modules/auth/credenciais';
 import { MembrosService } from '../src/modules/auth/membros';
 import { MemoryRateLimitStore } from '../src/security/rate-limit-store';
 import { zerarJanelasDoLog } from '../src/security/log-de-seguranca';
@@ -334,6 +335,67 @@ describe('B13: cancelamento e "não fui eu"', () => {
     expect(cancelou?.meta).toEqual({ op: 'admin_replacement_cancelled', ticket: p.chamado, by: 'contrato' });
     await expect(ativacao().usar({ token, email: p.email, nome: 'Admin Novo Ficticio', senha: SENHA, cabecalhos: new Headers() })).rejects.toBeInstanceOf(NaoEncontradoError);
     expect(await codigo(cancelarTrocaDoAdmin(dbProv.db, { pedido: p.pedido, chamado: p.chamado, operador: OPERADOR_B, por: 'dpo' }))).toBe('troca_encerrada');
+  });
+});
+
+describe('B13: aviso fixo do app (GET /sessao/troca-do-admin)', () => {
+  const sessaoDe = (tenantId: string, userId: string) => ({ tenantId: tenantId as TenantId, userId: userId as UserId, perfis: [], mfaEm: new Date() });
+  const avisoPara = (tenantId: string, userId: string) => new CredenciaisService({} as never, provedor).trocaDoAdminEmJanela(sessaoDe(tenantId, userId));
+
+  it('só a conta antiga, na clínica da troca, vê o fim da janela; outra clínica, outro membro e a conta nova não', async () => {
+    const clinicaId = await api.novaClinica();
+    const outra = await api.novaClinica();
+    const antigo = await contaComFator(clinicaId, 'admin');
+    // A conta antiga também trabalha em outra clínica (P4: lá ninguém é avisado, nem ela).
+    await api.membro(outra, { userId: antigo }, 'recepcao');
+    const colega = await contaComFator(clinicaId, 'recepcao');
+    expect(await avisoPara(clinicaId, antigo)).toEqual({ troca: null });
+
+    const p = pedidoFicticio(clinicaId, antigo);
+    await pedir(p);
+    const t = await troca(p.pedido);
+    const aviso = await avisoPara(clinicaId, antigo);
+    expect(aviso).toEqual({ troca: { liberaEm: t.liberaEm.toISOString(), suspensa: false } });
+    // Minimização: nada do e-mail novo, da conta nova, do chamado, do contrato nem de quem pediu.
+    const corpo = JSON.stringify(aviso);
+    for (const proibido of [p.email, t.usuarioNovo, p.chamado, p.contrato, OPERADOR_A]) expect(corpo).not.toContain(proibido);
+
+    expect(await avisoPara(outra, antigo)).toEqual({ troca: null });
+    expect(await avisoPara(clinicaId, colega)).toEqual({ troca: null });
+    expect(await avisoPara(clinicaId, api.fundador(clinicaId))).toEqual({ troca: null });
+
+    // Conta nova (admin depois da emissão, ativada): também não vê.
+    await liberar(p.pedido);
+    await ativar(await emitir(p), p.email);
+    expect((await troca(p.pedido)).estado).toBe('ativada');
+    expect(await avisoPara(clinicaId, t.usuarioNovo)).toEqual({ troca: null });
+    // A conta antiga segue vendo, já com a janela encerrada (o "não fui eu" ainda vale até a conclusão).
+    expect((await avisoPara(clinicaId, antigo)).troca).toMatchObject({ suspensa: false });
+  });
+
+  it('login completo da conta antiga: o aviso continua (suspensa); depois do "não fui eu", some', async () => {
+    const clinicaId = await api.novaClinica();
+    const antigo = await contaComFator(clinicaId, 'admin');
+    const p = pedidoFicticio(clinicaId, antigo);
+    await pedir(p);
+    await provedor.aposMfaVerificado(randomUUID(), antigo, 'login_em_duas_etapas');
+    expect((await troca(p.pedido)).estado).toBe('suspensa');
+    expect((await avisoPara(clinicaId, antigo)).troca).toMatchObject({ suspensa: true });
+    expect(await provedor.contestarTrocaDoAdmin(antigo)).toBe(true);
+    expect(await troca(p.pedido)).toMatchObject({ estado: 'contestada', encerradaPor: 'titular' });
+    expect(await avisoPara(clinicaId, antigo)).toEqual({ troca: null });
+  });
+
+  it('vínculo da conta antiga revogado na clínica (o RLS não vê vínculo ativo): sem aviso', async () => {
+    const clinicaId = await api.novaClinica();
+    const antigo = await contaComFator(clinicaId, 'admin', 'recepcao');
+    const p = pedidoFicticio(clinicaId, antigo);
+    await pedir(p);
+    const fundador = { tenantId: clinicaId, userId: api.fundador(clinicaId) as UserId, roles: ['admin'] };
+    await api.app.get(MembrosService).revogar(fundador, antigo, 'recepcao');
+    await api.app.get(MembrosService).revogar(fundador, antigo, 'admin');
+    expect((await troca(p.pedido)).estado).toBe('aguardando');
+    expect(await avisoPara(clinicaId, antigo)).toEqual({ troca: null });
   });
 });
 

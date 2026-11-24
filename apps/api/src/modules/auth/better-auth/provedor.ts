@@ -15,7 +15,15 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { clinicMembers, tenants } from '../../../db/schema';
 import { canRead, EXIT_WINDOW_DAYS } from '../../exports/access-policy';
 import { ativacaoDoFundador, conta, doisFatores, recuperacao, sessao, trocaDoAdmin, usuario, verificacao, vinculo } from '../../../db/identidade';
-import { aoLoginCompletoDaConta, concluirTrocaDoAdmin, concluirTrocasPendentes, contestarTrocaDoAdmin, expurgarTrocasAntigas } from './troca-do-admin-na-api';
+import {
+  aoLoginCompletoDaConta,
+  concluirTrocaDoAdmin,
+  concluirTrocasPendentes,
+  contestarTrocaDoAdmin,
+  expurgarTrocasAntigas,
+  trocaEmJanelaDaSessao,
+  type TrocaEmJanela,
+} from './troca-do-admin-na-api';
 import { withTenant, type Database } from '../../../db/tenant-transaction';
 import { registrarEventoDeSeguranca, registrarNoMaximoUmaVez } from '../../../security/log-de-seguranca';
 import { recordAudit, SYSTEM_ACTOR_ID } from '../../audit/audit-log';
@@ -1048,6 +1056,11 @@ export class BetterAuthProvider implements AuthProvider, ProvedorDePessoa, Prove
   /** B13, seção 5: "não fui eu" pela conta antiga (a rota exige MFA recente). */
   contestarTrocaDoAdmin(userId: string): Promise<boolean> {
     return contestarTrocaDoAdmin({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }, userId);
+  }
+
+  /** B13, aviso fixo do app: a troca em andamento da conta antiga NA clínica da sessão (só fim da janela e suspensão). */
+  trocaDoAdminEmJanela(userId: string, clinicaId: string): Promise<TrocaEmJanela | null> {
+    return trocaEmJanelaDaSessao({ dbAuth: this.d.dbAuth, dbClinica: this.d.dbClinica }, userId, clinicaId);
   }
 
   /** R8: o `enable` do TOTP só é aceito numa sessão de cadastro pendente dentro do prazo. */

@@ -151,6 +151,11 @@ export function ehProvedorDeAtivacao(p: AuthProvider): p is AuthProvider & Prove
 export interface ProvedorDeTrocaDoAdmin {
   /** Devolve se havia troca em andamento a contestar. */
   contestarTrocaDoAdmin(userId: string): Promise<boolean>;
+  /**
+   * Aviso fixo do app: a troca em andamento em que `userId` é a conta ANTIGA, na clínica `clinicaId` (a da sessão), ou
+   * null. Só o fim da janela e se está suspensa (minimização: nada do e-mail novo nem de quem pediu).
+   */
+  trocaDoAdminEmJanela(userId: string, clinicaId: string): Promise<{ liberaEm: string; suspensa: boolean } | null>;
 }
 
 export function ehProvedorDeTrocaDoAdmin(p: AuthProvider): p is AuthProvider & ProvedorDeTrocaDoAdmin {

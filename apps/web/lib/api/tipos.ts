@@ -16,6 +16,17 @@ export interface Usuario {
   profissionalId?: string;
 }
 
+/**
+ * Troca do admin único em andamento (B13), vista SÓ pela conta antiga, na clínica da sessão. Minimização: só o fim da
+ * janela de 48 h e se a troca está suspensa; nada do e-mail novo nem de quem pediu.
+ */
+export interface TrocaDoAdminEmJanela {
+  /** Fim da janela (ISO 8601). */
+  liberaEm: string;
+  /** Parada à espera da decisão do DPO (por exemplo, depois de um login completo desta conta). */
+  suspensa: boolean;
+}
+
 export interface Adendo {
   texto: string;
   em: string;

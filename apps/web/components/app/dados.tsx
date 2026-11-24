@@ -3,7 +3,8 @@
 /**
  * Provedor da camada de dados. Adaptador escolhido por `NEXT_PUBLIC_API_MODO` (lib/api/selecionar.ts):
  * `fake` (padrão, dados fictícios em memória) ou `http` (pacientes e agenda na API real).
- * `?demo=erro|vazio|lento` na URL mostra os estados de tela para revisão (só no fake).
+ * `?demo=erro|vazio|lento` na URL mostra os estados de tela para revisão (só no fake); `?demo=troca-do-admin`
+ * mostra o aviso fixo da troca do admin único (B13) para a administradora da demonstração.
  *
  * No modo http há dois retratos em memória, nenhum em storage:
  * - o do provedor (ressalva R1 do parecer front-r8): projeção mínima de pacientes (`paraIndice`) e
@@ -47,6 +48,13 @@ function lerSimulacao(): 'erro' | 'vazio' | 'lento' | 'lista_mudou' | undefined 
   return v === 'erro' || v === 'vazio' || v === 'lento' || v === 'lista_mudou' ? v : undefined;
 }
 
+/** `?demo=troca-do-admin` (ou `troca-do-admin-suspensa`): o aviso fixo da troca do admin único (B13), só no fake. */
+function lerTrocaDemo(): 'em_janela' | 'suspensa' | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const v = new URLSearchParams(window.location.search).get('demo');
+  return v === 'troca-do-admin' ? 'em_janela' : v === 'troca-do-admin-suspensa' ? 'suspensa' : undefined;
+}
+
 /** Mesma pessoa na mesma clínica? Se não, o retrato anterior não pode sobreviver. */
 function mesmaSessao(a: Usuario | null, b: Usuario): boolean {
   return a === null || (a.id === b.id && a.clinicaId === b.clinicaId);
@@ -71,7 +79,8 @@ export function DadosProvider({ children }: { children: ReactNode }) {
 
   const [api] = useState<ApiClinica>(() => {
     const simular = lerSimulacao();
-    return criarApi(config, { fake: simular ? { simular } : {}, http: { aoPerderSessao: limpar } });
+    const trocaDoAdmin = lerTrocaDemo();
+    return criarApi(config, { fake: { ...(simular ? { simular } : {}), ...(trocaDoAdmin ? { trocaDoAdmin } : {}) }, http: { aoPerderSessao: limpar } });
   });
   apiRef.current = api;
 

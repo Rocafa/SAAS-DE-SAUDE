@@ -25,6 +25,7 @@ import type {
   Recibo,
   StatusAgendamento,
   TipoAtendimento,
+  TrocaDoAdminEmJanela,
   Usuario,
 } from './tipos';
 
@@ -128,6 +129,14 @@ export interface ApiClinica {
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
   aprovarExportacao(id: string): Promise<PedidoExportacao>;
 
+
+  /**
+   * B13: troca do admin único em andamento em que quem está usando é a conta ANTIGA, nesta clínica; `null` para
+   * qualquer outra pessoa. O aviso fixo do app usa isto.
+   */
+  trocaDoAdminEmJanela(): Promise<TrocaDoAdminEmJanela | null>;
+  /** B13: "Não fui eu". A API exige MFA recente (403 `mfa_recente_obrigatorio`); sem troca a contestar, 404. */
+  contestarTrocaDoAdmin(): Promise<void>;
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
   usuariosDemo(): Promise<Usuario[]>;

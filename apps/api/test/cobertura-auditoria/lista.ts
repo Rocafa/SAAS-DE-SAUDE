@@ -232,6 +232,8 @@ export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
     'sessões da própria pessoa: id, criação e última atividade; sem IP, user-agent, clínica nem dado de paciente (R20)',
   'GET /sessao':
     'a própria sessão: id do usuário, id da clínica e perfis, todos já do contexto de quem pede',
+  'GET /sessao/troca-do-admin':
+    'aviso fixo da troca do admin único (B13): só o fim da janela e se a troca está suspensa, e só para a conta antiga na clínica da sessão; sem e-mail novo, conta nova, chamado nem quem pediu; o pedido e a contestação são auditados',
   'GET /tipos-atendimento':
     'cadastro da agenda: tipos de atendimento e duração; sem dado pessoal',
   'GET /whatsapp/configuracao':
