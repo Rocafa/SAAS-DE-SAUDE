@@ -844,3 +844,5 @@ destravando a auditoria de todos.
   Terraform, RIPD e aviso no app bloqueiam o B13 em produção, não o merge. Correções pedidas ao agente.
 - Em paralelo: atualização do RIPD da identidade para o B13 (§3, §4, §5 item 8, §5a, §8) no #238, um dos itens que
   bloqueiam o B13 em produção.
+- Limite de uso de 5 h atingido por volta das 04:00 (horário de Brasília): os dois agentes (ressalvas do #239 e RIPD do
+  B13) pararam no meio. Retomados de onde estavam depois da renovação.
