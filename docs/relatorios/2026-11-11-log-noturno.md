@@ -757,3 +757,7 @@ destravando a auditoria de todos.
 - `main` mesclada sem conflito no #194, #153, #154 e #155. No #154 (trava de logs) e no #155 rodei o vitest da API
   antes do push: exit 0 (1154 e 1159 testes). A pilha acima do #155 não foi propagada agora: ela mira branches, não a
   `main`, e cada propagação custa uma rodada de CI em 15 PRs; fica para quando o #155 for aprovado.
+- #234 em conflito: o sócio fez a própria correção no #220 ("exige MFA do RT", 5956a33). Agente do #234 mescla a
+  branch dele e concilia, mantendo o que o Guardião aprovou.
+- No #232 (branch do #213): reescrita do bloco unitário do `sw.js` para testar o arquivo de verdade, com prova por
+  mutação.
