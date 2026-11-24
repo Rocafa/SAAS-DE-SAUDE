@@ -291,7 +291,9 @@ export class ProntuarioService {
         conferirMfaDoRegistro(ctx, e);
         if (e.status !== 'open') throw new ConflitoError('registro_finalizado');
         if (dados.versaoBase !== e.currentVersion) throw new ConflitoError('versao_desatualizada');
-        const conteudo = validarConteudo(e.template, dados.conteudo);
+        // PRO-01.4: rascunho aberto numa versão do modelo segue a regra dela; só o primeiro salvamento usa a versão atual.
+        const versaoModelo = e.currentVersion > 0 ? (await this.versaoAtual(tx, ctx, e)).templateVersion : MODELOS[e.template].versao;
+        const conteudo = validarConteudo(e.template, dados.conteudo, versaoModelo);
         const versaoId = randomUUID();
         const versao = e.currentVersion + 1;
         const contentEnc = await cifrarCampoClinico(this.cipher, tx, ctx, versaoId, CAMPO_VERSAO, JSON.stringify(conteudo));
@@ -301,7 +303,7 @@ export class ProntuarioService {
           encounterId: e.id,
           version: versao,
           template: e.template,
-          templateVersion: MODELOS[e.template].versao,
+          templateVersion: versaoModelo,
           contentEnc,
           createdBy: ctx.userId,
         });

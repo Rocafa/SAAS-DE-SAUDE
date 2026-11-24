@@ -23,6 +23,26 @@ describe('modelos por nicho', () => {
     expect(faltasParaAssinar('fisio', { queixa: 'x', conduta: 'y' })).toEqual([]);
     expect(faltasParaAssinar('fisio', { queixa: '   ', conduta: 'y' })).toHaveLength(1);
   });
+  it('campos clínicos da issue 167 usam as chaves da API e não mudam os obrigatórios', () => {
+    expect(MODELOS.fisio.campos).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'diagnostico', rotulo: 'Diagnóstico e prognóstico fisioterapêuticos', tipo: 'texto', obrigatorio: false }),
+        expect.objectContaining({ id: 'exames', rotulo: 'Exames complementares realizados ou solicitados', tipo: 'texto', obrigatorio: false }),
+      ]),
+    );
+    expect(MODELOS.to.campos).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'diagnostico', rotulo: 'Diagnóstico e prognóstico terapêutico ocupacional', tipo: 'texto', obrigatorio: false }),
+        expect.objectContaining({ id: 'exames', rotulo: 'Exames complementares realizados ou solicitados', tipo: 'texto', obrigatorio: false }),
+        expect.objectContaining({ id: 'nivel_assistencia', rotulo: 'Nível de assistência', tipo: 'texto', obrigatorio: false }),
+      ]),
+    );
+    const instrumentos = MODELOS.psicologia.campos.find((c) => c.id === 'instrumentos');
+    expect(instrumentos).toMatchObject({ tipo: 'texto', obrigatorio: false });
+    expect(instrumentos?.ajuda).toContain('SATEPSI');
+    expect(faltasParaAssinar('to', { objetivo: 'x', atividades: 'y', diagnostico: '', exames: '', nivel_assistencia: '' })).toEqual([]);
+    expect(faltasParaAssinar('psicologia', { tema: 'x', evolucao: 'y', instrumentos: '' })).toEqual([]);
+  });
 });
 
 describe('documentos', () => {
