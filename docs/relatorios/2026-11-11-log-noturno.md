@@ -761,3 +761,5 @@ destravando a auditoria de todos.
   branch dele e concilia, mantendo o que o Guardião aprovou.
 - No #232 (branch do #213): reescrita do bloco unitário do `sw.js` para testar o arquivo de verdade, com prova por
   mutação.
+- #232 (2a08eb5): bloco unitário do `sw.js` reescrito com `node:vm` (8 testes de comportamento; 9 mutações no `sw.js`
+  derrubam todos); `/offline` lido do cache. Web: lint, typecheck e 425 testes com exit 0. Comentado no #213.
