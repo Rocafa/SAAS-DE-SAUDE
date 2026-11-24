@@ -13,7 +13,6 @@ async function pedirExportacao(page: Page) {
   await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
   await page.getByLabel(/Estou ciente/).check();
   await page.getByRole('button', { name: 'Confirmar pedido' }).click();
-  await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
 }
 
 test.describe('Garantias na tela', () => {
@@ -33,7 +32,7 @@ test.describe('Garantias na tela', () => {
     await expect(page.getByText(/Próxima cobrança/)).toBeVisible();
   });
 
-  test('G2: pedido não oferece aprovação a admin sem RT; RT aprova com MFA próprio', async ({ page }) => {
+  test('G2: quem pediu não vê o botão de aprovar; o RT entra, usa o próprio código e conclui', async ({ page }) => {
     await page.goto('/configuracoes/privacidade');
     await page.getByRole('button', { name: 'Baixar todos os dados da clínica' }).click();
     await page.getByLabel(/Código do aplicativo autenticador/).fill('000000');
@@ -45,22 +44,22 @@ test.describe('Garantias na tela', () => {
     await page.getByLabel(/Código do aplicativo autenticador/).fill('123456');
     await page.getByRole('button', { name: 'Confirmar pedido' }).click();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
-    await expect(page.getByText('Somente o responsável técnico pode aprovar, com um novo código MFA.')).toBeVisible();
+    // R9: a administradora que pediu não é o RT, então a tela não oferece o botão.
     await expect(page.getByRole('button', { name: /Aprovar como responsável técnico/ })).toHaveCount(0);
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toHaveCount(0);
+    await expect(page.getByText(/Só o responsável técnico aprova/)).toBeVisible();
 
     await entrarComo(page, /Dra\. Lúcia Prates \(administradora/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
-    await page.getByLabel('Código do responsável técnico (6 números)').fill('000000');
+    await expect(page.getByText(/registrada como autoaprovação/)).toHaveCount(0);
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('000000');
     await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'Código não confere' })).toBeVisible();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toBeVisible();
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toHaveCount(0);
-
-    await page.getByLabel('Código do responsável técnico (6 números)').fill('123456');
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
+    // Duplo clique não aprova duas vezes (o 409 e o `aprovando` seguram): uma linha só na auditoria.
     await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).dblclick();
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toBeVisible();
+    await expect(page.getByText(/O link foi para o e-mail de quem pediu/)).toBeVisible();
     await expect(page.getByText(/pode ser baixado 3 vezes/)).toBeVisible();
     await expect(page.getByText(/Falta a aprovação do responsável técnico/)).toHaveCount(0);
     const aprovacoes = page.getByRole('region', { name: 'Registro de acessos' }).getByRole('row').filter({ hasText: 'Responsável técnico aprovou a exportação' });
@@ -68,29 +67,28 @@ test.describe('Garantias na tela', () => {
     await expect(aprovacoes.first()).toContainText('Dra. Lúcia Prates');
   });
 
-  test('G2: admin RT autônomo aprova o próprio pedido e registra a exceção', async ({ page }) => {
+  test('G2: o RT pede, não se autoaprova (há outro admin ativo) e a outra administradora confirma com o código dela', async ({ page }) => {
     await page.goto('/mais');
     await entrarComo(page, /Dra\. Lúcia Prates \(administradora/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
     await pedirExportacao(page);
+    await expect(page.getByText(/Falta a confirmação de outro administrador/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Aprovar como responsável técnico|Confirmar como administrador/ })).toHaveCount(0);
+    await expect(page.getByText(/registrada como autoaprovação/)).toHaveCount(0);
 
     await entrarComo(page, /Administradora \(demonstração\)/);
     await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
-    await expect(page.getByText('Somente o responsável técnico pode aprovar, com um novo código MFA.')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Aprovar como responsável técnico/ })).toHaveCount(0);
-
-    await entrarComo(page, /Dra\. Lúcia Prates \(administradora/);
-    await page.getByRole('link', { name: 'Privacidade e LGPD' }).click();
-    await expect(page.getByText(/Você também é o responsável técnico; esta aprovação autônoma ficará registrada/)).toBeVisible();
-    await page.getByLabel('Código do responsável técnico (6 números)').fill('123456');
-    await page.getByRole('button', { name: /Aprovar como responsável técnico/ }).click();
-    await expect(page.getByText(/O link foi para o seu e-mail/)).toBeVisible();
-    const aprovacoes = page
+    await expect(page.getByText(/Falta a confirmação de outro administrador/)).toBeVisible();
+    await page.getByLabel(/Seu código do aplicativo autenticador/).fill('123456');
+    await page.getByRole('button', { name: /Confirmar como administrador/ }).click();
+    await expect(page.getByText(/O link foi para o e-mail de quem pediu/)).toBeVisible();
+    const confirmacoes = page
       .getByRole('region', { name: 'Registro de acessos' })
       .getByRole('row')
-      .filter({ hasText: 'Responsável técnico autônomo aprovou a própria exportação' });
-    await expect(aprovacoes).toHaveCount(1);
-    await expect(aprovacoes.first()).toContainText('Dra. Lúcia Prates');
+      .filter({ hasText: 'Administrador confirmou a exportação pedida pelo responsável técnico' });
+    await expect(confirmacoes).toHaveCount(1);
+    await expect(confirmacoes.first()).toContainText('Administradora (demonstração)');
+    await expect(page.getByRole('region', { name: 'Registro de acessos' }).getByRole('row').filter({ hasText: 'autoaprovação' })).toHaveCount(0);
   });
 
   test('auditoria mostra quem acessou o quê e filtra por pessoa', async ({ page }) => {

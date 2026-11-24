@@ -12,7 +12,8 @@ import { Botao } from '@/components/ui/botao';
 import { Carregando, Erro, Vazio } from '@/components/ui/estados';
 import { formatarDia } from '@/lib/ajudante/datas';
 import type { DadosClinica, Papel, PedidoExportacao } from '@/lib/api/tipos';
-import { JANELA_SAIDA_DIAS, avisoDeSaida, validarEmail } from '@/lib/conta';
+import { JANELA_SAIDA_DIAS, JANELA_SEGURANCA_EXPORTACAO_HORAS, avisoDeSaida, validarEmail } from '@/lib/conta';
+import { ehResponsavelTecnico, podeAprovarExportacao } from '@/lib/api/papeis';
 import { MODELOS } from '@/lib/prontuario';
 import { reais } from '@/lib/utils';
 import { useConsulta, useDados } from './dados';
@@ -405,13 +406,14 @@ function SecaoPrivacidade() {
   const usuarioId = usuario?.id;
   const papel = usuario?.papel;
   const admin = papel === 'admin';
-  const responsavelTecnico = usuario?.responsavelTecnico === true;
-  const aprovacaoAutonoma = responsavelTecnico && pedido?.pedidoPor === usuarioId;
+  // R9: só o RT vê o botão de aprovar; o RT que não é admin também acompanha o pedido pendente.
+  const rt = ehResponsavelTecnico(usuario);
+  const podeVer = admin || rt;
 
   useEffect(() => {
     // MFA pertence a quem está na sessão agora: nunca carregar o código ao trocar de usuário.
     setCodigoAprovacao('');
-    if (!usuarioId || papel !== 'admin') {
+    if (!usuarioId || !podeVer) {
       setCarregandoPedido(false);
       return;
     }
@@ -434,7 +436,7 @@ function SecaoPrivacidade() {
     return () => {
       vivo = false;
     };
-  }, [api, usuarioId, papel, tentativaPedido]);
+  }, [api, usuarioId, podeVer, tentativaPedido]);
 
   async function pedir(e: FormEvent) {
     e.preventDefault();
@@ -477,12 +479,14 @@ function SecaoPrivacidade() {
         </p>
         {!usuario ? (
           <Carregando />
-        ) : !admin ? (
+        ) : !podeVer ? (
           <p className="font-bold">Só um administrador da clínica pode pedir. Peça ao responsável.</p>
         ) : carregandoPedido ? (
           <Carregando texto="Carregando pedido de exportação…" />
         ) : erroPedido ? (
           <Erro mensagem={erroPedido} tentarDeNovo={() => setTentativaPedido((t) => t + 1)} />
+        ) : etapa === 'inicio' && !admin ? (
+          <p className="font-bold">Nenhum pedido de exportação aguardando a sua aprovação. Só um administrador pode pedir.</p>
         ) : etapa === 'inicio' ? (
           <Botao tamanho="grande" onClick={() => setEtapa('codigo')}>
             <Download aria-hidden />
@@ -511,44 +515,58 @@ function SecaoPrivacidade() {
           </form>
         ) : pedido?.status === 'aguardando_rt' ? (
           <div className="flex flex-col gap-3" role="status">
-            <p className="font-bold">Pedido feito. Falta a aprovação do responsável técnico da clínica.</p>
+            <p className="font-bold">
+              {pedido.confirmacao === 'admin'
+                ? 'Pedido feito pelo responsável técnico. Falta a confirmação de outro administrador da clínica.'
+                : pedido.confirmacao === 'autoaprovacao'
+                  ? 'Pedido feito. Falta a aprovação do responsável técnico (você, que é o único administrador ativo).'
+                  : 'Pedido feito. Falta a aprovação do responsável técnico da clínica.'}
+            </p>
             <p>Ele recebe um aviso. Todos os administradores também recebem um e-mail com o botão “Não fui eu”, que cancela o pedido.</p>
             {/*
-              G2/R6: com RT diferente, o dump completo exige duas pessoas. Quem pediu sem papel de
-              RT não vê ação nem depende do 403. R9: se o admin também é o RT autônomo, pode aprovar
-              o próprio pedido, com MFA próprio e exceção explícita na auditoria. O pedido pendente
-              é recuperado sem storage; a API real confere papel, identidade e MFA no servidor.
+              G2/R9 + Guardião (PR 234): o dump completo da clínica (pacientes, agenda, prontuários e
+              financeiro) precisa de duas pessoas, cada uma com o próprio MFA: pedido de admin → o RT
+              aprova (sigilo); pedido do RT com outro admin ativo → outro admin confirma (desvio). Só o
+              autônomo (RT sem outro admin ativo) se autoaprova, com janela de segurança (R10) e registro.
+              Quem não pode aprovar não vê o botão; o adaptador recusa com 403 de qualquer forma.
             */}
-            {!responsavelTecnico && <p>Somente o responsável técnico pode aprovar, com um novo código MFA.</p>}
-            {responsavelTecnico && aprovacaoAutonoma && (
-              <p>Você também é o responsável técnico; esta aprovação autônoma ficará registrada com seu usuário e este MFA.</p>
-            )}
-            {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
-            {modo === 'fake' && responsavelTecnico && (
+            {modo === 'fake' && podeAprovarExportacao(usuario, pedido) ? (
               <form onSubmit={aprovar} noValidate className="flex max-w-xl flex-col gap-3">
-                <Campo id="x-cod-aprovacao" rotulo="Código do responsável técnico (6 números)">
-                  <input
-                    id="x-cod-aprovacao"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    value={codigoAprovacao}
-                    onChange={(e) => setCodigoAprovacao(e.target.value)}
-                    className={CAMPO}
-                  />
+                {pedido.confirmacao === 'autoaprovacao' && (
+                  <p>
+                    Você é o responsável técnico: a aprovação do seu próprio pedido fica registrada como autoaprovação, e o link só é liberado{' '}
+                    {JANELA_SEGURANCA_EXPORTACAO_HORAS} horas depois (janela de segurança).
+                  </p>
+                )}
+                <Campo id="x-cod-rt" rotulo="Seu código do aplicativo autenticador (6 números)">
+                  <input id="x-cod-rt" inputMode="numeric" autoComplete="one-time-code" value={codigoAprovacao} onChange={(e) => setCodigoAprovacao(e.target.value)} className={CAMPO} />
                 </Campo>
                 <p className="text-texto-suave">Na demonstração, use 123456.</p>
+                {erroAprovacao && <p role="alert" className="font-bold">⚠ {erroAprovacao}</p>}
                 <Botao type="submit" variante="contorno" className="self-start" disabled={aprovando}>
                   <ShieldCheck aria-hidden />
-                  Aprovar como responsável técnico (demonstração)
+                  {pedido.confirmacao === 'admin' ? 'Confirmar como administrador (demonstração)' : 'Aprovar como responsável técnico (demonstração)'}
                 </Botao>
               </form>
+            ) : (
+              <p className="text-texto-suave">
+                {pedido.confirmacao === 'admin'
+                  ? 'Só outro administrador confirma, entrando com o próprio usuário e o código do autenticador dele.'
+                  : 'Só o responsável técnico aprova, entrando com o próprio usuário e o código do autenticador dele.'}
+              </p>
             )}
           </div>
+        ) : pedido?.status === 'cancelado' ? (
+          <p role="status" className="font-bold">Pedido cancelado. Nada foi enviado.</p>
         ) : (
           <p role="status" className="flex items-start gap-2 font-bold">
             <CheckCircle2 aria-hidden className="mt-0.5 size-6 shrink-0" />
-            Pronto. O link foi para o seu e-mail: vale até {pedido?.expiraEm ? formatarDia(pedido.expiraEm, new Date()) : 'amanhã'}, só para
-            você, e pode ser baixado {pedido?.downloadsRestantes} vezes. O arquivo vai cifrado.
+            {pedido && pedido.pedidoPor !== usuario.id
+              ? 'Aprovado. O link foi para o e-mail de quem pediu: vale até '
+              : 'Pronto. O link foi para o seu e-mail: vale até '}
+            {pedido?.expiraEm ? formatarDia(pedido.expiraEm, new Date()) : 'amanhã'}, só para
+            {pedido && pedido.pedidoPor !== usuario.id ? ' essa pessoa' : ' você'}, e pode ser baixado {pedido?.downloadsRestantes} vezes. O arquivo vai cifrado.
+            {pedido?.liberadoEm && ` Janela de segurança: o link só é liberado em ${formatarDia(pedido.liberadoEm.slice(0, 10), new Date())} às ${pedido.liberadoEm.slice(11)}.`}
           </p>
         )}
         <p className="mt-3 text-texto-suave">Fluxo de demonstração: a exportação de verdade entra com o login (D4) e a API de exportação.</p>

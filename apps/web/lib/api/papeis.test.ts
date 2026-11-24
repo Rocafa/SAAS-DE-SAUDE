@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { criarApiFake } from './fake';
-import { ehAdmin } from './papeis';
+import { ehAdmin, ehResponsavelTecnico, podeAprovarExportacao } from './papeis';
 
 const agora = new Date('2026-10-12T10:00:00');
 
@@ -14,6 +14,42 @@ describe('ehAdmin', () => {
     expect(ehAdmin('admin')).toBe(true);
     expect(ehAdmin('profissional')).toBe(false);
     expect(ehAdmin('recepcao')).toBe(false);
+  });
+});
+
+describe('ehResponsavelTecnico', () => {
+  it('só quem tem o vínculo de RT; ser admin não basta', async () => {
+    expect(ehResponsavelTecnico({ responsavelTecnico: true })).toBe(true);
+    expect(ehResponsavelTecnico({})).toBe(false);
+    expect(ehResponsavelTecnico(null)).toBe(false);
+    const rts = (await criarApiFake({ agora }).usuariosDemo()).filter(ehResponsavelTecnico).map((u) => u.id);
+    expect(rts).toEqual(['u5']);
+  });
+});
+
+describe('podeAprovarExportacao (o que a tela oferece)', () => {
+  const adminNaoRt = { id: 'u1', papel: 'admin' as const };
+  const adminRt = { id: 'u5', papel: 'admin' as const, responsavelTecnico: true };
+  const rtNaoAdmin = { id: 'u2', papel: 'profissional' as const, responsavelTecnico: true };
+  const aguardando = 'aguardando_rt' as const;
+  it('pedido de admin: só o RT; quem pediu não vê o botão', () => {
+    const p = { pedidoPor: 'u1', confirmacao: 'rt' as const, status: aguardando };
+    expect(podeAprovarExportacao(adminNaoRt, p)).toBe(false);
+    expect(podeAprovarExportacao(adminRt, p)).toBe(true);
+    expect(podeAprovarExportacao(rtNaoAdmin, p)).toBe(true);
+  });
+  it('pedido do RT com outro admin ativo: só outro admin, nunca o RT que pediu', () => {
+    const p = { pedidoPor: 'u5', confirmacao: 'admin' as const, status: aguardando };
+    expect(podeAprovarExportacao(adminRt, p)).toBe(false);
+    expect(podeAprovarExportacao(adminNaoRt, p)).toBe(true);
+    expect(podeAprovarExportacao(rtNaoAdmin, p)).toBe(false);
+  });
+  it('autônomo: só o RT que pediu; pedido encerrado não oferece nada', () => {
+    const p = { pedidoPor: 'u5', confirmacao: 'autoaprovacao' as const, status: aguardando };
+    expect(podeAprovarExportacao(adminRt, p)).toBe(true);
+    expect(podeAprovarExportacao(adminNaoRt, p)).toBe(false);
+    expect(podeAprovarExportacao(adminRt, { ...p, status: 'pronto' })).toBe(false);
+    expect(podeAprovarExportacao(adminRt, { ...p, status: 'cancelado' })).toBe(false);
   });
 });
 

@@ -6,9 +6,9 @@ import { paraIsoLocal, somarDias } from '../ajudante/datas';
 import type { ApiClinica, FiltroAgenda } from './cliente';
 import { datasDaSerie } from '../agenda';
 import { ErroApi, erroListaMudou, MENSAGENS, mensagemDeErro } from './http';
-import { ehAdmin } from './papeis';
+import { ehAdmin, ehResponsavelTecnico } from './papeis';
 import { mudancaDeNascimentoExigeDocumento, podeConferirDocumento } from './nascimento';
-import { fimDaJanela } from '../conta';
+import { JANELA_SEGURANCA_EXPORTACAO_HORAS, fimDaJanela } from '../conta';
 import { ehPerfilClinico, ehRestrito, faltasParaAssinar, modeloDoProfissional } from '../prontuario';
 import type {
   AlteracaoPaciente,
@@ -167,6 +167,16 @@ export interface OpcoesFake {
   simular?: 'erro' | 'vazio' | 'lento' | 'lista_mudou';
   /** Papel de quem ENTRA na demonstração (padrão: admin). `entrarComo` troca depois. */
   papel?: Papel;
+  /**
+   * Quem é o responsável técnico (padrão: `u5`, a Dra. Lúcia, admin e profissional). Os testes trocam
+   * para modelar o RT que não é admin. Na API real, o vínculo de RT vem do cadastro da clínica.
+   */
+  responsavelTecnicoId?: string;
+  /**
+   * Usuários da demonstração com o acesso tirado: não entram e não contam como admin ativo. Serve para
+   * modelar o autônomo (RT como único admin ativo, ex.: `['u1']`) na regra de autoaprovação da exportação.
+   */
+  semAcesso?: string[];
 }
 
 export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
@@ -211,20 +221,18 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
         { id: 'e2', pacienteId: 'p20', preferencia: 'Terça ou quinta depois das 17h', criadoEm: paraIsoLocal(somarDias(agora, -1)) },
       ];
   const pacotes: Pacote[] = vazio ? [] : [{ id: 'k1', pacienteId: 'p01', nome: 'Pacote de 10 sessões de fisioterapia', total: 10, usadas: 3 }];
-  const USUARIOS: Usuario[] = [
+  // R9: a aprovação da exportação total é do usuário RT; o fake marca um único RT por clínica.
+  const USUARIOS: Usuario[] = ([
     { id: 'u1', nome: 'Administradora (demonstração)', papel: 'admin', clinica: 'Clínica Demonstração' },
     { id: 'u2', nome: 'Dra. Beatriz Nogueira (fisioterapia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr1' },
     { id: 'u3', nome: 'Dr. Henrique Sales (psicologia)', papel: 'profissional', clinica: 'Clínica Demonstração', profissionalId: 'pr2' },
     { id: 'u4', nome: 'Recepcionista (demonstração)', papel: 'recepcao', clinica: 'Clínica Demonstração' },
-    {
-      id: 'u5',
-      nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)',
-      papel: 'admin',
-      clinica: 'Clínica Demonstração',
-      profissionalId: 'pr3',
-      responsavelTecnico: true,
-    },
-  ];
+    { id: 'u5', nome: 'Dra. Lúcia Prates (administradora e terapeuta ocupacional)', papel: 'admin', clinica: 'Clínica Demonstração', profissionalId: 'pr3' },
+  ] satisfies Usuario[])
+    .filter((u) => !opcoes.semAcesso?.includes(u.id))
+    .map((u) => ({ ...u, responsavelTecnico: u.id === (opcoes.responsavelTecnicoId ?? 'u5') }));
+  /** Há admin ativo além de `id`? Decide se o RT pode se autoaprovar (só o autônomo pode). */
+  const outroAdminAtivo = (id: string) => USUARIOS.some((u) => u.id !== id && ehAdmin(u.papel));
   // `papel` é só o ESTADO INICIAL: escolhe quem entra na demonstração, e `entrarComo` sobrepõe depois.
   // Tem de ser um usuário da lista, não a administradora com o papel trocado: o perfil clínico é
   // decidido pelo `profissionalId` (`ehPerfilClinico`), e um "profissional" sem vínculo não existe —
@@ -327,6 +335,7 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     if (!ehAdmin(usuario.papel)) throw new ErroApi(MENSAGENS.proibido, 403, 'proibido');
   }
 
+  /** MFA recente de quem está na sessão (pedido e aprovação da exportação total, G2). */
   function exigirMfa(codigo: string): void {
     if (!/^\d{6}$/.test(codigo.trim())) throw new Error('O código tem 6 números. Veja no aplicativo autenticador.');
     if (codigo.trim() !== '123456') throw new Error('Código não confere. Na demonstração, use 123456.');
@@ -706,35 +715,78 @@ export function criarApiFake(opcoes: OpcoesFake = {}): ApiClinica {
     async pedirExportacao(codigo) {
       exigirAdmin();
       exigirMfa(codigo);
-      const p: PedidoExportacao = { id: novoId('x'), pedidoPor: usuario.id, status: 'aguardando_rt', pedidoEm: hojeIso };
+      const confirmacao: PedidoExportacao['confirmacao'] = !ehResponsavelTecnico(usuario)
+        ? 'rt'
+        : outroAdminAtivo(usuario.id)
+          ? 'admin'
+          : 'autoaprovacao';
+      const p: PedidoExportacao = { id: novoId('x'), pedidoPor: usuario.id, confirmacao, status: 'aguardando_rt', pedidoEm: hojeIso };
       exportacoes.push(p);
       registrar('Pediu a exportação total dos dados');
       return resposta(p);
     },
     async obterExportacaoPendente() {
-      exigirAdmin();
+      if (!ehResponsavelTecnico(usuario)) exigirAdmin();
       const p = exportacoes.filter((x) => x.status === 'aguardando_rt').pop() ?? null;
       return resposta(p);
     },
     async aprovarExportacao(id, codigo) {
-      exigirAdmin();
+      // G2/R9 + Guardião (PR 234): regras no contrato de `aprovarExportacao` (cliente.ts). A API real
+      // repete todas as conferências no servidor, com a identidade da sessão.
+      const rt = ehResponsavelTecnico(usuario);
+      if (!rt && !ehAdmin(usuario.papel)) throw new ErroApi(MENSAGENS.proibido, 403, 'proibido');
       const p = exportacoes.find((x) => x.id === id);
       if (!p) throw new Error('Pedido não encontrado.');
-      // G2/R6/R9: a API real repete papel, identidade e MFA no servidor. Admin sozinho não basta:
-      // só o RT aprova; autoaprovação só vale quando esse admin também é o RT autônomo.
-      if (usuario.id === p.pedidoPor && !usuario.responsavelTecnico) {
-        throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
+      // Pronto ou cancelado ("Não fui eu") não volta: reaprovar devolveria downloads e estenderia o prazo.
+      if (p.status !== 'aguardando_rt') {
+        throw new ErroApi('Este pedido não está mais aguardando aprovação. Se precisar, faça um pedido novo.', 409, 'pedido_encerrado');
       }
-      if (!usuario.responsavelTecnico) {
+      if (p.confirmacao === 'rt' && !rt) {
+        if (usuario.id === p.pedidoPor) {
+          throw new ErroApi('Quem pediu a exportação não pode aprovar. O responsável técnico precisa ser outra pessoa.', 403, 'autoaprovacao_proibida');
+        }
         throw new ErroApi('Somente o responsável técnico pode aprovar a exportação.', 403, 'responsavel_tecnico_obrigatorio');
       }
+      if (p.confirmacao === 'admin') {
+        if (usuario.id === p.pedidoPor) {
+          throw new ErroApi('A clínica tem outro administrador ativo: ele confirma o seu pedido, com o código dele.', 403, 'autoaprovacao_proibida');
+        }
+        if (!ehAdmin(usuario.papel)) throw new ErroApi('Só outro administrador confirma o pedido do responsável técnico.', 403, 'proibido');
+      }
+      if (p.confirmacao === 'autoaprovacao') {
+        if (usuario.id !== p.pedidoPor) throw new ErroApi('Só o responsável técnico que pediu aprova este pedido.', 403, 'proibido');
+        if (outroAdminAtivo(usuario.id)) {
+          throw new ErroApi('Agora a clínica tem outro administrador ativo: faça um pedido novo para ele confirmar.', 403, 'autoaprovacao_proibida');
+        }
+      }
       exigirMfa(codigo);
-      p.aprovadoPor = usuario.id;
-      p.aprovacaoAutonoma = usuario.id === p.pedidoPor;
+      const autoaprovacao = p.confirmacao === 'autoaprovacao';
+      // R10: na autoaprovação a janela de segurança é obrigatória; o prazo de 24 h conta da liberação.
+      const liberacao = autoaprovacao ? new Date(agora.getTime() + JANELA_SEGURANCA_EXPORTACAO_HORAS * 36e5) : agora;
       p.status = 'pronto';
-      p.expiraEm = paraIsoLocal(somarDias(agora, 1));
+      p.aprovadoPor = usuario.id;
+      p.aprovacaoAutonoma = autoaprovacao;
+      if (autoaprovacao) p.liberadoEm = `${paraIsoLocal(liberacao)} ${String(liberacao.getHours()).padStart(2, '0')}:${String(liberacao.getMinutes()).padStart(2, '0')}`;
+      p.expiraEm = paraIsoLocal(somarDias(liberacao, 1));
       p.downloadsRestantes = 3;
-      registrar(p.aprovacaoAutonoma ? 'Responsável técnico autônomo aprovou a própria exportação' : 'Responsável técnico aprovou a exportação');
+      registrar(
+        autoaprovacao
+          ? `Responsável técnico autônomo aprovou a própria exportação (autoaprovação; link liberado em ${p.liberadoEm})`
+          : p.confirmacao === 'admin'
+            ? 'Administrador confirmou a exportação pedida pelo responsável técnico'
+            : 'Responsável técnico aprovou a exportação',
+      );
+      return resposta(p);
+    },
+    async cancelarExportacao(id) {
+      if (!ehResponsavelTecnico(usuario)) exigirAdmin();
+      const p = exportacoes.find((x) => x.id === id);
+      if (!p) throw new Error('Pedido não encontrado.');
+      if (p.status !== 'cancelado') {
+        p.status = 'cancelado';
+        p.downloadsRestantes = 0;
+        registrar('Cancelou o pedido de exportação ("Não fui eu")');
+      }
       return resposta(p);
     },
 

@@ -7,6 +7,12 @@ import { deIsoLocal, paraIsoLocal, somarDias } from './ajudante/datas';
 /** Garantia G3: depois de cancelar, leitura e exportação por no mínimo 90 dias. */
 export const JANELA_SAIDA_DIAS = 90;
 
+/**
+ * Garantia G2 (R10): na autoaprovação da exportação pelo RT autônomo, o link só é liberado depois
+ * desta janela de segurança, tempo para o "Não fui eu" chegar e ser usado.
+ */
+export const JANELA_SEGURANCA_EXPORTACAO_HORAS = 24;
+
 export function fimDaJanela(canceladoEm: string): string {
   return paraIsoLocal(somarDias(deIsoLocal(canceladoEm), JANELA_SAIDA_DIAS));
 }

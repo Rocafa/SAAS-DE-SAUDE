@@ -128,16 +128,28 @@ export interface ApiClinica {
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
   /**
    * Pedido pendente mais recente da clínica, para o responsável técnico retomar após trocar de usuário.
-   * Exige admin e o mesmo isolamento de tenant das demais consultas; `null` quando não há pedido.
+   * Exige admin ou RT e o mesmo isolamento de tenant das demais consultas; `null` quando não há pedido.
    */
   obterExportacaoPendente(): Promise<PedidoExportacao | null>;
   /**
-   * Ato do usuário RT autenticado, com MFA recente próprio (`codigo` da sessão atual). O servidor
-   * confere papel, identidade e MFA. Se o RT for outra pessoa, quem pediu recebe 403; se o admin
-   * também for o RT autônomo, a aprovação do próprio pedido é permitida e registrada como exceção
-   * explícita (garantia G2, R6/R9 do Guardião). Ser admin sozinho não autoriza aprovar.
+   * Aprovação da exportação total (G2, R9 da revisão de 12/10, parecer do Guardião no PR 234). Sempre
+   * com o código do PRÓPRIO autenticador de quem aprova (MFA recente); o servidor confere identidade,
+   * vínculo de RT e papel na sessão, e o cliente nunca informa quem aprova. Regras por `confirmacao`:
+   * - `rt` (pediu um admin que não é o RT): só o usuário RT aprova; qualquer outro recebe 403.
+   * - `admin` (pediu o RT e a clínica tem outro admin ativo): só outro admin ativo confirma, com o MFA
+   *   dele. O RT cobre o sigilo, o admin cobre o desvio; o RT recebe 403 `autoaprovacao_proibida`.
+   * - `autoaprovacao` (pediu o RT de clínica SEM outro admin ativo: o autônomo): o próprio RT aprova,
+   *   registrado como autoaprovação na auditoria, e a janela de segurança do R10 é obrigatória: o link
+   *   só é liberado em `liberadoEm`. Se, ao aprovar, já houver outro admin ativo, 403 `autoaprovacao_proibida`.
+   * Pedido que não está `aguardando_rt` (já pronto, ou cancelado pelo "Não fui eu") recebe 409
+   * `pedido_encerrado`: aprovar de novo não devolve downloads nem estende o prazo.
    */
   aprovarExportacao(id: string, codigo: string): Promise<PedidoExportacao>;
+  /**
+   * "Não fui eu" (aviso aos admins e ao RT, G2): cancela o pedido aguardando ou pronto. Exige admin ou RT;
+   * fica na auditoria. Depois disso, `aprovarExportacao` responde 409.
+   */
+  cancelarExportacao(id: string): Promise<PedidoExportacao>;
 
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
