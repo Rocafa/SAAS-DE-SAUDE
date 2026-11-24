@@ -15,7 +15,7 @@
  * A cada carga o provedor pergunta a sessão PRIMEIRO; se mudou, limpa tudo e só então lista (veto B1
  * do #76: uma lista obtida antes da comparação nunca é gravada).
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { paraIsoLocal, somarDias } from '@/lib/ajudante/datas';
 import type { ApiClinica } from '@/lib/api/cliente';
 import { textoDoErro } from '@/components/app/desfazer';
@@ -146,12 +146,18 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
   const [estado, setEstado] = useState<EstadoConsulta<T>>({ estado: 'carregando' });
   const pergunta = JSON.stringify(deps);
   const perguntaAnterior = useRef(pergunta);
+  const carregarRef = useRef(carregar);
+  // Atualiza o ref DEPOIS do render (escrever em ref durante o render é impuro e quebra em render
+  // concorrente). Sem deps: roda a cada commit, antes do efeito abaixo, que lê sempre o `carregar` mais novo.
+  useLayoutEffect(() => {
+    carregarRef.current = carregar;
+  });
   useEffect(() => {
     let vivo = true;
     const mesmaPergunta = perguntaAnterior.current === pergunta;
     perguntaAnterior.current = pergunta;
     setEstado((e) => aoRecarregar(e, mesmaPergunta));
-    carregar(api)
+    carregarRef.current(api)
       .then((dados) => vivo && setEstado({ estado: 'pronto', dados }))
       .catch((e: unknown) =>
         vivo &&
@@ -164,6 +170,8 @@ export function useConsulta<T>(carregar: (api: ApiClinica) => Promise<T>, deps: 
     return () => {
       vivo = false;
     };
+    // `carregar` vem do ref e muda a cada render, por isso fica fora das deps: recarrega quando os dados
+    // mudam ou ao tentar de novo.
   }, [api, versao, tentativa, pergunta]);
   return estado;
 }

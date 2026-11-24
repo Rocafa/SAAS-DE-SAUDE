@@ -29,6 +29,8 @@ test.describe('Atendimento e prontuário', () => {
     await expect(page.getByRole('button', { name: 'Escriba de IA (em breve)' })).toBeDisabled();
     await page.getByLabel('Como o paciente chegou hoje').fill('Relata menos dor ao subir escada (fictício).');
     await page.getByLabel('Dor hoje (0 a 10)').selectOption('4');
+    await page.getByLabel('Diagnóstico e prognóstico fisioterapêuticos').fill('Diagnóstico e prognóstico fictícios da demonstração.');
+    await page.getByLabel('Exames complementares realizados ou solicitados').fill('Exame fictício solicitado na demonstração.');
     await expect(page.getByText(/Rascunho salvo às/)).toBeVisible({ timeout: 5000 });
 
     await page.getByRole('button', { name: 'Assinar' }).click();
@@ -42,10 +44,57 @@ test.describe('Atendimento e prontuário', () => {
     await expect(page.getByText(/Depois de assinada ela não muda mais/)).toBeVisible();
     await page.getByTestId('confirmar-assinatura').click();
     await expect(page.getByRole('heading', { name: /^Assinado/ })).toBeVisible();
+    const evolucaoAssinada = page.locator('section[aria-labelledby="t-assinado"]');
+    await expect(evolucaoAssinada).toContainText('Diagnóstico e prognóstico fictícios da demonstração.');
+    await expect(evolucaoAssinada).toContainText('Exame fictício solicitado na demonstração.');
 
     await page.getByLabel(/vira adendo/).fill('Orientei gelo em casa (fictício).');
     await page.getByRole('button', { name: 'Adicionar adendo' }).click();
     await expect(page.getByText(/Adendo de hoje:/)).toBeVisible();
+  });
+
+  test('TO registra diagnóstico, exames e nível de assistência sem relaxar objetivo e atividades', async ({ page }) => {
+    await entrarComo(page, /Dra\. Lúcia/);
+    await irPeloMenu(page, 'Atendimento');
+    await page.getByRole('listitem').filter({ hasText: 'Carlos Rodrigues' }).getByRole('link', { name: 'Atender' }).click();
+    await expect(page.getByRole('heading', { name: 'Evolução de terapia ocupacional' }).first()).toBeVisible();
+
+    await page.getByRole('button', { name: 'Assinar' }).click();
+    await page.getByTestId('confirmar-assinatura').click();
+    const erro = page.locator('p[role="alert"]');
+    await expect(erro).toContainText('Falta preencher “Objetivo da sessão”.');
+    await expect(erro).toContainText('Falta preencher “Atividades feitas”.');
+
+    await page.getByLabel('Objetivo da sessão').fill('Objetivo fictício da sessão.');
+    await page.getByLabel('Atividades feitas').fill('Atividade fictícia da demonstração.');
+    await page.getByLabel('Desempenho do paciente').fill('Desempenho fictício da demonstração.');
+    await page.getByLabel('Diagnóstico e prognóstico terapêutico ocupacional').fill('Diagnóstico ocupacional fictício.');
+    await page.getByLabel('Exames complementares realizados ou solicitados').fill('Exame complementar fictício.');
+    await page.getByLabel('Nível de assistência').fill('Assistência fictícia observada.');
+    await expect(page.getByText(/Rascunho salvo às/)).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Assinar' }).click();
+    await page.getByTestId('confirmar-assinatura').click();
+
+    const evolucaoAssinada = page.locator('section[aria-labelledby="t-assinado"]');
+    await expect(evolucaoAssinada).toContainText('Diagnóstico ocupacional fictício.');
+    await expect(evolucaoAssinada).toContainText('Exame complementar fictício.');
+    await expect(evolucaoAssinada).toContainText('Assistência fictícia observada.');
+  });
+
+  test('psicologia referencia instrumento em texto e mantém o aviso do SATEPSI', async ({ page }) => {
+    await entrarComo(page, /Dr\. Henrique/);
+    await irPeloMenu(page, 'Atendimento');
+    await page.getByRole('listitem').filter({ hasText: 'Pedro Santos' }).getByRole('link', { name: 'Atender' }).click();
+
+    await page.getByLabel('Tema principal da sessão').fill('Tema fictício da demonstração.');
+    await page.getByLabel('Evolução').fill('Evolução fictícia da demonstração.');
+    await page.getByLabel('Instrumentos ou testes utilizados').fill('Referência fictícia de instrumento.');
+    await expect(page.getByText(/conferência no SATEPSI é responsabilidade do profissional/)).toBeVisible();
+    await expect(page.getByText(/Rascunho salvo às/)).toBeVisible({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Assinar' }).click();
+    await page.getByTestId('confirmar-assinatura').click();
+
+    await expect(page.locator('section[aria-labelledby="t-assinado"]')).toContainText('Referência fictícia de instrumento.');
   });
 
   test('recepção não escreve evolução', async ({ page }) => {
