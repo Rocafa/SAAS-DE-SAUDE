@@ -126,7 +126,7 @@ resource "aws_security_group" "endpoints" {
 
 locals {
   # ecr.dkr + ecr.api: pull de imagem; secretsmanager: segredos da task; kms: decifrar; logs: awslogs.
-  # O ssm (tarefas avulsas B11/B12) é à parte, condicional e com política de endpoint (abaixo).
+  # O ssm (tarefas avulsas B11/B12/B13) é à parte, condicional e com política de endpoint (abaixo).
   endpoints_interface = toset(["ecr.api", "ecr.dkr", "secretsmanager", "kms", "logs"])
 }
 
@@ -142,14 +142,15 @@ resource "aws_vpc_endpoint" "interface" {
   tags                = { Name = "${local.nome}-${each.key}" }
 }
 
-# Endpoint ssm das tarefas avulsas do provisionamento e da recuperação (B11, B12; A4 do parecer de
+# Endpoint ssm das tarefas avulsas do provisionamento, da recuperação e da troca do admin único
+# (B11, B12, B13; A4 do parecer de
 # 17/11/2026). Só com var.endpoint_ssm = true. Custo (ESTIMATIVA, conferir na página de preços do AWS
 # PrivateLink para sa-east-1 antes de ligar): da ordem de US$ 7 a 12 por mês por AZ, mais o tráfego;
 # staging tem zonas_dos_endpoints = 1, prod teria 3. Desligado, as tarefas NÃO chegam ao SSM (o grupo
 # de segurança delas só sai para 443 dentro da VPC, sem NAT) e falham fechado: ligar junto com o PR
 # do cliente SSM, antes da primeira execução real.
 # A política de endpoint fecha o canal: só principal E recurso DESTA conta (sem ela, uma credencial de
-# fora usaria o endpoint para gravar no SSM de outra conta) e só os parâmetros dos dois fluxos.
+# fora usaria o endpoint para gravar no SSM de outra conta) e só os parâmetros dos três fluxos.
 data "aws_iam_policy_document" "endpoint_ssm" {
   statement {
     sid     = "SoParametrosDasTarefasAvulsasDestaConta"
@@ -157,6 +158,7 @@ data "aws_iam_policy_document" "endpoint_ssm" {
     resources = [
       "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/provisionamento/*",
       "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/recuperacao-suporte/*",
+      "${local.ops_troca_parametros}/*",
     ]
     principals {
       type        = "AWS"

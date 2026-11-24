@@ -33,6 +33,24 @@
 #   containerOverrides[0].command     = ["--pedido", "<uuid>", "--contrato", "CTR-<n>"]
 #   containerOverrides[0].environment = [{ name = "CONFIRMA_PROVISIONAMENTO", value = "<o mesmo uuid>" }]
 # O programa fica no entryPoint (R-A do parecer do código do #190): o override troca só os argumentos.
+#
+# Troca do admin único que perdeu senha e fator (B13; desenho docs/04-arquitetura/troca-do-admin-unico.md,
+# runbook runbook-troca-do-admin-unico.md). O Guardião decidiu AMPLIAR este fluxo em vez de criar papel
+# novo: a troca roda com os MESMOS papéis de execução e de tarefa, os mesmos segredos
+# (DATABASE_PROVISIONAMENTO_URL, app_provisionamento ampliado pela 0082, e RATE_LIMIT_HASH_KEY para
+# chaveDeHmac('ativacao-email')), a mesma rede, a mesma chave KMS e os mesmos papéis humanos executor e
+# entrega. Só a DEFINIÇÃO de tarefa é outra (família <nome>-ops-troca-admin), porque o entryPoint fixa o
+# programa (R-A): um override de `command` não troca de script, então cada comando aceito tem a sua
+# família (local.ops_prov_comandos_aceitos e a precondição de cada definição).
+#   /troca-admin/<pedido>          {"email": ...}: o executor do pedido cria (72 h); a tarefa lê e apaga;
+#   /troca-admin/<pedido>/entrega  o token (24 h): a tarefa grava no `emitir` (e apaga se a rodada falhar
+#                                  depois de gravar); o entregador, TERCEIRA pessoa, lê uma vez e apaga.
+# Overwrite e vencimento: nos caminhos da troca o IAM nega PutParameter com Overwrite=true ou sem a
+# política (Expiration) do SSM, para o executor e para a tarefa (o cliente já manda Overwrite: false,
+# Tier Advanced e Expiration, parametros-ssm.ts). O `emitir` por operador diferente do `pedir` (R4) é
+# garantido no código (`mesmo_operador`), não no IAM: os dois rodam com o mesmo papel executor.
+#   containerOverrides[0].command     = ["--fase", "<pedir|emitir|cancelar>", "--pedido", "<uuid>", ...]
+#   containerOverrides[0].environment = [{ name = "CONFIRMA_TROCA", value = "<o mesmo uuid do pedido>" }]
 
 locals {
   ops_prov_nome      = "${local.nome}-ops-provisionamento"
@@ -51,6 +69,20 @@ locals {
   ops_prov_pedidos    = "${local.ops_prov_parametros}/*"
   ops_prov_entregas   = "${local.ops_prov_parametros}/*/entrega"
   ops_prov_via_ssm    = "ssm.${local.regiao}.amazonaws.com"
+
+  # Troca do admin único (B13): mesma forma de caminhos, prefixo próprio.
+  ops_troca_nome       = "${local.nome}-ops-troca-admin"
+  ops_troca_conteiner  = "ops-troca-admin"
+  ops_troca_prefixo    = "ops-troca-admin"
+  ops_troca_parametros = "arn:${data.aws_partition.atual.partition}:ssm:${local.regiao}:${local.conta}:parameter/troca-admin"
+  ops_troca_pedidos    = "${local.ops_troca_parametros}/*"
+  ops_troca_entregas   = "${local.ops_troca_parametros}/*/entrega"
+
+  # Os dois fluxos que usam estes papéis e esta chave. Toda lista de caminhos (IAM, KMS, endpoint,
+  # alertas) deriva daqui ou cita os dois prefixos.
+  ops_prov_todos_pedidos  = [local.ops_prov_pedidos, local.ops_troca_pedidos]
+  ops_prov_todas_entregas = [local.ops_prov_entregas, local.ops_troca_entregas]
+  ops_prov_todos_prefixos = [local.ops_prov_prefixo, local.ops_troca_prefixo]
 
   # Segredo -> segredo do Secrets Manager. SÓ estes três (R8). A política de leitura do papel de
   # execução é derivada deste mapa; a precondição abaixo falha se entrar qualquer outro.
@@ -86,7 +118,11 @@ locals {
   ops_prov_nomes_segredos     = [for s in local.ops_prov_segredos : s.name]
 
   # Imagem distroless (gcr.io/distroless/nodejs22): node e script fixos; argumentos só pelo override.
-  ops_prov_entrypoint = ["/nodejs/bin/node", "dist/ops/provisionar-clinica.js"]
+  ops_prov_entrypoint  = ["/nodejs/bin/node", "dist/ops/provisionar-clinica.js"]
+  ops_troca_entrypoint = ["/nodejs/bin/node", "dist/ops/trocar-admin-unico.js"]
+
+  # Comandos aceitos nas definições que usam os papéis do provisionamento (precondição de cada uma).
+  ops_prov_comandos_aceitos = ["dist/ops/provisionar-clinica.js", "dist/ops/trocar-admin-unico.js"]
 }
 
 # --- Rede: grupo de segurança próprio (só banco e VPC endpoints; sem Redis, sem entrada) -------
@@ -157,7 +193,7 @@ data "aws_iam_policy_document" "ops_provisionamento_execucao" {
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.api.arn}:log-stream:${local.ops_prov_prefixo}/*"]
+    resources = [for p in local.ops_prov_todos_prefixos : "${aws_cloudwatch_log_group.api.arn}:log-stream:${p}/*"]
   }
   statement {
     sid       = "SegredosDaTarefa"
@@ -185,22 +221,40 @@ resource "aws_iam_role" "ops_provisionamento_tarefa" {
 }
 
 data "aws_iam_policy_document" "ops_provisionamento_tarefa" {
+  source_policy_documents = [data.aws_iam_policy_document.ops_troca_grava_sem_sobrescrever.json]
+
+  # Pedido do provisionamento e da troca: a tarefa lê e apaga (com sucesso ou falha).
   statement {
     sid       = "LerEApagarOPedido"
     actions   = ["ssm:GetParameter", "ssm:DeleteParameter"]
-    resources = [local.ops_prov_pedidos]
+    resources = local.ops_prov_todos_pedidos
   }
   statement {
     sid       = "GravarAEntrega"
     actions   = ["ssm:PutParameter"]
-    resources = [local.ops_prov_entregas]
+    resources = local.ops_prov_todas_entregas
   }
-  # A entrega é da segunda pessoa: a tarefa não a lê, não a apaga e não lê histórico.
+  # A entrega é de outra pessoa: a tarefa não a lê nem lê histórico. No provisionamento também não
+  # a apaga.
   statement {
     sid       = "EntregaNaoVolta"
     effect    = "Deny"
-    actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:DeleteParameter"]
+    actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"]
+    resources = local.ops_prov_todas_entregas
+  }
+  statement {
+    sid       = "EntregaDoProvisionamentoNaoSai"
+    effect    = "Deny"
+    actions   = ["ssm:DeleteParameter"]
     resources = [local.ops_prov_entregas]
+  }
+  # Na troca, o `emitir` apaga a entrega que ELE gravou quando a transação se desfaz depois do
+  # PutParameter (trocar-admin-unico.ts): o token dessa rodada não vale e não pode ficar no SSM.
+  # Apagar não revela o token (o Get segue negado acima).
+  statement {
+    sid       = "ApagarAEntregaDesfeitaDaTroca"
+    actions   = ["ssm:DeleteParameter"]
+    resources = [local.ops_troca_entregas]
   }
   statement {
     sid       = "DecifrarOPedido"
@@ -214,13 +268,13 @@ data "aws_iam_policy_document" "ops_provisionamento_tarefa" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [local.ops_prov_pedidos]
+      values   = local.ops_prov_todos_pedidos
     }
     # A3: `*` atravessa a barra; a entrega fica de fora também no KMS (igual ao Deny do SSM).
     condition {
       test     = "ArnNotLike"
       variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [local.ops_prov_entregas]
+      values   = local.ops_prov_todas_entregas
     }
   }
   statement {
@@ -235,7 +289,38 @@ data "aws_iam_policy_document" "ops_provisionamento_tarefa" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [local.ops_prov_entregas]
+      values   = local.ops_prov_todas_entregas
+    }
+  }
+}
+
+# Troca (B13): nos caminhos /troca-admin/* o PutParameter só passa com Overwrite=false e com política
+# do SSM (Expiration), para o executor e para a tarefa. Condições ssm:Overwrite e ssm:Policies do
+# PutParameter (Service Authorization Reference do Systems Manager). Overwrite ausente vale false. O
+# recurso /troca-admin/* inclui as entregas (`*` atravessa a barra).
+data "aws_iam_policy_document" "ops_troca_grava_sem_sobrescrever" {
+  statement {
+    sid       = "TrocaNaoSobrescreve"
+    effect    = "Deny"
+    actions   = ["ssm:PutParameter"]
+    resources = [local.ops_troca_pedidos]
+    condition {
+      test     = "StringEqualsIgnoreCase"
+      variable = "ssm:Overwrite"
+      values   = ["true"]
+    }
+  }
+  statement {
+    sid       = "TrocaSoComVencimento"
+    effect    = "Deny"
+    actions   = ["ssm:PutParameter"]
+    resources = [local.ops_troca_pedidos]
+    # Operador negado com a chave ausente também casa: sem Policies, nega; com Policies sem
+    # Expiration (só NoChangeNotification, por exemplo), nega.
+    condition {
+      test     = "StringNotLike"
+      variable = "ssm:Policies"
+      values   = ["*Expiration*"]
     }
   }
 }
@@ -316,6 +401,86 @@ resource "aws_ecs_task_definition" "ops_provisionamento" {
         && length(setintersection(var.principais_ops_provisionamento_executor, var.principais_ops_provisionamento_entrega)) == 0
       )
       error_message = "principais_ops_provisionamento_executor e principais_ops_provisionamento_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda o provisionamento não lê a entrega do token (C1 do parecer de 17/11/2026)."
+    }
+    # R-A: node fixo e só um comando aceito no entryPoint.
+    precondition {
+      condition     = length(local.ops_prov_entrypoint) == 2 && local.ops_prov_entrypoint[0] == "/nodejs/bin/node" && contains(local.ops_prov_comandos_aceitos, local.ops_prov_entrypoint[1])
+      error_message = "O entryPoint do provisionamento tem de ser /nodejs/bin/node mais um comando de local.ops_prov_comandos_aceitos."
+    }
+  }
+}
+
+# Troca do admin único (B13): outra família só porque o entryPoint fixa o programa (R-A). Papéis,
+# segredos, ambiente (SSM_KMS_KEY_ID da chave "ops-provisionamento"), rede e log group são os do
+# provisionamento; as travas são as mesmas, sobre os mesmos locals.
+resource "aws_ecs_task_definition" "ops_troca_admin" {
+  family                   = local.ops_troca_nome
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ops_provisionamento_execucao.arn
+  task_role_arn            = aws_iam_role.ops_provisionamento_tarefa.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  volume {
+    name = "tmp"
+  }
+
+  container_definitions = jsonencode([{
+    name                   = local.ops_troca_conteiner
+    image                  = "${aws_ecr_repository.api.repository_url}:${var.api_imagem_tag}" # mesma imagem da API
+    essential              = true
+    readonlyRootFilesystem = true
+    user                   = "1000:1000"
+    entryPoint             = local.ops_troca_entrypoint
+    command                = []
+    stopTimeout            = 30
+    linuxParameters        = { initProcessEnabled = true }
+    mountPoints            = [{ sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }]
+    environment            = local.ops_prov_ambiente
+    secrets                = local.ops_prov_segredos
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.api.name
+        awslogs-region        = local.regiao
+        awslogs-stream-prefix = local.ops_troca_prefixo
+      }
+    }
+  }])
+
+  lifecycle {
+    # P7 do desenho da troca e R8 do provisionamento: os mesmos dois segredos, nada além.
+    precondition {
+      condition = (
+        length(local.ops_prov_segredos_origem) == 2
+        && length(setsubtract(keys(local.ops_prov_segredos_origem), keys(local.ops_prov_segredos_permitidos))) == 0
+        && length(setsubtract(keys(local.ops_prov_segredos_permitidos), keys(local.ops_prov_segredos_origem))) == 0
+        && alltrue([for n, s in local.ops_prov_segredos_origem : s.segredo == local.ops_prov_segredos_permitidos[n]])
+        && length(setsubtract(local.ops_prov_segredos_arns, values(local.ops_prov_segredos_permitidos))) == 0
+      )
+      error_message = "A tarefa da troca do admin só pode ter os segredos DATABASE_PROVISIONAMENTO_URL (banco-app-provisionamento) e RATE_LIMIT_HASH_KEY (rate-limit-hash-key), os mesmos do provisionamento."
+    }
+    precondition {
+      condition     = length(setsubtract(local.ops_prov_nomes_ambiente, local.ops_prov_ambiente_permitido)) == 0 && length(setintersection(local.ops_prov_nomes_ambiente, local.ops_prov_nomes_segredos)) == 0
+      error_message = "O environment da tarefa da troca do admin só aceita NODE_ENV, NODE_EXTRA_CA_CERTS, AWS_REGION e SSM_KMS_KEY_ID. CONFIRMA_TROCA vem só pelo containerOverrides do RunTask."
+    }
+    # Três pessoas (P3): executor e entregador disjuntos (o `emitir` por outro executor é do código).
+    precondition {
+      condition = (
+        (length(var.principais_ops_provisionamento_executor) == 0) == (length(var.principais_ops_provisionamento_entrega) == 0)
+        && length(setintersection(var.principais_ops_provisionamento_executor, var.principais_ops_provisionamento_entrega)) == 0
+      )
+      error_message = "principais_ops_provisionamento_executor e principais_ops_provisionamento_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda a troca do admin não lê a entrega do token (P3 do desenho da troca)."
+    }
+    precondition {
+      condition     = length(local.ops_troca_entrypoint) == 2 && local.ops_troca_entrypoint[0] == "/nodejs/bin/node" && contains(local.ops_prov_comandos_aceitos, local.ops_troca_entrypoint[1])
+      error_message = "O entryPoint da troca do admin tem de ser /nodejs/bin/node mais um comando de local.ops_prov_comandos_aceitos."
     }
   }
 }
@@ -444,13 +609,17 @@ data "aws_iam_policy_document" "ops_provisionamento_comum" {
 }
 
 data "aws_iam_policy_document" "ops_provisionamento_executor" {
-  source_policy_documents = [data.aws_iam_policy_document.ops_provisionamento_comum.json]
+  source_policy_documents = [
+    data.aws_iam_policy_document.ops_provisionamento_comum.json,
+    data.aws_iam_policy_document.ops_troca_grava_sem_sobrescrever.json,
+  ]
 
-  # Roda SÓ a revisão atual desta definição (ARN com revisão), SÓ neste cluster.
+  # Roda SÓ a revisão atual de cada definição (ARN com revisão), SÓ neste cluster: o provisionamento
+  # (B11) e a troca do admin único (B13).
   statement {
     sid       = "RodarProvisionamento"
     actions   = ["ecs:RunTask"]
-    resources = [aws_ecs_task_definition.ops_provisionamento.arn]
+    resources = [aws_ecs_task_definition.ops_provisionamento.arn, aws_ecs_task_definition.ops_troca_admin.arn]
     condition {
       test     = "ArnEquals"
       variable = "ecs:cluster"
@@ -475,13 +644,14 @@ data "aws_iam_policy_document" "ops_provisionamento_executor" {
   statement {
     sid       = "LerSaidaDoProvisionamento"
     actions   = ["logs:GetLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.api.arn}:log-stream:${local.ops_prov_prefixo}/*"]
+    resources = [for p in local.ops_prov_todos_prefixos : "${aws_cloudwatch_log_group.api.arn}:log-stream:${p}/*"]
   }
-  # Cria o pedido e o apaga se nasceu errado. `*` atravessa a barra: o Deny abaixo tira a entrega.
+  # Cria o pedido (provisionamento ou troca) e o apaga se nasceu errado. `*` atravessa a barra: o
+  # Deny abaixo tira as entregas.
   statement {
     sid       = "CriarEApagarOPedido"
     actions   = ["ssm:PutParameter", "ssm:DeleteParameter"]
-    resources = [local.ops_prov_pedidos]
+    resources = local.ops_prov_todos_pedidos
   }
   statement {
     sid       = "CifrarOPedido"
@@ -495,27 +665,34 @@ data "aws_iam_policy_document" "ops_provisionamento_executor" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [local.ops_prov_pedidos]
+      values   = local.ops_prov_todos_pedidos
+    }
+    condition {
+      test     = "ArnNotLike"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = local.ops_prov_todas_entregas
     }
   }
-  # C1: quem roda não toca a entrega (nem forja, nem lê, nem apaga). Reler o pedido (e-mail em
-  # claro) também fica de fora: não há Get liberado, e a key policy nega o Decrypt a este papel.
+  # C1: quem roda não toca a entrega (nem forja, nem lê, nem apaga), em nenhum dos dois fluxos.
+  # Reler o pedido (e-mail em claro) também fica de fora: não há Get liberado, e a key policy nega o
+  # Decrypt a este papel.
   statement {
     sid       = "NaoTocaAEntrega"
     effect    = "Deny"
     actions   = ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:DeleteParameter"]
-    resources = [local.ops_prov_entregas]
+    resources = local.ops_prov_todas_entregas
   }
 }
 
 data "aws_iam_policy_document" "ops_provisionamento_entrega" {
   source_policy_documents = [data.aws_iam_policy_document.ops_provisionamento_comum.json]
 
-  # Lê a entrega uma vez, entrega fora de banda e apaga (R3).
+  # Lê a entrega uma vez, entrega fora de banda e apaga (R3 do B11; seção 6 do runbook da troca, B13).
+  # Na troca, também apaga SEM LER a entrega pendente de uma rodada anterior (`entrega_pendente`).
   statement {
     sid       = "LerEApagarAEntrega"
     actions   = ["ssm:GetParameter", "ssm:DeleteParameter"]
-    resources = [local.ops_prov_entregas]
+    resources = local.ops_prov_todas_entregas
   }
   statement {
     sid       = "DecifrarAEntrega"
@@ -529,7 +706,7 @@ data "aws_iam_policy_document" "ops_provisionamento_entrega" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:PARAMETER_ARN"
-      values   = [local.ops_prov_entregas]
+      values   = local.ops_prov_todas_entregas
     }
   }
   # C1: quem entrega não roda a tarefa, não passa os papéis dela e não grava nada no fluxo (nem
@@ -557,10 +734,12 @@ resource "aws_iam_role_policy" "ops_provisionamento" {
 }
 
 # --- Alerta a cada execução (padrão R-B do parecer do código do #190) ------------------------------
-# Duas regras no tópico de alertas de segurança:
-#   1. <nome>-ops-provisionamento-execucao: TODA chamada a RunTask desta família;
+# Duas regras no tópico de alertas de segurança, para as duas famílias (provisionamento, B11, e troca
+# do admin único, B13):
+#   1. <nome>-ops-provisionamento-execucao: TODA chamada a RunTask de uma das duas famílias;
 #   2. <nome>-ops-provisionamento-override-suspeito (CRÍTICO): variável de ambiente com nome diferente
-#      de CONFIRMA_PROVISIONAMENTO, environmentFiles, troca de papel ou ECS Exec.
+#      da trava da família (CONFIRMA_PROVISIONAMENTO ou CONFIRMA_TROCA), environmentFiles, troca de
+#      papel ou ECS Exec.
 # O EventBridge não confere tamanho nem ordem do `command`: fica com a regra 1 e com o conferente, que
 # confere o override no evento do CloudTrail e anota no chamado (runbook).
 
@@ -569,17 +748,20 @@ locals {
     source        = ["aws.ecs"]
     "detail-type" = ["AWS API Call via CloudTrail"]
   }
-  ops_prov_familia_curinga = [{ wildcard = "*${local.ops_prov_nome}*" }]
+  ops_prov_familia_curinga  = [{ wildcard = "*${local.ops_prov_nome}*" }]
+  ops_troca_familia_curinga = [{ wildcard = "*${local.ops_troca_nome}*" }]
+  # Lista de padrões é OU no EventBridge: casa qualquer uma das duas famílias.
+  ops_prov_familias_curinga = concat(local.ops_prov_familia_curinga, local.ops_troca_familia_curinga)
 }
 
 resource "aws_cloudwatch_event_rule" "ops_provisionamento_execucao" {
   name        = "${local.ops_prov_nome}-execucao"
-  description = "Toda execução (RunTask) do provisionamento da clínica (B11)."
+  description = "Toda execução (RunTask) do provisionamento da clínica (B11) e da troca do admin único (B13)."
   event_pattern = jsonencode(merge(local.ops_prov_evento_runtask, {
     detail = {
       eventSource       = ["ecs.amazonaws.com"]
       eventName         = ["RunTask"]
-      requestParameters = { taskDefinition = local.ops_prov_familia_curinga }
+      requestParameters = { taskDefinition = local.ops_prov_familias_curinga }
     }
   }))
 }
@@ -591,17 +773,18 @@ resource "aws_cloudwatch_event_target" "ops_provisionamento_execucao" {
 
 resource "aws_cloudwatch_event_rule" "ops_provisionamento_override_suspeito" {
   name        = "${local.ops_prov_nome}-override-suspeito"
-  description = "CRITICO: RunTask do provisionamento com override fora do runbook (variável além de CONFIRMA_PROVISIONAMENTO, troca de papel, ECS Exec)."
+  description = "CRITICO: RunTask do provisionamento ou da troca do admin com override fora do runbook (variável além de CONFIRMA_PROVISIONAMENTO ou CONFIRMA_TROCA, troca de papel, ECS Exec)."
   event_pattern = jsonencode(merge(local.ops_prov_evento_runtask, {
     detail = {
       eventSource = ["ecs.amazonaws.com"]
       eventName   = ["RunTask"]
       "$or" = [
         { requestParameters = { taskDefinition = local.ops_prov_familia_curinga, overrides = { containerOverrides = { environment = { name = [{ "anything-but" = "CONFIRMA_PROVISIONAMENTO" }] } } } } },
-        { requestParameters = { taskDefinition = local.ops_prov_familia_curinga, overrides = { containerOverrides = { environmentFiles = [{ exists = true }] } } } },
-        { requestParameters = { taskDefinition = local.ops_prov_familia_curinga, overrides = { taskRoleArn = [{ exists = true }] } } },
-        { requestParameters = { taskDefinition = local.ops_prov_familia_curinga, overrides = { executionRoleArn = [{ exists = true }] } } },
-        { requestParameters = { taskDefinition = local.ops_prov_familia_curinga, enableExecuteCommand = [true] } },
+        { requestParameters = { taskDefinition = local.ops_troca_familia_curinga, overrides = { containerOverrides = { environment = { name = [{ "anything-but" = "CONFIRMA_TROCA" }] } } } } },
+        { requestParameters = { taskDefinition = local.ops_prov_familias_curinga, overrides = { containerOverrides = { environmentFiles = [{ exists = true }] } } } },
+        { requestParameters = { taskDefinition = local.ops_prov_familias_curinga, overrides = { taskRoleArn = [{ exists = true }] } } },
+        { requestParameters = { taskDefinition = local.ops_prov_familias_curinga, overrides = { executionRoleArn = [{ exists = true }] } } },
+        { requestParameters = { taskDefinition = local.ops_prov_familias_curinga, enableExecuteCommand = [true] } },
       ]
     }
   }))
@@ -613,13 +796,13 @@ resource "aws_cloudwatch_event_target" "ops_provisionamento_override_suspeito" {
 }
 
 # 3. <nome>-ops-provisionamento-entrega (A6, trilha do "entregue em" de C1): toda leitura ou
-#    apagamento de /provisionamento/*/entrega. GetParameter é evento de leitura: o EventBridge só o
+#    apagamento de /provisionamento/*/entrega e de /troca-admin/*/entrega (B13). GetParameter é evento de leitura: o EventBridge só o
 #    recebe com a regra no estado ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS (o trail já grava
 #    os eventos de gerenciamento de leitura, cloudtrail.tf). O alerta leva o SourceIdentity; quem
 #    confere o chamado compara com o do RunTask (a separação em si já é garantida pelos dois papéis).
 resource "aws_cloudwatch_event_rule" "ops_provisionamento_entrega" {
   name        = "${local.ops_prov_nome}-entrega"
-  description = "Leitura ou apagamento da entrega do token do provisionamento (B11)."
+  description = "Leitura ou apagamento da entrega do token do provisionamento (B11) ou da troca do admin (B13)."
   state       = "ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS"
   event_pattern = jsonencode({
     source        = ["aws.ssm"]
@@ -628,8 +811,8 @@ resource "aws_cloudwatch_event_rule" "ops_provisionamento_entrega" {
       eventSource = ["ssm.amazonaws.com"]
       eventName   = ["GetParameter", "GetParameters", "GetParameterHistory", "DeleteParameter", "DeleteParameters"]
       "$or" = [
-        { requestParameters = { name = [{ wildcard = "/provisionamento/*/entrega" }] } },
-        { requestParameters = { names = [{ wildcard = "/provisionamento/*/entrega" }] } },
+        { requestParameters = { name = [{ wildcard = "/provisionamento/*/entrega" }, { wildcard = "/troca-admin/*/entrega" }] } },
+        { requestParameters = { names = [{ wildcard = "/provisionamento/*/entrega" }, { wildcard = "/troca-admin/*/entrega" }] } },
       ]
     }
   })
@@ -642,11 +825,12 @@ resource "aws_cloudwatch_event_target" "ops_provisionamento_entrega" {
 
 # 4. <nome>-ops-entrega-vencida (C2 do parecer 2026-11-17-codigo-infra-ops-provisionamento): a
 #    entrega que ninguém retirou vence pela política Expiration do PutParameter (72 h no
-#    provisionamento, 24 h na recuperação, #206) e o SSM a apaga. O alerta avisa quem opera que o
-#    token não chegou ao destinatário e o chamado precisa de nova rodada. Vale para os dois fluxos.
+#    provisionamento, 24 h na recuperação, #206, e 24 h na troca do admin, B13) e o SSM a apaga. O
+#    alerta avisa quem opera que o token não chegou ao destinatário e o chamado precisa de nova
+#    rodada. Vale para os três fluxos.
 resource "aws_cloudwatch_event_rule" "ops_entrega_vencida" {
   name        = "${local.nome}-ops-entrega-vencida"
-  description = "Entrega de token (provisionamento ou recuperação) vencida sem retirada pela política Expiration."
+  description = "Entrega de token (provisionamento, recuperação ou troca do admin) vencida sem retirada pela política Expiration."
   event_pattern = jsonencode({
     source        = ["aws.ssm"]
     "detail-type" = ["Parameter Store Policy Action"]
@@ -655,6 +839,7 @@ resource "aws_cloudwatch_event_rule" "ops_entrega_vencida" {
       "$or" = [
         { "parameter-name" = [{ wildcard = "/provisionamento/*/entrega" }] },
         { "parameter-name" = [{ wildcard = "/recuperacao-suporte/*/entrega" }] },
+        { "parameter-name" = [{ wildcard = "/troca-admin/*/entrega" }] },
       ]
     }
   })
@@ -665,7 +850,7 @@ resource "aws_cloudwatch_event_target" "ops_entrega_vencida" {
   arn  = aws_sns_topic.alertas_seguranca.arn
 }
 
-# --- Papéis de máquina NUNCA rodam esta tarefa nem tocam os parâmetros (R7) ---------------------
+# --- Papéis de máquina NUNCA rodam estas tarefas nem tocam os parâmetros (R7; B11 e B13) ---------
 # Mesma lista de papéis de máquina do B10 (local.ops_anon_papeis_sem_acesso). O Deny explícito
 # garante que uma ampliação futura (curinga) não alcance o provisionamento.
 
@@ -676,6 +861,7 @@ data "aws_iam_policy_document" "nega_ops_provisionamento" {
     actions = ["ecs:RunTask", "ecs:StartTask"]
     resources = [
       "arn:${data.aws_partition.atual.partition}:ecs:${local.regiao}:${local.conta}:task-definition/${local.ops_prov_nome}:*",
+      "arn:${data.aws_partition.atual.partition}:ecs:${local.regiao}:${local.conta}:task-definition/${local.ops_troca_nome}:*",
     ]
   }
   statement {
@@ -688,7 +874,7 @@ data "aws_iam_policy_document" "nega_ops_provisionamento" {
     sid       = "NaoTocaOsParametros"
     effect    = "Deny"
     actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters"]
-    resources = [local.ops_prov_parametros, local.ops_prov_pedidos]
+    resources = [local.ops_prov_parametros, local.ops_prov_pedidos, local.ops_troca_parametros, local.ops_troca_pedidos]
   }
   statement {
     sid       = "NaoUsaAChaveDosParametros"

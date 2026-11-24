@@ -10,7 +10,7 @@ locals {
     ecr                 = "Imagens no ECR"
     alertas             = "Tópico SNS de alertas de segurança (uso do break-glass)"
     backup              = "Cofre do AWS Backup (backup mensal imutável, R7)"
-    ops-provisionamento = "Parâmetros SSM do provisionamento da clínica (B11): pedido e entrega do token, vida curta"
+    ops-provisionamento = "Parâmetros SSM do provisionamento da clínica (B11) e da troca do admin único (B13): pedido e entrega do token, vida curta"
     ops-recuperacao     = "Parâmetros SSM da recuperação do admin único (B12): entrega do token, vida curta"
   }
 

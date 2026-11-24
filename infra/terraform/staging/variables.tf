@@ -143,7 +143,7 @@ variable "principais_ops_recuperacao_entrega" {
 }
 
 variable "endpoint_ssm" {
-  description = "Cria o VPC endpoint ssm (com política só desta conta e dos parâmetros /provisionamento/* e /recuperacao-suporte/*) para as tarefas avulsas B11/B12 (A4 do parecer de 17/11/2026). Custo por AZ (ver rede.tf). Desligado, as tarefas não alcançam o SSM e falham fechado; ligar com o PR do cliente SSM."
+  description = "Cria o VPC endpoint ssm (com política só desta conta e dos parâmetros /provisionamento/*, /recuperacao-suporte/* e /troca-admin/*) para as tarefas avulsas B11/B12/B13 (A4 do parecer de 17/11/2026). Custo por AZ (ver rede.tf). Desligado, as tarefas não alcançam o SSM e falham fechado; ligar com o PR do cliente SSM."
   type        = bool
   default     = false
 }
