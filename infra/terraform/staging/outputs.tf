@@ -108,6 +108,11 @@ output "papeis_ops_provisionamento" {
   value       = { for k, r in aws_iam_role.ops_provisionamento : k => r.arn }
 }
 
+output "ops_troca_admin_task_definition" {
+  description = "Definição de tarefa (com revisão) da troca do admin único (B13). Mesmos papéis, rede (ops_provisionamento_rede) e chave do provisionamento; só o papel ops-provisionamento-executor, com MFA, roda; argumentos por containerOverrides e CONFIRMA_TROCA."
+  value       = aws_ecs_task_definition.ops_troca_admin.arn
+}
+
 output "ops_recuperacao_task_definition" {
   description = "Definição de tarefa (com revisão) da recuperação do fator do admin único (B12). Só o papel ops-recuperacao-executor, com MFA, roda; argumentos por containerOverrides."
   value       = aws_ecs_task_definition.ops_recuperacao.arn
