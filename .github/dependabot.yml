@@ -5,9 +5,16 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Maturidade: só propõe versão publicada há 14 dias ou mais (regra que já seguíamos à mão; PRs #202 e #236 de
+    # 11/2026 traziam versões de 1 a 11 dias). Não vale para atualização de segurança, que continua imediata.
+    cooldown:
+      default-days: 14
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+        # better-auth vem em PR próprio: a pilha do login real foi revisada pelo Guardião LGPD numa versão fixa,
+        # e cada subida exige ler o changelog com ele. No grupo, travava as outras 18 atualizações.
+        exclude-patterns: ["better-auth", "@better-auth/*"]
     ignore:
       # TypeScript 7 (compilador nativo) quebra o lint: typescript-eslint suporta só
       # typescript ">=4.8.4 <6.1.0" (testado em 09/10/2026, PR #4). Remover quando o
