@@ -867,3 +867,7 @@ destravando a auditoria de todos.
   Terraform (#204) e o aviso no app (em andamento); o RIPD já está no #238.
 - Disparado o Terraform da troca do admin (B13) num PR sobre o #204: comando da tarefa, caminhos SSM da entrega,
   IAM mínimo, KMS, alerta de entrega vencida e política do endpoint SSM.
+- **#240 aberto** (Terraform do B13, base `eng/infra-ops-provisionamento`): tarefa `ops-troca-admin` com comando fixo,
+  caminhos SSM `/troca-admin/*` com vencimento e sem sobrescrita, entrega lida só pelo entregador, KMS do provisionamento
+  reaproveitado, alertas e endpoint SSM cobrindo a troca. Job de infra verde na CI; sem terraform local. Runbook vai
+  conflitar com o do #239 (fica a seção 11 do #240). Enviado ao Guardião.
