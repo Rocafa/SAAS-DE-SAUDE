@@ -763,3 +763,13 @@ destravando a auditoria de todos.
   mutação.
 - #232 (2a08eb5): bloco unitário do `sw.js` reescrito com `node:vm` (8 testes de comportamento; 9 mutações no `sw.js`
   derrubam todos); `/offline` lido do cache. Web: lint, typecheck e 425 testes com exit 0. Comentado no #213.
+
+### 24/11 — o alerta do picomatch foi retirado
+
+- **FATO:** o GitHub retirou o GHSA-fc5q-39xc-vjpf em 18/11/2026 às 15:38 UTC (`withdrawn_at`, consultado em
+  24/11/2026 em https://github.com/advisories/GHSA-fc5q-39xc-vjpf). A auditoria voltou a passar em todos os PRs sem
+  exceção: #210, #116, #155, #194, #153 e #154 estão verdes.
+- **#209 fechado** com a explicação; a branch fica guardada com o mecanismo de exceção datada para uso futuro. O #210
+  segue valendo (imagem de 268 para 82 MB) e agora precisa só da reaprovação.
+- Alertas abertos na `main`: 7 do next 16.4.3 (médios; todos corrigidos na 16.4.5, que é o #201 do Dependabot) e o do
+  minimatch (#189). Pedi `@dependabot rebase` no #201.
