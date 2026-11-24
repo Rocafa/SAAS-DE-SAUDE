@@ -122,7 +122,10 @@ test.describe('PWA e páginas de erro', () => {
       const c = await caches.open(nomes[0]!);
       return (await c.keys()).map((r) => new URL(r.url).pathname);
     });
-    expect(guardados.filter((p) => !p.startsWith('/_next/static/') && !p.startsWith('/icones/'))).toEqual(['/offline']);
+    // O manifesto (/manifest.webmanifest) é público e estático (nome, cores, ícones): sem dado pessoal.
+    const permitidos = (p: string) =>
+      p.startsWith('/_next/static/') || p.startsWith('/icones/') || p === '/manifest.webmanifest';
+    expect(guardados.filter((p) => !permitidos(p))).toEqual(['/offline']);
     await context.setOffline(false);
   });
 
