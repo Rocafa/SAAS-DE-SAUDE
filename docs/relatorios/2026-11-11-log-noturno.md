@@ -831,3 +831,6 @@ destravando a auditoria de todos.
   retirada. CI verde (13 jobs); vitest 1178, build e boot ok. Enviado ao Guardião, com a pergunta se retirar a trava
   antecipa o provedor real antes da D3 (envio sem pseudonimizar).
 - Em andamento: código do B13 sobre o #238.
+- **Guardião aprova o #227 + #230 + #233.** Retirar a trava não antecipa o provedor real: `createProviders` ainda
+  bloqueia as rotas reais até a D3; o PR da primeira rota real precisa vir com pseudonimização e DPA, ou veto. Falta só
+  o CloudTrail no staging (não bloqueia). Postado no #227.
