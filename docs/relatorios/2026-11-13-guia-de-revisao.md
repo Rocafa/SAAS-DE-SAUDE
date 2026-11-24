@@ -9,6 +9,12 @@
   aprovado), #116 (reaprovar), #155, #194, #153, #154 e #237 (Dependabot espera 14 dias; better-auth em PR próprio).
 - Do Dependabot, mesclei com o OK do @Rocafa o #201 (next 16.4.5, fecha 7 alertas médios), o #184, o #186 e o #200.
   O grupo #236 fica em espera até as versões completarem 14 dias.
+- **Decisões tuas novas, do B13 (#238, admin único que perdeu senha e fator; desenho v2 aprovado com ressalvas pelo
+  Guardião):** P1 48 h corridas ou úteis (recomendação: corridas, com um dia útil inteiro dentro); P2 suspender a conta
+  antiga já no pedido quando houver suspeita (recomendação: sim, com decisão do DPO registrada); P5 quem indica o admin
+  novo se o signatário saiu ou faleceu (recomendação: só o representante legal, com poderes comprovados; modelo com o
+  advogado); P6 quem decide reverter depois de concluída (recomendação: DPO e os dois sócios). Meu voto: as quatro
+  recomendações.
 - Os meus PRs de correção para as tuas branches (tabela abaixo) continuam prontos. O #234 está conciliando com o teu
   commit "exige MFA do RT" no #220.
 

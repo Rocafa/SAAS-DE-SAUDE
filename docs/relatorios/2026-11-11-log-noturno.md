@@ -821,3 +821,8 @@ destravando a auditoria de todos.
   telefone do contrato no `pedir` e no `emitir` (sem e-mail, risco aceito até a D3); trigger de transições; operadores
   diferentes; alarme de login da conta antiga. Decidiu P3, P4, P7–P10; recomendou P1, P2, P5, P6 aos sócios. Postado no
   PR; v2 do desenho e arquivo do parecer em andamento.
+- #238 (a143582): desenho v2 do B13 com as 5 ressalvas, parecer transcrito em
+  `revisoes/2026-11-24-desenho-troca-do-admin-unico.md`, risco da falta de e-mail no RIPD-identidade §4/§8 e checklist
+  atualizado. P1, P2, P5 e P6 no guia do sócio, com o meu voto nas recomendações.
+- Próximo: código do B13 sobre o #238, com as recomendações como padrão (constantes documentadas) até os sócios
+  decidirem.
