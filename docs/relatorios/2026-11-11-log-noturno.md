@@ -817,3 +817,7 @@ destravando a auditoria de todos.
   contrato ou pelo app; fase `emitir` com token de ativação de 24 h; na ativação, vínculo antigo revogado e conta antiga
   marcada como substituída, credenciais apagadas em 90 dias. Checklist corrigido (B11 e B12 com código, B13 aguardando
   o Guardião). Perguntas aos sócios: P1, P2, P5, P6. Enviado ao Guardião.
+- **Guardião no B13 (#238): aprovado com ressalvas.** Concluir só com o TOTP confirmado; viva voz obrigatória pelo
+  telefone do contrato no `pedir` e no `emitir` (sem e-mail, risco aceito até a D3); trigger de transições; operadores
+  diferentes; alarme de login da conta antiga. Decidiu P3, P4, P7–P10; recomendou P1, P2, P5, P6 aos sócios. Postado no
+  PR; v2 do desenho e arquivo do parecer em andamento.
