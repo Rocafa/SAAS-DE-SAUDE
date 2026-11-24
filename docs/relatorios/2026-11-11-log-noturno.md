@@ -812,3 +812,8 @@ destravando a auditoria de todos.
 - #231 (9196cdf): a linha de autor só aparece com `autor` preenchido (435 testes do web, exit 0). A API real não tem
   rota de linha do tempo; no modo http a ficha cai no fake, pela regra já documentada em `selecionar.ts`. Sugeri no
   #222 esconder a aba ou mostrar "ainda não disponível" no modo http até existir a rota.
+- **#238 aberto (desenho do B13)**, base `eng/clinica-sem-fundador`: pedido pelo contrato (chamado, DPO, signatário,
+  executor e entregador diferentes); fase `pedir` com e-mail novo só em HMAC e janela de 48 h; "não fui eu" pelo
+  contrato ou pelo app; fase `emitir` com token de ativação de 24 h; na ativação, vínculo antigo revogado e conta antiga
+  marcada como substituída, credenciais apagadas em 90 dias. Checklist corrigido (B11 e B12 com código, B13 aguardando
+  o Guardião). Perguntas aos sócios: P1, P2, P5, P6. Enviado ao Guardião.
