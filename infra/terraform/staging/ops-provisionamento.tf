@@ -40,8 +40,9 @@
 # (DATABASE_PROVISIONAMENTO_URL, app_provisionamento ampliado pela 0082, e RATE_LIMIT_HASH_KEY para
 # chaveDeHmac('ativacao-email')), a mesma rede, a mesma chave KMS e os mesmos papéis humanos executor e
 # entrega. Só a DEFINIÇÃO de tarefa é outra (família <nome>-ops-troca-admin), porque o entryPoint fixa o
-# programa (R-A): um override de `command` não troca de script, então cada comando aceito tem a sua
-# família (local.ops_prov_comandos_aceitos e a precondição de cada definição).
+# programa (R-A): um override de `command` não troca de script, então cada família tem exatamente o
+# seu programa (local.ops_prov_programa_da_familia e a precondição de igualdade de cada definição;
+# R1 do parecer do #240: uma família nunca roda o programa da outra sem o alerta de override).
 #   /troca-admin/<pedido>          {"email": ...}: o executor do pedido cria (72 h); a tarefa lê e apaga;
 #   /troca-admin/<pedido>/entrega  o token (24 h): a tarefa grava no `emitir` (e apaga se a rodada falhar
 #                                  depois de gravar); o entregador, TERCEIRA pessoa, lê uma vez e apaga.
@@ -121,8 +122,12 @@ locals {
   ops_prov_entrypoint  = ["/nodejs/bin/node", "dist/ops/provisionar-clinica.js"]
   ops_troca_entrypoint = ["/nodejs/bin/node", "dist/ops/trocar-admin-unico.js"]
 
-  # Comandos aceitos nas definições que usam os papéis do provisionamento (precondição de cada uma).
-  ops_prov_comandos_aceitos = ["dist/ops/provisionar-clinica.js", "dist/ops/trocar-admin-unico.js"]
+  # O programa de CADA família (R1 do parecer do #240): a precondição de cada definição exige
+  # igualdade exata do entryPoint, não "um dos comandos aceitos".
+  ops_prov_programa_da_familia = {
+    provisionamento = "dist/ops/provisionar-clinica.js"
+    troca           = "dist/ops/trocar-admin-unico.js"
+  }
 }
 
 # --- Rede: grupo de segurança próprio (só banco e VPC endpoints; sem Redis, sem entrada) -------
@@ -402,10 +407,10 @@ resource "aws_ecs_task_definition" "ops_provisionamento" {
       )
       error_message = "principais_ops_provisionamento_executor e principais_ops_provisionamento_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda o provisionamento não lê a entrega do token (C1 do parecer de 17/11/2026)."
     }
-    # R-A: node fixo e só um comando aceito no entryPoint.
+    # R-A e R1 do parecer do #240: node fixo e SÓ o programa do provisionamento.
     precondition {
-      condition     = length(local.ops_prov_entrypoint) == 2 && local.ops_prov_entrypoint[0] == "/nodejs/bin/node" && contains(local.ops_prov_comandos_aceitos, local.ops_prov_entrypoint[1])
-      error_message = "O entryPoint do provisionamento tem de ser /nodejs/bin/node mais um comando de local.ops_prov_comandos_aceitos."
+      condition     = length(local.ops_prov_entrypoint) == 2 && local.ops_prov_entrypoint[0] == "/nodejs/bin/node" && local.ops_prov_entrypoint[1] == local.ops_prov_programa_da_familia.provisionamento
+      error_message = "O entryPoint do provisionamento tem de ser exatamente /nodejs/bin/node dist/ops/provisionar-clinica.js (R1 do parecer do #240)."
     }
   }
 }
@@ -479,8 +484,8 @@ resource "aws_ecs_task_definition" "ops_troca_admin" {
       error_message = "principais_ops_provisionamento_executor e principais_ops_provisionamento_entrega precisam estar as duas preenchidas (ou as duas vazias) e ser disjuntas: quem roda a troca do admin não lê a entrega do token (P3 do desenho da troca)."
     }
     precondition {
-      condition     = length(local.ops_troca_entrypoint) == 2 && local.ops_troca_entrypoint[0] == "/nodejs/bin/node" && contains(local.ops_prov_comandos_aceitos, local.ops_troca_entrypoint[1])
-      error_message = "O entryPoint da troca do admin tem de ser /nodejs/bin/node mais um comando de local.ops_prov_comandos_aceitos."
+      condition     = length(local.ops_troca_entrypoint) == 2 && local.ops_troca_entrypoint[0] == "/nodejs/bin/node" && local.ops_troca_entrypoint[1] == local.ops_prov_programa_da_familia.troca
+      error_message = "O entryPoint da troca do admin tem de ser exatamente /nodejs/bin/node dist/ops/trocar-admin-unico.js (R1 do parecer do #240)."
     }
   }
 }
