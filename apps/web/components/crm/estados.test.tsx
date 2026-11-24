@@ -95,7 +95,8 @@ describe('LinhaDoTempo', () => {
       <LinhaDoTempo eventos={[{ data: '2026-10-01', tipo: 'cadastro', texto: 'Cadastro criado' }]} agora={new Date('2026-10-13T12:00:00-03:00')} />,
     );
     expect(html).toContain('Cadastro');
-    expect(html).toContain('Autor não informado');
+    expect(html).toContain('Cadastro criado');
+    expect(html).not.toContain('Autor');
   });
 
   it('usa o estado vazio existente quando ainda não há histórico', () => {
