@@ -43,7 +43,9 @@ export function LinhaDoTempo({ eventos, agora = new Date() }: { eventos: EventoL
               <Icone aria-hidden className="size-5 shrink-0" />
               {evento.texto}
             </p>
-            <p className="mt-1 text-[0.95rem] text-texto-suave">{evento.autor ? `Autor: ${evento.autor}` : 'Autor não informado'}</p>
+            {/* A API real ainda não expõe autor (é dado de quem acessou o prontuário: decisão dos sócios + Guardião).
+                Sem autor, a linha some em vez de repetir "não informado" em todo evento. */}
+            {evento.autor ? <p className="mt-1 text-[0.95rem] text-texto-suave">Autor: {evento.autor}</p> : null}
           </li>
         );
       })}
