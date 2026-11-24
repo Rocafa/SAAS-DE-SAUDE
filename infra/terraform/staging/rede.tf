@@ -175,6 +175,22 @@ data "aws_iam_policy_document" "endpoint_ssm" {
       values   = [local.conta]
     }
   }
+  # Troca do admin (B13, #239): a tarefa confere o vencimento do pedido por DescribeParameters, que só
+  # aceita recurso "*" e devolve só metadados da conta de quem chama (nunca valores).
+  statement {
+    sid       = "MetadadosDosParametrosDestaConta"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [local.conta]
+    }
+  }
 }
 
 resource "aws_vpc_endpoint" "ssm" {

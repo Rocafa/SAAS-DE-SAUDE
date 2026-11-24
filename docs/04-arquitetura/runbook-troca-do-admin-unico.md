@@ -173,6 +173,7 @@ Está no Terraform (`infra/terraform/staging/ops-provisionamento.tf`, PR `devops
 - **Chave KMS:** a do provisionamento, reaproveitada: quem decifra são os mesmos dois papéis (a tarefa e o entregador), e o IAM separa os caminhos pelo `PARAMETER_ARN` do contexto de cifra. **Desligar ou agendar a exclusão da chave `ops-provisionamento` para os dois fluxos de uma vez** (provisionamento e troca): os pedidos e entregas pendentes dos dois deixam de ser lidos. Num incidente da troca, prefira negar no IAM os caminhos `/troca-admin/*`.
 - **IAM:**
   - executor (`ops-provisionamento-executor`): roda as duas definições, grava e apaga o pedido, e **nunca** lê, grava ou apaga a entrega;
+  - tarefa: confere o vencimento do pedido com `ssm:DescribeParameters` (recusa e apaga se passa de 72 h ou não tem `Expiration`). Essa ação só aceita recurso `*`, então vale para a conta inteira, mas **devolve só metadados** (nome, tipo, data e políticas), **nunca valores**, e só de dentro da VPC (`aws:SourceVpc`, pelo endpoint SSM, cuja política também a libera). Só o papel da tarefa tem essa permissão; os humanos não;
   - tarefa: lê e apaga o pedido, grava a entrega e só a apaga se a rodada do `emitir` falhar depois de gravá-la; nunca a lê;
   - entregador (`ops-provisionamento-entrega`): o único que lê a entrega; apaga, e não roda nem grava nada.
   O `emitir` por outra pessoa que não a do `pedir` é garantido no código (`mesmo_operador`), não no IAM: os dois usam o papel executor.

@@ -239,6 +239,20 @@ data "aws_iam_policy_document" "ops_provisionamento_tarefa" {
     actions   = ["ssm:PutParameter"]
     resources = local.ops_prov_todas_entregas
   }
+  # Troca (B13, #239): antes de usar /troca-admin/<pedido>, a tarefa confere a política Expiration
+  # (recusa e apaga se passa de 72 h ou não tem) com DescribeParameters, que devolve SÓ metadados
+  # (nome, tipo, data, políticas), nunca o valor. A ação não aceita ARN de parâmetro (só "*") nem tem
+  # chave de condição para o filtro; o limite é a rede: só de dentro desta VPC (pelo endpoint ssm).
+  statement {
+    sid       = "ConferirVencimentoDoPedido"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceVpc"
+      values   = [aws_vpc.this.id]
+    }
+  }
   # A entrega é de outra pessoa: a tarefa não a lê nem lê histórico. No provisionamento também não
   # a apaga.
   statement {
