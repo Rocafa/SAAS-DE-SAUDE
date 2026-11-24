@@ -126,7 +126,18 @@ export interface ApiClinica {
   reativarAssinatura(): Promise<Assinatura>;
   /** Exige o código do autenticador (MFA recente). */
   pedirExportacao(codigo: string): Promise<PedidoExportacao>;
-  aprovarExportacao(id: string): Promise<PedidoExportacao>;
+  /**
+   * Pedido pendente mais recente da clínica, para o responsável técnico retomar após trocar de usuário.
+   * Exige admin e o mesmo isolamento de tenant das demais consultas; `null` quando não há pedido.
+   */
+  obterExportacaoPendente(): Promise<PedidoExportacao | null>;
+  /**
+   * Ato do usuário RT autenticado, com MFA recente próprio (`codigo` da sessão atual). O servidor
+   * confere papel, identidade e MFA. Se o RT for outra pessoa, quem pediu recebe 403; se o admin
+   * também for o RT autônomo, a aprovação do próprio pedido é permitida e registrada como exceção
+   * explícita (garantia G2, R6/R9 do Guardião). Ser admin sozinho não autoriza aprovar.
+   */
+  aprovarExportacao(id: string, codigo: string): Promise<PedidoExportacao>;
 
 
   /** Só na demonstração: trocar quem está usando, para ver as permissões. */
