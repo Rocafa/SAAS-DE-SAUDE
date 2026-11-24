@@ -881,3 +881,6 @@ destravando a auditoria de todos.
 - No #239: a tarefa vai recusar e apagar pedido com vencimento acima de 72 h (recomendação do Guardião no #240).
 - Avisos de "next upgrade --agent=security" no build: os 7 alertas do next foram fechados pelo #201 (16.4.5); o resto
   vem com o grupo do Dependabot depois do cooldown.
+- **Guardião aprova o #241.** Com isso o B13 tem desenho (#238, com RIPD), código (#239), aviso no app (#241) e
+  Terraform (#240), todos aprovados pelo Guardião e com CI verde. Faltam as decisões P1, P2, P5 e P6 dos sócios, a
+  aprovação do @Lopesloro e a prova no staging.
