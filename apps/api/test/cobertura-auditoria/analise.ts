@@ -65,13 +65,23 @@ function relativo(n: ts.Node): string {
   return path.relative(RAIZ_API, sf.fileName).split(path.sep).join('/');
 }
 
+/**
+ * Os fontes não mudam durante um processo de teste. Reutilizar o programa da API evita reconstruir o compilador para
+ * R5, MFA e R6; a repetição consumia memória e estourava os timeouts quando várias suítes rodavam em paralelo.
+ * Fixtures continuam com programa próprio, pois cada análise com `extras` devolve somente as rotas daqueles arquivos.
+ */
+let programaDaApi: ts.Program | undefined;
+
 function criarPrograma(extras: readonly string[]): ts.Program {
   const arquivoConfig = path.join(RAIZ_API, 'tsconfig.json');
   const lido = ts.readConfigFile(arquivoConfig, (f) => ts.sys.readFile(f));
   if (lido.error) throw new Error(ts.flattenDiagnosticMessageText(lido.error.messageText, ' '));
   const cfg = ts.parseJsonConfigFileContent(lido.config, ts.sys, RAIZ_API);
   const raizes = cfg.fileNames.filter((f) => path.resolve(f).startsWith(RAIZ_SRC) && !/\.test\.ts$/.test(f));
-  return ts.createProgram([...raizes, ...extras], { ...cfg.options, noEmit: true });
+  const opcoes = { ...cfg.options, noEmit: true };
+  if (extras.length > 0) return ts.createProgram([...raizes, ...extras], opcoes);
+  programaDaApi ??= ts.createProgram(raizes, opcoes);
+  return programaDaApi;
 }
 
 interface Contexto {
@@ -224,6 +234,9 @@ function sqlAlcancado(cx: Contexto, inicio: ts.Node): string[] {
 
 export type TipoDeRota = 'escrita' | 'leitura';
 
+/** MFA consulta os mesmos inventários já calculados nos `beforeAll`; fixtures nunca entram neste cache. */
+const cacheRotasDaApi = new Map<TipoDeRota, RotaAnalisada[]>();
+
 /** Rotas de escrita (`POST/PATCH/PUT/DELETE/ALL`), com a análise de alcance. */
 export function analisarRotasDeEscrita(extras: readonly string[] = []): RotaAnalisada[] {
   return analisarRotas('escrita', extras);
@@ -239,6 +252,10 @@ export function analisarRotasDeLeitura(extras: readonly string[] = []): RotaAnal
  * tratados como nosso código e cujas rotas são as ÚNICAS devolvidas (fixtures de sanidade do teste).
  */
 function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisada[] {
+  if (extras.length === 0) {
+    const emCache = cacheRotasDaApi.get(tipo);
+    if (emCache) return emCache;
+  }
   const absolutos = extras.map((f) => path.resolve(f));
   const programa = criarPrograma(absolutos);
   // Código com erro de sintaxe daria análise parcial (e falso "não audita"): melhor falhar com o motivo.
@@ -315,7 +332,9 @@ function analisarRotas(tipo: TipoDeRota, extras: readonly string[]): RotaAnalisa
     };
     visitar(sf);
   }
-  return rotas.sort((a, b) => a.rota.localeCompare(b.rota));
+  const ordenadas = rotas.sort((a, b) => a.rota.localeCompare(b.rota));
+  if (extras.length === 0) cacheRotasDaApi.set(tipo, ordenadas);
+  return ordenadas;
 }
 
 /** Métodos que registram handler HTTP fora de controller (Nest `INestApplication`/adaptador, Express, MiddlewareConsumer). */
