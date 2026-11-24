@@ -860,3 +860,6 @@ destravando a auditoria de todos.
   em conflito. Nada a fazer.
 - PRs novos do sócio sem revisão nossa: nenhum (#143 e #157 já têm revisão nossa).
 - Guia do sócio sem mudança.
+- #239 (e3c5e37): ressalvas corrigidas (suspensão derruba tokens e sessões da conta nova e o banco recusa o fator fora
+  de `ativada`; `app_auth` limitado nas transições; `TRILHA_NAO_GRAVADA` na contestação parcial). CI verde. De volta ao
+  Guardião. Em paralelo: aviso fixo no app para a conta antiga, com "Não fui eu", num PR sobre o #239.
