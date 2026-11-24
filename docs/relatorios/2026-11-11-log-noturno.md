@@ -803,3 +803,9 @@ destravando a auditoria de todos.
 - Em vez de só esperar: disparado o item 3 do veto do #227 no #233 (tentativa e resultado em dois eventos, chamada ao
   modelo fora da transação, teste de que o pool não fica preso). Se completo e testado, sai a trava do provedor real.
   Volta ao Guardião depois.
+- "Faça tudo": dois trabalhos novos além do item 3 do #227.
+  - #231 (branch do #222): o `autor` da linha do tempo só existe no fake; verificar se a API real o expõe e, se não,
+    esconder a linha em vez de "Autor não informado" em todo evento.
+  - **B13** (admin único que perdeu senha e fator): ainda sem desenho. Desenho em andamento num PR sobre o topo da
+    pilha (#208), com conta nova pelo provisionamento, revogação do vínculo antigo e 48 h; depois vai ao Guardião. O
+    checklist de prontidão também será corrigido (B11 e B12 já têm código nos #195–#208).
