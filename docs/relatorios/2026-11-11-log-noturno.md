@@ -744,3 +744,13 @@ destravando a auditoria de todos.
 ## Checagem de 23/11 22:15
 
 - Nada mudou: #155 segue sem aprovação, main parada em e545878, nenhum merge.
+
+### 24/11 01:15 UTC — retomada
+
+- O sócio mesclou na `main` os #221, #214, #215, #224 e #223 (todos aprovados por mim em 23/11). Com isso, o #210 e o
+  #116 ficaram em conflito no lockfile e o #209 atrás da `main`.
+- #209: `main` mesclada sem conflito. #210 e #116: lockfile regenerado a partir do da `main` (`pnpm install
+  --lockfile-only`), com o mesmo efeito do PR original (+4/−18 e +15/−20). O #210 perde a aprovação (descarte por push
+  novo) e vai precisar de reaprovação. O #189 (aprovado, atrás) fica como está até o #209 entrar, para não perder a
+  aprovação à toa.
+- Meus PRs de correção (#228–#234) seguem abertos para as branches do sócio; ele ainda não os mesclou.
