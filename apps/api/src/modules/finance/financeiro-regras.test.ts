@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EntradaInvalidaError } from '../../common/validacao';
 import {
+  avisoDoRecebimento,
   descricaoEhNeutraOuAceita,
   normalizarTextoParaChecagem,
   dinheiroEsperado,
@@ -96,6 +97,18 @@ describe('cobrança e recebimento', () => {
     expect(validarRecebimento({ forma: 'pix' }).forma).toBe('pix_manual');
     expect(validarRecebimento({ forma: 'cartao' }).forma).toBe('cartao_credito');
     expect(campos(() => validarRecebimento({ forma: 'boleto' }))).toEqual(['forma']);
+  });
+
+  it('R8 do #65: Pix manual e transferência avisam que a mensagem bancária não deve descrever o atendimento', () => {
+    for (const forma of ['pix_manual', 'transferencia'] as const) {
+      expect(avisoDoRecebimento(forma)?.includes('Não descreva o atendimento na mensagem do Pix ou da transferência')).toBe(true);
+    }
+  });
+
+  it('R8 do #65: formas sem mensagem bancária livre não carregam aviso', () => {
+    for (const forma of ['dinheiro', 'cartao_credito', 'cartao_debito', 'convenio'] as const) {
+      expect(avisoDoRecebimento(forma)).toBeNull();
+    }
   });
 });
 
