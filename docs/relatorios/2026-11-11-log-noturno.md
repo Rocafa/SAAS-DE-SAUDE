@@ -789,3 +789,7 @@ destravando a auditoria de todos.
 - #210 e #116: lockfile regenerado de novo depois do #201, com o mesmo efeito de cada PR (+4/−18 e +15/−20).
 - **#184, #186 e #200 mesclados** (pnpm/action-setup 6.1.1, setup-k6-action 1.3.0, digest novo do node 22): cada um
   com rebase, CI toda verde, diff igual ao revisado e aprovação. Do Dependabot sobra só o #202 (em espera até 27/11).
+- O Dependabot fechou o #202 e abriu o #236 (19 atualizações, versões ainda mais novas, better-auth 1.7.27). Em
+  espera, comentado.
+- **#237 aberto** (`devops/dependabot-cooldown`): `cooldown` de 14 dias no npm (segurança continua imediata) e
+  better-auth fora do grupo, em PR próprio. Só configuração; YAML validado. Precisa da aprovação do sócio.
