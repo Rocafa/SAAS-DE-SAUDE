@@ -865,3 +865,5 @@ destravando a auditoria de todos.
   Guardião. Em paralelo: aviso fixo no app para a conta antiga, com "Não fui eu", num PR sobre o #239.
 - **Guardião aprova o #239** (e3c5e37): sem grant novo ao `app_auth` além de `troca_do_admin`. Para produção faltam o
   Terraform (#204) e o aviso no app (em andamento); o RIPD já está no #238.
+- Disparado o Terraform da troca do admin (B13) num PR sobre o #204: comando da tarefa, caminhos SSM da entrega,
+  IAM mínimo, KMS, alerta de entrega vencida e política do endpoint SSM.
