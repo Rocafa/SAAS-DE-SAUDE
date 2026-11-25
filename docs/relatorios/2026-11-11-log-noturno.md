@@ -933,3 +933,5 @@ destravando a auditoria de todos.
   e #154, sem conflito. Feito antes da aprovação de propósito: atualizar depois derrubaria a aprovação.
 - #189 (minimatch, estava aprovado e atrás da `main`): atualizado; o lockfile mesclado passa no
   `pnpm install --frozen-lockfile`. A aprovação caiu com o push; pedi reaprovação no PR.
+- Comentário-resumo no #210 marcando o @Lopesloro, com o link do guia (que está na branch, não na `main`), a ordem de
+  aprovação, as correções nas branches dele e as decisões pendentes.
