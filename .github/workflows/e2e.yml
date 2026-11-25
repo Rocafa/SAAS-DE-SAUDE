@@ -12,6 +12,7 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      - '.pnpmfile.cjs'
       - 'tsconfig.base.json'
       - '.github/workflows/e2e.yml'
   workflow_dispatch:
