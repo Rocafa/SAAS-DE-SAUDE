@@ -1,6 +1,13 @@
 # Guia de revisão para o @Lopesloro — 13/11/2026
 
-## Atualização de 24/11/2026, comece por aqui
+## Atualização de 25/11/2026, comece por aqui
+
+- **Primeiro o #242** (uma linha): desde 25/11 o Trivy barra o CVE-2026-124851 (alto) no `libzstd1` da imagem
+  distroless de runtime, e o job de build falha em todos os PRs. O #242 troca o digest pela imagem republicada; CI toda
+  verde. Depois dele, a ordem de 24/11 abaixo continua valendo.
+- Atualizei com a `main` em 25/11 o #210, #189, #116, #155, #194, #153 e #154, antes da tua aprovação, para ela não cair.
+
+## Atualização de 24/11/2026
 
 - **O alerta do picomatch foi retirado pelo GitHub em 18/11**, e a auditoria voltou a passar em todos os PRs. Fechei
   o #209, que não é mais necessário.
