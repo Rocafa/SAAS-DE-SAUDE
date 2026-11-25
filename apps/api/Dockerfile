@@ -12,7 +12,7 @@
 # ---------------------------------------------------------------------------------------------
 # Estágio 1: build (Node 22 LTS, Debian trixie slim) — compila shared + API e isola só a API.
 # ---------------------------------------------------------------------------------------------
-FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS build
+FROM node:22-trixie-slim@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64 AS build
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
