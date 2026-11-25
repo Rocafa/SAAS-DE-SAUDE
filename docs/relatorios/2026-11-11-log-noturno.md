@@ -955,3 +955,5 @@ destravando a auditoria de todos.
   gatilho com trava (respeita capacidade > 1, o que uma exclusion constraint não faria), gestão só do admin e auditada,
   409 `sala_ocupada`/`sala_inativa`, exportação total 1.25.0. Executor de migrações confirmado: aplica qualquer arquivo
   pendente, mesmo com número menor. CI verde (13 testes RLS novos), exceto Trivy (#242). Enviado ao Guardião.
+- **Guardião aprova o #243.** Recomendações para depois: dica na tela contra nome de paciente em sala/unidade; units e
+  rooms no inventário de dados.
