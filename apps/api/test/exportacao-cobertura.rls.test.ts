@@ -298,7 +298,7 @@ beforeAll(async () => {
     .http()
     .put(`/atendimentos/${atId}/registro`)
     .set(cab(admin))
-    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', objetivo: 'Objetivo ficticio', atividades: 'Atividades ficticias', medidas: [{ tipo: 'eva', valor: 4 }] } })
+    .send({ versaoBase: 1, conteudo: { queixa: TEXTO_CLINICO, conduta: 'Conduta ficticia', objetivo: 'Objetivo ficticio', atividades: 'Atividades ficticias', medidas: [{ tipo: 'escala', rotulo: 'Barthel', valor: 50 }] } })
     .expect(200);
   await api.http().post(`/atendimentos/${atId}/finalizar`).set(cab(admin)).send({}).expect(200);
   await api.http().post(`/atendimentos/${atId}/adendos`).set(cab(admin)).send({ texto: TEXTO_ADENDO }).expect(201);
@@ -752,7 +752,7 @@ describe('G2 — conteúdo do pacote', () => {
     expect(ats[0]?.signedHash).toMatch(/^[0-9a-f]{64}$/);
     expect(versoes.map((v) => v.version)).toEqual([1, 2]);
     expect(versoes[0]?.content).toEqual({ queixa: 'Queixa v1' });
-    expect(versoes[1]?.content).toMatchObject({ queixa: TEXTO_CLINICO, medidas: [{ tipo: 'eva', valor: 4 }] });
+    expect(versoes[1]?.content).toMatchObject({ queixa: TEXTO_CLINICO, medidas: [{ tipo: 'escala', rotulo: 'Barthel', valor: 50 }] });
     expect(adendos[0]).toMatchObject({ text: TEXTO_ADENDO, encounterId: ats[0]?.id });
     expect(cfg).toEqual([expect.objectContaining({ psychCompartment: 'restrito_ao_autor' })]);
     for (const proibido of [TEXTO_CLINICO, TEXTO_ADENDO, NOTA_EXPORTAVEL, NOTA_RETIDA, 'Queixa v1']) expect(pkg.auditJsonl).not.toContain(proibido);
