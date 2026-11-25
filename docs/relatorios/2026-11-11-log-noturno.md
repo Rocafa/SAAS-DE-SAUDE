@@ -931,3 +931,5 @@ destravando a auditoria de todos.
 - O sócio não mexe desde 23/11; a tarefa de 2 h registrou "nada mudou" nas rodadas de 24 e 25/11.
 - Atualizei com a `main` (merges do Dependabot de 24/11: pins de ação e digest do node) o #210, #116, #155, #194, #153
   e #154, sem conflito. Feito antes da aprovação de propósito: atualizar depois derrubaria a aprovação.
+- #189 (minimatch, estava aprovado e atrás da `main`): atualizado; o lockfile mesclado passa no
+  `pnpm install --frozen-lockfile`. A aprovação caiu com o push; pedi reaprovação no PR.
