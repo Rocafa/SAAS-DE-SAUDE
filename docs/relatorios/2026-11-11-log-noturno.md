@@ -941,3 +941,5 @@ destravando a auditoria de todos.
   O Trivy do próprio PR prova se o pacote veio corrigido. Precisa da aprovação do sócio; destrava os sete.
 - **#242 verde em tudo**, inclusive Build/Trivy: o digest novo traz o `libzstd1` corrigido. Passa a ser o primeiro da
   ordem de aprovação (comentado no #210 para o sócio).
+- Para não ficar parado enquanto o sócio não revisa: mapeamento das histórias do M0/M1 do backlog que faltam e não
+  dependem da pilha do login nem da AWS, para escolher as próximas.
