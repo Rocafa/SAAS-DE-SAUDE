@@ -13,6 +13,9 @@ import type { TenantId, UserId } from '@plataforma/shared';
 import {
   adolescentConfidentialityRequests,
   auditLog,
+  clinicHolidays,
+  professionalSchedules,
+  scheduleBlocks,
   patients,
   professionals,
   appointmentTypes,
@@ -117,6 +120,9 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   receipt_cancellations: 'finance.receiptCancellations',
   clinic_members: 'clinicMembers',
   support_access_grants: 'supportAccessGrants',
+  professional_schedules: 'scheduleAvailability.professionalSchedules',
+  schedule_blocks: 'scheduleAvailability.scheduleBlocks',
+  clinic_holidays: 'scheduleAvailability.clinicHolidays',
   portal_invites: 'portal.invites',
   portal_links: 'portal.links',
   portal_consents: 'portal.consents',
@@ -493,6 +499,23 @@ beforeAll(async () => {
     tx.insert(whatsappInbound).values({ tenantId: clinicaA, providerMessageId: 'wamid.EXPORT1', outboxId: envioId, interpretation: 'outro', outcome: 'sem_acao' }),
   );
 
+  // 0100: disponibilidade da agenda (depois de todas as marcações, para não restringi-las). Datas fictícias em 2031.
+  const profId = (prof.body as { id: string }).id;
+  await api
+    .http()
+    .put(`/agenda/grade/${profId}`)
+    .set(cab(admin))
+    .send({ janelas: [{ diaSemana: 1, inicio: '08:00', fim: '12:00', minutos: 40 }] })
+    .expect(200);
+  const bloq = await api
+    .http()
+    .post('/agenda/bloqueios')
+    .set(cab(admin))
+    .send({ profissionalId: profId, dataInicio: '2031-01-06', dataFim: '2031-01-10', motivo: 'ferias' });
+  expect(bloq.status, JSON.stringify(bloq.body)).toBe(201);
+  await api.http().post(`/agenda/bloqueios/${(bloq.body as { id: string }).id}/remover`).set(cab(admin)).expect(204);
+  await api.http().post('/agenda/feriados').set(cab(admin)).send({ data: '2031-03-19', nome: 'Feriado municipal ficticio' }).expect(201);
+
   const ctx = { tenantId: clinicaA, userId: admin.userId as UserId, roles: ['admin'] };
   pkg = await api.app.get(ExportsService).exportTenantData(ctx);
 });
@@ -644,6 +667,11 @@ describe('G2 — conteúdo do pacote', () => {
         },
         clinicMembers: await n(clinicMembers),
         supportAccessGrants: await n(supportAccessGrants),
+        scheduleAvailability: {
+          professionalSchedules: (await tx.select({ n: sql<number>`count(*)::int` }).from(professionalSchedules))[0]?.n ?? -1,
+          scheduleBlocks: (await tx.select({ n: sql<number>`count(*)::int` }).from(scheduleBlocks))[0]?.n ?? -1,
+          clinicHolidays: (await tx.select({ n: sql<number>`count(*)::int` }).from(clinicHolidays))[0]?.n ?? -1,
+        },
         portal: {
           invites: await n(portalInvites),
           links: await n(portalLinks),
@@ -684,6 +712,8 @@ describe('G2 — conteúdo do pacote', () => {
       noteCustodies: 1,
       // 0059: a autorização do chamado do suporte (a linha de suporte da trilha exige uma vigente).
       supportAccessGrants: 1,
+      // 0100: 1 janela de grade, 1 bloqueio (removido) e 1 feriado.
+      scheduleAvailability: { professionalSchedules: 1, scheduleBlocks: 1, clinicHolidays: 1 },
       portal: { invites: 1, links: 1, consents: 1, rightsRequests: 1 },
       finance: {
         financeSettings: 1,

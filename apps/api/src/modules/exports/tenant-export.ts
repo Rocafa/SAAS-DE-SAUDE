@@ -10,6 +10,9 @@ import {
   appointmentTypes,
   clinicMembers,
   supportAccessGrants,
+  clinicHolidays,
+  professionalSchedules,
+  scheduleBlocks,
   clinicalAddenda,
   clinicalRecordVersions,
   clinicalSettings,
@@ -129,8 +132,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
+ * 1.25.0: `scheduleAvailability` (migração 0100, HU-AGD-001/003): grade semanal dos profissionais (inclusive as
+ *        janelas desativadas, com quem criou), bloqueios e feriados (inclusive os removidos, com quem e quando), com
+ *        as contagens em `manifest.counts.scheduleAvailability`.
  */
-export const EXPORT_SCHEMA_VERSION = '1.24.0';
+export const EXPORT_SCHEMA_VERSION = '1.25.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -177,6 +183,10 @@ export const EXPORTED_TABLES = [
   'clinic_members',
   // Autorizações de acesso do suporte (0059): em data.supportAccessGrants.
   'support_access_grants',
+  // Disponibilidade da agenda (0100): em data.scheduleAvailability.
+  'professional_schedules',
+  'schedule_blocks',
+  'clinic_holidays',
   // Portal do paciente (0027): em data.portal. portal_invites sai sem token_hash (credencial).
   'portal_invites',
   'portal_links',
@@ -269,6 +279,8 @@ export interface ExportManifest {
     readonly clinicMembers: number;
     /** Autorizações de acesso do suporte (0059). */
     readonly supportAccessGrants: number;
+    /** Disponibilidade da agenda (0100), por tabela. */
+    readonly scheduleAvailability: ScheduleAvailabilityCounts;
     /** Portal do paciente (0027), por tabela. */
     readonly portal: PortalCounts;
     /** Importador (0024): lotes e livro do lote. */
@@ -593,6 +605,47 @@ export interface ExportedSupportAccessGrant {
   readonly revokedAt: string | null;
 }
 
+/** Disponibilidade da agenda (0100): grade, bloqueios e feriados (só ids, horários, datas e códigos). */
+export interface ScheduleAvailabilityCounts {
+  readonly professionalSchedules: number;
+  readonly scheduleBlocks: number;
+  readonly clinicHolidays: number;
+}
+export interface ExportedScheduleAvailability {
+  readonly professionalSchedules: readonly {
+    readonly id: string;
+    readonly professionalId: string;
+    readonly weekday: number;
+    readonly startTime: string;
+    readonly endTime: string;
+    readonly slotMinutes: number;
+    readonly active: boolean;
+    readonly createdBy: string;
+    readonly createdAt: string;
+  }[];
+  readonly scheduleBlocks: readonly {
+    readonly id: string;
+    readonly professionalId: string | null;
+    readonly startsAt: string;
+    readonly endsAt: string;
+    readonly reason: string;
+    readonly createdBy: string;
+    readonly createdAt: string;
+    readonly removedBy: string | null;
+    readonly removedAt: string | null;
+  }[];
+  readonly clinicHolidays: readonly {
+    readonly id: string;
+    readonly holidayDate: string;
+    readonly name: string;
+    readonly source: string;
+    readonly createdBy: string;
+    readonly createdAt: string;
+    readonly removedBy: string | null;
+    readonly removedAt: string | null;
+  }[];
+}
+
 /** Custódia das notas lacradas (0017). */
 export interface ExportedNoteCustody {
   readonly id: string;
@@ -635,6 +688,8 @@ export interface TenantExportDocument {
     readonly whatsapp: ExportedWhatsapp;
     readonly clinicMembers: readonly ExportedClinicMember[];
     readonly supportAccessGrants: readonly ExportedSupportAccessGrant[];
+    /** Disponibilidade da agenda (0100). */
+    readonly scheduleAvailability: ExportedScheduleAvailability;
     /** Portal do paciente (0027). */
     readonly portal: ExportedPortal;
     /** Importador (0024). */
@@ -672,6 +727,60 @@ export class ExportCipherMissingError extends Error {
 const iso = (d: Date | null): string | null => d?.toISOString() ?? null;
 
 /** Defesa em profundidade além do filtro explícito e do RLS. */
+/** Disponibilidade da agenda (0100), inteira: inclui janelas desativadas e bloqueios/feriados removidos. */
+async function exportarDisponibilidade(tx: TenantTx, tenantId: string): Promise<ExportedScheduleAvailability> {
+  const grade = soDaClinica(
+    await tx
+      .select()
+      .from(professionalSchedules)
+      .where(eq(professionalSchedules.tenantId, tenantId))
+      .orderBy(asc(professionalSchedules.createdAt), asc(professionalSchedules.id)),
+    tenantId,
+  );
+  const bloqueios = soDaClinica(
+    await tx.select().from(scheduleBlocks).where(eq(scheduleBlocks.tenantId, tenantId)).orderBy(asc(scheduleBlocks.createdAt), asc(scheduleBlocks.id)),
+    tenantId,
+  );
+  const feriados = soDaClinica(
+    await tx.select().from(clinicHolidays).where(eq(clinicHolidays.tenantId, tenantId)).orderBy(asc(clinicHolidays.holidayDate), asc(clinicHolidays.id)),
+    tenantId,
+  );
+  return {
+    professionalSchedules: grade.map((g) => ({
+      id: g.id,
+      professionalId: g.professionalId,
+      weekday: g.weekday,
+      startTime: g.startTime,
+      endTime: g.endTime,
+      slotMinutes: g.slotMinutes,
+      active: g.active,
+      createdBy: g.createdBy,
+      createdAt: g.createdAt.toISOString(),
+    })),
+    scheduleBlocks: bloqueios.map((b) => ({
+      id: b.id,
+      professionalId: b.professionalId,
+      startsAt: b.startsAt.toISOString(),
+      endsAt: b.endsAt.toISOString(),
+      reason: b.reason,
+      createdBy: b.createdBy,
+      createdAt: b.createdAt.toISOString(),
+      removedBy: b.removedBy,
+      removedAt: b.removedAt ? b.removedAt.toISOString() : null,
+    })),
+    clinicHolidays: feriados.map((f) => ({
+      id: f.id,
+      holidayDate: f.holidayDate,
+      name: f.name,
+      source: f.source,
+      createdBy: f.createdBy,
+      createdAt: f.createdAt.toISOString(),
+      removedBy: f.removedBy,
+      removedAt: f.removedAt ? f.removedAt.toISOString() : null,
+    })),
+  };
+}
+
 function soDaClinica<T extends { tenantId: string }>(rows: readonly T[], tenantId: string): readonly T[] {
   if (rows.some((r) => r.tenantId !== tenantId)) throw new Error('linha de outro tenant no export');
   return rows;
@@ -843,6 +952,7 @@ export async function exportInTransaction(
       .orderBy(asc(supportAccessGrants.grantedAt), asc(supportAccessGrants.id)),
     ctx.tenantId,
   );
+  const scheduleAvailability = await exportarDisponibilidade(tx, ctx.tenantId);
 
   // Trilha da clínica, inteira e sem reescrita: os campos da cadeia e o JSON canônico vêm do banco
   // (data com microssegundos, como no hash). O ator interno já está pseudonimizado desde o INSERT (0008).
@@ -1220,6 +1330,11 @@ export async function exportInTransaction(
       whatsapp: whatsapp.counts,
       clinicMembers: exportedMembers.length,
       supportAccessGrants: exportedGrants.length,
+      scheduleAvailability: {
+        professionalSchedules: scheduleAvailability.professionalSchedules.length,
+        scheduleBlocks: scheduleAvailability.scheduleBlocks.length,
+        clinicHolidays: scheduleAvailability.clinicHolidays.length,
+      },
       portal: portal.counts,
       imports: importacoes.counts,
       auditEvents: auditEvents.length,
@@ -1308,6 +1423,7 @@ export async function exportInTransaction(
         whatsapp: whatsapp.data,
         clinicMembers: exportedMembers,
         supportAccessGrants: exportedGrants,
+        scheduleAvailability,
         portal: portal.data,
         imports: importacoes.data,
       },

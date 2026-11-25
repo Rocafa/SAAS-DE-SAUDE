@@ -43,6 +43,11 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Disponibilidade da agenda (migração 0100): sem DELETE/TRUNCATE. Grade só desativa; bloqueio e feriado só são
+  // removidos (uma vez, pelo usuário da sessão), tudo por trigger.
+  professional_schedules: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  schedule_blocks: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  clinic_holidays: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Guias e pacotes (migração 0011): sem DELETE/TRUNCATE — cancelar/estornar, nunca apagar.
   insurers: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   insurance_guides: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
