@@ -3,7 +3,7 @@ import { AuditAction, type RequestContext } from '@plataforma/shared';
 import { and, asc, count, eq, gt, gte, inArray, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError, ProibidoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
-import { appointments, appointmentTypes, patients, professionals, type AppointmentStatusDb } from '../../db/schema';
+import { appointments, appointmentTypes, patients, professionals, rooms, units, type AppointmentStatusDb } from '../../db/schema';
 import type { TenantTx } from '../../db/tenant-transaction';
 import { recordAudit } from '../audit/audit-log';
 import { temPermissao, type Perfil } from '../auth/perfis';
@@ -37,7 +37,9 @@ import {
   type NovoAgendamento,
   type NovoProfissional,
   type NovoTipoAtendimento,
+  type Remarcacao,
 } from './scheduling.validation';
+import { traduzirErroDeSala } from './sala-erros';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { avisarAdminsDeAnomalia, avisarAreaSensivelDesmarcada } from '../records/avisos';
 
@@ -55,6 +57,8 @@ export interface AgendamentoDto {
   readonly fim: string;
   readonly status: StatusFront;
   readonly encaixe: boolean;
+  /** Sala do atendimento (0101); null se não houver. */
+  readonly salaId: string | null;
 }
 
 export interface ProfissionalDto {
@@ -93,6 +97,7 @@ function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
     fim: a.endsAt.toISOString(),
     status: statusParaFront(a.status),
     encaixe: a.isWalkIn,
+    salaId: a.roomId,
   };
 }
 
@@ -171,6 +176,7 @@ export class SchedulingService {
     // R7 da re-revisão do #61: não se marca no passado (a folga é a mesma da janela de atendimento).
     if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
     const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
+    if (dados.salaId) await this.salaUtilizavel(tx, ctx, dados.salaId);
     await this.travarAgenda(tx, ctx, profissional.id);
     if (!dados.encaixe) {
       const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
@@ -188,6 +194,8 @@ export class SchedulingService {
         startsAt: inicio,
         endsAt: fim,
         isWalkIn: dados.encaixe,
+        // 0101 (HU-AGD-004): o gatilho appointments_sala_sem_conflito trava a sala e recusa acima da capacidade.
+        roomId: dados.salaId ?? null,
         // 0013: quem criou. Autoagendamento (criador = usuário do profissional) não dá vínculo de
         // cuidado antes do atendimento efetivo (V1 do parecer #61; vinculo-de-cuidado.ts).
         createdBy: ctx.userId,
@@ -203,6 +211,7 @@ export class SchedulingService {
         appointment_id: linha.id,
         patient_id: linha.patientId,
         walk_in: linha.isWalkIn,
+        ...(linha.roomId ? { room_id: linha.roomId } : {}),
         self_scheduled: profissional.userId === ctx.userId,
         // R6 do parecer do #61 / E12 de 04/11: o perfil de quem criou (o alerta de vínculo cruzado olha isto).
         creator_role: papelDoCriador(ctx.roles),
@@ -220,7 +229,7 @@ export class SchedulingService {
    * agendamento passa a contar como AUTOAGENDAMENTO no vínculo de cuidado e no alerta. O horário
    * anterior fica no histórico append-only `appointment_reschedules` (trigger da 0014).
    */
-  remarcar(ctx: RequestContext, id: string, novo: { data: string; hora: string }): Promise<{ data: string; hora: string }> {
+  remarcar(ctx: RequestContext, id: string, novo: Remarcacao): Promise<{ data: string; hora: string }> {
     return this.escrita(ctx, async (tx) => {
       const atual = await this.travarAgendamento(tx, ctx, id);
       const duracao = atual.endsAt.getTime() - atual.startsAt.getTime();
@@ -228,6 +237,9 @@ export class SchedulingService {
       const motivo = motivoParaNaoRemarcar(atual, inicio, new Date(), this.janela);
       if (motivo) throw new ConflitoError(motivo);
       const fim = new Date(inicio.getTime() + duracao);
+      // Sala (0101): ausente mantém a atual; o gatilho confere a ocupação no horário novo (e na sala nova).
+      const sala = novo.salaId === undefined ? atual.roomId : novo.salaId;
+      if (sala && sala !== atual.roomId) await this.salaUtilizavel(tx, ctx, sala);
       await this.travarAgenda(tx, ctx, atual.professionalId);
       if (!atual.isWalkIn) {
         const [profissional] = await tx
@@ -246,7 +258,7 @@ export class SchedulingService {
       }
       await tx
         .update(appointments)
-        .set({ startsAt: inicio, endsAt: fim, rescheduledBy: ctx.userId, updatedAt: new Date() })
+        .set({ startsAt: inicio, endsAt: fim, roomId: sala, rescheduledBy: ctx.userId, updatedAt: new Date() })
         .where(and(eq(appointments.tenantId, ctx.tenantId), eq(appointments.id, id)));
       const [profissional] = await tx
         .select({ id: professionals.id, userId: professionals.userId })
@@ -255,7 +267,12 @@ export class SchedulingService {
       await recordAudit(tx, ctx, {
         action: AuditAction.Update,
         scope: SCOPE,
-        metadata: { appointment_id: id, op: 'reschedule', self_rescheduled: profissional?.userId === ctx.userId },
+        metadata: {
+          appointment_id: id,
+          op: 'reschedule',
+          self_rescheduled: profissional?.userId === ctx.userId,
+          ...(sala !== atual.roomId ? { room_from: atual.roomId ?? 'none', room_to: sala ?? 'none' } : {}),
+        },
       });
       // R4 do parecer do #134: remarcar para hoje também reabre a leitura do colega.
       if (profissional) await this.alertarVinculoCruzado(tx, ctx, id, profissional, 'reschedule');
@@ -460,6 +477,20 @@ export class SchedulingService {
     registrarEventoDeSeguranca('ALERTA_ANOMALIA', { tenantId: ctx.tenantId, regra: 'vinculo_cruzado' });
   }
 
+  /**
+   * Sala escolhida (0101): da clínica da sessão (de outra clínica é invisível pelo RLS: 404 como inexistente), ativa
+   * e de unidade ativa (409 `sala_inativa`). A ocupação é conferida pelo gatilho, sob a trava da sala.
+   */
+  private async salaUtilizavel(tx: TenantTx, ctx: RequestContext, salaId: string): Promise<void> {
+    const [s] = await tx
+      .select({ ativa: rooms.active, unidadeAtiva: units.active })
+      .from(rooms)
+      .innerJoin(units, and(eq(units.id, rooms.unitId), eq(units.tenantId, rooms.tenantId)))
+      .where(and(eq(rooms.tenantId, ctx.tenantId), eq(rooms.id, salaId)));
+    if (!s) throw new NaoEncontradoError();
+    if (!s.ativa || !s.unidadeAtiva) throw new ConflitoError('sala_inativa');
+  }
+
   private async profissionalAtivo(tx: TenantTx, ctx: RequestContext, id: string) {
     const [p] = await tx
       .select()
@@ -558,8 +589,9 @@ export class SchedulingService {
     return lerNaClinica(this.db, ctx, fn);
   }
 
+  /** Escritas da agenda: sala ocupada/inativa recusada pelo gatilho da 0101 vira 409 com código (sala-erros.ts). */
   private escrita<T>(ctx: RequestContext, fn: (tx: TenantTx) => Promise<T>): Promise<T> {
-    return escreverNaClinica(this.db, ctx, fn);
+    return escreverNaClinica(this.db, ctx, fn).catch(traduzirErroDeSala);
   }
 }
 

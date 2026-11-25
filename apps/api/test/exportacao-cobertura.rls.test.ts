@@ -16,6 +16,8 @@ import {
   patients,
   professionals,
   appointmentTypes,
+  units,
+  rooms,
   appointments,
   appointmentReschedules,
   insurers,
@@ -90,6 +92,8 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   patients: 'patients',
   professionals: 'professionals',
   appointment_types: 'appointmentTypes',
+  units: 'units',
+  rooms: 'rooms',
   appointments: 'appointments',
   insurers: 'insurers',
   insurance_guides: 'insuranceGuides',
@@ -183,6 +187,15 @@ beforeAll(async () => {
   const admin = api.sessao(clinicaA, 'admin', 'profissional');
   const prof = await api.http().post('/profissionais').set(cab(admin)).send({ nome: 'Prof Ficticia', especialidade: 'Terapia ocupacional', usuarioId: admin.userId });
   const tipo = await api.http().post('/tipos-atendimento').set(cab(admin)).send({ nome: 'Avaliacao', minutos: 40 });
+  // 0101: unidade e sala (o primeiro agendamento usa a sala, para appointments[].roomId sair preenchido).
+  const unidade = await api.http().post('/unidades').set(cab(admin)).send({ nome: 'Unidade Ficticia Export' });
+  expect(unidade.status).toBe(201);
+  const sala = await api
+    .http()
+    .post('/salas')
+    .set(cab(admin))
+    .send({ unidadeId: (unidade.body as { id: string }).id, nome: 'Sala Ficticia Export' });
+  expect(sala.status).toBe(201);
   const pac = await api
     .http()
     .post('/pacientes')
@@ -196,6 +209,7 @@ beforeAll(async () => {
     tipoId: (tipo.body as { id: string }).id,
     data: '2030-05-06',
     hora: '08:00',
+    salaId: (sala.body as { id: string }).id,
   });
   expect(ag.status).toBe(201);
   // Uma remarcação (para o histórico da 0014 entrar no pacote).
@@ -556,6 +570,8 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof adolescentConfidentialityRequests
           | typeof professionals
           | typeof appointmentTypes
+          | typeof units
+          | typeof rooms
           | typeof appointments
           | typeof appointmentReschedules
           | typeof insurers
@@ -600,6 +616,8 @@ describe('G2 — conteúdo do pacote', () => {
         patients: await n(patients),
         professionals: await n(professionals),
         appointmentTypes: await n(appointmentTypes),
+        units: await n(units),
+        rooms: await n(rooms),
         appointments: await n(appointments),
         insurers: await n(insurers),
         insuranceGuides: await n(insuranceGuides),
@@ -665,6 +683,8 @@ describe('G2 — conteúdo do pacote', () => {
       imports: { batches: 1, batchRecords: 1 },
       professionals: 3,
       appointmentTypes: 1,
+      units: 1,
+      rooms: 1,
       appointments: 4,
       appointmentReschedules: 1,
       insurers: 1,

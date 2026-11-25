@@ -136,6 +136,16 @@ A paginação deixaria um usuário raspar a base inteira. Código: `apps/api/src
 - Store fora do ar: cai para memória; se mesmo assim falhar, a leitura segue com log `RATE_LIMIT_FAIL_OPEN` (mesma política do limite por IP).
 - Provas: `test/vigilancia-pacientes.rls.test.ts`.
 
+### 3c. Unidades, salas e sala sem conflito (HU-NUC-002 e HU-AGD-004; migração 0101)
+
+- **Rotas:** `GET /unidades` e `GET /salas?unidadeId=` (`cadastros:ler`: quem agenda escolhe a sala), `POST /unidades`, `PATCH /unidades/:id` (`nome`, `ativa`), `POST /salas` (`unidadeId`, `nome`, `capacidade` 1..20, padrão 1) e `PATCH /salas/:id` (`nome`, `capacidade`, `ativa`), todas de escrita só do **admin** (`cadastros:gerir`) e auditadas (escopos `units`/`rooms`, só ids e o que mudou). Não há exclusão: inativar. Nome repetido na unidade (ou unidade repetida na clínica, sem diferenciar maiúsculas): `409 nome_em_uso`. A sala não muda de unidade.
+- **Agendamento:** `POST /agendamentos` aceita `salaId`; `POST /agendamentos/:id/remarcar` aceita `salaId` (ausente mantém a sala, `null` tira, UUID troca). O DTO traz `salaId`. Sala de outra clínica: `404` (invisível pelo RLS); sala ou unidade inativa: `409 sala_inativa`; sala ocupada: `409 sala_ocupada`.
+- **Regra no banco:** gatilho `appointments_sala_sem_conflito` (BEFORE INSERT/UPDATE de sala, horário ou status). Agendamento não cancelado ocupa uma vaga da sala em `[início, fim)`; se os que se sobrepõem já somam a `capacity` da sala, recusa (`23P01`, constraint `appointments_room_conflict`). Horário encostado (fim = início) não conflita. Cancelado não conta; voltar de cancelado reconfere. Agendamento com atendimento, falta ou cancelado não troca de sala.
+- **Por que gatilho e não `EXCLUDE USING gist` (btree_gist):** a exclusion constraint só expressa "nenhum par sobreposto" (capacidade 1). Sala de grupo/ginásio tem capacidade N, que mora em `rooms`. Um mecanismo só para os dois casos: `pg_advisory_xact_lock` por (clínica, sala) e contagem depois da trava. Em READ COMMITTED (o padrão da API) cada comando do PL/pgSQL tira snapshot novo, então a segunda transação, depois de esperar a trava, enxerga a linha da primeira. A contagem é conservadora (soma todos os que tocam o intervalo, como a capacidade do profissional): nunca passa acima da capacidade. Ordem das travas: agenda do profissional → sala → `audit_chain`.
+- **Encaixe** passa da capacidade do profissional, não da sala (a sala é física). O override com motivo do admin (2º cenário da HU-AGD-004) fica para depois.
+- **Exportação (G2 1.25.0):** `units`, `rooms` e `appointments[].roomId`.
+- Provas: `test/unidades-salas.rls.test.ts` (isolamento, sala de outra clínica, conflito, duas transações concorrentes, remarcação, cancelado, capacidade, sala inativa, auditoria) e `src/modules/scheduling/unidades.test.ts`.
+
 ### 3b. Cursor de paginação assinado (R5 do parecer PR #76, rodada 26)
 
 Problema: a página seguinte era pedida por número e respondida com a clínica do cookie daquele momento. Se a sessão trocasse A→B→A durante a paginação (outra aba), páginas de B se misturavam à lista de A no cliente. A conferência de sessão do front fecha quase tudo; a correção completa é no servidor. Código: `apps/api/src/modules/patients/cursor-de-paginacao.ts`; contrato em `packages/shared/src/paginacao.ts` (`PaginaPorCursor`, `CURSOR_INVALIDO`).
