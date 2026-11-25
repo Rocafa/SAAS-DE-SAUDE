@@ -951,3 +951,7 @@ destravando a auditoria de todos.
   HU-AGD-001/003 (grade, bloqueios e feriados; migração 0100), HU-NUC-002/AGD-004 (unidades e salas sem conflito;
   0101) e HU-AGD-009 (lista de espera no backend; 0102, passa pelo Guardião). Números a partir de 0100 para não colidir
   com a pilha (0066–0082); cada agente confere antes se o executor de migrações aceita aplicar fora de ordem.
+- **#243 aberto (unidades e salas)**: migração 0101 (`units`, `rooms`, `appointments.room_id`), conflito de sala por
+  gatilho com trava (respeita capacidade > 1, o que uma exclusion constraint não faria), gestão só do admin e auditada,
+  409 `sala_ocupada`/`sala_inativa`, exportação total 1.25.0. Executor de migrações confirmado: aplica qualquer arquivo
+  pendente, mesmo com número menor. CI verde (13 testes RLS novos), exceto Trivy (#242). Enviado ao Guardião.
