@@ -943,3 +943,11 @@ destravando a auditoria de todos.
   ordem de aprovação (comentado no #210 para o sócio).
 - Para não ficar parado enquanto o sócio não revisa: mapeamento das histórias do M0/M1 do backlog que faltam e não
   dependem da pilha do login nem da AWS, para escolher as próximas.
+- Mapeamento do M0/M1: feitas a base multi-tenant, cripto, jobs, perfis, vínculo de cuidado, auditoria, pacientes,
+  boa parte da agenda, prontuário de fisio/TO/psicologia e convênios; em PR o login, o perfil profissional, o suporte
+  e o onboarding. Faltam, sem depender do login nem da AWS: grade/bloqueios/feriados, unidades e salas, lista de
+  espera no backend, sessões recorrentes no banco e a linha do tempo do paciente na API.
+- O sócio foi para a prova e pediu para não parar até o limite. Disparados três PRs para a `main`, só na API:
+  HU-AGD-001/003 (grade, bloqueios e feriados; migração 0100), HU-NUC-002/AGD-004 (unidades e salas sem conflito;
+  0101) e HU-AGD-009 (lista de espera no backend; 0102, passa pelo Guardião). Números a partir de 0100 para não colidir
+  com a pilha (0066–0082); cada agente confere antes se o executor de migrações aceita aplicar fora de ordem.
