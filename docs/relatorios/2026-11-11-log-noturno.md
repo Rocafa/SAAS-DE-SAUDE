@@ -925,3 +925,9 @@ destravando a auditoria de todos.
 ### Checagem de 25/11 22:24 UTC
 
 - Nada mudou desde a última checagem (nenhum PR atualizado desde 24/11; sem aprovação nova, merge, Dependabot novo ou ação do sócio).
+
+### 25/11 22:30 UTC — retomada
+
+- O sócio não mexe desde 23/11; a tarefa de 2 h registrou "nada mudou" nas rodadas de 24 e 25/11.
+- Atualizei com a `main` (merges do Dependabot de 24/11: pins de ação e digest do node) o #210, #116, #155, #194, #153
+  e #154, sem conflito. Feito antes da aprovação de propósito: atualizar depois derrubaria a aprovação.
