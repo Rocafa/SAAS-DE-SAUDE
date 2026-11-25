@@ -935,3 +935,7 @@ destravando a auditoria de todos.
   `pnpm install --frozen-lockfile`. A aprovação caiu com o push; pedi reaprovação no PR.
 - Comentário-resumo no #210 marcando o @Lopesloro, com o link do guia (que está na branch, não na `main`), a ordem de
   aprovação, as correções nas branches dele e as decisões pendentes.
+- **Build/Trivy vermelho nos sete PRs** depois da atualização: CVE-2026-124851 (alto) no `libzstd1 1.5.7+dfsg-1` da
+  imagem de runtime distroless (Debian 13.7); corrigido em `+deb13u1`. Não é dos PRs, é da imagem base.
+- **#242 aberto**: digest novo da `distroless/nodejs22-debian13:nonroot` (`c73ddeb0…`, consultado no registro em 25/11).
+  O Trivy do próprio PR prova se o pacote veio corrigido. Precisa da aprovação do sócio; destrava os sete.
