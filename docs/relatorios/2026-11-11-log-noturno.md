@@ -939,3 +939,5 @@ destravando a auditoria de todos.
   imagem de runtime distroless (Debian 13.7); corrigido em `+deb13u1`. Não é dos PRs, é da imagem base.
 - **#242 aberto**: digest novo da `distroless/nodejs22-debian13:nonroot` (`c73ddeb0…`, consultado no registro em 25/11).
   O Trivy do próprio PR prova se o pacote veio corrigido. Precisa da aprovação do sócio; destrava os sete.
+- **#242 verde em tudo**, inclusive Build/Trivy: o digest novo traz o `libzstd1` corrigido. Passa a ser o primeiro da
+  ordem de aprovação (comentado no #210 para o sócio).
