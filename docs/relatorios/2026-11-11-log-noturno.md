@@ -957,3 +957,5 @@ destravando a auditoria de todos.
   pendente, mesmo com número menor. CI verde (13 testes RLS novos), exceto Trivy (#242). Enviado ao Guardião.
 - **Guardião aprova o #243.** Recomendações para depois: dica na tela contra nome de paciente em sala/unidade; units e
   rooms no inventário de dados.
+- Disparada a HU-PAC-007: `GET /pacientes/:id/linha-do-tempo` na API, filtrada por perfil e vínculo de cuidado,
+  sem conteúdo clínico e com psicologia escondida, leitura auditada. Resolve também a ficha do #222 no modo http.
