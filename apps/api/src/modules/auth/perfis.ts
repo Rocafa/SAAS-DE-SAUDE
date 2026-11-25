@@ -40,6 +40,13 @@ export const PERMISSOES = {
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */
   'agenda:atender': ['profissional'],
+  /**
+   * Lista de espera (HU-AGD-009, 0102). Quem cuida da agenda (recepção e dono) lê, coloca, tira e marca a partir
+   * da espera. O profissional LÊ só os itens marcados para ele (o serviço filtra pelo `professionals.user_id` da
+   * sessão; item sem profissional não aparece para ele). O financeiro não precisa da espera para cobrar.
+   */
+  'espera:ler': ['admin', 'recepcao', 'profissional'],
+  'espera:escrever': ['admin', 'recepcao'],
   'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'cadastros:gerir': ['admin'],
   /** E10 de 04/11: consultar a trilha da clínica (só ids, ações e datas). */

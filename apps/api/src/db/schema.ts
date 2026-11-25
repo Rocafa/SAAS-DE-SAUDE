@@ -145,6 +145,36 @@ export const appointments = pgTable('appointments', {
   importBatchId: uuid('import_batch_id'),
 });
 
+/** Períodos do dia da lista de espera (migração 0102). Mesmos valores do CHECK no banco. */
+export const WAITLIST_PERIODS = ['manha', 'tarde', 'noite'] as const;
+export type WaitlistPeriod = (typeof WAITLIST_PERIODS)[number];
+/** Motivos de saída da lista de espera (migração 0102). */
+export const WAITLIST_REMOVAL_REASONS = ['agendado', 'retirado', 'desistencia'] as const;
+export type WaitlistRemovalReason = (typeof WAITLIST_REMOVAL_REASONS)[number];
+
+/**
+ * Lista de espera (migração 0102, HU-AGD-009): um item por paciente (e profissional opcional) com preferências
+ * estruturadas e observação curta SÓ cifrada. Sai por remoção lógica; o removido é apagado em 30 dias (job).
+ */
+export const waitlistEntries = pgTable('waitlist_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  professionalId: uuid('professional_id'),
+  /** 0 = domingo … 6 = sábado; vazio = qualquer dia. */
+  weekdays: smallint('weekdays').array().notNull().default(sql`'{}'::smallint[]`),
+  period: text('period', { enum: WAITLIST_PERIODS }),
+  noteEnc: text('note_enc'),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  removedAt: timestamp('removed_at', { withTimezone: true }),
+  removedBy: uuid('removed_by'),
+  removalReason: text('removal_reason', { enum: WAITLIST_REMOVAL_REASONS }),
+  appointmentId: uuid('appointment_id'),
+});
+
 /**
  * Histórico de remarcações (migração 0014): append-only, gravado SÓ pelo trigger de appointments a
  * cada mudança de horário. O runtime lê; não insere, não altera, não apaga.

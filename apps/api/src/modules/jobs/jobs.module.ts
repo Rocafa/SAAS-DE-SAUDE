@@ -23,6 +23,7 @@ import { PatientsService } from '../patients/patients.service';
 import { ResponsaveisService } from '../patients/responsaveis.service';
 import { PortalClinicaService } from '../portal/portal-clinica.service';
 import { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
+import { ListaEsperaService } from '../scheduling/lista-espera.service';
 import { ClinicasDoAgendador, TenantDatabase } from '../tenancy/tenancy.module';
 import { AgendadorBullMQ, fabricasReais, RegistroRedis, TravaRedis } from './agendador-bullmq';
 import { AgendadorEmMemoria, RegistroEmMemoria, TravaEmMemoria } from './agendador-memoria';
@@ -113,6 +114,7 @@ export class JobsService implements OnApplicationBootstrap, OnApplicationShutdow
       retencaoFiscal: get(RetencaoFiscalService),
       responsaveis: get(ResponsaveisService),
       pacientes: get(PatientsService),
+      espera: get(ListaEsperaService),
     });
     this.executor = this.novoExecutor({ jobs });
     const agendador = this.infra.agendador;

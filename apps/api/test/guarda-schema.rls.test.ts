@@ -43,6 +43,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Lista de espera (0102): sem DELETE/TRUNCATE — sai por remoção lógica; só app_waitlist_purge_run (job) apaga.
+  waitlist_entries: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Guias e pacotes (migração 0011): sem DELETE/TRUNCATE — cancelar/estornar, nunca apagar.
   insurers: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   insurance_guides: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
@@ -358,6 +360,17 @@ describe('guarda de schema: expurgo das notas (R11)', () => {
     expect(f?.dono).not.toBe(RUNTIME_ROLE);
   });
 
+  it('app_waitlist_purge_run (retenção da lista de espera, 0102): SECURITY DEFINER, search_path fixo, dono sem superpoder', async () => {
+    const [f] = await sql<{ secdef: boolean; config: string[] | null; dono: string; superu: boolean; bypass: boolean }[]>`
+      SELECT p.prosecdef AS secdef, p.proconfig AS config, o.rolname AS dono, o.rolsuper AS superu, o.rolbypassrls AS bypass
+      FROM pg_proc p JOIN pg_roles o ON o.oid = p.proowner
+      WHERE p.oid = 'public.app_waitlist_purge_run()'::regprocedure`;
+    expect(f?.secdef).toBe(true);
+    expect(f?.config ?? []).toContain('search_path=pg_catalog, public, pg_temp');
+    expect({ superu: f?.superu, bypass: f?.bypass }).toEqual({ superu: false, bypass: false });
+    expect(f?.dono).not.toBe(RUNTIME_ROLE);
+  });
+
   it('o runtime não tem DELETE nem TRUNCATE nas tabelas de notas e de prontuário', async () => {
     for (const tabela of ['private_notes', 'encounters', 'clinical_record_versions', 'clinical_addenda', 'legal_holds', 'note_custodies']) {
       const tem = await privilegiosDoRuntime(tabela);
@@ -459,6 +472,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'adolescent_confidentiality_requests',
       // 0059: a autorização de acesso do suporte nunca é vista pela sessão do portal.
       'support_access_grants',
+      // 0102: a lista de espera é da recepção; o portal não a vê.
+      'waitlist_entries',
       // WhatsApp (0032): adicionadas no merge do #69 (abaixo, em PORTAL_FORA_WHATSAPP).
       ...PORTAL_FORA_WHATSAPP,
     ];

@@ -459,9 +459,9 @@ jobs:
           grep -A3 '^\s*jobs-desligados = {' staging/jobs.tf | grep -q 'excluir *= *\["JOBS_DESLIGADOS_POR_OPCAO"\]'
           grep -A8 '^\s*jobs-desligados = {' staging/jobs.tf | grep -Eq 'dpo +=\s*true'
           [ "$(grep -Ec 'dpo +=\s*true' staging/jobs.tf)" -eq 1 ] || { echo "DPO só em JOBS_DESLIGADOS entre os gerais"; exit 1; }
-          # DPO: JOB_ATRASADO/JOB_ALARME dos 6 jobs de retenção/revogação, alarme só no tópico do DPO.
+          # DPO: JOB_ATRASADO/JOB_ALARME dos 7 jobs de retenção/revogação, alarme só no tópico do DPO.
           for j in whatsapp-retencao importador-expurgo notas-privadas-ciclo retencao-fiscal \
-                   responsaveis-descarte portal-representacoes; do
+                   responsaveis-descarte lista-espera-retencao portal-representacoes; do
             grep -q "^\s*\"$j\",$" staging/jobs.tf || { echo "job de retenção $j fora do alarme do DPO"; exit 1; }
           done
           grep -q 'setproduct(\["JOB_ATRASADO", "JOB_ALARME"\], local.jobs_de_retencao)' staging/jobs.tf

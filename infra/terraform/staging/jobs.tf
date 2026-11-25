@@ -134,6 +134,7 @@ locals {
     "notas-privadas-ciclo",
     "retencao-fiscal",
     "responsaveis-descarte",
+    "lista-espera-retencao",
     "portal-representacoes",
   ]
 
