@@ -25,8 +25,10 @@ import {
   patients,
   privateNotes,
   professionals,
+  rooms,
   sessionPackages,
   tenants,
+  units,
   RECORD_COMPARTMENTS,
   type RecordCompartment,
   type SubscriptionStatus,
@@ -129,8 +131,10 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
+ * 1.25.0: unidades e salas (migração 0101, HU-NUC-002): `units` e `rooms` (nome, capacidade, ativa), com as contagens
+ *        em `manifest.counts.units`/`manifest.counts.rooms`, e `appointments[].roomId` (sala do agendamento, ou null).
  */
-export const EXPORT_SCHEMA_VERSION = '1.24.0';
+export const EXPORT_SCHEMA_VERSION = '1.25.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -144,6 +148,9 @@ export const EXPORTED_TABLES = [
   'patients',
   'professionals',
   'appointment_types',
+  // Unidades e salas (0101): em data.units e data.rooms.
+  'units',
+  'rooms',
   'appointments',
   'appointment_reschedules',
   'insurers',
@@ -241,6 +248,8 @@ export interface ExportManifest {
     readonly patients: number;
     readonly professionals: number;
     readonly appointmentTypes: number;
+    readonly units: number;
+    readonly rooms: number;
     readonly appointments: number;
     readonly insurers: number;
     readonly insuranceGuides: number;
@@ -368,6 +377,26 @@ export interface ExportedAppointmentType {
   readonly createdAt: string;
 }
 
+/** Unidade da clínica (0101). */
+export interface ExportedUnit {
+  readonly id: string;
+  readonly name: string;
+  readonly active: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Sala da unidade (0101): capacidade = atendimentos simultâneos. */
+export interface ExportedRoom {
+  readonly id: string;
+  readonly unitId: string;
+  readonly name: string;
+  readonly capacity: number;
+  readonly active: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface ExportedAppointment {
   readonly id: string;
   readonly patientId: string;
@@ -390,6 +419,8 @@ export interface ExportedAppointment {
   readonly rescheduleLocked: boolean;
   /** Lote de importação que criou o agendamento (0026); null se marcado de outro modo. */
   readonly importBatchId: string | null;
+  /** Sala do agendamento (0101); null se não houver. */
+  readonly roomId: string | null;
 }
 
 /** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
@@ -610,6 +641,8 @@ export interface TenantExportDocument {
     readonly patients: readonly ExportedPatient[];
     readonly professionals: readonly ExportedProfessional[];
     readonly appointmentTypes: readonly ExportedAppointmentType[];
+    readonly units: readonly ExportedUnit[];
+    readonly rooms: readonly ExportedRoom[];
     readonly appointments: readonly ExportedAppointment[];
     readonly insurers: readonly ExportedInsurer[];
     readonly insuranceGuides: readonly ExportedInsuranceGuide[];
@@ -712,6 +745,14 @@ export async function exportInTransaction(
       .from(appointmentTypes)
       .where(eq(appointmentTypes.tenantId, ctx.tenantId))
       .orderBy(asc(appointmentTypes.createdAt), asc(appointmentTypes.id)),
+    ctx.tenantId,
+  );
+  const unitRows = soDaClinica(
+    await tx.select().from(units).where(eq(units.tenantId, ctx.tenantId)).orderBy(asc(units.createdAt), asc(units.id)),
+    ctx.tenantId,
+  );
+  const roomRows = soDaClinica(
+    await tx.select().from(rooms).where(eq(rooms.tenantId, ctx.tenantId)).orderBy(asc(rooms.createdAt), asc(rooms.id)),
     ctx.tenantId,
   );
   const appointmentRows = soDaClinica(
@@ -965,6 +1006,23 @@ export async function exportInTransaction(
     rescheduledBy: a.rescheduledBy,
     rescheduleLocked: a.rescheduleLocked,
     importBatchId: a.importBatchId,
+    roomId: a.roomId,
+  }));
+  const exportedUnits: ExportedUnit[] = unitRows.map((u) => ({
+    id: u.id,
+    name: u.name,
+    active: u.active,
+    createdAt: u.createdAt.toISOString(),
+    updatedAt: u.updatedAt.toISOString(),
+  }));
+  const exportedRooms: ExportedRoom[] = roomRows.map((r) => ({
+    id: r.id,
+    unitId: r.unitId,
+    name: r.name,
+    capacity: r.capacity,
+    active: r.active,
+    createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
   }));
   const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
     id: r.id,
@@ -1198,6 +1256,8 @@ export async function exportInTransaction(
       patients: exportedPatients.length,
       professionals: exportedProfessionals.length,
       appointmentTypes: exportedTypes.length,
+      units: exportedUnits.length,
+      rooms: exportedRooms.length,
       appointments: exportedAppointments.length,
       insurers: exportedInsurers.length,
       insuranceGuides: exportedGuides.length,
@@ -1287,6 +1347,8 @@ export async function exportInTransaction(
         patients: exportedPatients,
         professionals: exportedProfessionals,
         appointmentTypes: exportedTypes,
+        units: exportedUnits,
+        rooms: exportedRooms,
         appointments: exportedAppointments,
         insurers: exportedInsurers,
         insuranceGuides: exportedGuides,

@@ -20,6 +20,15 @@ export interface NovoAgendamento {
   readonly data: string;
   readonly hora: string;
   readonly encaixe: boolean;
+  /** Sala (0101, HU-AGD-004): opcional; o banco recusa sala ocupada acima da capacidade. */
+  readonly salaId?: string;
+}
+
+export interface Remarcacao {
+  readonly data: string;
+  readonly hora: string;
+  /** Ausente: mantém a sala atual. `null`: tira a sala. UUID: troca de sala. */
+  readonly salaId?: string | null;
 }
 
 export interface NovoProfissional {
@@ -71,12 +80,13 @@ export function validarFiltroAgenda(query: unknown): FiltroAgenda {
 }
 
 export function validarNovoAgendamento(corpo: unknown): NovoAgendamento {
-  const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'profissionalId', 'tipoId', 'data', 'hora', 'encaixe']));
+  const v = new Validador(exigirObjeto(corpo, ['pacienteId', 'profissionalId', 'tipoId', 'data', 'hora', 'encaixe', 'salaId']));
   const pacienteId = v.uuid('pacienteId', true);
   const profissionalId = v.uuid('profissionalId', true);
   const tipoId = v.uuid('tipoId', true);
   const { data, hora } = dataEHora(v);
   const encaixe = v.booleano('encaixe') ?? false;
+  const salaId = v.uuid('salaId', false);
   v.concluir();
   return {
     pacienteId: pacienteId as string,
@@ -85,14 +95,17 @@ export function validarNovoAgendamento(corpo: unknown): NovoAgendamento {
     data: data as string,
     hora: hora as string,
     encaixe,
+    ...(salaId ? { salaId } : {}),
   };
 }
 
-export function validarRemarcacao(corpo: unknown): { data: string; hora: string } {
-  const v = new Validador(exigirObjeto(corpo, ['data', 'hora']));
+export function validarRemarcacao(corpo: unknown): Remarcacao {
+  const entrada = exigirObjeto(corpo, ['data', 'hora', 'salaId']);
+  const v = new Validador(entrada);
   const { data, hora } = dataEHora(v);
+  const salaId = entrada['salaId'] === null ? null : v.uuid('salaId', false);
   v.concluir();
-  return { data: data as string, hora: hora as string };
+  return { data: data as string, hora: hora as string, ...(salaId !== undefined ? { salaId } : {}) };
 }
 
 export function validarStatus(corpo: unknown): StatusFront {

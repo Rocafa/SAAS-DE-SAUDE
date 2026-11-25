@@ -106,6 +106,8 @@ describe('G2 — exportação total do tenant', () => {
       patients: 2,
       professionals: 0,
       appointmentTypes: 0,
+      units: 0,
+      rooms: 0,
       appointments: 0,
       insurers: 0,
       insuranceGuides: 0,

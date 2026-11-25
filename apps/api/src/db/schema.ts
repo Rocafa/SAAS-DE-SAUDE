@@ -106,6 +106,35 @@ export const appointmentTypes = pgTable('appointment_types', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Migração 0101 (HU-NUC-002): unidade da clínica. Nada se apaga: inativar. */
+export const units = pgTable('units', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  name: text('name').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Migração 0101 (HU-NUC-002/HU-AGD-004): sala da unidade, sempre da mesma clínica (FK composta). `capacity`: atendimentos
+ * simultâneos; o gatilho appointments_sala_sem_conflito recusa agendamento acima dela. Nada se apaga: inativar.
+ */
+export const rooms = pgTable('rooms', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  unitId: uuid('unit_id').notNull(),
+  name: text('name').notNull(),
+  capacity: integer('capacity').notNull().default(1),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Mesmos valores do CHECK de appointments.status e de AppointmentStatus (packages/shared). */
 export const APPOINTMENT_STATUSES = [
   'scheduled',
@@ -143,6 +172,8 @@ export const appointments = pgTable('appointments', {
   rescheduleLocked: boolean('reschedule_locked').notNull().default(false),
   /** Migração 0026 (V1 do importador): lote que criou o agendamento; gravado só no INSERT, imutável. */
   importBatchId: uuid('import_batch_id'),
+  /** Migração 0101: sala opcional (mesma clínica, FK composta); o banco recusa acima da capacidade da sala. */
+  roomId: uuid('room_id'),
 });
 
 /**

@@ -21,6 +21,8 @@ export const AUDITADAS: readonly string[] = [
   'PATCH /notas-privadas/:id',
   'PATCH /pacientes/:id',
   'PATCH /pacientes/:id/responsaveis/:vinculoId',
+  'PATCH /salas/:id',
+  'PATCH /unidades/:id',
   'POST /agendamentos',
   'POST /agendamentos/:id/cancelar',
   'POST /agendamentos/:id/check-in',
@@ -98,9 +100,11 @@ export const AUDITADAS: readonly string[] = [
   'POST /prontuario/pacientes/:id/retencao-legal/retirada/aprovacao',
   'POST /prontuario/profissionais/:id/desligamento',
   'POST /responsaveis/descarte',
+  'POST /salas',
   'POST /suporte/autorizacoes',
   'POST /suporte/autorizacoes/:id/revogar',
   'POST /tipos-atendimento',
+  'POST /unidades',
   'POST /whatsapp/lembretes/execucao',
   'POST /whatsapp/retencao/execucao',
   'POST /whatsapp/webhook',
@@ -211,10 +215,14 @@ export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
     'texto e versão do termo de migração e limites do arquivo; constantes, sem dado',
   'GET /profissionais':
     'cadastro da agenda: nome, especialidade, capacidade e marca de área sensível de cada profissional (dado da equipe exibido ao agendar), sem dado de paciente',
+  'GET /salas':
+    'cadastro da agenda (0101): salas da clínica com unidade, nome, capacidade e se está ativa; sem dado pessoal; criar e alterar são auditados',
   'GET /sessao':
     'a própria sessão: id do usuário, id da clínica e perfis, todos já do contexto de quem pede',
   'GET /tipos-atendimento':
     'cadastro da agenda: tipos de atendimento e duração; sem dado pessoal',
+  'GET /unidades':
+    'cadastro da clínica (0101): unidades com nome e se está ativa; sem dado pessoal; criar e alterar são auditados',
   'GET /whatsapp/configuracao':
     'configuração do WhatsApp da clínica (ligado, antecedência dos lembretes); sem dado pessoal',
   'GET /whatsapp/modelos':
