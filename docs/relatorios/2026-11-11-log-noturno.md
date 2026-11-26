@@ -988,3 +988,5 @@ destravando a auditoria de todos.
   o psicólogo que registrou; autor só no atendimento; leitura auditada. CI verde exceto Trivy (#242). Enviado ao Guardião.
 - **Guardião aprova o #246** com 3 ajustes não bloqueantes (HU atualizada para psicologia oculta; permissão explícita
   no lugar de `perfis.length > 0`; RIPD com a omissão do nome do profissional sensível). Pedidos ao agente.
+- **Guardião retira o veto e aprova o #245** (lista de espera): retenção legal respeitada no job, leitura auditada por
+  item. Condição para o futuro PR do front: aviso no campo de observação.
