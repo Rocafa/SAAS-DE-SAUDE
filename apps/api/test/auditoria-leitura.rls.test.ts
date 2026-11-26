@@ -204,6 +204,7 @@ beforeAll(async () => {
     'GET /notas-privadas/:id': c(`/notas-privadas/${notaId}`),
     'GET /pacientes': c('/pacientes'),
     'GET /pacientes/:id': c(`/pacientes/${pacienteId}`),
+    'GET /pacientes/:id/linha-do-tempo': c(`/pacientes/${pacienteId}/linha-do-tempo`),
     'GET /pacientes/:id/notas-privadas': c(`/pacientes/${pacienteId}/notas-privadas`),
     'GET /pacientes/:id/prontuario': c(`/pacientes/${pacienteId}/prontuario`),
     'GET /pacientes/:id/responsaveis': c(`/pacientes/${pacienteId}/responsaveis`),

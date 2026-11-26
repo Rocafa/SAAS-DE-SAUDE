@@ -262,9 +262,17 @@ export class CursorDePaginacao {
    */
   conferirAncora(posicao: PosicaoLida, nomeAtual: string | undefined): void {
     if (nomeAtual === undefined) return this.recusar('ancora_sumiu');
-    const atual = Buffer.from(this.marca(posicao.clinica, posicao.depoisDe, nomeAtual), 'base64url');
+    if (!this.ancoraConfere(posicao, nomeAtual)) return this.recusar('ancora_mudou');
+  }
+
+  /**
+   * A marca do cursor confere com este nome de âncora? Sem lançar: a linha do tempo (HU-PAC-007) tem mais de
+   * um evento por linha de origem (marcado, cancelado...) e escolhe, entre os candidatos, o que o cursor marcou.
+   */
+  ancoraConfere(posicao: PosicaoLida, nome: string): boolean {
+    const atual = Buffer.from(this.marca(posicao.clinica, posicao.depoisDe, nome), 'base64url');
     const emitida = Buffer.from(posicao.marcaDaAncora, 'base64url');
-    if (atual.length !== emitida.length || !timingSafeEqual(atual, emitida)) return this.recusar('ancora_mudou');
+    return atual.length === emitida.length && timingSafeEqual(atual, emitida);
   }
 
   /** V2-a/V2-b: HMAC (chave própria) de escopo + clínica + id da âncora + nome normalizado, truncado. */

@@ -1,6 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import type { RateLimitStore } from '../../security/rate-limit-store';
 import { CURSOR_DE_PAGINACAO, CursorDePaginacao } from './cursor-de-paginacao';
+import { CURSOR_DA_LINHA_DO_TEMPO, LinhaDoTempoService } from './linha-do-tempo.service';
 import { PatientsController } from './patients.controller';
 import { PatientsService } from './patients.service';
 import { PAGINA_MAXIMA } from './patients.validation';
@@ -27,11 +28,14 @@ export class PatientsModule {
       controllers: [PatientsController, ResponsaveisController, DescarteDeResponsaveisController],
       providers: [
         PatientsService,
+        LinhaDoTempoService,
         ResponsaveisService,
         VigilanciaDeLeituraService,
         { provide: VIGILANCIA_STORE, useValue: store },
         { provide: VIGILANCIA_OPCOES, useValue: opcoes },
         { provide: CURSOR_DE_PAGINACAO, useValue: new CursorDePaginacao(cursorKey, 'pacientes', Date.now, undefined, PAGINA_MAXIMA) },
+        // Escopo próprio: cursor da lista de pacientes não serve na linha do tempo (e vice-versa).
+        { provide: CURSOR_DA_LINHA_DO_TEMPO, useValue: new CursorDePaginacao(cursorKey, 'linha-do-tempo', Date.now, undefined, PAGINA_MAXIMA) },
       ],
       // Store e opções também saem para o portal contar no MESMO store (limite por conta, rodada 18.1).
       exports: [PatientsService, ResponsaveisService, VigilanciaDeLeituraService, VIGILANCIA_STORE, VIGILANCIA_OPCOES, CURSOR_DE_PAGINACAO],

@@ -174,3 +174,12 @@ export function validarBuscaPacientes(corpo: unknown): FiltroPacientes & { reado
   if (normal.length < 2) throw new EntradaInvalidaError(['busca']);
   return { busca: normal, situacao, limite, ...extra };
 }
+
+/** `GET /pacientes/:id/linha-do-tempo` (HU-PAC-007): só limite e cursor na query; nada de texto livre. */
+export function validarFiltroLinhaDoTempo(query: unknown): { readonly limite: number; readonly cursor?: string } {
+  const v = new Validador(exigirObjeto(query ?? {}, ['limite', 'cursor']));
+  const limite = v.inteiroDeTexto('limite', { min: 1, max: LIMITE_MAXIMO, padrao: LIMITE_PADRAO });
+  const cursor = v.texto('cursor', { max: CURSOR_MAX });
+  v.concluir();
+  return cursor !== undefined ? { limite, cursor } : { limite };
+}
