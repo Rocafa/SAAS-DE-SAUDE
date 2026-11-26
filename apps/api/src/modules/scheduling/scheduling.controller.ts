@@ -14,6 +14,7 @@ import {
   validarFiltroAgenda,
   validarNovoAgendamento,
   validarNovoProfissional,
+  validarRegistroNoConselho,
   validarNovoTipo,
   validarRemarcacao,
   validarStatus,
@@ -94,6 +95,14 @@ export class CadastrosAgendaController {
   @ExigeMfaRecente() // E8 da revisão interna de 04/11: rota de poder
   criarProfissional(@Sessao() auth: AuthContext, @Body() corpo: unknown): Promise<ProfissionalDto> {
     return this.service.criarProfissional(paraRequestContext(auth), validarNovoProfissional(corpo));
+  }
+
+  /** 0074: conselho e número de registro (COFFITO 414/415 art. 1º §1º VIII). */
+  @Post('profissionais/:id/conselho')
+  @Permissao('cadastros:gerir')
+  @ExigeMfaRecente() // rota de poder: muda a identificação de quem assina o prontuário
+  definirRegistroNoConselho(@Sessao() auth: AuthContext, @Param('id') id: string, @Body() corpo: unknown): Promise<ProfissionalDto> {
+    return this.service.definirRegistroNoConselho(paraRequestContext(auth), exigirUuid(id), validarRegistroNoConselho(corpo));
   }
 
   @Post('profissionais/:id/area-sensivel')
