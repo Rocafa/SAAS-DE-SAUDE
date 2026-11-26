@@ -983,3 +983,6 @@ destravando a auditoria de todos.
   dá 409 (a recepção remarca antes); a carga de feriados nacionais pula essas datas. CHECK no nome do feriado. CI verde
   exceto Trivy (#242).
 - Disparada a HU-AGD-008 (sessões recorrentes no banco, ligadas a pacote; migração 0103, exportação 1.27.0).
+- **#246 aberto (linha do tempo do paciente)**: `GET /pacientes/:id/linha-do-tempo` com agenda, cobranças, pagamentos,
+  recibos e atendimentos (só metadado), filtrada por perfil, `financeiro:ler` e vínculo de cuidado; psicologia só para
+  o psicólogo que registrou; autor só no atendimento; leitura auditada. CI verde exceto Trivy (#242). Enviado ao Guardião.
