@@ -986,3 +986,5 @@ destravando a auditoria de todos.
 - **#246 aberto (linha do tempo do paciente)**: `GET /pacientes/:id/linha-do-tempo` com agenda, cobranças, pagamentos,
   recibos e atendimentos (só metadado), filtrada por perfil, `financeiro:ler` e vínculo de cuidado; psicologia só para
   o psicólogo que registrou; autor só no atendimento; leitura auditada. CI verde exceto Trivy (#242). Enviado ao Guardião.
+- **Guardião aprova o #246** com 3 ajustes não bloqueantes (HU atualizada para psicologia oculta; permissão explícita
+  no lugar de `perfis.length > 0`; RIPD com a omissão do nome do profissional sensível). Pedidos ao agente.
