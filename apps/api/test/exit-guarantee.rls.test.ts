@@ -121,6 +121,7 @@ describe('G2 — exportação total do tenant', () => {
       privateNotes: 0,
       privateNotesWithheld: 0,
       appointmentReschedules: 0,
+      appointmentSeries: 0,
       legalHolds: 0,
       noteCustodies: 0,
       finance: {

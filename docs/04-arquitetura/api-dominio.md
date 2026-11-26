@@ -182,6 +182,30 @@ Problema: a página seguinte era pedida por número e respondida com a clínica 
 2. **Provedor de login real (D4)** implementando `AuthProvider` (Better Auth recomendado: sessão em cookie `HttpOnly`, MFA por perfil, troca de clínica, nome do usuário em `/sessao`).
 3. **Fora desta rodada:** responsáveis do paciente, recibos e pendências do dia, valor do tipo de atendimento, fuso por clínica, busca por CPF (exige índice cego), KMS em produção.
 
+## 5c. Sessões recorrentes (HU-AGD-008, migração 0103)
+
+Série de agendamentos criada numa ação, com pacote opcional. Perfis: `series:ler` e `series:escrever` = recepção e
+admin (o banco também recusa série criada ou cancelada por outro perfil). Código: `src/modules/scheduling/series.*`.
+
+| Rota | O que faz |
+|---|---|
+| `POST /series` | `{pacienteId, profissionalId, tipoId, pacoteId?, dias: [0–6], intervaloSemanas?: 1–4, hora, minutos?, dataInicial, sessoes (1–100) \| dataFinal (até 366 dias)}`. Gera **todos** os agendamentos numa transação, sob a trava da agenda do profissional: se algum horário estiver lotado, nada é criado e a resposta é `409 {codigo: 'serie_com_conflito', datas: [...]}`. Sem `minutos`, vale a duração do tipo. Devolve `{serie, agendamentos}` (201). |
+| `GET /series` | `?pacienteId&profissionalId&pacoteId`. Regra + resumo por status (`agendadas`, `realizadas`, `faltas`, `canceladas`). **Leitura auditada** (a série revela vínculo paciente-profissional, como a agenda). |
+| `POST /series/:id/cancelar` | `{aPartirDe}`. Cancela os agendamentos da série desse dia em diante que ainda não começaram e estão agendados/confirmados; check-in, atendimento, falta e os anteriores ficam. A data só recua; repetir é idempotente. |
+
+- **Pacote:** só pacote ativo, do mesmo paciente (e do mesmo tipo/profissional quando o pacote os fixa), que não vença
+  antes da última sessão. O número de sessões não passa do saldo **livre** = total − usadas − sessões de outras séries do
+  pacote que ainda ocupam horário e não consumiram (sob a trava do pacote: duas séries simultâneas não passam as duas). O
+  consumo segue o de hoje (`POST /pacotes/:id/consumos` por sessão realizada; estorno ao desfazer o status).
+- **Banco:** `appointment_series` com RLS FORÇADO (`tenant_isolation` + `portal_fora`), sem DELETE/TRUNCATE para o
+  runtime, regra imutável (só `cancelled_from`, que só recua); `appointments.series_id` com FK composta (série, clínica,
+  paciente, profissional), gravado só no INSERT e só em série ativa.
+- **Trilha:** uma linha por série (`appointment_series`, `create`/`update` com `op: 'cancel_from'`) e uma por agendamento
+  criado ou cancelado (`appointments`, com `series_id`), só ids e contagens.
+- **Fora desta entrega:** pular feriados (depende da grade/feriados do #244), editar "só esta ou todas as próximas" e
+  ligar a série a guia de convênio (HU-CNV-003).
+- **Exportação total:** 1.27.0 (`appointmentSeries` e `appointments[].seriesId`).
+
 ## 5a. Ressalvas do parecer do PR #57
 
 | # | Situação | Onde |

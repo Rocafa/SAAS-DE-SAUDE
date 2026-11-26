@@ -214,6 +214,7 @@ beforeAll(async () => {
     'GET /pacotes/:id': c(`/pacotes/${pacoteId}`),
     'GET /pacotes/:id/historico': c(`/pacotes/${pacoteId}/historico`),
     'GET /prontuario/configuracao': c('/prontuario/configuracao'),
+    'GET /series': c('/series'),
     'GET /suporte/autorizacoes': c('/suporte/autorizacoes'),
     'GET /whatsapp/envios': c('/whatsapp/envios?de=2030-05-01&ate=2030-05-07'),
     'GET /portal/consultas': p('/portal/consultas'),

@@ -40,6 +40,13 @@ export const PERMISSOES = {
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */
   'agenda:atender': ['profissional'],
+  /**
+   * Sessões recorrentes (HU-AGD-008, 0103): quem cuida da agenda (recepção e dono) cria, cancela a partir de uma data e
+   * lista as séries. O profissional vê os agendamentos gerados na agenda, como os avulsos; o banco também recusa série
+   * criada ou cancelada por quem não é recepção nem admin.
+   */
+  'series:ler': ['admin', 'recepcao'],
+  'series:escrever': ['admin', 'recepcao'],
   'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'cadastros:gerir': ['admin'],
   /** E10 de 04/11: consultar a trilha da clínica (só ids, ações e datas). */

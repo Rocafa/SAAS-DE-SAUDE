@@ -18,6 +18,7 @@ import {
   appointmentTypes,
   appointments,
   appointmentReschedules,
+  appointmentSeries,
   insurers,
   insuranceGuides,
   guideSessions,
@@ -104,6 +105,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   clinical_addenda: 'clinicalAddenda',
   private_notes: 'privateNotes',
   appointment_reschedules: 'appointmentReschedules',
+  appointment_series: 'appointmentSeries',
   legal_holds: 'legalHolds',
   note_custodies: 'noteCustodies',
   finance_settings: 'finance.financeSettings',
@@ -173,6 +175,7 @@ const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
 const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
 const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
 /** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
+let serieId: string;
 const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
 beforeAll(async () => {
@@ -198,6 +201,18 @@ beforeAll(async () => {
     hora: '08:00',
   });
   expect(ag.status).toBe(201);
+  // Sessões recorrentes (0103): uma série de 2 sessões (segundas 2030-06-03 e 2030-06-10, 07:00), sem pacote.
+  const serie = await api.http().post('/series').set(cab(admin)).send({
+    pacienteId: (pac.body as { id: string }).id,
+    profissionalId: (prof.body as { id: string }).id,
+    tipoId: (tipo.body as { id: string }).id,
+    dias: [1],
+    hora: '07:00',
+    dataInicial: '2030-06-03',
+    sessoes: 2,
+  });
+  expect(serie.status, JSON.stringify(serie.body)).toBe(201);
+  serieId = (serie.body as { serie: { id: string } }).serie.id;
   // Uma remarcação (para o histórico da 0014 entrar no pacote).
   await api
     .http()
@@ -558,6 +573,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof appointmentTypes
           | typeof appointments
           | typeof appointmentReschedules
+          | typeof appointmentSeries
           | typeof insurers
           | typeof insuranceGuides
           | typeof guideSessions
@@ -617,6 +633,7 @@ describe('G2 — conteúdo do pacote', () => {
         privateNotesWithheld:
           (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, false)))[0]?.n ?? -1,
         appointmentReschedules: await n(appointmentReschedules),
+        appointmentSeries: await n(appointmentSeries),
         legalHolds: await n(legalHolds),
         noteCustodies: await n(noteCustodies),
         finance: {
@@ -665,8 +682,9 @@ describe('G2 — conteúdo do pacote', () => {
       imports: { batches: 1, batchRecords: 1 },
       professionals: 3,
       appointmentTypes: 1,
-      appointments: 4,
+      appointments: 6,
       appointmentReschedules: 1,
+      appointmentSeries: 1,
       insurers: 1,
       insuranceGuides: 1,
       guideSessions: 1,
@@ -716,6 +734,9 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
     expect(pkg.auditJsonl).not.toContain('QZX7735');
     expect(pkg.auditJsonl).not.toContain('QZX7736');
+    // Sessões recorrentes (0103): a regra no pacote e cada agendamento gerado com o seriesId.
+    expect(pkg.json.data.appointmentSeries[0]).toMatchObject({ id: serieId, weekdays: [1], intervalWeeks: 1, startTime: '07:00', startsOn: '2030-06-03', sessions: 2, endsOn: null, cancelledFrom: null });
+    expect(pkg.json.data.appointments.filter((a) => a.seriesId === serieId)).toHaveLength(2);
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');
@@ -809,7 +830,7 @@ describe('G2 — conteúdo do pacote', () => {
     );
     expect(linhas).toHaveLength(1);
     // 3 pacientes (2 do cadastro + 1 do lote importado) e 4 agendamentos (3 + o do WhatsApp).
-    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 4, guides: 1, packages: 1 });
+    expect(linhas[0]?.metadata).toMatchObject({ patients: 3, professionals: 3, appointmentTypes: 1, appointments: 6, guides: 1, packages: 1 });
     const serial = JSON.stringify(linhas[0]);
     for (const proibido of [cpfFicticio(7), '11900000007', '2001-01-02', 'Ficticia', 'HYPERLINK', GUIA_NUMERO, GUIA_SENHA]) {
       expect(serial).not.toContain(proibido);
