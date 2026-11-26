@@ -14,6 +14,7 @@ import type { PatientsService } from '../patients/patients.service';
 import type { ResponsaveisService } from '../patients/responsaveis.service';
 import type { PortalClinicaService } from '../portal/portal-clinica.service';
 import type { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
+import type { ListaEsperaService } from '../scheduling/lista-espera.service';
 import { validarAposentados, validarDefinicoes, type DefinicaoDeJob, type JobAposentado } from './agendador.port';
 
 const MIN = 60_000;
@@ -31,6 +32,7 @@ export interface ServicosDosJobs {
   readonly retencaoFiscal: Pick<RetencaoFiscalService, 'executarComoSistema'>;
   readonly responsaveis: Pick<ResponsaveisService, 'descartarAnuladosComoSistema'>;
   readonly pacientes: Pick<PatientsService, 'reindexarIndiceCpfComoSistema'>;
+  readonly espera: Pick<ListaEsperaService, 'purgarComoSistema'>;
 }
 
 export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob[] {
@@ -114,6 +116,13 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       nome: 'cpf-indice-reindexacao',
       ...diario('30 5 * * *', 'diário, 05:30'),
       porClinica: async (t) => ({ ...(await s.pacientes.reindexarIndiceCpfComoSistema(t)) }),
+    },
+    {
+      // HU-AGD-009 (§5b, 0102): apaga o item que saiu da lista de espera há mais de 30 dias e o de paciente inativado
+      // há mais de 30 dias (prazo no banco, app_waitlist_purge_run). Trilha só com a contagem.
+      nome: 'lista-espera-retencao',
+      ...diario('15 5 * * *', 'diário, 05:15'),
+      porClinica: async (t) => ({ ...(await s.espera.purgarComoSistema(t)) }),
     },
   ];
   validarDefinicoes(jobs);

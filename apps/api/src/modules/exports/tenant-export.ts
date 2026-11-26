@@ -40,6 +40,7 @@ import { exportarPortal, type ExportedPortal, type PortalCounts } from '../porta
 import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
 import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
 import { exportarWhatsapp, type ExportedWhatsapp, type WhatsappCounts } from '../messaging/whatsapp-export';
+import { exportarListaDeEspera, type ExportedWaitlistEntry } from '../scheduling/waitlist-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -129,8 +130,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
+ * 1.26.0: (1.25.0 é dos PRs #243/#244) `waitlist` (migração 0102, HU-AGD-009): lista de espera — preferências estruturadas, observação decifrada,
+ *        entrada, saída (motivo e agendamento) — com a contagem em `manifest.counts.waitlist`. Sai também o item que
+ *        saiu da lista e ainda não passou pela retenção de 30 dias.
  */
-export const EXPORT_SCHEMA_VERSION = '1.24.0';
+export const EXPORT_SCHEMA_VERSION = '1.26.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -146,6 +150,8 @@ export const EXPORTED_TABLES = [
   'appointment_types',
   'appointments',
   'appointment_reschedules',
+  // Lista de espera (0102): em data.waitlist.
+  'waitlist_entries',
   'insurers',
   'insurance_guides',
   'guide_sessions',
@@ -258,6 +264,8 @@ export interface ExportManifest {
     /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
     readonly privateNotesWithheld: number;
     readonly appointmentReschedules: number;
+    /** Lista de espera (0102). */
+    readonly waitlist: number;
     readonly legalHolds: number;
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
@@ -625,6 +633,8 @@ export interface TenantExportDocument {
     readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
     readonly privateNotes: readonly ExportedPrivateNote[];
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
+    /** Lista de espera (0102). */
+    readonly waitlist: readonly ExportedWaitlistEntry[];
     readonly legalHolds: readonly ExportedLegalHold[];
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
@@ -899,6 +909,10 @@ export async function exportInTransaction(
   });
   const importacoes = await exportarImportacoes(tx, ctx.tenantId);
   const whatsapp = await exportarWhatsapp(tx, ctx.tenantId, () => {
+    if (!options.cipher) throw new ExportCipherMissingError();
+    return options.cipher;
+  });
+  const listaDeEspera = await exportarListaDeEspera(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
   });
@@ -1213,6 +1227,7 @@ export async function exportInTransaction(
       privateNotes: exportedNotes.length,
       privateNotesWithheld: noteRows.length - exportedNotes.length,
       appointmentReschedules: exportedReschedules.length,
+      waitlist: listaDeEspera.length,
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
@@ -1301,6 +1316,7 @@ export async function exportInTransaction(
         clinicalAddenda: exportedAddenda,
         privateNotes: exportedNotes,
         appointmentReschedules: exportedReschedules,
+        waitlist: listaDeEspera,
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,

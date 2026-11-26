@@ -16,6 +16,7 @@
 /** Rotas de escrita cuja trilha é gravada pelo código da API. */
 export const AUDITADAS: readonly string[] = [
   'DELETE /clinica/membros/:usuarioId/:perfil',
+  'DELETE /espera/:id',
   'PATCH /convenios/:id',
   'PATCH /guias/:id',
   'PATCH /notas-privadas/:id',
@@ -39,6 +40,9 @@ export const AUDITADAS: readonly string[] = [
   'POST /convenios/:id/inativar',
   'POST /custodias/:id/aceite',
   'POST /custodias/:id/notas/:notaId/decisao',
+  'POST /espera',
+  'POST /espera/:id/devolver',
+  'POST /espera/:id/marcar',
   'POST /financeiro/caixas',
   'POST /financeiro/caixas/:id/fechar',
   'POST /financeiro/cobrancas',
@@ -147,6 +151,7 @@ export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /convenios',
   'GET /convenios/:id/relatorio',
   'GET /custodias/:id/notas',
+  'GET /espera',
   'GET /financeiro/caixas',
   'GET /financeiro/caixas/:id',
   'GET /financeiro/cobrancas/:id',

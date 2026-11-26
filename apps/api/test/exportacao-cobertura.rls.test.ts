@@ -57,6 +57,7 @@ import {
   whatsappOptIns,
   whatsappOutbox,
   whatsappSettings,
+  waitlistEntries,
 } from '../src/db/schema';
 import { FIELD_CIPHER } from '../src/modules/crypto/crypto.module';
 import type { FieldCipher } from '../src/modules/crypto/field-cipher';
@@ -104,6 +105,7 @@ const CHAVE_NO_PACOTE: Readonly<Record<(typeof EXPORTED_TABLES)[number], string>
   clinical_addenda: 'clinicalAddenda',
   private_notes: 'privateNotes',
   appointment_reschedules: 'appointmentReschedules',
+  waitlist_entries: 'waitlist',
   legal_holds: 'legalHolds',
   note_custodies: 'noteCustodies',
   finance_settings: 'finance.financeSettings',
@@ -172,6 +174,7 @@ const REFERENCIA_RETENCAO = 'Oficio ficticio de retencao QZX7735';
 const MOTIVO_RETIRADA = 'Processo ficticio encerrado QZX7736';
 const PEDIDO_DETALHE = 'Pedido ficticio do titular QZX7738';
 const RESP_NOME = 'Responsavel Ficticia Export QZX7737';
+const OBS_ESPERA = 'Avisar pelo WhatsApp ficticio QZX7739';
 /** Número de negócio fictício, novo a cada execução (a rota do webhook é única no banco inteiro). */
 const NUMERO_DE_NEGOCIO = `9${String(Date.now()).slice(-12)}`;
 
@@ -208,6 +211,13 @@ beforeAll(async () => {
   // Guias e pacotes (0011): convênio, guia com campos cifrados, consumo + confirmação, pacote + consumo.
   const pacienteId = (pac.body as { id: string }).id;
   const agId = (ag.body as { id: string }).id;
+  // Lista de espera (0102): um item com preferências e observação (cifrada; no pacote decifrada, nunca na trilha).
+  await api
+    .http()
+    .post('/espera')
+    .set(cab(admin))
+    .send({ pacienteId, profissionalId: (prof.body as { id: string }).id, dias: [2, 4], periodo: 'manha', observacao: OBS_ESPERA })
+    .expect(201);
   await api.http().post(`/agendamentos/${agId}/check-in`).set(cab(admin)).expect(200);
   const conv = await api.http().post('/convenios').set(cab(admin)).send({ nome: 'Operadora Ficticia Export', exigeAssinatura: true });
   const guia = await api.http().post('/guias').set(cab(admin)).send({
@@ -558,6 +568,7 @@ describe('G2 — conteúdo do pacote', () => {
           | typeof appointmentTypes
           | typeof appointments
           | typeof appointmentReschedules
+          | typeof waitlistEntries
           | typeof insurers
           | typeof insuranceGuides
           | typeof guideSessions
@@ -617,6 +628,7 @@ describe('G2 — conteúdo do pacote', () => {
         privateNotesWithheld:
           (await tx.select({ n: sql<number>`count(*)::int` }).from(privateNotes).where(eq(privateNotes.exportConsent, false)))[0]?.n ?? -1,
         appointmentReschedules: await n(appointmentReschedules),
+        waitlist: await n(waitlistEntries),
         legalHolds: await n(legalHolds),
         noteCustodies: await n(noteCustodies),
         finance: {
@@ -667,6 +679,7 @@ describe('G2 — conteúdo do pacote', () => {
       appointmentTypes: 1,
       appointments: 4,
       appointmentReschedules: 1,
+      waitlist: 1,
       insurers: 1,
       insuranceGuides: 1,
       guideSessions: 1,
@@ -716,6 +729,9 @@ describe('G2 — conteúdo do pacote', () => {
     expect(pkg.json.data.legalHolds[0]).toMatchObject({ reference: REFERENCIA_RETENCAO, releaseReason: MOTIVO_RETIRADA });
     expect(pkg.auditJsonl).not.toContain('QZX7735');
     expect(pkg.auditJsonl).not.toContain('QZX7736');
+    // Lista de espera (0102): preferências estruturadas e observação decifrada no pacote; nunca na trilha.
+    expect(pkg.json.data.waitlist[0]).toMatchObject({ weekdays: [2, 4], period: 'manha', note: OBS_ESPERA, removedAt: null });
+    expect(pkg.auditJsonl).not.toContain('QZX7739');
     expect(noBanco.auditEvents).toBeGreaterThan(5);
     const tudo = JSON.stringify(pkg);
     expect(tudo).not.toContain('Outra Clinica');

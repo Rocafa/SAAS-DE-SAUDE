@@ -59,6 +59,7 @@ describe('agendador em teste', () => {
       'retencao-fiscal',
       'responsaveis-descarte',
       'cpf-indice-reindexacao',
+      'lista-espera-retencao',
     ]);
   });
 });

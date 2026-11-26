@@ -241,7 +241,7 @@ A API passou a ter um agendador real (BullMQ) para os jobs de retenção, revoga
 
 Sem alarme (informativos): `JOB_OK`, `JOB_EM_ANDAMENTO`, `JOB_REMOVIDO` e `JOB_TRAVA_NAO_LIBERADA`.
 
-**DPO (`alertas-dpo`, assinatura por `alerta_dpo_email`).** Recebe só falha de retenção ou revogação: o alarme `jobs-desligados` e o alarme `alta-jobs-retencao-dpo`. Este último soma 12 filtros `"<marcador>" "job=<nome>"` (dois termos exatos = E lógico) para `JOB_ATRASADO` e `JOB_ALARME` × `whatsapp-retencao`, `importador-expurgo`, `notas-privadas-ciclo`, `retencao-fiscal`, `responsaveis-descarte` e `portal-representacoes` (lista `jobs_de_retencao`; job novo de retenção entra lá). `JOB_ATRASADO` de `whatsapp-lembretes` fica só com a operação.
+**DPO (`alertas-dpo`, assinatura por `alerta_dpo_email`).** Recebe só falha de retenção ou revogação: o alarme `jobs-desligados` e o alarme `alta-jobs-retencao-dpo`. Este último soma 14 filtros `"<marcador>" "job=<nome>"` (dois termos exatos = E lógico) para `JOB_ATRASADO` e `JOB_ALARME` × `whatsapp-retencao`, `importador-expurgo`, `notas-privadas-ciclo`, `retencao-fiscal`, `responsaveis-descarte`, `lista-espera-retencao` e `portal-representacoes` (lista `jobs_de_retencao`; job novo de retenção entra lá). `JOB_ATRASADO` de `whatsapp-lembretes` fica só com a operação.
 
 **`jobs` ≠ `bullmq` no `/health/ready` (`jobs-ready.tf`).** Opção escolhida: **canary do CloudWatch Synthetics em sa-east-1**, a mais simples que funciona sem mudar a API nem sair da região:
 - *Métrica a partir de log* não serve: a API não loga o modo; `nao_iniciado` (o `agendar()` do BullMQ pendurado) não gera log nenhum. Exigiria uma linha periódica na API (ENG).
