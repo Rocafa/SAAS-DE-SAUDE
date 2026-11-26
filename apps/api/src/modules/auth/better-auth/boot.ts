@@ -7,7 +7,7 @@
 import { createDatabase } from '../../../db/tenant-transaction';
 import { AMBIENTES_SESSAO_FICTICIA } from '../auth-provider.factory';
 import { loadRateLimitHashKey, type RateLimitStore } from '../../../security/rate-limit-store';
-import { criarAutenticacao } from './instancia';
+import { criarAutenticacao, nomeDoCookie } from './instancia';
 import { montarAutenticacao } from './montagem';
 import { BetterAuthProvider } from './provedor';
 import { conferidorPorKAnonimato } from './senha-vazada';
@@ -43,7 +43,12 @@ export function bootDoBetterAuth(env: NodeJS.ProcessEnv, origensConfiaveis: read
       aoFalharMfa: (e) => doProvedor().aposMfaRecusado(e.sessaoId, e.userId, e.bloqueou),
     },
   });
-  const provider = new BetterAuthProvider({ auth, dbAuth: dbAuth.db, dbClinica: dbClinica.db });
+  const provider = new BetterAuthProvider({
+    auth,
+    dbAuth: dbAuth.db,
+    dbClinica: dbClinica.db,
+    cookieDeEncerramento: `${nomeDoCookie(producao)}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict${producao ? '; Secure' : ''}`,
+  });
   ref.provedor = provider;
   return {
     provider,

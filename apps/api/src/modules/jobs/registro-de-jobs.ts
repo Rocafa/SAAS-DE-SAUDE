@@ -14,7 +14,7 @@ import type { PatientsService } from '../patients/patients.service';
 import type { ResponsaveisService } from '../patients/responsaveis.service';
 import type { PortalClinicaService } from '../portal/portal-clinica.service';
 import type { CicloNotasPrivadasService } from '../records/ciclo-notas-privadas';
-import { validarAposentados, validarDefinicoes, type DefinicaoDeJob, type JobAposentado } from './agendador.port';
+import { validarAposentados, validarDefinicoes, type DefinicaoDeJob, type JobAposentado, type ResultadoDeJob } from './agendador.port';
 
 const MIN = 60_000;
 const HORA = 60 * MIN;
@@ -31,6 +31,8 @@ export interface ServicosDosJobs {
   readonly retencaoFiscal: Pick<RetencaoFiscalService, 'executarComoSistema'>;
   readonly responsaveis: Pick<ResponsaveisService, 'descartarAnuladosComoSistema'>;
   readonly pacientes: Pick<PatientsService, 'reindexarIndiceCpfComoSistema'>;
+  /** Expurgo do schema `identidade` (D4): no provedor real; com o dev provider, não faz nada. */
+  readonly identidade: { expurgarComoSistema(): Promise<ResultadoDeJob> };
 }
 
 export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob[] {
@@ -114,6 +116,14 @@ export function criarRegistroDeJobs(s: ServicosDosJobs): readonly DefinicaoDeJob
       nome: 'cpf-indice-reindexacao',
       ...diario('30 5 * * *', 'diário, 05:30'),
       porClinica: async (t) => ({ ...(await s.pacientes.reindexarIndiceCpfComoSistema(t)) }),
+    },
+    {
+      // R11 do parecer do desenho da D4 e R7 do desenho do PR 3: apaga sessões vencidas, tokens de uso único
+      // (`verificacao`) vencidos há mais de 24 h e cadastros de TOTP não concluídos há mais de 24 h. Da plataforma
+      // (o schema identidade não é de clínica); só contagens no log.
+      nome: 'identidade-expurgo',
+      ...diario('20 3 * * *', 'diário, 03:20'),
+      daPlataforma: () => s.identidade.expurgarComoSistema(),
     },
   ];
   validarDefinicoes(jobs);

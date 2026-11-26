@@ -35,6 +35,11 @@ function montar(opcoes: { trilhaFora: boolean }) {
       return cadeia(undefined);
     },
     delete: () => cadeia(undefined),
+    // Troca atômica da clínica (R1 do parecer do 3a): uma instrução só, devolvendo o valor anterior.
+    execute: () => {
+      ordem.push('clinica_ativa');
+      return Promise.resolve([{ clinica_antes: null, sem_clinica_antes: null }]);
+    },
   };
   const dbClinica = {
     transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -97,5 +102,164 @@ describe('definirClinica: trilha antes da clínica ativa', () => {
     const { provedor } = montar({ trilhaFora: true });
     for (let i = 0; i < 5; i++) expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
     expect(eventos().filter((e) => e['evento'] === 'TRILHA_NAO_GRAVADA')).toHaveLength(1);
+  });
+});
+
+/**
+ * Ressalva do parecer da resolução 3a × #168: trilha fora × TOTP feito sem clínica (R4 do desenho do PR 3). Sessão com
+ * estado no banco falso: `execute` faz a troca atômica (devolve o valor anterior e zera `mfa_sem_clinica_em`).
+ */
+function montarComTotp(agora: Date) {
+  const estado = { trilhaFora: true, clinicaAtiva: null as string | null, mfaSemClinicaEm: new Date(agora.getTime() - 60_000) as Date | null };
+  const dbAuth = {
+    selectDistinct: () => cadeia([{ clinicaId: CLINICA }]),
+    execute: () => {
+      const antes = { clinica_antes: estado.clinicaAtiva, sem_clinica_antes: estado.mfaSemClinicaEm };
+      estado.clinicaAtiva = CLINICA;
+      estado.mfaSemClinicaEm = null;
+      return Promise.resolve([antes]);
+    },
+  };
+  const dbClinica = {
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      if (estado.trilhaFora) throw new Error('banco da trilha fora');
+      return fn({ execute: () => Promise.resolve(undefined), insert: () => cadeia(undefined) });
+    },
+  };
+  const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
+  const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never, agora: () => agora });
+  const marcarMfa = vi.spyOn(provedor, 'marcarMfa').mockResolvedValue(true);
+  const comFator = provedor as unknown as { trilhaDoFator: (...a: unknown[]) => Promise<void> };
+  const trilhaDoFator = vi.spyOn(comFator, 'trilhaDoFator').mockResolvedValue(undefined);
+  return { provedor, estado, marcarMfa, trilhaDoFator };
+}
+
+describe('definirClinica: trilha fora × TOTP feito sem clínica', () => {
+  it('(a) trilha fora: o TOTP sem clínica continua guardado e nenhum MFA é marcado', async () => {
+    capturarEventos();
+    const { provedor, estado, marcarMfa, trilhaDoFator } = montarComTotp(new Date());
+    const guardado = estado.mfaSemClinicaEm;
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
+    expect(estado.clinicaAtiva).toBeNull();
+    expect(estado.mfaSemClinicaEm).toBe(guardado);
+    expect(marcarMfa).not.toHaveBeenCalled();
+    expect(trilhaDoFator).not.toHaveBeenCalled();
+  });
+
+  it('(b) a trilha volta dentro dos 5 min: a escolha aproveita o TOTP uma vez só e zera o campo', async () => {
+    capturarEventos();
+    const { provedor, estado, marcarMfa, trilhaDoFator } = montarComTotp(new Date());
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(false);
+    estado.trilhaFora = false;
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(true);
+    expect(estado.mfaSemClinicaEm).toBeNull();
+    expect(marcarMfa).toHaveBeenCalledTimes(1);
+    expect(trilhaDoFator).toHaveBeenCalledWith(CLINICA, USER, ['mfa_verified'], expect.anything());
+    // Segunda escolha: o TOTP já foi gasto.
+    expect(await provedor.definirClinica(SESSAO, USER, CLINICA)).toBe(true);
+    expect(marcarMfa).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Logout × trilha fora (parecer do #155): as sessões já foram apagadas quando a trilha roda. Uma clínica fora não pode
+ * parar as outras nem lançar — sem o 204 o navegador fica com o cookie de uma sessão que não existe mais.
+ */
+const CLINICA_B = '33333333-3333-4333-8333-333333333333';
+
+function montarLogout(opcoes: { falhaNa: string | null }) {
+  const gravadas: string[] = [];
+  const dbAuth = {
+    selectDistinct: () => cadeia([{ clinicaId: CLINICA }, { clinicaId: CLINICA_B }]),
+    delete: () => cadeia([{ id: SESSAO }]),
+  };
+  const dbClinica = {
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      // O tenant da transação é o do último `app_set_tenant`; aqui o fake reconhece pelo texto da instrução.
+      let tenant = '';
+      const tx = {
+        execute: (q: unknown) => {
+          const texto = JSON.stringify(q);
+          for (const c of [CLINICA, CLINICA_B]) if (texto.includes(c)) tenant = c;
+          if (tenant === opcoes.falhaNa) return Promise.reject(new Error('clínica fora'));
+          return Promise.resolve(undefined);
+        },
+        insert: () => {
+          gravadas.push(tenant);
+          return cadeia(undefined);
+        },
+      };
+      return fn(tx);
+    },
+  };
+  const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
+  const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+  return { provedor, gravadas };
+}
+
+describe('logout global: a trilha não derruba o logout', () => {
+  it('as duas clínicas recebem a linha quando tudo está de pé', async () => {
+    const { provedor, gravadas } = montarLogout({ falhaNa: null });
+    expect(await provedor.encerrarTodasDaPessoa({ sessaoId: SESSAO, userId: USER })).toBe(1);
+    expect(gravadas).toEqual([CLINICA, CLINICA_B]);
+  });
+
+  it('uma clínica fora: a outra grava, nada é lançado e o alarme sai com a contagem', async () => {
+    const eventos = capturarEventos();
+    const { provedor, gravadas } = montarLogout({ falhaNa: CLINICA });
+    await expect(provedor.encerrarTodasDaPessoa({ sessaoId: SESSAO, userId: USER })).resolves.toBe(1);
+    expect(gravadas).toEqual([CLINICA_B]);
+    const linhas = eventos().filter((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['motivo'] === 'logout_global');
+    expect(linhas.some((e) => e['tenantId'] === CLINICA)).toBe(true);
+    expect(linhas.some((e) => e['contagem'] === 1)).toBe(true);
+  });
+});
+
+/** Trilha do fator fora (parecer do #155): `mfa_em` não pode ficar marcado sem a linha do fator na trilha. */
+describe('aposMfaVerificado: trilha do fator fora desfaz o MFA', () => {
+  function montarFator(trilhaFora: boolean) {
+    const sets: Record<string, unknown>[] = [];
+    const dbAuth = {
+      select: () => cadeia([{ clinicaAtiva: CLINICA, userId: USER }]),
+      selectDistinct: () => cadeia([{ clinicaId: CLINICA }]),
+      update: () => ({
+        set: (v: Record<string, unknown>) => {
+          sets.push(v);
+          return cadeia(undefined);
+        },
+      }),
+    };
+    const dbClinica = {
+      // A leitura dos perfis funciona; só a GRAVAÇÃO da trilha falha (trigger da 0022, RLS do `audit_log`, metadata
+      // recusado). É o caso perigoso: `marcarMfa` consegue marcar e a linha do fator não entra.
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+        return fn({
+          execute: () => Promise.resolve(undefined),
+          insert: () => {
+            if (trilhaFora) throw new Error('trilha recusada');
+            return cadeia(undefined);
+          },
+          select: () => cadeia([{ role: 'admin' }]),
+        });
+      },
+    };
+    const auth = { api: { getSession: () => Promise.resolve(null) } } as unknown as Autenticacao;
+    const provedor = new BetterAuthProvider({ auth, dbAuth: dbAuth as never, dbClinica: dbClinica as never });
+    return { provedor, sets };
+  }
+
+  it('trilha de pé: devolve marcado e `mfa_em` fica com a data', async () => {
+    const { provedor, sets } = montarFator(false);
+    expect(await provedor.aposMfaVerificado(SESSAO, USER, 'reverificacao')).toBe('marcado');
+    expect(sets.some((s) => s['mfaEm'] instanceof Date)).toBe(true);
+    expect(sets.some((s) => s['mfaEm'] === null)).toBe(false);
+  });
+
+  it('trilha fora: devolve nada, zera `mfa_em` e alarma TRILHA_NAO_GRAVADA', async () => {
+    const eventos = capturarEventos();
+    const { provedor, sets } = montarFator(true);
+    expect(await provedor.aposMfaVerificado(SESSAO, USER, 'reverificacao')).toBe('nada');
+    expect(sets.at(-1)).toEqual({ mfaEm: null, perfisNoMfa: null });
+    expect(eventos().some((e) => e['evento'] === 'TRILHA_NAO_GRAVADA' && e['motivo'] === 'trilha_do_fator')).toBe(true);
   });
 });
