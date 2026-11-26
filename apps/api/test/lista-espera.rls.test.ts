@@ -319,7 +319,9 @@ describe('lista de espera: retenção (job lista-espera-retencao)', () => {
     const naLista = await colocar(recepA, { pacienteId: retido, profissionalId: profissionalA });
     expect((await api.http().delete(`/espera/${saiu.id}`).set(cab(recepA))).status).toBe(200);
     await envelhecerSaida(saiu.id, 31);
-    const retencao = await api.http().put(`/prontuario/pacientes/${retido}/retencao-legal`).set(cab(adminA)).send({ referencia: 'Oficio ficticio da espera QZX8803' });
+    // Retenção legal exige o perfil admin registrado no banco (0020).
+    const dono = await api.membro(clinicaA, api.sessao(clinicaA, 'admin'), 'admin');
+    const retencao = await api.http().put(`/prontuario/pacientes/${retido}/retencao-legal`).set(cab(dono)).send({ referencia: 'Oficio ficticio da espera QZX8803' });
     expect(retencao.status, JSON.stringify(retencao.body)).toBe(200);
     // Inativado há mais de 30 dias também não apaga o item ainda na lista.
     expect((await api.http().post(`/pacientes/${retido}/inativar`).set(cab(recepA))).status).toBe(200);
