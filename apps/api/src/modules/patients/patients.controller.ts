@@ -3,7 +3,14 @@ import { exigirUuid } from '../../common/validacao';
 import { paraRequestContext, type AuthContext } from '../auth/auth-context';
 import { Permissao, Sessao, SessaoGuard } from '../auth/sessao.guard';
 import { PatientsService, type PacienteDto, type PaginaDePacientes } from './patients.service';
-import { validarAlteracaoPaciente, validarBuscaPacientes, validarFiltroPacientes, validarNovoPaciente } from './patients.validation';
+import { LinhaDoTempoService, type PaginaDaLinhaDoTempo } from './linha-do-tempo.service';
+import {
+  validarAlteracaoPaciente,
+  validarBuscaPacientes,
+  validarFiltroLinhaDoTempo,
+  validarFiltroPacientes,
+  validarNovoPaciente,
+} from './patients.validation';
 import { VigilanciaDeLeituraService } from './vigilancia-de-leitura';
 
 /**
@@ -19,6 +26,7 @@ export class PatientsController {
   constructor(
     @Inject(PatientsService) private readonly service: PatientsService,
     @Inject(VigilanciaDeLeituraService) private readonly vigilancia: VigilanciaDeLeituraService,
+    @Inject(LinhaDoTempoService) private readonly linhaDoTempo: LinhaDoTempoService,
   ) {}
 
   /**
@@ -53,6 +61,21 @@ export class PatientsController {
     const ctx = paraRequestContext(auth);
     await this.vigilancia.ficha(ctx, alvo);
     return this.service.obter(ctx, alvo);
+  }
+
+  /**
+   * Linha do tempo (HU-PAC-007): agenda, financeiro, recibos e metadado de atendimento, filtrados pelo perfil
+   * (linha-do-tempo-regras.ts). Nunca conteúdo clínico. Conta como abertura da ficha na vigilância (R5) e grava
+   * leitura auditada (`patient_timeline`). Paginação só por cursor (limite e cursor na query).
+   */
+  @Get(':id/linha-do-tempo')
+  @Permissao('pacientes:ler')
+  async linhaDoTempoDoPaciente(@Sessao() auth: AuthContext, @Param('id') id: string, @Query() query: unknown): Promise<PaginaDaLinhaDoTempo> {
+    const alvo = exigirUuid(id);
+    const filtro = validarFiltroLinhaDoTempo(query);
+    const ctx = paraRequestContext(auth);
+    await this.vigilancia.ficha(ctx, alvo);
+    return this.linhaDoTempo.listar(ctx, alvo, filtro);
   }
 
   @Post()

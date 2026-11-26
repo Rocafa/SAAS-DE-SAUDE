@@ -165,6 +165,7 @@ export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /notas-privadas/:id',
   'GET /pacientes',
   'GET /pacientes/:id',
+  'GET /pacientes/:id/linha-do-tempo',
   'GET /pacientes/:id/notas-privadas',
   'GET /pacientes/:id/prontuario',
   'GET /pacientes/:id/responsaveis',

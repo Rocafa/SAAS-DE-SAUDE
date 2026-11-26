@@ -82,6 +82,7 @@ A base legal é **da clínica** (controladora); a operadora segue as instruçõe
 - **Qualidade:** edição de prontuário gera nova versão (não sobrescreve), com autoria e horário.
 - **Direitos do art. 18:** acesso e cópia pelo portal; correção pela clínica (com histórico); portabilidade pela exportação (G2); revogação de consentimento onde a base é consentimento.
 - **Transparência:** modelo de aviso de privacidade da clínica, editável, oferecido pelo produto.
+- **Linha do tempo do paciente (HU-PAC-007, #246):** junta agenda, financeiro, recibos e só o metadado do atendimento. Diferente de `GET /agendamentos`, que mostra o profissional de cada consulta, a linha do tempo **omite o nome do profissional de área sensível** (psicologia, psiquiatria, saúde mental; `professionals.sensitive_area`) no texto dos eventos de agenda, salvo para o próprio profissional: a visão consolidada não reforça o vínculo do paciente com a área sensível. O atendimento de psicologia só aparece para o psicólogo responsável; valores só com `financeiro:ler`.
 - **Suboperadores:** DPA com obrigações equivalentes; lista publicada; aviso de 30 dias para inclusões.
 
 ## 5. Medidas de segurança (art. 38, parágrafo único)
