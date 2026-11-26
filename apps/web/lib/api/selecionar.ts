@@ -8,7 +8,7 @@
  */
 import type { ApiClinica } from './cliente';
 import { criarApiFake, type OpcoesFake } from './fake';
-import { criarApiHttp, type OpcoesHttp } from './http';
+import { ErroApi, MENSAGENS, criarApiHttp, type OpcoesHttp } from './http';
 import type { Paciente } from './tipos';
 
 export type ModoApi = 'fake' | 'http';
@@ -63,5 +63,12 @@ export function criarApi(
 ): ApiClinica {
   const fake = criarApiFake(opcoes.fake ?? {});
   if (config.modo === 'fake' || !config.origem) return fake;
-  return { ...fake, ...criarApiHttp({ ...opcoes.http, baseUrl: config.origem }) };
+  // O que é só da demonstração NÃO sobrevive ao modo http: `entrarComo` e `usuariosDemo` não existem na
+  // API, então vinham do fake — e um clique no trocador virava troca de papel feita pelo cliente, com
+  // efeito no que o fake ainda serve (achado ALTA do #92). Recusa explícita, em vez de herança calada.
+  const semDemonstracao = {
+    entrarComo: () => Promise.reject(new ErroApi(MENSAGENS.semDemonstracao, 501)),
+    usuariosDemo: () => Promise.reject(new ErroApi(MENSAGENS.semDemonstracao, 501)),
+  };
+  return { ...fake, ...semDemonstracao, ...criarApiHttp({ ...opcoes.http, baseUrl: config.origem }) };
 }

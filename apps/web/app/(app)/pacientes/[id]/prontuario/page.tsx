@@ -19,6 +19,8 @@ const MOTIVO: Record<NonNullable<Registro['motivoOculto']>, string> = {
   perfil_nao_clinico: 'Conteúdo clínico: só os profissionais que atendem o paciente leem.',
   sem_vinculo: 'Conteúdo restrito: você não atende este paciente.',
   sigilo_psicologia: 'Conteúdo restrito ao profissional autor (sigilo profissional).',
+  // A API pede o código de novo para abrir psicologia (MFA recente): é pedido, não recusa.
+  mfa_recente_obrigatorio: 'Para abrir este conteúdo, confirme o código de verificação outra vez.',
 };
 
 function Lista({ registros, profissionais }: { registros: Registro[]; profissionais: Map<string, Profissional> }) {
