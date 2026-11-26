@@ -978,3 +978,8 @@ destravando a auditoria de todos.
   (faltava `legal_hold_since IS NULL`, como nas 0031/0034). Correção e teste pedidos ao agente, mais auditoria dos ids
   lidos. Respostas do Guardião: observação curta cifrada aceita (aviso no campo no PR do front), profissional vê os
   seus, 30 dias também para os agendados, lista na exportação 1.26.0.
+- #244 (db7db0b): trava da agenda da clínica compartilhada na marcação e exclusiva em bloqueio de clínica e feriado;
+  teste de concorrência (sempre um dos dois passa). Mudança de regra: bloqueio ou feriado sobre agendamento existente
+  dá 409 (a recepção remarca antes); a carga de feriados nacionais pula essas datas. CHECK no nome do feriado. CI verde
+  exceto Trivy (#242).
+- Disparada a HU-AGD-008 (sessões recorrentes no banco, ligadas a pacote; migração 0103, exportação 1.27.0).
