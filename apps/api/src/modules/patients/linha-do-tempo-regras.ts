@@ -6,8 +6,9 @@
  * - NUNCA conteúdo clínico: o evento clínico é só metadado ("atendimento registrado por X em D"); não sai
  *   modelo, especialidade, compartimento, versão, queixa, evolução, adendo nem nota privada.
  * - Agenda: todos os perfis da clínica (é o que `GET /agendamentos` já mostra a eles).
- * - Financeiro: todos veem que houve cobrança/pagamento/recibo; VALORES e número do recibo só com
- *   `financeiro:ler` (admin, recepção, financeiro). O profissional vê o fato, sem valor.
+ * - Financeiro: quem tem `linha_do_tempo:financeiro_resumo` (hoje, todos os perfis) vê que houve
+ *   cobrança/pagamento/recibo; VALORES e número do recibo só com `financeiro:ler` (admin, recepção, financeiro).
+ *   O profissional vê o fato, sem valor.
  * - Clínico: só perfil clínico COM vínculo de cuidado (`podeLerConteudoClinico`). Recepção, financeiro e
  *   admin não clínico nunca recebem evento clínico.
  * - Psicologia (compartimento de sigilo): o atendimento só aparece para o AUTOR (o psicólogo responsável),
@@ -84,7 +85,7 @@ export interface EscopoDaLinhaDoTempo {
 export function escopoDaLinhaDoTempo(perfis: readonly Perfil[], podeVerClinico: boolean): EscopoDaLinhaDoTempo {
   return {
     agenda: temPermissao(perfis, 'agenda:ler'),
-    financeiro: perfis.length > 0,
+    financeiro: temPermissao(perfis, 'linha_do_tempo:financeiro_resumo'),
     valores: temPermissao(perfis, 'financeiro:ler'),
     clinico: podeVerClinico && temPermissao(perfis, 'conteudo_clinico:ler'),
   };

@@ -735,7 +735,7 @@ Como **Dr. Rafael**, quero ver em ordem cronológica agendamentos, atendimentos,
   Cenário: Sigilo entre profissionais
     Dado um atendimento de psicologia não compartilhado
     Quando a nutricionista abre a linha do tempo
-    Então o atendimento aparece só como "atendimento – outro profissional", sem conteúdo
+    Então o atendimento de psicologia não aparece na linha do tempo (só o psicólogo responsável o vê), e nada do conteúdo
 ```
 
 ### HU-PAC-008 — Inativação respeitando a guarda legal

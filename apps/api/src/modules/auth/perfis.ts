@@ -71,6 +71,12 @@ export const PERMISSOES = {
    * - configurar: texto neutro do recibo, emitente e tipo de atendimento padrão.
    */
   'financeiro:ler': ['admin', 'recepcao', 'financeiro'],
+  /**
+   * Linha do tempo do paciente (HU-PAC-007; parecer do Guardião no #246): ver que houve cobrança, pagamento,
+   * estorno e recibo, SEM valores nem número do recibo (esses seguem `financeiro:ler`). Todos os perfis da clínica:
+   * o profissional precisa saber se a sessão foi paga sem ver quanto.
+   */
+  'linha_do_tempo:financeiro_resumo': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'financeiro:operar': ['admin', 'recepcao', 'financeiro'],
   'financeiro:estornar': ['admin', 'financeiro'],
   'financeiro:fiscal': ['admin', 'financeiro'],

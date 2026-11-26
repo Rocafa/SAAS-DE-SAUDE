@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Perfil } from '../auth/perfis';
+import { PERMISSOES, type Perfil } from '../auth/perfis';
 import {
   EVENTOS_DA_LINHA_DO_TEMPO,
   escopoDaLinhaDoTempo,
@@ -117,5 +117,11 @@ describe('apoio', () => {
   });
   it('nome da âncora amarra evento e instante exato', () => {
     expect(nomeDaAncora({ evento: 'agenda_marcada', chave: '2030-05-06 13:30:00.123456' })).toBe('agenda_marcada|2030-05-06 13:30:00.123456');
+  });
+});
+
+describe('matriz real', () => {
+  it('linha_do_tempo:financeiro_resumo é dada aos quatro perfis da clínica (os que já recebiam)', () => {
+    expect([...PERMISSOES['linha_do_tempo:financeiro_resumo']].sort()).toEqual(['admin', 'financeiro', 'profissional', 'recepcao']);
   });
 });
