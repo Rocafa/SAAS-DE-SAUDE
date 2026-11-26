@@ -129,7 +129,11 @@ feriado vigente da clínica = 409 `feriado`; bloqueio vigente do profissional ou
 fora de toda janela da grade = 409 `fora_da_grade`. Profissional **sem nenhuma janela** não é restringido pela grade
 (nenhuma clínica fica sem agenda no deploy). **Encaixe ignora a grade** (e a capacidade), mas **não** bloqueio nem
 feriado. `agenda:configurar` = dono e recepção. Nada se apaga (trigger): a grade só desativa; bloqueio e feriado só são
-removidos, uma vez. Toda alteração audita no escopo `schedule_config` (só ids, contagens e códigos). O importador
+removidos, uma vez. Travas (#244): a marcação pega a trava da clínica compartilhada e a do profissional exclusiva;
+bloqueio da clínica e feriado pegam a da clínica exclusiva, bloqueio de profissional a dele. Sob a trava, bloqueio sobre
+agendamento já marcado = 409 `bloqueio_com_agendamentos` e feriado em dia com agendamento = 409 `feriado_com_agendamentos`
+(a carga dos nacionais pula essas datas): bloqueio e marcação simultâneos nunca passam os dois. O nome do feriado não
+aceita caractere de controle (API e CHECK). Toda alteração audita no escopo `schedule_config` (só ids, contagens e códigos). O importador
 aplica as mesmas regras na simulação (divergência de aviso com o mesmo código).
 
 ### 3a. Limite por usuário e alerta de anomalia (R5 do parecer PR #57)

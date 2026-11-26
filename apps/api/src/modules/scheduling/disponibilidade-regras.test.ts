@@ -131,6 +131,10 @@ describe('validação da configuração', () => {
 
   it('feriado: data válida e nome até 60; ano entre 2024 e 2100 (número no corpo, texto na query)', () => {
     expect(validarNovoFeriado({ data: '2030-01-20', nome: 'Padroeiro' })).toEqual({ data: '2030-01-20', nome: 'Padroeiro' });
+    // Caracteres de controle no nome (recomendação do Guardião no #244): recusados.
+    for (const nome of ['Padro\u0007eiro', 'Padro\neiro', 'Padro\teiro', 'Padro\u0085eiro', 'Padro eiro']) {
+      expect(() => validarNovoFeriado({ data: '2030-01-20', nome })).toThrow();
+    }
     expect(() => validarNovoFeriado({ data: '2030-01-20', nome: 'x'.repeat(61) })).toThrow();
     expect(validarAno({ ano: 2030 })).toBe(2030);
     expect(validarAno({ ano: '2030' })).toBe(2030);

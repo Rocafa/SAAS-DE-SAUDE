@@ -386,3 +386,98 @@ describe('banco: nada se apaga e a trilha registra a configuração', () => {
     expect(n?.n).toBe(0);
   });
 });
+
+describe('concorrência e conflito com o que já está marcado (#244)', () => {
+  type Resp = { status: number; body: unknown };
+  const codigo = (r: Resp) => (r.body as { codigo?: string }).codigo;
+
+  it('bloqueio ou feriado sobre agendamento já marcado: 409 (remarque ou cancele antes)', async () => {
+    const ag = await api
+      .http()
+      .post('/agendamentos')
+      .set(cab(recepA))
+      .send({ pacienteId: pacienteA, profissionalId: outroProfissionalA, tipoId: tipoA, data: '2030-07-15', hora: '10:00' });
+    expect(ag.status, JSON.stringify(ag.body)).toBe(201);
+    for (const corpo of [
+      { dataInicio: '2030-07-15', horaInicio: '10:30', dataFim: '2030-07-15', horaFim: '11:00', motivo: 'reuniao' },
+      { profissionalId: outroProfissionalA, dataInicio: '2030-07-15', dataFim: '2030-07-15', motivo: 'ferias' },
+    ]) {
+      const b = await api.http().post('/agenda/bloqueios').set(cab(adminA)).send(corpo);
+      expect(b.status).toBe(409);
+      expect(codigo(b)).toBe('bloqueio_com_agendamentos');
+    }
+    // Bloqueio de OUTRO profissional no mesmo horário passa.
+    const outro = await api
+      .http()
+      .post('/agenda/bloqueios')
+      .set(cab(adminA))
+      .send({ profissionalId: profissionalA, dataInicio: '2030-07-15', dataFim: '2030-07-15', motivo: 'congresso' });
+    expect(outro.status, JSON.stringify(outro.body)).toBe(201);
+    const f = await api.http().post('/agenda/feriados').set(cab(adminA)).send({ data: '2030-07-15', nome: 'Feriado ficticio' });
+    expect(f.status).toBe(409);
+    expect(codigo(f)).toBe('feriado_com_agendamentos');
+  });
+
+  it('bloqueio (da clínica ou do profissional) e marcação ao mesmo tempo: nunca passam os dois', async () => {
+    for (let i = 0; i < 8; i++) {
+      const data = `2030-08-${String(i + 1).padStart(2, '0')}`;
+      const bloqueio =
+        i % 2 === 0
+          ? { dataInicio: data, horaInicio: '08:00', dataFim: data, horaFim: '09:00', motivo: 'manutencao' }
+          : { profissionalId: outroProfissionalA, dataInicio: data, horaInicio: '08:00', dataFim: data, horaFim: '09:00', motivo: 'reuniao' };
+      const [b, m] = (await Promise.all([
+        api.http().post('/agenda/bloqueios').set(cab(adminA)).send(bloqueio),
+        api
+          .http()
+          .post('/agendamentos')
+          .set(cab(recepA))
+          .send({ pacienteId: pacienteA, profissionalId: outroProfissionalA, tipoId: tipoA, data, hora: '08:10' }),
+      ])) as [Resp, Resp];
+      const passaram = [b.status, m.status].filter((s) => s === 201).length;
+      expect(passaram, `${data}: bloqueio ${b.status} ${JSON.stringify(b.body)} / marcação ${m.status} ${JSON.stringify(m.body)}`).toBe(1);
+      if (b.status === 201) expect(codigo(m)).toBe('horario_bloqueado');
+      else expect(codigo(b)).toBe('bloqueio_com_agendamentos');
+    }
+    // E no banco: nenhum bloqueio vigente se sobrepõe a agendamento que ocupa vaga do mesmo profissional (ou da clínica).
+    const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n FROM schedule_blocks b JOIN appointments a
+          ON a.tenant_id = b.tenant_id AND (b.professional_id IS NULL OR b.professional_id = a.professional_id)
+         AND a.starts_at < b.ends_at AND a.ends_at > b.starts_at
+         AND a.status IN ('scheduled', 'confirmed', 'checked_in', 'in_progress', 'completed')
+         WHERE b.removed_at IS NULL`),
+    );
+    expect(Number([...linhas][0]?.n)).toBe(0);
+  });
+
+  it('feriado e marcação ao mesmo tempo: nunca passam os dois', async () => {
+    for (let i = 0; i < 4; i++) {
+      const data = `2030-09-${String(i + 10).padStart(2, '0')}`;
+      const [f, m] = (await Promise.all([
+        api.http().post('/agenda/feriados').set(cab(adminA)).send({ data, nome: 'Feriado ficticio concorrente' }),
+        api
+          .http()
+          .post('/agendamentos')
+          .set(cab(recepA))
+          .send({ pacienteId: pacienteA, profissionalId: outroProfissionalA, tipoId: tipoA, data, hora: '15:00' }),
+      ])) as [Resp, Resp];
+      expect([f.status, m.status].filter((s) => s === 201).length, `${data}: ${JSON.stringify([f.body, m.body])}`).toBe(1);
+      if (f.status === 201) expect(codigo(m)).toBe('feriado');
+      else expect(codigo(f)).toBe('feriado_com_agendamentos');
+    }
+  });
+
+  it('nome do feriado com caractere de controle: 400 na API e recusado pelo CHECK no banco', async () => {
+    const r = await api.http().post('/agenda/feriados').set(cab(adminA)).send({ data: '2030-10-01', nome: 'Feriado\u0007ficticio' });
+    expect(r.status).toBe(400);
+    const codigos = await sqlstate(
+      withTenant(
+        api.db.db,
+        clinicaA,
+        (tx) => tx.insert(clinicHolidays).values({ tenantId: clinicaA, holidayDate: '2030-10-01', name: 'Feriado\nficticio', source: 'clinica', createdBy: adminA.userId }),
+        adminA.userId,
+      ),
+    );
+    expect(codigos).toContain('23514');
+  });
+});

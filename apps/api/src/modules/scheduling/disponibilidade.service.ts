@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditAction, type RequestContext } from '@plataforma/shared';
-import { and, asc, eq, gt, gte, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, isNull, lt, lte, or, type SQL } from 'drizzle-orm';
 import { ConflitoError, NaoEncontradoError } from '../../common/erros-dominio';
 import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica';
 import { clinicHolidays, professionals, professionalSchedules, scheduleBlocks, type ScheduleBlockReason } from '../../db/schema';
@@ -9,7 +9,7 @@ import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import { janelaDeDias, noFusoDaClinica, paraInstante } from './agenda-regras';
 import { feriadosNacionais, problemaNasJanelas, type JanelaDaGrade } from './disponibilidade-regras';
-import { janelasDoProfissional } from './disponibilidade';
+import { agendamentosNoIntervalo, janelasDoProfissional, travarAgendaDaClinica, travarAgendaDoProfissional } from './disponibilidade';
 import type { FiltroBloqueios, NovoBloqueio } from './disponibilidade.validation';
 
 export interface BloqueioDto {
@@ -31,14 +31,6 @@ export interface FeriadoDto {
   readonly data: string;
   readonly nome: string;
   readonly origem: 'nacional' | 'clinica';
-}
-
-/**
- * Mesma trava da marcação (SchedulingService.travarAgenda): trocar a grade ou bloquear o profissional não corre em
- * paralelo com uma marcação dele. Ordem: agenda -> audit_chain, como na marcação.
- */
-async function travarAgendaDoProfissional(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`agenda:${ctx.tenantId}:${profissionalId}`}, 0))`);
 }
 
 /** Escopo da trilha: configuração da agenda (sem dado de paciente; só ids, contagens e códigos). */
@@ -151,9 +143,16 @@ export class DisponibilidadeService {
     if (fim.getTime() <= inicio.getTime()) throw new ConflitoError('intervalo_invalido');
     if (fim.getTime() - inicio.getTime() > 366 * DIA_MS) throw new ConflitoError('intervalo_longo_demais');
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      // Sob a trava (do profissional, ou a exclusiva da clínica): bloqueio e marcação simultâneos não passam os dois.
       if (dados.profissionalId) {
         await this.profissionalDaClinica(tx, ctx, dados.profissionalId);
         await travarAgendaDoProfissional(tx, ctx, dados.profissionalId);
+      } else {
+        await travarAgendaDaClinica(tx, ctx, 'exclusiva');
+      }
+      // Agendamento já marcado no intervalo: remarque ou cancele antes (nada fica marcado dentro de um bloqueio).
+      if ((await agendamentosNoIntervalo(tx, ctx, dados.profissionalId ?? null, inicio, fim)) > 0) {
+        throw new ConflitoError('bloqueio_com_agendamentos');
       }
       const [b] = await tx
         .insert(scheduleBlocks)
@@ -215,7 +214,9 @@ export class DisponibilidadeService {
 
   criarFeriado(ctx: RequestContext, dados: { data: string; nome: string }): Promise<FeriadoDto> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      await travarAgendaDaClinica(tx, ctx, 'exclusiva');
       if (await this.feriadoVigente(tx, ctx, dados.data)) throw new ConflitoError('feriado_ja_cadastrado');
+      if (await this.temAgendamentoNoDia(tx, ctx, dados.data)) throw new ConflitoError('feriado_com_agendamentos');
       const [f] = await tx
         .insert(clinicHolidays)
         .values({ tenantId: ctx.tenantId, holidayDate: dados.data, name: dados.nome, source: 'clinica', createdBy: ctx.userId })
@@ -230,18 +231,28 @@ export class DisponibilidadeService {
     });
   }
 
-  /** Pré-carrega os feriados nacionais do ano (pula as datas que já têm feriado vigente). Idempotente. */
+  /**
+   * Pré-carrega os feriados nacionais do ano. Idempotente: pula as datas que já têm feriado vigente. Pula também (e
+   * conta em `skipped_with_appointments` na trilha) as datas com agendamento marcado: a clínica remarca e carrega de novo.
+   */
   carregarFeriadosNacionais(ctx: RequestContext, ano: number): Promise<FeriadoDto[]> {
     return escreverNaClinica(this.db, ctx, async (tx) => {
+      await travarAgendaDaClinica(tx, ctx, 'exclusiva');
       let criados = 0;
+      let comAgendamentos = 0;
       for (const n of feriadosNacionais(ano)) {
         if (await this.feriadoVigente(tx, ctx, n.data)) continue;
+        if (await this.temAgendamentoNoDia(tx, ctx, n.data)) {
+          comAgendamentos++;
+          continue;
+        }
         await tx
           .insert(clinicHolidays)
           .values({ tenantId: ctx.tenantId, holidayDate: n.data, name: n.nome, source: 'nacional', createdBy: ctx.userId });
         criados++;
       }
-      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: SCOPE, metadata: { op: 'feriados_nacionais', year: ano, created: criados } });
+      await recordAudit(tx, ctx, { action: AuditAction.Create, scope: SCOPE, metadata: { op: 'feriados_nacionais', year: ano, created: criados, skipped_with_appointments: comAgendamentos },
+      });
       const linhas = await tx
         .select()
         .from(clinicHolidays)
@@ -268,6 +279,12 @@ export class DisponibilidadeService {
       if (!f) throw new NaoEncontradoError();
       await recordAudit(tx, ctx, { action: AuditAction.Update, scope: SCOPE, metadata: { op: 'feriado_removido', holiday_id: id } });
     });
+  }
+
+  /** Há agendamento ocupando vaga na data (fuso da clínica), de qualquer profissional? Chamar sob a trava exclusiva. */
+  private async temAgendamentoNoDia(tx: TenantTx, ctx: RequestContext, data: string): Promise<boolean> {
+    const { inicio, fim } = janelaDeDias(data, data);
+    return (await agendamentosNoIntervalo(tx, ctx, null, inicio, fim)) > 0;
   }
 
   private async feriadoVigente(tx: TenantTx, ctx: RequestContext, data: string): Promise<boolean> {

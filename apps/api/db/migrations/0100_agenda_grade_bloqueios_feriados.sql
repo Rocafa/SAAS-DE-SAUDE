@@ -91,7 +91,8 @@ CREATE TABLE clinic_holidays (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id    uuid NOT NULL REFERENCES tenants (id),
   holiday_date date NOT NULL,
-  name         text NOT NULL CONSTRAINT clinic_holidays_name_check CHECK (length(name) BETWEEN 1 AND 60),
+  -- Nome do feriado: curto, sem caracteres de controle (recomendação do Guardião no #244; a API também recusa).
+  name         text NOT NULL CONSTRAINT clinic_holidays_name_check CHECK (length(name) BETWEEN 1 AND 60 AND name !~ '[[:cntrl:]]'),
   source       text NOT NULL CONSTRAINT clinic_holidays_source_check CHECK (source IN ('nacional', 'clinica')),
   created_by   uuid NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),

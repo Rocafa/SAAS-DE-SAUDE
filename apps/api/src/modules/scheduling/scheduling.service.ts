@@ -38,7 +38,7 @@ import {
   type NovoProfissional,
   type NovoTipoAtendimento,
 } from './scheduling.validation';
-import { motivoDeIndisponibilidade } from './disponibilidade';
+import { motivoDeIndisponibilidade, travarAgendaDoProfissional } from './disponibilidade';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { avisarAdminsDeAnomalia, avisarAreaSensivelDesmarcada } from '../records/avisos';
 
@@ -482,7 +482,8 @@ export class SchedulingService {
    * nenhum caminho toma audit_chain antes desta, então não há ciclo.
    */
   private async travarAgenda(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`agenda:${ctx.tenantId}:${profissionalId}`}, 0))`);
+    // 0100: a da clínica (compartilhada) antes da do profissional; bloqueio da clínica e feriado pegam a exclusiva.
+    await travarAgendaDoProfissional(tx, ctx, profissionalId);
   }
 
   private async travarAgendamento(tx: TenantTx, ctx: RequestContext, id: string) {
