@@ -55,6 +55,8 @@ export interface AgendamentoDto {
   readonly fim: string;
   readonly status: StatusFront;
   readonly encaixe: boolean;
+  /** Série de sessões recorrentes (0103, HU-AGD-008); ausente no agendamento avulso. */
+  readonly serieId?: string;
 }
 
 export interface ProfissionalDto {
@@ -79,7 +81,7 @@ const DIA_MS = 86_400_000;
 /** Janela de atendimento e limiar do alerta de autoagendamento (provida pelo SchedulingModule). */
 export const JANELA_DE_ATENDIMENTO = Symbol('JANELA_DE_ATENDIMENTO');
 
-function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
+export function agendamentoParaDto(a: typeof appointments.$inferSelect): AgendamentoDto {
   const { data, hora } = noFusoDaClinica(a.startsAt);
   return {
     id: a.id,
@@ -93,6 +95,7 @@ function paraDto(a: typeof appointments.$inferSelect): AgendamentoDto {
     fim: a.endsAt.toISOString(),
     status: statusParaFront(a.status),
     encaixe: a.isWalkIn,
+    ...(a.seriesId ? { serieId: a.seriesId } : {}),
   };
 }
 
@@ -128,7 +131,7 @@ export class SchedulingService {
         .orderBy(asc(appointments.startsAt), asc(appointments.id))
         .limit(MAXIMO_AGENDAMENTOS + 1);
       const truncado = linhas.length > MAXIMO_AGENDAMENTOS;
-      const itens = linhas.slice(0, MAXIMO_AGENDAMENTOS).map(paraDto);
+      const itens = linhas.slice(0, MAXIMO_AGENDAMENTOS).map(agendamentoParaDto);
       await recordAudit(tx, ctx, {
         action: AuditAction.Read,
         scope: SCOPE,
@@ -210,7 +213,7 @@ export class SchedulingService {
       },
     });
     if (!importBatchId) await this.alertarVinculoCruzado(tx, ctx, linha.id, profissional, 'create');
-    return paraDto(linha);
+    return agendamentoParaDto(linha);
   }
 
   /**
@@ -472,9 +475,10 @@ export class SchedulingService {
   /**
    * Serializa marcações do mesmo profissional (duas recepções no mesmo horário não passam as duas
    * da capacidade). Ordem das travas: agenda -> audit_chain (o INSERT da auditoria vem depois);
-   * nenhum caminho toma audit_chain antes desta, então não há ciclo.
+   * nenhum caminho toma audit_chain antes desta, então não há ciclo. Pública para a série (series.service.ts), que
+   * marca vários horários do mesmo profissional sob a mesma trava.
    */
-  private async travarAgenda(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
+  async travarAgenda(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`agenda:${ctx.tenantId}:${profissionalId}`}, 0))`);
   }
 

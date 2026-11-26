@@ -40,6 +40,7 @@ import { exportarPortal, type ExportedPortal, type PortalCounts } from '../porta
 import { exportarResponsaveis, type ExportedGuardians, type GuardiansCounts } from '../patients/guardians-export';
 import { exportarImportacoes, type ExportedImports, type ImportCounts } from '../imports/import-export';
 import { exportarWhatsapp, type ExportedWhatsapp, type WhatsappCounts } from '../messaging/whatsapp-export';
+import { exportarSeries, type ExportedAppointmentSeries } from '../scheduling/series-export';
 import { guideFieldRef, type GuideEncryptedColumn } from '../insurance/guide-fields';
 import { patientFieldRef, type PatientEncryptedColumn } from '../patients/patient-fields';
 import {
@@ -129,8 +130,12 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
+ * 1.27.0: (1.25.0 é dos PRs #243/#244 e 1.26.0 do #245) `appointmentSeries` (migração 0103, HU-AGD-008): séries de
+ *        sessões recorrentes — regra (dias, horário, duração, intervalo, data inicial e sessões ou data final), pacote
+ *        e cancelamento "a partir de" —, com a contagem em `manifest.counts.appointmentSeries`, e
+ *        `appointments[].seriesId` (a série que gerou o agendamento; null no avulso).
  */
-export const EXPORT_SCHEMA_VERSION = '1.24.0';
+export const EXPORT_SCHEMA_VERSION = '1.27.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 
@@ -146,6 +151,8 @@ export const EXPORTED_TABLES = [
   'appointment_types',
   'appointments',
   'appointment_reschedules',
+  // Sessões recorrentes (0103): em data.appointmentSeries.
+  'appointment_series',
   'insurers',
   'insurance_guides',
   'guide_sessions',
@@ -258,6 +265,8 @@ export interface ExportManifest {
     /** Notas privadas que existem mas ficaram FORA (sem decisão do autor ou descartadas). Só a contagem. */
     readonly privateNotesWithheld: number;
     readonly appointmentReschedules: number;
+    /** Séries de sessões recorrentes (0103). */
+    readonly appointmentSeries: number;
     readonly legalHolds: number;
     readonly noteCustodies: number;
     /** Financeiro (0018), por tabela. */
@@ -390,6 +399,8 @@ export interface ExportedAppointment {
   readonly rescheduleLocked: boolean;
   /** Lote de importação que criou o agendamento (0026); null se marcado de outro modo. */
   readonly importBatchId: string | null;
+  /** Série de sessões recorrentes que gerou o agendamento (0103); null no avulso. */
+  readonly seriesId: string | null;
 }
 
 /** Histórico append-only de remarcações (0014): de -> para, quem e quando. */
@@ -625,6 +636,8 @@ export interface TenantExportDocument {
     readonly clinicalAddenda: readonly ExportedClinicalAddendum[];
     readonly privateNotes: readonly ExportedPrivateNote[];
     readonly appointmentReschedules: readonly ExportedAppointmentReschedule[];
+    /** Séries de sessões recorrentes (0103). */
+    readonly appointmentSeries: readonly ExportedAppointmentSeries[];
     readonly legalHolds: readonly ExportedLegalHold[];
     readonly noteCustodies: readonly ExportedNoteCustody[];
     /** Financeiro (0018). */
@@ -898,6 +911,7 @@ export async function exportInTransaction(
     return options.cipher;
   });
   const importacoes = await exportarImportacoes(tx, ctx.tenantId);
+  const series = await exportarSeries(tx, ctx.tenantId);
   const whatsapp = await exportarWhatsapp(tx, ctx.tenantId, () => {
     if (!options.cipher) throw new ExportCipherMissingError();
     return options.cipher;
@@ -965,6 +979,7 @@ export async function exportInTransaction(
     rescheduledBy: a.rescheduledBy,
     rescheduleLocked: a.rescheduleLocked,
     importBatchId: a.importBatchId,
+    seriesId: a.seriesId,
   }));
   const exportedReschedules: ExportedAppointmentReschedule[] = rescheduleRows.map((r) => ({
     id: r.id,
@@ -1213,6 +1228,7 @@ export async function exportInTransaction(
       privateNotes: exportedNotes.length,
       privateNotesWithheld: noteRows.length - exportedNotes.length,
       appointmentReschedules: exportedReschedules.length,
+      appointmentSeries: series.length,
       legalHolds: exportedHolds.length,
       noteCustodies: exportedCustodies.length,
       finance: financeiro.counts,
@@ -1301,6 +1317,7 @@ export async function exportInTransaction(
         clinicalAddenda: exportedAddenda,
         privateNotes: exportedNotes,
         appointmentReschedules: exportedReschedules,
+        appointmentSeries: series,
         legalHolds: exportedHolds,
         noteCustodies: exportedCustodies,
         finance: financeiro.data,

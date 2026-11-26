@@ -43,6 +43,8 @@ const TABELAS_DA_APLICACAO: Readonly<Record<string, { readonly privilegios: read
   professionals: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointment_types: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   appointments: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
+  // Sessões recorrentes (0103): sem DELETE/TRUNCATE — a série se cancela a partir de uma data, nunca se apaga.
+  appointment_series: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   // Guias e pacotes (migração 0011): sem DELETE/TRUNCATE — cancelar/estornar, nunca apagar.
   insurers: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
   insurance_guides: { privilegios: ['SELECT', 'INSERT', 'UPDATE'] },
@@ -459,6 +461,8 @@ describe('guarda de schema: portal do paciente (0027)', () => {
       'adolescent_confidentiality_requests',
       // 0059: a autorização de acesso do suporte nunca é vista pela sessão do portal.
       'support_access_grants',
+      // 0103: a série de sessões é da recepção; o portal vê só os próprios agendamentos.
+      'appointment_series',
       // WhatsApp (0032): adicionadas no merge do #69 (abaixo, em PORTAL_FORA_WHATSAPP).
       ...PORTAL_FORA_WHATSAPP,
     ];

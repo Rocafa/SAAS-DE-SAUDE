@@ -98,6 +98,8 @@ export const AUDITADAS: readonly string[] = [
   'POST /prontuario/pacientes/:id/retencao-legal/retirada/aprovacao',
   'POST /prontuario/profissionais/:id/desligamento',
   'POST /responsaveis/descarte',
+  'POST /series',
+  'POST /series/:id/cancelar',
   'POST /suporte/autorizacoes',
   'POST /suporte/autorizacoes/:id/revogar',
   'POST /tipos-atendimento',
@@ -185,6 +187,8 @@ export const AUDITADAS_LEITURA: readonly string[] = [
   'GET /portal/solicitacoes',
   'GET /portal/vinculos',
   'GET /prontuario/configuracao',
+  // Série (HU-AGD-008, 0103): revela vínculo paciente-profissional (como a agenda), então a leitura é auditada.
+  'GET /series',
   'GET /suporte/autorizacoes',
   'GET /whatsapp/envios',
 ];

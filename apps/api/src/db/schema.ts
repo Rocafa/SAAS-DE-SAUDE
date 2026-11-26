@@ -143,6 +143,38 @@ export const appointments = pgTable('appointments', {
   rescheduleLocked: boolean('reschedule_locked').notNull().default(false),
   /** Migração 0026 (V1 do importador): lote que criou o agendamento; gravado só no INSERT, imutável. */
   importBatchId: uuid('import_batch_id'),
+  /** Migração 0103 (HU-AGD-008): série que gerou o agendamento; gravado só no INSERT, imutável. */
+  seriesId: uuid('series_id'),
+});
+
+/**
+ * Série de sessões recorrentes (migração 0103, HU-AGD-008): a regra (dias da semana, horário no fuso da clínica,
+ * duração, intervalo em semanas, data inicial e número de sessões OU data final), com pacote opcional. Não se apaga:
+ * cancela-se a partir de uma data (`cancelledFrom`, que só recua).
+ */
+export const appointmentSeries = pgTable('appointment_series', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  patientId: uuid('patient_id').notNull(),
+  professionalId: uuid('professional_id').notNull(),
+  appointmentTypeId: uuid('appointment_type_id').notNull(),
+  packageId: uuid('package_id'),
+  /** 0 = domingo … 6 = sábado; ao menos um. */
+  weekdays: smallint('weekdays').array().notNull(),
+  intervalWeeks: smallint('interval_weeks').notNull().default(1),
+  /** HH:MM no fuso da clínica. */
+  startTime: text('start_time').notNull(),
+  durationMinutes: smallint('duration_minutes').notNull(),
+  startsOn: date('starts_on', { mode: 'string' }).notNull(),
+  sessions: smallint('sessions'),
+  endsOn: date('ends_on', { mode: 'string' }),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  cancelledFrom: date('cancelled_from', { mode: 'string' }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  cancelledBy: uuid('cancelled_by'),
 });
 
 /**
