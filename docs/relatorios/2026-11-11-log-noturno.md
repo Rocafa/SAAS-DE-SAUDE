@@ -968,3 +968,5 @@ destravando a auditoria de todos.
   Trivy (#242). Enviado ao Guardião.
 - #243 e #244 sobem a exportação para 1.25.0: quem entrar depois passa para 1.26.0.
 - Os agentes da lista de espera e da linha do tempo pararam no limite de uso; retomados.
+- **Guardião aprova o #244** (motivo do bloqueio é lista fechada, sem código de saúde). Pedido ao agente: trava de
+  agenda também no bloqueio (corrida com marcação simultânea) e recusa de caractere de controle no nome do feriado.
