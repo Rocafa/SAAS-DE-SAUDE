@@ -6,6 +6,8 @@
   distroless de runtime, e o job de build falha em todos os PRs. O #242 troca o digest pela imagem republicada; CI toda
   verde. Depois dele, a ordem de 24/11 abaixo continua valendo.
 - Atualizei com a `main` em 25/11 o #210, #189, #116, #155, #194, #153 e #154, antes da tua aprovação, para ela não cair.
+- Dependabot em 26/11: mesclei o #248 (pin do CodeQL 4.39.4, SHA conferido). O #249 (grupo novo, substitui o #236)
+  fica em espera: traz better-auth e versões com menos de 14 dias.
 
 ## Atualização de 24/11/2026
 
