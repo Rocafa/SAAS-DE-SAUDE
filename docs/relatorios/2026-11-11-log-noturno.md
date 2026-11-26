@@ -990,3 +990,6 @@ destravando a auditoria de todos.
   no lugar de `perfis.length > 0`; RIPD com a omissão do nome do profissional sensível). Pedidos ao agente.
 - **Guardião retira o veto e aprova o #245** (lista de espera): retenção legal respeitada no job, leitura auditada por
   item. Condição para o futuro PR do front: aviso no campo de observação.
+- Disparada a HU-PAC-003 (deduplicação de pacientes): detecção por índice cego de CPF e nome+nascimento na mesma
+  clínica, criação com confirmação auditada e, se não for arriscado, mescla atômica só do admin (migração 0104 se
+  precisar). Se exigir mudar a derivação de chave revisada pelo Guardião, o agente para e descreve.
