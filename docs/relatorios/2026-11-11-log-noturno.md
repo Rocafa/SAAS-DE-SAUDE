@@ -959,3 +959,12 @@ destravando a auditoria de todos.
   rooms no inventário de dados.
 - Disparada a HU-PAC-007: `GET /pacientes/:id/linha-do-tempo` na API, filtrada por perfil e vínculo de cuidado,
   sem conteúdo clínico e com psicologia escondida, leitura auditada. Resolve também a ficha do #222 no modo http.
+
+### 26/11 — depois do limite de uso
+
+- **#244 aberto (grade, bloqueios e feriados)**: migração 0100, 409 `feriado`/`horario_bloqueado`/`fora_da_grade` na
+  marcação e remarcação (encaixe ignora só a grade; profissional sem grade continua livre), permissão nova
+  `agenda:configurar`, carga de feriados nacionais, importador com as mesmas regras, exportação 1.25.0. CI verde exceto
+  Trivy (#242). Enviado ao Guardião.
+- #243 e #244 sobem a exportação para 1.25.0: quem entrar depois passa para 1.26.0.
+- Os agentes da lista de espera e da linha do tempo pararam no limite de uso; retomados.
