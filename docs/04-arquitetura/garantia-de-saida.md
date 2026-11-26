@@ -49,7 +49,7 @@ RBAC/MFA continuam valendo à parte.**
   Desde a 1.24.0 (R12 do parecer do #123): `manifest.compartments` separa o prontuário por compartimento
   (atendimentos, versões, adendos e ids). A psicologia sai **inteira** e marcada: a exportação não usa
   `mfaEm`, então a regra de MFA recente da tela nunca oculta nada do pacote.
-  Desde a 1.25.0 (migração 0102, HU-AGD-009): `waitlist` (lista de espera com preferências, observação
+  Desde a 1.26.0 (migração 0102, HU-AGD-009): `waitlist` (lista de espera com preferências, observação
   **decifrada**, entrada e saída), inclusive o item que saiu e ainda não passou pela retenção de 30 dias.
   Desde a 1.8.0 (migração 0017, R2/R12 do parecer PR #63): `legalHolds` (referência e motivo da
   retirada decifrados) e `noteCustodies`; `clinical_notices` fica fora (aviso interno, sem dado de paciente).

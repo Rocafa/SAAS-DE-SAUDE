@@ -130,11 +130,11 @@ export const EXPORT_FORMAT = 'plataforma-saude/tenant-export';
  * 1.24.0: `manifest.compartments` (R12 do parecer do #123, G2): o prontuário separado por compartimento, com
  *        contagens e ids dos atendimentos. A psicologia sai inteira e marcada, nunca oculta pela regra de tela
  *        (a exportação não usa `mfaEm`). Compartimento novo entra pelo enum, sem decisão à parte.
- * 1.25.0: `waitlist` (migração 0102, HU-AGD-009): lista de espera — preferências estruturadas, observação decifrada,
+ * 1.26.0: (1.25.0 é dos PRs #243/#244) `waitlist` (migração 0102, HU-AGD-009): lista de espera — preferências estruturadas, observação decifrada,
  *        entrada, saída (motivo e agendamento) — com a contagem em `manifest.counts.waitlist`. Sai também o item que
  *        saiu da lista e ainda não passou pela retenção de 30 dias.
  */
-export const EXPORT_SCHEMA_VERSION = '1.25.0';
+export const EXPORT_SCHEMA_VERSION = '1.26.0';
 export const EXPORT_AUDIT_SCOPE = 'tenant.full_export';
 export const EXPORT_FILES = { json: 'export.json', patientsCsv: 'pacientes.csv', auditJsonl: 'auditoria.jsonl' } as const;
 

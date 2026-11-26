@@ -212,7 +212,7 @@ O item volta no formato do `ItemEspera` do front (`id`, `pacienteId`, `preferenc
 
 - **Minimização.** A observação é **administrativa** ("avisar pelo WhatsApp", "só depois das 15h") e **nunca** leva dado clínico (queixa, diagnóstico, medicação): o motivo do atendimento é do prontuário. Limite de 120 caracteres, sem quebra de linha, gravada **só cifrada** (FieldCipher da clínica, AAD `waitlist_entries.note`); nunca vai para a trilha nem para log.
 - **Auditoria** (escopo `waitlist`, mesma transação): leitura (`count`, `own_only`), entrada (`waitlist_id`, `patient_id`, `professional_id`, nº de dias, período, `has_note`), saída (`op: remove`, `reason`), volta (`op: restore`), marcação (`op: schedule`, `appointment_id`, além da trilha da agenda) e retenção (`op: purge_run`, `purged`).
-- **Retenção.** O item que saiu da lista é apagado **30 dias** depois, e o de paciente inativado há mais de 30 dias também, pelo job `lista-espera-retencao` (§14; `app_waitlist_purge_run`, SECURITY DEFINER, prazo no relógio do banco). Até lá, sai na exportação (G2 1.25.0, `data.waitlist`).
+- **Retenção.** O item que saiu da lista é apagado **30 dias** depois, e o de paciente inativado há mais de 30 dias também, pelo job `lista-espera-retencao` (§14; `app_waitlist_purge_run`, SECURITY DEFINER, prazo no relógio do banco). Até lá, sai na exportação (G2 1.26.0, `data.waitlist`).
 - Teste: `test/lista-espera.rls.test.ts` (isolamento, perfis, inativo, atomicidade, retirada, retenção).
 
 ## 6. Como verificar localmente

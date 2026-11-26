@@ -6,7 +6,7 @@ import type { FieldCipher } from '../crypto/field-cipher';
 import { observacaoRef } from './lista-espera-regras';
 
 /**
- * Item da lista de espera no pacote da garantia de saída (G2, 1.25.0; migração 0102): os que estão na lista e os que
+ * Item da lista de espera no pacote da garantia de saída (G2, 1.26.0; migração 0102): os que estão na lista e os que
  * saíram e ainda não passaram pela retenção de 30 dias. A observação sai decifrada para a própria clínica.
  */
 export interface ExportedWaitlistEntry {

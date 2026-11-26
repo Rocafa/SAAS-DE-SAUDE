@@ -186,6 +186,7 @@ beforeAll(async () => {
     'GET /convenios': c('/convenios'),
     'GET /convenios/:id/relatorio': c(`/convenios/${convenioId}/relatorio?de=2030-05-01&ate=2030-05-30`),
     'GET /custodias/:id/notas': { s: psiSubst, url: `/custodias/${custodiaId}/notas`, ator: psiSubst.userId },
+    'GET /espera': c('/espera'),
     'GET /financeiro/caixas': c('/financeiro/caixas'),
     'GET /financeiro/caixas/:id': c(`/financeiro/caixas/${id(caixa)}`),
     'GET /financeiro/cobrancas/:id': c(`/financeiro/cobrancas/${cobrancaId}`),
