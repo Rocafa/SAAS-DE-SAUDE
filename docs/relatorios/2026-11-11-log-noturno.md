@@ -974,3 +974,7 @@ destravando a auditoria de todos.
   remoção por marcação), rotas de listar, incluir, remover, devolver e marcar (atômico), profissional só lê os seus,
   financeiro sem acesso, tudo auditado sem a observação, job de retenção de 30 dias com alarme do DPO, exportação
   1.26.0. CI verde exceto Trivy (#242). Enviado ao Guardião.
+- **Veto do Guardião no #245**: o job de retenção da lista de espera apagaria itens de paciente sob retenção legal
+  (faltava `legal_hold_since IS NULL`, como nas 0031/0034). Correção e teste pedidos ao agente, mais auditoria dos ids
+  lidos. Respostas do Guardião: observação curta cifrada aceita (aviso no campo no PR do front), profissional vê os
+  seus, 30 dias também para os agendados, lista na exportação 1.26.0.
