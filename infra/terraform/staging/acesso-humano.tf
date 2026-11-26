@@ -218,6 +218,9 @@ data "aws_iam_policy_document" "alertas_seguranca" {
         aws_cloudwatch_event_rule.papeis_de_excecao.arn,
         aws_cloudwatch_event_rule.kms_reativacao.arn,
         aws_cloudwatch_event_rule.kms_administracao.arn,
+        # Execução da anonimização pelo suporte (ops-anonimizacao.tf, R-B do #190).
+        aws_cloudwatch_event_rule.ops_anonimizacao_execucao.arn,
+        aws_cloudwatch_event_rule.ops_anonimizacao_override_suspeito.arn,
       ]
     }
   }

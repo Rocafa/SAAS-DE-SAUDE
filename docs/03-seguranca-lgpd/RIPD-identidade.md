@@ -63,7 +63,7 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 ## 5. Procedimentos de suporte (fora da API, com trilha)
 
 1. **Perdeu senha e fator ao mesmo tempo:** nenhum admin resolve sozinho (R1). O suporte confere a identidade (documento **apenas exibido**, nunca copiado nem guardado, e confirmação pelo admin da clínica de origem) e a pessoa recebe um convite **novo**, com **outro e-mail**. O histórico clínico continua no id antigo. O e-mail antigo só é liberado pela disputa (item 3).
-2. **Anonimização a pedido do titular:** o pedido chega ao DPO. O suporte roda `anonimizarConta` (sem rota pública), registra o pedido e guarda a prova (evento e trilha). O atendimento segue o art. 18 (direito à anonimização, inciso IV), com a resposta nos prazos do art. 19.
+2. **Anonimização a pedido do titular (B10):** o pedido chega ao DPO, que confere a identidade e responde ao titular. O suporte roda o comando operacional como tarefa avulsa do ECS (grupo IAM nominal `ops-lgpd` com MFA, duas pessoas, chamado `LGPD-<n>`), sem rota pública, conforme o [runbook](../04-arquitetura/runbook-anonimizacao-pelo-suporte.md). Prazo interno de **15 dias corridos** do recebimento, enquanto a ANPD não regulamentar o art. 18 §5. A resposta diz o que fica e por quê (id da conta para a autoria do prontuário por 20 anos; nome e registro em cada clínica, que é a controladora; eventos do log até 180 dias), e as clínicas com vínculo são avisadas (art. 18 §6).
 3. **Disputa de e-mail (R17):** quando alguém diz que o e-mail da conta é dele, a conta fica **suspensa durante a investigação**. O suporte confere com as clínicas de origem, desativa a conta indevida (sem apagar o histórico), libera o e-mail e registra o resultado na trilha das clínicas envolvidas.
 4. **Sem vínculo em nenhuma clínica e sem senha (R13 do código do 3b-2):** a recuperação pelo admin exige vínculo ativo na clínica dele (R16), então quem foi desligado de todas e perdeu a senha não tem admin que o atenda. Se a pessoa volta a trabalhar numa clínica **antes dos 90 dias**, a conta antiga ainda guarda o e-mail, e o convite para ele pede a senha e o TOTP que ela perdeu: o convite vai para **outro e-mail** e o histórico continua no id antigo (como no item 1). **Depois dos 90 dias**, o expurgo libera o e-mail e o convite para ele cria conta nova. Se a pessoa só precisa exercer um direito do art. 18 sobre a conta antiga, o pedido vai ao DPO pelo procedimento 2.
 5. **Ordem judicial (Marco Civil, art. 22):** o IP fica só em HMAC. O suporte entrega o que há (sessões e eventos do período, com a origem em HMAC). Se a ordem trouxer IPs, o suporte calcula o HMAC de cada um e compara. O IP em claro nunca é guardado.
@@ -78,7 +78,8 @@ A identificação do autor do prontuário (nome e registro profissional) fica na
 | Nenhum token restaura os dois fatores | testes da recuperação (3b-2) |
 | Retenção | job `identidade-expurgo`, com alarme (`jobs.tf`) |
 | Segredos fora do git, com rotação | Terraform (`dados.tf`, `api-ambiente.tf`) e runbook `docs/04-arquitetura/runbook-rotacao-better-auth.md` |
-| Prova do atendimento ao titular | evento `CONTA_ANONIMIZADA` e trilha `account_anonymized` |
+| Prova do atendimento ao titular | evento `CONTA_ANONIMIZADA` (com o chamado e o operador) e trilha `account_anonymized` em cada clínica (ator sistema, com o chamado; nunca o operador) |
+| Atendimento ao titular executável (B10) | `apps/api/src/ops/anonimizar-conta.ts`, testes do comando e da bancada RLS (idempotência, conta inexistente, falha parcial), CloudTrail do `ecs:RunTask` |
 
 ## 6. Conclusão (proposta)
 
