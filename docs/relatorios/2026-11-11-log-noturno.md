@@ -970,3 +970,7 @@ destravando a auditoria de todos.
 - Os agentes da lista de espera e da linha do tempo pararam no limite de uso; retomados.
 - **Guardião aprova o #244** (motivo do bloqueio é lista fechada, sem código de saúde). Pedido ao agente: trava de
   agenda também no bloqueio (corrida com marcação simultânea) e recusa de caractere de controle no nome do feriado.
+- **#245 aberto (lista de espera no backend)**: migração 0102 (observação curta só cifrada, preferências estruturadas,
+  remoção por marcação), rotas de listar, incluir, remover, devolver e marcar (atômico), profissional só lê os seus,
+  financeiro sem acesso, tudo auditado sem a observação, job de retenção de 30 dias com alarme do DPO, exportação
+  1.26.0. CI verde exceto Trivy (#242). Enviado ao Guardião.
