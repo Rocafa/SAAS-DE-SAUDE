@@ -92,6 +92,21 @@ async function envelhecerSaida(id: string, dias: number): Promise<void> {
   }
 }
 
+/** Envelhece a inativação do paciente (papel de MIGRAÇÃO; `inactivated_at` é da API). */
+async function envelhecerInativacao(pacienteId: string, dias: number): Promise<void> {
+  const url = process.env.DATABASE_MIGRATOR_URL;
+  if (!url) throw new Error('DATABASE_MIGRATOR_URL é obrigatória para simular a inativação antiga');
+  const op = postgres(url, { max: 1, onnotice: () => undefined });
+  try {
+    await op.begin(async (t) => {
+      await t`select app_set_tenant(${clinicaA}::uuid)`;
+      await t`update patients set inactivated_at = inactivated_at - make_interval(days => ${dias}) where id = ${pacienteId}::uuid`;
+    });
+  } finally {
+    await op.end({ timeout: 5 });
+  }
+}
+
 beforeAll(async () => {
   api = await subirApi();
   clinicaA = await api.novaClinica();
@@ -296,5 +311,48 @@ describe('lista de espera: retenção (job lista-espera-retencao)', () => {
       tx.select().from(auditLog).where(and(eq(auditLog.scope, 'waitlist'), sql`${auditLog.metadata} ->> 'op' = 'purge_run'`)),
     );
     expect(trilha).toMatchObject({ actorKind: 'sistema' });
+  });
+
+  it('V1 do #245: paciente sob retenção legal não perde o item, nem saído há mais de 30 dias nem inativado', async () => {
+    const retido = await paciente(recepA, 'Paciente Ficticio Espera Retido');
+    const saiu = await colocar(recepA, { pacienteId: retido });
+    const naLista = await colocar(recepA, { pacienteId: retido, profissionalId: profissionalA });
+    expect((await api.http().delete(`/espera/${saiu.id}`).set(cab(recepA))).status).toBe(200);
+    await envelhecerSaida(saiu.id, 31);
+    const retencao = await api.http().put(`/prontuario/pacientes/${retido}/retencao-legal`).set(cab(adminA)).send({ referencia: 'Oficio ficticio da espera QZX8803' });
+    expect(retencao.status, JSON.stringify(retencao.body)).toBe(200);
+    // Inativado há mais de 30 dias também não apaga o item ainda na lista.
+    expect((await api.http().post(`/pacientes/${retido}/inativar`).set(cab(recepA))).status).toBe(200);
+    await envelhecerInativacao(retido, 31);
+
+    await api.app.get(ListaEsperaService).purgarComoSistema(clinicaA);
+    const ids = (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: waitlistEntries.id }).from(waitlistEntries))).map((x) => x.id);
+    expect(ids).toContain(saiu.id);
+    expect(ids).toContain(naLista.id);
+  });
+
+  it('sem retenção legal, o item de paciente inativado há mais de 30 dias é apagado', async () => {
+    const inativo = await paciente(recepA, 'Paciente Ficticia Espera Inativa Antiga');
+    const item = await colocar(recepA, { pacienteId: inativo });
+    expect((await api.http().post(`/pacientes/${inativo}/inativar`).set(cab(recepA))).status).toBe(200);
+    await envelhecerInativacao(inativo, 31);
+    await api.app.get(ListaEsperaService).purgarComoSistema(clinicaA);
+    const ids = (await withTenant(api.db.db, clinicaA, (tx) => tx.select({ id: waitlistEntries.id }).from(waitlistEntries))).map((x) => x.id);
+    expect(ids).not.toContain(item.id);
+  });
+});
+
+describe('lista de espera: leitura auditada por item (recomendação do #245)', () => {
+  it('GET /espera grava o waitlist_id e o patient_id de cada item lido, além do resumo', async () => {
+    const leitor = api.sessao(clinicaA, 'recepcao');
+    const itens = await lista(leitor);
+    expect(itens.length).toBeGreaterThan(0);
+    const linhas = await withTenant(api.db.db, clinicaA, (tx) =>
+      tx.select().from(auditLog).where(and(eq(auditLog.scope, 'waitlist'), eq(auditLog.actorId, leitor.userId), eq(auditLog.action, 'read'))),
+    );
+    const porItem = linhas.map((l) => l.metadata as Record<string, unknown>).filter((m) => m['op'] === 'list_item');
+    expect(porItem.map((m) => m['waitlist_id']).sort()).toEqual(itens.map((i) => i.id).sort());
+    for (const i of itens) expect(porItem).toContainEqual(expect.objectContaining({ waitlist_id: i.id, patient_id: i.pacienteId }));
+    expect(linhas.some((l) => (l.metadata as Record<string, unknown>)['count'] === itens.length)).toBe(true);
   });
 });

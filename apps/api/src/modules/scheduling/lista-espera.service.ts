@@ -99,6 +99,11 @@ export class ListaEsperaService {
         scope: SCOPE,
         metadata: { count: itens.length, own_only: soOsDele, ...(filtro.profissionalId ? { professional_id: filtro.profissionalId } : {}) },
       });
+      // Recomendação do parecer do #245: quem leu QUAL item (e de qual paciente) fica na trilha, uma linha por item
+      // (o metadata só aceita escalares). Só ids; a observação nunca entra.
+      for (const i of itens) {
+        await recordAudit(tx, ctx, { action: AuditAction.Read, scope: SCOPE, metadata: { op: 'list_item', waitlist_id: i.id, patient_id: i.pacienteId } });
+      }
       return { itens, truncado };
     });
   }

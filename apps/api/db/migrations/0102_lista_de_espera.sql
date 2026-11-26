@@ -127,7 +127,8 @@ GRANT SELECT, INSERT, UPDATE ON waitlist_entries TO app_user;
 -- ---------------------------------------------------------------- retenção
 
 -- Apaga, na clínica do contexto, os itens que SAÍRAM da lista há mais de 30 dias e os de paciente INATIVADO há mais de
--- 30 dias (a API já os esconde; relógio do banco, sem parâmetro). O resto da lista não vence. Idempotente; devolve
+-- 30 dias (a API já os esconde; relógio do banco, sem parâmetro), salvo paciente sob retenção legal. O resto da lista
+-- não vence. Idempotente; devolve
 -- quantos apagou (a trilha, só com a contagem, é gravada pela API na mesma transação).
 CREATE FUNCTION app_waitlist_purge_run() RETURNS integer
   LANGUAGE plpgsql
@@ -141,12 +142,16 @@ BEGIN
   IF v_tenant IS NULL THEN
     RAISE EXCEPTION 'retenção da lista de espera exige o contexto de tenant' USING ERRCODE = 'insufficient_privilege';
   END IF;
+  -- V1 do parecer do #245: paciente sob retenção legal (legal_hold_since, 0015) não perde nada, nos DOIS ramos
+  -- (mesma regra das eliminações da 0031/0034).
   DELETE FROM waitlist_entries w
    WHERE w.tenant_id = v_tenant
-     AND ((w.removed_at IS NOT NULL AND w.removed_at < now() - interval '30 days')
-          OR EXISTS (SELECT 1 FROM patients p
-                      WHERE p.tenant_id = w.tenant_id AND p.id = w.patient_id
-                        AND NOT p.active AND p.inactivated_at < now() - interval '30 days'));
+     AND ((w.removed_at IS NOT NULL AND w.removed_at < now() - interval '30 days'
+           AND EXISTS (SELECT 1 FROM patients pa
+                        WHERE pa.tenant_id = w.tenant_id AND pa.id = w.patient_id AND pa.legal_hold_since IS NULL))
+          OR EXISTS (SELECT 1 FROM patients pa
+                      WHERE pa.tenant_id = w.tenant_id AND pa.id = w.patient_id AND pa.legal_hold_since IS NULL
+                        AND NOT pa.active AND pa.inactivated_at < now() - interval '30 days'));
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END;
