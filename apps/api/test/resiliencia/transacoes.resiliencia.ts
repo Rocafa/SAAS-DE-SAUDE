@@ -101,6 +101,24 @@ describe('timeouts por conexão', () => {
       expect(proxima.pacientes).toBe(2);
     }
   });
+
+  it('conexão encerrada no meio da transação: rejeita e nada parcial fica gravado (§3 do bug-postgresjs)', async () => {
+    // Reprodução da §3 de docs/04-arquitetura/bug-postgresjs-3.4.9.md, dentro da aplicação: grava, fica ociosa
+    // além do idle_in_transaction_session_timeout (o servidor mata a sessão) e tenta gravar de novo. O driver
+    // tem de REJEITAR a transação inteira (nunca resolver), e a primeira gravação não pode ter ficado no banco.
+    for (const ociosoMs of [450, 500, 550, 600, 700, 800]) {
+      const antes = await contagens().catch(() => contagens());
+      const err = await erroDe(
+        withTenant(h.db, tenant, async (tx) => {
+          await tx.insert(patients).values({ tenantId: tenant, displayName: 'Paciente Ficticio Parcial A' });
+          await new Promise((r) => setTimeout(r, ociosoMs));
+          await tx.insert(patients).values({ tenantId: tenant, displayName: 'Paciente Ficticio Parcial B' });
+        }),
+      );
+      expect(isTransientDatabaseError(err), `ocioso=${ociosoMs}: ${String(err)}`).toBe(true);
+      expect((await contagens().catch(() => contagens())).pacientes, `ocioso=${ociosoMs}`).toBe(antes.pacientes);
+    }
+  });
 });
 
 describe('rollback de withTenant (nada parcial gravado)', () => {

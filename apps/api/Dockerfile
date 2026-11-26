@@ -25,7 +25,6 @@ WORKDIR /repo
 
 # Só o que define as dependências: muda pouco, então o cache desta camada vale entre builds.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY patches ./patches
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm fetch --frozen-lockfile
 
