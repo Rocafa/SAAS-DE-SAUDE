@@ -993,3 +993,12 @@ destravando a auditoria de todos.
 - Disparada a HU-PAC-003 (deduplicação de pacientes): detecção por índice cego de CPF e nome+nascimento na mesma
   clínica, criação com confirmação auditada e, se não for arriscado, mescla atômica só do admin (migração 0104 se
   precisar). Se exigir mudar a derivação de chave revisada pelo Guardião, o agente para e descreve.
+
+### Checagem de 26/11 16:46 UTC
+
+- **#248 mesclado** (Dependabot, codeql-action 4.39.3 → 4.39.4): o SHA `1bd86f2` confere com a tag oficial v4.39.4;
+  diff só troca os dois pins; checks obrigatórios verdes. Aprovado e mesclado sem `--admin`; MERGED conferido.
+- O Dependabot fechou o #236 e abriu o **#249** (grupo de 20 pacotes). Em espera: traz better-auth 1.7.27 (precisa do
+  Guardião, e vai para PR próprio quando o #237 entrar) e versões com menos de 14 dias.
+- #189 continua aprovado, mas com Build/Trivy vermelho (CVE do `libzstd1`); não mesclado até o #242 entrar.
+- Os outros PRs nossos seguem sem aprovação; os do sócio e as minhas correções (#228–#234) sem mudança desde 24/11.
