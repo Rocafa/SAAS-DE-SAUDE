@@ -120,6 +120,21 @@ Todas exigem sessão. Erros: `400 {message:'Dados inválidos', campos:[...]}` (n
 | `POST /agendamentos/:id/cancelar` | agenda:escrever | `removerAgendamento` | não há exclusão: "remover/desfazer" vira cancelar |
 | `GET /profissionais`, `POST /profissionais` | cadastros:ler / gerir | `listarProfissionais` | `capacidade` 1–20 (AGD-01.5) |
 | `GET /tipos-atendimento`, `POST /tipos-atendimento` | cadastros:ler / gerir | `listarTiposAtendimento` | `minutos` 5–480, `capacidade` 1–20 |
+| `GET /agenda/grade?profissionalId`, `PUT /agenda/grade/:profissionalId` | agenda:ler / agenda:configurar | — | 0100 (HU-AGD-001): `{janelas:[{diaSemana 0–6, inicio, fim, minutos}]}` substitui a grade inteira (vazia limpa); sobreposição = 409 `janelas_sobrepostas` |
+| `GET /agenda/bloqueios?de&ate&profissionalId`, `POST /agenda/bloqueios`, `POST /agenda/bloqueios/:id/remover` | agenda:ler / agenda:configurar | — | 0100 (HU-AGD-003): sem `profissionalId` = clínica inteira; `motivo` de lista fechada (`ferias`, `congresso`, `manutencao`, `reuniao`, `pessoal`, `outro`), nunca texto livre |
+| `GET /agenda/feriados?ano`, `POST /agenda/feriados`, `POST /agenda/feriados/nacionais`, `POST /agenda/feriados/:id/remover` | agenda:ler / agenda:configurar | — | 0100 (HU-AGD-003): um feriado vigente por data; `nacionais` pré-carrega o ano (idempotente) |
+
+**Disponibilidade na marcação e na remarcação (0100).** Antes da capacidade, sob a trava da agenda do profissional:
+feriado vigente da clínica = 409 `feriado`; bloqueio vigente do profissional ou da clínica = 409 `horario_bloqueado`;
+fora de toda janela da grade = 409 `fora_da_grade`. Profissional **sem nenhuma janela** não é restringido pela grade
+(nenhuma clínica fica sem agenda no deploy). **Encaixe ignora a grade** (e a capacidade), mas **não** bloqueio nem
+feriado. `agenda:configurar` = dono e recepção. Nada se apaga (trigger): a grade só desativa; bloqueio e feriado só são
+removidos, uma vez. Travas (#244): a marcação pega a trava da clínica compartilhada e a do profissional exclusiva;
+bloqueio da clínica e feriado pegam a da clínica exclusiva, bloqueio de profissional a dele. Sob a trava, bloqueio sobre
+agendamento já marcado = 409 `bloqueio_com_agendamentos` e feriado em dia com agendamento = 409 `feriado_com_agendamentos`
+(a carga dos nacionais pula essas datas): bloqueio e marcação simultâneos nunca passam os dois. O nome do feriado não
+aceita caractere de controle (API e CHECK). Toda alteração audita no escopo `schedule_config` (só ids, contagens e códigos). O importador
+aplica as mesmas regras na simulação (divergência de aviso com o mesmo código).
 
 ### 3a. Limite por usuário e alerta de anomalia (R5 do parecer PR #57)
 

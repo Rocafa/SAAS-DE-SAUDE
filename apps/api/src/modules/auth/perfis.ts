@@ -40,6 +40,11 @@ export const PERMISSOES = {
   'agenda:escrever': ['admin', 'profissional', 'recepcao'],
   /** Marcar "em atendimento"/"atendido": ato do profissional, não da recepção nem do admin. */
   'agenda:atender': ['profissional'],
+  /**
+   * Configurar a disponibilidade da agenda (0100, HU-AGD-001/003): grade semanal, bloqueios e feriados. Quem cuida da
+   * agenda (dono e recepção). Ler a configuração: quem lê a agenda (`agenda:ler`).
+   */
+  'agenda:configurar': ['admin', 'recepcao'],
   'cadastros:ler': ['admin', 'profissional', 'recepcao', 'financeiro'],
   'cadastros:gerir': ['admin'],
   /** E10 de 04/11: consultar a trilha da clínica (só ids, ações e datas). */

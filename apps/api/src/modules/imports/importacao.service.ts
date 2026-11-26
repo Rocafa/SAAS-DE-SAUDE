@@ -36,6 +36,7 @@ import { SCOPE_RESPONSAVEIS } from '../patients/responsaveis.service';
 import { PatientsService } from '../patients/patients.service';
 import { normalizarBusca } from '../patients/patients.validation';
 import { capacidadeDoHorario, noFusoDaClinica, paraInstante } from '../scheduling/agenda-regras';
+import { motivoDeIndisponibilidade } from '../scheduling/disponibilidade';
 import { SchedulingService } from '../scheduling/scheduling.service';
 import { TenantDatabase } from '../tenancy/tenancy.module';
 import {
@@ -1104,6 +1105,13 @@ export class ImportacaoService {
       if (existente) {
         acoes.push({ linha: a.linha, acao: 'ignorar', ref });
         divergencias.push({ linha: a.linha, campo: 'linha', codigo: 'ja_agendado', gravidade: 'aviso' });
+        continue;
+      }
+      // 0100: feriado, bloqueio e grade, as mesmas regras da marcação (sem isto o aplicar falharia o lote inteiro).
+      const indisponivel = await motivoDeIndisponibilidade(tx, ctx, prof.id, inicio, fim, false);
+      if (indisponivel) {
+        acoes.push({ linha: a.linha, acao: 'ignorar', ref });
+        divergencias.push({ linha: a.linha, campo: 'hora', codigo: indisponivel, gravidade: 'aviso' });
         continue;
       }
       const intervalos = planejados.get(prof.id) ?? [];

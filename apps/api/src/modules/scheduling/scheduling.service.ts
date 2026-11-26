@@ -38,6 +38,7 @@ import {
   type NovoProfissional,
   type NovoTipoAtendimento,
 } from './scheduling.validation';
+import { motivoDeIndisponibilidade, travarAgendaDoProfissional } from './disponibilidade';
 import { registrarEventoDeSeguranca } from '../../security/log-de-seguranca';
 import { avisarAdminsDeAnomalia, avisarAreaSensivelDesmarcada } from '../records/avisos';
 
@@ -172,6 +173,9 @@ export class SchedulingService {
     if (horarioJaPassou(inicio, new Date(), this.janela)) throw new ConflitoError('horario_no_passado');
     const fim = new Date(inicio.getTime() + tipo.durationMinutes * 60_000);
     await this.travarAgenda(tx, ctx, profissional.id);
+    // 0100 (HU-AGD-001/003): feriado, bloqueio e grade. Encaixe ignora só a grade (disponibilidade-regras.ts).
+    const indisponivel = await motivoDeIndisponibilidade(tx, ctx, profissional.id, inicio, fim, dados.encaixe);
+    if (indisponivel) throw new ConflitoError(indisponivel);
     if (!dados.encaixe) {
       const ocupados = await this.ocupados(tx, ctx, profissional.id, inicio, fim);
       if (ocupados >= capacidadeDoHorario(profissional.capacity, tipo.capacity)) {
@@ -229,6 +233,9 @@ export class SchedulingService {
       if (motivo) throw new ConflitoError(motivo);
       const fim = new Date(inicio.getTime() + duracao);
       await this.travarAgenda(tx, ctx, atual.professionalId);
+      // 0100: a remarcação passa pelas mesmas regras de feriado, bloqueio e grade da marcação.
+      const indisponivel = await motivoDeIndisponibilidade(tx, ctx, atual.professionalId, inicio, fim, atual.isWalkIn);
+      if (indisponivel) throw new ConflitoError(indisponivel);
       if (!atual.isWalkIn) {
         const [profissional] = await tx
           .select({ capacity: professionals.capacity })
@@ -475,7 +482,8 @@ export class SchedulingService {
    * nenhum caminho toma audit_chain antes desta, então não há ciclo.
    */
   private async travarAgenda(tx: TenantTx, ctx: RequestContext, profissionalId: string): Promise<void> {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`agenda:${ctx.tenantId}:${profissionalId}`}, 0))`);
+    // 0100: a da clínica (compartilhada) antes da do profissional; bloqueio da clínica e feriado pegam a exclusiva.
+    await travarAgendaDoProfissional(tx, ctx, profissionalId);
   }
 
   private async travarAgendamento(tx: TenantTx, ctx: RequestContext, id: string) {

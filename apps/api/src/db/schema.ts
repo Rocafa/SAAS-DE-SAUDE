@@ -1,4 +1,4 @@
-import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, date, foreignKey, integer, jsonb, pgTable, primaryKey, smallint, text, time, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
@@ -104,6 +104,61 @@ export const appointmentTypes = pgTable('appointment_types', {
   capacity: integer('capacity').notNull().default(1),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Grade semanal do profissional (0100, HU-AGD-001): janelas por dia da semana (0 = domingo), no fuso da clínica.
+ * Só desativa (trigger); trocar a grade = desativar as vigentes e inserir as novas.
+ */
+export const professionalSchedules = pgTable('professional_schedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  professionalId: uuid('professional_id').notNull(),
+  weekday: smallint('weekday').notNull(),
+  /** HH:MM:SS (o driver devolve texto). */
+  startTime: time('start_time').notNull(),
+  endTime: time('end_time').notNull(),
+  slotMinutes: integer('slot_minutes').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Motivos de bloqueio (lista fechada do CHECK da 0100: nunca texto livre, nunca dado de paciente). */
+export const SCHEDULE_BLOCK_REASONS = ['ferias', 'congresso', 'manutencao', 'reuniao', 'pessoal', 'outro'] as const;
+export type ScheduleBlockReason = (typeof SCHEDULE_BLOCK_REASONS)[number];
+
+/** Bloqueio da agenda (0100, HU-AGD-003): de um profissional ou da clínica inteira (professional_id nulo). */
+export const scheduleBlocks = pgTable('schedule_blocks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  professionalId: uuid('professional_id'),
+  startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+  endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+  reason: text('reason', { enum: SCHEDULE_BLOCK_REASONS }).notNull(),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  removedBy: uuid('removed_by'),
+  removedAt: timestamp('removed_at', { withTimezone: true }),
+});
+
+/** Feriado da clínica (0100, HU-AGD-003): nacional pré-carregado ou da clínica; um vigente por data. */
+export const clinicHolidays = pgTable('clinic_holidays', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id),
+  holidayDate: date('holiday_date', { mode: 'string' }).notNull(),
+  name: text('name').notNull(),
+  source: text('source', { enum: ['nacional', 'clinica'] }).notNull(),
+  createdBy: uuid('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  removedBy: uuid('removed_by'),
+  removedAt: timestamp('removed_at', { withTimezone: true }),
 });
 
 /** Mesmos valores do CHECK de appointments.status e de AppointmentStatus (packages/shared). */
@@ -1295,6 +1350,9 @@ export const schema = {
   tenantDataKeys,
   professionals,
   appointmentTypes,
+  professionalSchedules,
+  scheduleBlocks,
+  clinicHolidays,
   appointments,
   insurers,
   insuranceGuides,

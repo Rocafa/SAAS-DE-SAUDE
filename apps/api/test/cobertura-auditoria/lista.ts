@@ -21,6 +21,11 @@ export const AUDITADAS: readonly string[] = [
   'PATCH /notas-privadas/:id',
   'PATCH /pacientes/:id',
   'PATCH /pacientes/:id/responsaveis/:vinculoId',
+  'POST /agenda/bloqueios',
+  'POST /agenda/bloqueios/:id/remover',
+  'POST /agenda/feriados',
+  'POST /agenda/feriados/:id/remover',
+  'POST /agenda/feriados/nacionais',
   'POST /agendamentos',
   'POST /agendamentos/:id/cancelar',
   'POST /agendamentos/:id/check-in',
@@ -104,6 +109,7 @@ export const AUDITADAS: readonly string[] = [
   'POST /whatsapp/lembretes/execucao',
   'POST /whatsapp/retencao/execucao',
   'POST /whatsapp/webhook',
+  'PUT /agenda/grade/:profissionalId',
   'PUT /atendimentos/:id/registro',
   'PUT /clinica/vinculo-de-cuidado',
   'PUT /financeiro/configuracao',
@@ -195,6 +201,12 @@ export const AUDITADAS_LEITURA: readonly string[] = [
  * caminho clínico (CAMINHOS_CLINICOS no teste) nunca entra aqui. Mudar exige parecer do Guardião.
  */
 export const LEITURA_SEM_DADO_DE_PACIENTE: Readonly<Record<string, string>> = {
+  'GET /agenda/bloqueios':
+    'disponibilidade da agenda (0100): ids, intervalo, profissional ou clínica inteira e motivo de lista fechada (sem texto livre); sem dado de paciente; criar e remover são auditados',
+  'GET /agenda/feriados':
+    'feriados da clínica (0100): data, nome do feriado e origem; sem dado pessoal; criar e remover são auditados',
+  'GET /agenda/grade':
+    'grade semanal do profissional (0100): dia da semana, horários e duração padrão (dado da equipe); sem dado de paciente; a troca é auditada',
   'GET /avisos':
     'avisos do próprio destinatário (filtro pelo usuário da sessão): ids técnicos, tipo e datas; o aviso de transição do sigilo traz o pacienteId e a transição (que pode deixar inferir incapacidade), aceito porque a criação do aviso é auditada e o passo seguinte (abrir o paciente) também',
   'GET /clinica/membros':
