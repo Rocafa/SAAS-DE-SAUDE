@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, hkdfSync } from 'node:crypto';
 import Redis from 'ioredis';
 
 /** Resultado de uma batida na janela: quantas requisições a chave já fez e quando a janela vira. */
@@ -106,7 +106,7 @@ return 0
  * sem chave permitiria em minutos. Derivada UMA vez, na borda (rateLimiter); os stores só veem isto.
  */
 export function rateLimitKey(clientId: string, secret: Uint8Array): string {
-  return `rl:v2:${createHmac('sha256', secret).update(clientId).digest('hex').slice(0, 32)}`;
+  return `rl:v3:${createHmac('sha256', secret).update(clientId).digest('hex').slice(0, 32)}`;
 }
 
 export const RATE_LIMIT_HASH_KEY_MIN_BYTES = 32;
@@ -131,6 +131,24 @@ export function loadRateLimitHashKey(env: NodeJS.ProcessEnv = process.env): Buff
   }
   processHashKey ??= randomBytes(RATE_LIMIT_HASH_KEY_MIN_BYTES);
   return processHashKey;
+}
+
+/**
+ * B9 do checklist da abertura (desenho em docs/04-arquitetura/derivacao-da-chave-de-hmac.md, parecer de 11/11/2026):
+ * cada uso tem a própria chave, derivada da raiz por HKDF-SHA256, com a versão no `info`. Trocar a versão de UM uso
+ * rotaciona só aquele uso. Um vazamento da raiz (ou do processo) ainda exige rotação em bloco.
+ * Lista FECHADA: o rate limit por IP e as vigilâncias (`rate-limit`), o pseudônimo de origem do log, da sessão e dos
+ * contadores por origem (`origem`), o bloqueio 5/15 e a marca de reuso (`bloqueio`), o user-agent da sessão
+ * (`sessao-ua`) e o e-mail do convite (`convite-email`).
+ */
+export const VERSOES_DE_HMAC = { 'rate-limit': 1, origem: 1, bloqueio: 1, 'sessao-ua': 1, 'convite-email': 1 } as const;
+export type UsoDeHmac = keyof typeof VERSOES_DE_HMAC;
+const SAL_DO_HMAC = 'plataforma-saude/hmac';
+
+/** Chave do uso, derivada da raiz (`RATE_LIMIT_HASH_KEY`). Único caminho do código de domínio até a raiz (R4). */
+export function chaveDeHmac(uso: UsoDeHmac, env: NodeJS.ProcessEnv = process.env): Buffer {
+  if (!Object.hasOwn(VERSOES_DE_HMAC, uso)) throw new Error('uso de HMAC fora da lista fechada');
+  return Buffer.from(hkdfSync('sha256', loadRateLimitHashKey(env), SAL_DO_HMAC, `${uso}/v${VERSOES_DE_HMAC[uso]}`, 32));
 }
 
 export interface RedisRateLimitOptions {

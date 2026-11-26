@@ -29,7 +29,7 @@ import { loadPaginationCursorKey } from './modules/patients/cursor-de-paginacao'
 import { RecordsModule } from './modules/records/records.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TenancyModule } from './modules/tenancy/tenancy.module';
-import { createRateLimitStore, loadRateLimitHashKey, type RateLimitStore } from './security/rate-limit-store';
+import { chaveDeHmac, createRateLimitStore, type RateLimitStore } from './security/rate-limit-store';
 
 /** Peças plugáveis escolhidas no boot (testes injetam as suas). */
 export interface AppAdapters {
@@ -82,7 +82,7 @@ export class AppModule {
     const pacientes = PatientsModule.forRoot({
       store,
       fecharStore: adapters.rateLimitStore === undefined,
-      hashKey: loadRateLimitHashKey(process.env),
+      hashKey: chaveDeHmac('rate-limit', process.env),
       // Segredo do cursor da lista (R5 do parecer #76); obrigatório em produção.
       cursorKey: loadPaginationCursorKey(process.env),
       config: adapters.vigilancia ?? loadVigilanciaConfig(process.env),

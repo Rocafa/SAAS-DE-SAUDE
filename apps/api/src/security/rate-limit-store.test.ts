@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { rateLimitFailOpenCount, rateLimiter } from './http-security';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  chaveDeHmac,
   createRateLimitStore,
   FallbackRateLimitStore,
   loadRateLimitHashKey,
   MemoryRateLimitStore,
+  VERSOES_DE_HMAC,
   rateLimitKey,
   RedisRateLimitStore,
   type RateLimitStore,
@@ -67,7 +71,7 @@ describe('rateLimitKey (R1: HMAC com segredo)', () => {
 
   it('nunca leva o IP em claro e é estável para o mesmo segredo', () => {
     const chave = rateLimitKey('203.0.113.7', segredo);
-    expect(chave).toMatch(/^rl:v2:[0-9a-f]{32}$/);
+    expect(chave).toMatch(/^rl:v3:[0-9a-f]{32}$/);
     expect(chave).not.toContain('203.0.113.7');
     expect(rateLimitKey('203.0.113.7', segredo)).toBe(chave);
     expect(rateLimitKey('203.0.113.8', segredo)).not.toBe(chave);
@@ -93,6 +97,48 @@ describe('loadRateLimitHashKey', () => {
     const a = loadRateLimitHashKey({});
     expect(a).toHaveLength(32);
     expect(loadRateLimitHashKey({})).toBe(a);
+  });
+});
+
+describe('chaveDeHmac (B9: uma chave por uso, derivada por HKDF)', () => {
+  const env = { RATE_LIMIT_HASH_KEY: 'a'.repeat(32) };
+
+  it('cada uso tem chave própria, diferente da raiz', () => {
+    const chaves = (Object.keys(VERSOES_DE_HMAC) as (keyof typeof VERSOES_DE_HMAC)[]).map((u) => chaveDeHmac(u, env).toString('hex'));
+    expect(new Set(chaves).size).toBe(chaves.length);
+    expect(chaves).not.toContain(loadRateLimitHashKey(env).toString('hex'));
+  });
+
+  it('V2 do #179: rótulo fora da lista fechada não compila', () => {
+    // @ts-expect-error: 'qualquer' não é um uso de HMAC
+    expect(() => chaveDeHmac('qualquer', env)).toThrow();
+  });
+
+  it('vetor conhecido: HKDF-SHA256, sal fixo e a versão no info', () => {
+    expect(chaveDeHmac('origem', env).toString('hex')).toBe('497397328393dd5d42fda25df872f498fa19d229ceddae8bc3dccf4e47f816c2');
+  });
+
+  it('em produção, sem a raiz ou com menos de 32 bytes, falha', () => {
+    expect(() => chaveDeHmac('origem', { NODE_ENV: 'production' })).toThrow(/RATE_LIMIT_HASH_KEY/);
+    expect(() => chaveDeHmac('origem', { NODE_ENV: 'production', RATE_LIMIT_HASH_KEY: 'curto' })).toThrow(/32 bytes/);
+  });
+
+  it('R4: fora do rate-limit-store, nenhum arquivo de src importa a raiz', () => {
+    const arquivos: string[] = [];
+    const andar = (dir: string): void => {
+      for (const n of readdirSync(dir)) {
+        const c = join(dir, n);
+        if (statSync(c).isDirectory()) andar(c);
+        else if (c.endsWith('.ts') && !c.endsWith('.test.ts')) arquivos.push(c);
+      }
+    };
+    andar(join(__dirname, '..'));
+    const fora = arquivos.filter((f) => !f.endsWith(join('security', 'rate-limit-store.ts')) && readFileSync(f, 'utf8').includes('loadRateLimitHashKey'));
+    expect(fora).toEqual([]);
+    // N2 do #179: a variável da raiz só aparece no store e na regra C1 do cursor.
+    const permitidos = [join('security', 'rate-limit-store.ts'), join('patients', 'cursor-de-paginacao.ts')];
+    const comARaiz = arquivos.filter((f) => !permitidos.some((p) => f.endsWith(p)) && readFileSync(f, 'utf8').includes('RATE_LIMIT_HASH_KEY'));
+    expect(comARaiz).toEqual([]);
   });
 });
 
@@ -127,14 +173,18 @@ describe('rateLimiter', () => {
       mode: () => 'memoria',
       close: () => Promise.resolve(),
     };
-    const mw = rateLimiter(10, 60_000, espiao, new Set(), randomBytes(32));
+    const segredoDoTeste = randomBytes(32);
+    const mw = rateLimiter(10, 60_000, espiao, new Set(), segredoDoTeste);
     await passar(mw, '198.51.100.23');
     await passar(mw, '2001:db8::1');
     expect(vistas).toHaveLength(2);
     for (const k of vistas) {
-      expect(k).toMatch(/^rl:v2:[0-9a-f]{32}$/);
+      expect(k).toMatch(/^rl:v3:[0-9a-f]{32}$/);
       expect(k).not.toMatch(/198\.51|2001:db8/);
     }
+    // N1 do #179: o IP entra com o prefixo próprio (`ip\u001f`), separado das vigilâncias.
+    expect(vistas[0]).not.toBe(rateLimitKey('198.51.100.23', segredoDoTeste));
+    expect(vistas[0]).toBe(rateLimitKey('ip\u001f198.51.100.23', segredoDoTeste));
   });
 
   it('R4: store quebrado deixa passar, mas conta e registra erro com marcador fixo', async () => {

@@ -19,7 +19,7 @@ import { escreverNaClinica, lerNaClinica } from '../../common/transacao-clinica'
 import { exigirObjeto, exigirUuid, Validador } from '../../common/validacao';
 import { clinicMembers, teamInvites, type ClinicMemberRole } from '../../db/schema';
 import { origemDaRequisicao } from '../../security/log-de-seguranca';
-import { loadRateLimitHashKey } from '../../security/rate-limit-store';
+import { chaveDeHmac } from '../../security/rate-limit-store';
 import { CABECALHO_ORIGEM } from './better-auth/protecao';
 import { recordAudit } from '../audit/audit-log';
 import { TenantDatabase } from '../tenancy/tenancy.module';
@@ -69,7 +69,7 @@ export function clinicaDoToken(token: string): string | null {
 
 export const hashDoToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 
-export function hmacDoEmail(email: string, chave: Uint8Array = loadRateLimitHashKey(process.env)): string {
+export function hmacDoEmail(email: string, chave: Uint8Array = chaveDeHmac('convite-email')): string {
   return createHmac('sha256', chave).update(`convite-email:${email.trim().toLowerCase()}`).digest('hex').slice(0, 32);
 }
 
